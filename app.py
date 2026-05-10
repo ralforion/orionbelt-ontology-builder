@@ -3,6 +3,7 @@ OrionBelt Ontology Builder - A Streamlit application for building, editing,
 and managing OWL ontologies.
 """
 
+import hashlib
 import logging
 import streamlit as st
 import traceback
@@ -185,20 +186,87 @@ def format_label_name(name: str, label: str) -> str:
     return name
 
 
-def _cb_toggle_view(prefix, name):
-    """Callback: open view panel, close edit."""
-    st.session_state[f"view_{prefix}_{name}"] = True
-    st.session_state[f"edit_{prefix}_{name}"] = False
+def _uid(uri: str) -> str:
+    """Stable short identifier for a URI — used as Streamlit key suffix.
 
-def _cb_toggle_edit(prefix, name):
-    """Callback: open edit panel, close view."""
-    st.session_state[f"edit_{prefix}_{name}"] = True
-    st.session_state[f"view_{prefix}_{name}"] = False
+    The local name of an imported resource may collide across namespaces
+    (e.g., gist:Organization and foaf:Organization both have local name
+    'Organization'). Using a hash of the full URI guarantees a unique key
+    per resource regardless of name collisions.
+    """
+    return hashlib.md5(uri.encode("utf-8")).hexdigest()[:12]
 
-def _cb_view_to_edit(prefix, name):
-    """Callback: switch from view to edit."""
-    st.session_state[f"view_{prefix}_{name}"] = False
-    st.session_state[f"edit_{prefix}_{name}"] = True
+
+def _prefix_for_uri(uri: str) -> str:
+    """Return the prefix bound to the namespace of a URI, or empty string.
+
+    Used by display disambiguation to surface the namespace when a local
+    name appears in more than one namespace.
+    """
+    ont = st.session_state.get("ontology")
+    if ont is None:
+        return ""
+    # Find the longest namespace whose URI is a prefix of the resource URI
+    best_prefix = ""
+    best_ns_len = 0
+    for prefix, ns in ont.graph.namespaces():
+        ns_str = str(ns)
+        if uri.startswith(ns_str) and len(ns_str) > best_ns_len:
+            best_prefix = prefix
+            best_ns_len = len(ns_str)
+    return best_prefix
+
+
+def _build_name_collision_set(items: list) -> set:
+    """Return the set of local names that appear under more than one URI.
+
+    `items` is a list of dicts each with 'name' and 'uri' fields. Result is
+    used by `_disambiguated_name` so single-namespace names render as just
+    the name and ambiguous names render with a namespace tag.
+    """
+    seen: dict[str, str] = {}
+    collisions: set[str] = set()
+    for it in items:
+        name = it.get("name")
+        uri = it.get("uri")
+        if not name or not uri:
+            continue
+        if name in seen:
+            if seen[name] != uri:
+                collisions.add(name)
+        else:
+            seen[name] = uri
+    return collisions
+
+
+def _disambiguated_name(item: dict, collisions: set) -> str:
+    """Return a display name that includes a namespace prefix when ambiguous.
+
+    `Organization` stays `Organization` if it's the only one; otherwise it
+    becomes `Organization (foaf)` / `Organization (gist)` etc.
+    """
+    name = item.get("name", "")
+    if name in collisions:
+        prefix = _prefix_for_uri(item.get("uri", ""))
+        if prefix:
+            return f"{name} ({prefix})"
+    return name
+
+
+def _cb_toggle_view(prefix, uid):
+    """Callback: open view panel, close edit. `uid` must be unique per resource."""
+    st.session_state[f"view_{prefix}_{uid}"] = True
+    st.session_state[f"edit_{prefix}_{uid}"] = False
+
+def _cb_toggle_edit(prefix, uid):
+    """Callback: open edit panel, close view. `uid` must be unique per resource."""
+    st.session_state[f"edit_{prefix}_{uid}"] = True
+    st.session_state[f"view_{prefix}_{uid}"] = False
+
+def _cb_view_to_edit(prefix, uid):
+    """Callback: switch from view to edit. `uid` must be unique per resource."""
+    st.session_state[f"view_{prefix}_{uid}"] = False
+    st.session_state[f"edit_{prefix}_{uid}"] = True
 
 def _cb_confirm_delete(key_suffix):
     """Callback: trigger delete confirmation."""
@@ -206,20 +274,29 @@ def _cb_confirm_delete(key_suffix):
 
 
 def build_class_options(classes: list, include_none: bool = False) -> tuple:
-    """Build class dropdown options with 'Label (name)' format, sorted by display text.
+    """Build class dropdown options with 'Label (disambiguated name)' format.
+
+    Display strings include a namespace tag when local names collide across
+    namespaces (e.g. 'Organization (foaf)' / 'Organization (gist)'), so the
+    dropdown never shows two visually identical entries. The lookup maps each
+    display string to the resource's full URI — pass this URI to ont methods
+    (`add_class`, `delete_class`, etc.) which already accept URIs via `_uri()`.
 
     Returns:
-        tuple: (display_options, name_lookup_dict)
+        tuple: (display_options, uri_lookup_dict). For the 'None' entry the
+        lookup value is None.
     """
     options = []
     lookup = {}
+    collisions = _build_name_collision_set(classes)
 
     # Build display strings and sort
     items = []
     for c in classes:
-        display = format_label_name(c["name"], c.get("label"))
+        disp_name = _disambiguated_name(c, collisions)
+        display = format_label_name(disp_name, c.get("label"))
         items.append(display)
-        lookup[display] = c["name"]
+        lookup[display] = c["uri"]
 
     # Sort alphabetically by display text (case-insensitive)
     items.sort(key=lambda x: x.lower())
@@ -410,34 +487,48 @@ def render_classes():
             # Class hierarchy view
             st.subheader("Class Hierarchy")
 
+            collisions = _build_name_collision_set(classes)
+
             # Sort classes by display name, but put actively viewed class first
-            sorted_classes = sorted(classes, key=lambda c: format_label_name(c['name'], c.get('label')).lower())
-            _active_cls = next((c for c in sorted_classes if st.session_state.get(f"view_class_{c['name']}", False) or st.session_state.get(f"edit_class_{c['name']}", False)), None)
+            sorted_classes = sorted(
+                classes,
+                key=lambda c: format_label_name(_disambiguated_name(c, collisions), c.get('label')).lower(),
+            )
+            _active_cls = next(
+                (c for c in sorted_classes
+                 if st.session_state.get(f"view_class_{_uid(c['uri'])}", False)
+                 or st.session_state.get(f"edit_class_{_uid(c['uri'])}", False)),
+                None,
+            )
             if _active_cls:
+                _active_uid = _uid(_active_cls["uri"])
                 for c in sorted_classes:
-                    if c["name"] != _active_cls["name"]:
-                        st.session_state.pop(f"view_class_{c['name']}", None)
-                        st.session_state.pop(f"edit_class_{c['name']}", None)
+                    c_uid = _uid(c["uri"])
+                    if c_uid != _active_uid:
+                        st.session_state.pop(f"view_class_{c_uid}", None)
+                        st.session_state.pop(f"edit_class_{c_uid}", None)
 
             for cls in sorted_classes:
-                display_name = format_label_name(cls['name'], cls.get('label'))
-                _cls_expanded = st.session_state.get(f"view_class_{cls['name']}", False) or st.session_state.get(f"edit_class_{cls['name']}", False)
+                cls_uid = _uid(cls["uri"])
+                disp_name = _disambiguated_name(cls, collisions)
+                display_name = format_label_name(disp_name, cls.get('label'))
+                _cls_expanded = st.session_state.get(f"view_class_{cls_uid}", False) or st.session_state.get(f"edit_class_{cls_uid}", False)
                 with st.expander(f"📦 **{display_name}**", expanded=_cls_expanded):
                     st.write(f"**URI:** `{cls['uri']}`" if cls['uri'].startswith("http://example.org/") else f"**URI:** {cls['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
                     with btn_view:
-                        st.button("👁️ View", key=f"btn_view_class_{cls['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_view, args=("class", cls['name']))
+                        st.button("👁️ View", key=f"btn_view_class_{cls_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_view, args=("class", cls_uid))
                     with btn_edit:
-                        st.button("✏️ Edit", key=f"btn_edit_class_{cls['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_edit, args=("class", cls['name']))
+                        st.button("✏️ Edit", key=f"btn_edit_class_{cls_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_edit, args=("class", cls_uid))
                     with btn_del:
-                        st.button("🗑️ Delete", key=f"btn_del_class_{cls['name']}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(f"class_{cls['name']}",))
+                        st.button("🗑️ Delete", key=f"btn_del_class_{cls_uid}", use_container_width=True,
+                                  on_click=_cb_confirm_delete, args=(f"class_{cls_uid}",))
 
                     # View details
-                    if st.session_state.get(f"view_class_{cls['name']}", False):
+                    if st.session_state.get(f"view_class_{cls_uid}", False):
                         st.divider()
                         st.write(f"**Name:** {cls['name']}")
                         st.write(f"**Label:** {cls['label'] or '—'}")
@@ -445,52 +536,51 @@ def render_classes():
                         st.write(f"**Parent Class:** {', '.join(cls['parents']) if cls['parents'] else '—'}")
                         if cls["children"]:
                             st.write(f"**Children:** {', '.join(cls['children'])}")
-                        st.button("✏️ Edit", key=f"btn_view_to_edit_class_{cls['name']}",
-                                  on_click=_cb_view_to_edit, args=("class", cls['name']))
+                        st.button("✏️ Edit", key=f"btn_view_to_edit_class_{cls_uid}",
+                                  on_click=_cb_view_to_edit, args=("class", cls_uid))
 
-                    if confirm_delete(cls["name"], "class", f"class_{cls['name']}"):
-                        ont.delete_class(cls["name"])
+                    if confirm_delete(cls["uri"], "class", f"class_{cls_uid}"):
+                        ont.delete_class(cls["uri"])
                         save_checkpoint("Delete class")
-                        set_flash_message(f"Class '{cls['name']}' deleted!", "success")
+                        set_flash_message(f"Class '{disp_name}' deleted!", "success")
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_class_{cls['name']}", False):
+                    if st.session_state.get(f"edit_class_{cls_uid}", False):
                         st.divider()
-                        with st.form(f"edit_class_form_{cls['name']}"):
-                            new_name = st.text_input("Name (URI local part)", value=cls["name"], key=f"name_{cls['name']}")
-                            new_label = st.text_input("Label", value=cls["label"], key=f"lbl_{cls['name']}")
-                            new_comment = st.text_area("Comment", value=cls["comment"], key=f"cmt_{cls['name']}")
+                        with st.form(f"edit_class_form_{cls_uid}"):
+                            new_name = st.text_input("Name (URI local part)", value=cls["name"], key=f"name_{cls_uid}")
+                            new_label = st.text_input("Label", value=cls["label"], key=f"lbl_{cls_uid}")
+                            new_comment = st.text_area("Comment", value=cls["comment"], key=f"cmt_{cls_uid}")
                             other_classes = [c for c in class_names if c != cls["name"]]
                             current_parent = cls["parents"][0] if cls["parents"] else "None"
                             new_parent = st.selectbox("Parent Class",
                                 options=["None"] + other_classes,
                                 index=0 if current_parent == "None" else
                                       (other_classes.index(current_parent) + 1 if current_parent in other_classes else 0),
-                                key=f"par_{cls['name']}")
+                                key=f"par_{cls_uid}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI so cross-namespace duplicates resolve correctly
+                                current_ref = cls["uri"]
                                 if new_name and new_name != cls["name"]:
-                                    if ont.rename_class(cls["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_class(cls["uri"], new_name):
+                                        current_ref = new_name  # post-rename, the resource lives in the base namespace
                                         save_checkpoint("Rename class")
                                         show_message(f"Class renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = cls["name"]
 
                                 if cls["parents"] and new_parent != cls["parents"][0]:
-                                    ont.update_class(current_name, remove_parent=cls["parents"][0])
-                                ont.update_class(current_name,
+                                    ont.update_class(current_ref, remove_parent=cls["parents"][0])
+                                ont.update_class(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     new_parent=new_parent if new_parent != "None" else None)
                                 save_checkpoint("Update class")
-                                st.session_state[f"edit_class_{cls['name']}"] = False
-                                show_message(f"Class '{current_name}' updated!", "success")
+                                st.session_state[f"edit_class_{cls_uid}"] = False
+                                show_message(f"Class updated!", "success")
                                 st.rerun()
 
             # Table view
@@ -536,62 +626,62 @@ def render_classes():
         if not classes:
             st.info("No classes to edit.")
         else:
-            # Build options with Label (name) format
+            # Build options with Label (disambiguated name) format; lookup is by URI
             class_options, class_lookup = build_class_options(classes)
             selected_display = st.selectbox("Select Class", options=class_options, key="edit_class_select")
-            selected_class = class_lookup.get(selected_display)
+            selected_uri = class_lookup.get(selected_display)
+            class_info = next((c for c in classes if c["uri"] == selected_uri), None) if selected_uri else None
 
-            if selected_class:
-                class_info = next((c for c in classes if c["name"] == selected_class), None)
+            if class_info:
+                selected_uid = _uid(class_info["uri"])
+                selected_class = class_info["name"]  # local-name shorthand for messaging
+                st.subheader(f"Edit: {selected_display}")
 
-                if class_info:
-                    st.subheader(f"Edit: {selected_class}")
+                with st.form("edit_class_form"):
+                    new_label = st.text_input("Label", value=class_info["label"])
+                    new_comment = st.text_area("Comment", value=class_info["comment"])
 
-                    with st.form("edit_class_form"):
-                        new_label = st.text_input("Label", value=class_info["label"])
-                        new_comment = st.text_area("Comment", value=class_info["comment"])
+                    other_classes = [c for c in class_names if c != selected_class]
+                    current_parent = class_info["parents"][0] if class_info["parents"] else "None"
+                    new_parent = st.selectbox("Parent Class",
+                                              options=["None"] + other_classes,
+                                              index=0 if current_parent == "None"
+                                              else (other_classes.index(current_parent) + 1
+                                                   if current_parent in other_classes else 0))
 
-                        other_classes = [c for c in class_names if c != selected_class]
-                        current_parent = class_info["parents"][0] if class_info["parents"] else "None"
-                        new_parent = st.selectbox("Parent Class",
-                                                  options=["None"] + other_classes,
-                                                  index=0 if current_parent == "None"
-                                                  else (other_classes.index(current_parent) + 1
-                                                       if current_parent in other_classes else 0))
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        update_btn = st.form_submit_button("Update Class")
+                    with col2:
+                        delete_btn = st.form_submit_button("Delete Class", type="secondary")
 
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            update_btn = st.form_submit_button("Update Class")
-                        with col2:
-                            delete_btn = st.form_submit_button("Delete Class", type="secondary")
+                    if update_btn:
+                        # Remove old parent if changed
+                        if class_info["parents"] and new_parent != class_info["parents"][0]:
+                            ont.update_class(class_info["uri"],
+                                             remove_parent=class_info["parents"][0])
 
-                        if update_btn:
-                            # Remove old parent if changed
-                            if class_info["parents"] and new_parent != class_info["parents"][0]:
-                                ont.update_class(selected_class,
-                                               remove_parent=class_info["parents"][0])
+                        ont.update_class(class_info["uri"],
+                                         new_label=new_label,
+                                         new_comment=new_comment,
+                                         new_parent=new_parent if new_parent != "None" else None)
+                        save_checkpoint("Update class")
+                        show_message(f"Class '{selected_display}' updated!", "success")
+                        st.rerun()
 
-                            ont.update_class(selected_class,
-                                           new_label=new_label,
-                                           new_comment=new_comment,
-                                           new_parent=new_parent if new_parent != "None" else None)
-                            save_checkpoint("Update class")
-                            show_message(f"Class '{selected_class}' updated!", "success")
-                            st.rerun()
+                    if delete_btn:
+                        st.session_state[f"confirm_delete_class_detail_{selected_uid}"] = True
+                        st.rerun()
 
-                        if delete_btn:
-                            st.session_state[f"confirm_delete_class_detail_{selected_class}"] = True
-                            st.rerun()
-
-                if confirm_delete(selected_class, "class", f"class_detail_{selected_class}"):
-                    ont.delete_class(selected_class)
+                if confirm_delete(class_info["uri"], "class", f"class_detail_{selected_uid}"):
+                    ont.delete_class(class_info["uri"])
                     save_checkpoint("Delete class")
-                    set_flash_message(f"Class '{selected_class}' deleted!", "success")
+                    set_flash_message(f"Class '{selected_display}' deleted!", "success")
                     st.rerun()
 
                 # Resource usages / backlinks
                 with st.expander("Show Usages"):
-                    usages = ont.get_resource_usages(selected_class)
+                    usages = ont.get_resource_usages(class_info["uri"])
                     if usages["inbound"]:
                         st.markdown("**Referenced by:**")
                         for u in usages["inbound"]:
