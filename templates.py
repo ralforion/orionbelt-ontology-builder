@@ -412,8 +412,8 @@ UPPER_ONTOLOGIES = [
 
 
 def get_upper_ontology_names() -> list:
-    """Return list of upper ontology names."""
-    return [o["name"] for o in UPPER_ONTOLOGIES]
+    """Return upper ontology names, sorted alphabetically."""
+    return sorted(o["name"] for o in UPPER_ONTOLOGIES)
 
 
 def get_upper_ontology(name: str) -> dict:
@@ -502,8 +502,8 @@ REFERENCE_ONTOLOGIES = [
 
 
 def get_reference_ontology_names() -> list:
-    """Return list of reference ontology names."""
-    return [o["name"] for o in REFERENCE_ONTOLOGIES]
+    """Return reference ontology names, sorted alphabetically."""
+    return sorted(o["name"] for o in REFERENCE_ONTOLOGIES)
 
 
 def get_reference_ontology(name: str) -> dict:
