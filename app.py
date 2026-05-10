@@ -3230,11 +3230,19 @@ def render_visualization():
             issues = ont.validate()
             validation_subjects = {i["subject"] for i in issues}
 
-        # Class filter
+        # Class filter — reset to "all selected" whenever the ontology mutates
+        # (load, import, replace, undo) so a previously narrowed filter doesn't
+        # silently hide most of the newly loaded content.
         all_class_names = [c["name"] for c in classes] if classes else []
         all_class_set = set(all_class_names)
-        if "_viz_cfg_selected_classes" not in st.session_state:
+        current_mutation = st.session_state.get("_ont_mutation_count", 0)
+        last_seen_mutation = st.session_state.get("_viz_cfg_classes_at_mutation")
+        if (
+            "_viz_cfg_selected_classes" not in st.session_state
+            or last_seen_mutation != current_mutation
+        ):
             st.session_state["_viz_cfg_selected_classes"] = all_class_names
+            st.session_state["_viz_cfg_classes_at_mutation"] = current_mutation
         else:
             valid = [c for c in st.session_state["_viz_cfg_selected_classes"] if c in all_class_set]
             if not valid and all_class_names:
