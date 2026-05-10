@@ -378,6 +378,33 @@ UPPER_ONTOLOGIES = [
             },
         ],
     },
+    {
+        "name": "gUFO (UFO / OntoUML)",
+        "version": "1.0.0",
+        "description": (
+            "A lightweight OWL 2 DL implementation of the Unified Foundational "
+            "Ontology (UFO). Designed for ontologically precise modeling of "
+            "kinds, roles, phases, events, situations, qualities, and relators. "
+            "Suitable for OntoUML-style conceptual modeling. Licensed under CC BY 4.0."
+        ),
+        "url": "https://nemo-ufes.github.io/gufo/",
+        "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        "attribution": (
+            "Almeida, J.P.A.; Guizzardi, G.; Sales, T.P.; Falbo, R.A. — "
+            "NEMO, Federal University of Espírito Santo"
+        ),
+        "modules": [
+            {
+                "name": "gufo",
+                "file": "gufo/gufo.ttl",
+                "description": (
+                    "Core gUFO ontology — foundational UFO classes (Endurant, "
+                    "Event, Situation, Quality, Relator, etc.) and properties"
+                ),
+                "required": True,
+            },
+        ],
+    },
 ]
 
 

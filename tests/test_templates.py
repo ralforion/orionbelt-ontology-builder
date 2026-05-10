@@ -122,3 +122,39 @@ class TestUpperOntologies:
         required = [m for m in upper["modules"] if m.get("required")]
         assert len(required) == 1
         assert required[0]["name"] == "gistCore"
+
+    def test_gufo_listed(self):
+        names = get_upper_ontology_names()
+        assert "gUFO (UFO / OntoUML)" in names
+
+    def test_get_gufo_upper_ontology(self):
+        upper = get_upper_ontology("gUFO (UFO / OntoUML)")
+        assert upper is not None
+        assert upper["version"] == "1.0.0"
+        assert "CC BY 4.0" in upper["license"]
+        assert len(upper["modules"]) == 1
+        assert upper["modules"][0]["name"] == "gufo"
+        assert upper["modules"][0].get("required") is True
+
+    def test_gufo_core_valid_turtle(self):
+        upper = get_upper_ontology("gUFO (UFO / OntoUML)")
+        core = upper["modules"][0]
+        content = load_upper_ontology_module(core)
+        g = Graph()
+        g.parse(data=content, format="turtle")
+        assert len(g) > 100
+
+    def test_merge_gufo_into_ontology(self):
+        om = OntologyManager(base_uri="http://test.org/myont#")
+        om.add_class("MyClass")
+        upper = get_upper_ontology("gUFO (UFO / OntoUML)")
+        for mod in upper["modules"]:
+            if mod.get("required") or mod.get("default"):
+                content = load_upper_ontology_module(mod)
+                om.merge_from_string(content, "turtle")
+        classes = [c["name"] for c in om.get_classes()]
+        assert "MyClass" in classes
+        assert "Endurant" in classes
+        assert "Event" in classes
+        assert "Kind" in classes
+        assert "Relator" in classes
