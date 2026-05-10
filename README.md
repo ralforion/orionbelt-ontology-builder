@@ -27,7 +27,7 @@
 
 OrionBelt lets you build, edit, and maintain OWL ontologies and SKOS vocabularies in your browser. No Java, no desktop install - just `pip install` and go.
 
-It works with **OWL ontologies** (classes as `owl:Class`, properties as `owl:ObjectProperty` / `owl:DatatypeProperty`). Pure RDFS vocabularies like schema.org that use `rdfs:Class` and `rdf:Property` can be imported via the Reference Ontologies tab — their triples land in the graph and show up in the Source view, but they will not appear in the OWL Classes / Properties panels.
+It works with **OWL ontologies** (classes as `owl:Class`, properties as `owl:ObjectProperty` / `owl:DatatypeProperty`). Pure RDFS vocabularies like schema.org that use `rdfs:Class` and `rdf:Property` are not currently surfaced in the Classes / Properties panels.
 
 It's not trying to be Protégé. It's meant for people who want something lighter: a workbench that's easy to pick up, hard to break things with, and good enough for real ontology work.
 
@@ -82,7 +82,7 @@ Start from a professionally built upper ontology instead of redefining foundatio
 
 ### Reference Ontologies
 
-A separate tab for importing widely-used domain and reference vocabularies. Bundled vocabularies load instantly; remote vocabularies are downloaded once on first use, verified against a pinned SHA256, and cached on disk. Currently includes [**schema.org**](https://schema.org/) (downloaded), [**PROV-O**](https://www.w3.org/TR/prov-o/), [**FOAF**](http://xmlns.com/foaf/spec/), and [**GoodRelations**](http://www.heppnetz.de/ontologies/goodrelations/) (bundled).
+A separate tab for importing widely-used domain and reference vocabularies. The loader supports both bundled vocabularies (instant) and on-demand downloads (verified against a pinned SHA256 and cached on disk). Currently ships with [**PROV-O**](https://www.w3.org/TR/prov-o/), [**FOAF**](http://xmlns.com/foaf/spec/), and [**GoodRelations**](http://www.heppnetz.de/ontologies/goodrelations/) — all bundled.
 
 ### Import & export
 

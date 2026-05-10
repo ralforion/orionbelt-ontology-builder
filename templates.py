@@ -434,34 +434,6 @@ CACHE_DIR = Path.home() / ".cache" / "orionbelt" / "ontologies"
 
 REFERENCE_ONTOLOGIES = [
     {
-        "name": "schema.org",
-        "version": "30.0",
-        "description": (
-            "The schema.org vocabulary — types and properties used by major "
-            "search engines for structured data on the web. Around 800 types "
-            "and 1,400 properties covering persons, organizations, events, "
-            "products, creative works, and more. Note: schema.org uses "
-            "rdfs:Class / rdf:Property (not OWL); imported types appear in "
-            "the Source view but not in the OWL Classes panel."
-        ),
-        "url": "https://schema.org/",
-        "license": "Creative Commons Attribution-ShareAlike 3.0 (CC BY-SA 3.0)",
-        "attribution": "Schema.org Community Group",
-        "modules": [
-            {
-                "name": "schema-org-core",
-                "url": "https://schema.org/version/30.0/schemaorg-current-https.ttl",
-                "sha256": "320938f0945d717fc317f822c707f10944e7a7a0097018665a3b95dcf475b39d",
-                "format": "turtle",
-                "description": (
-                    "schema.org v30.0 core vocabulary "
-                    "(~1.1 MB, downloaded on first use)"
-                ),
-                "required": True,
-            },
-        ],
-    },
-    {
         "name": "PROV-O",
         "version": "W3C Recommendation 2013-04-30",
         "description": (

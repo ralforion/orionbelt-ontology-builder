@@ -170,17 +170,14 @@ class TestUpperOntologies:
 class TestReferenceOntologies:
     def test_reference_names(self):
         names = get_reference_ontology_names()
-        assert "schema.org" in names
         assert "PROV-O" in names
         assert "FOAF (Friend of a Friend)" in names
         assert "GoodRelations" in names
 
     def test_get_reference_ontology(self):
-        ref = get_reference_ontology("schema.org")
+        ref = get_reference_ontology("PROV-O")
         assert ref is not None
-        assert ref["version"] == "30.0"
-        assert ref["modules"][0].get("url", "").startswith("https://")
-        assert ref["modules"][0].get("sha256")
+        assert ref["modules"][0].get("file") == "prov-o.ttl"
 
     def test_get_nonexistent_reference(self):
         assert get_reference_ontology("Nonexistent") is None
