@@ -3319,18 +3319,22 @@ def render_visualization():
             max_nodes = 500
             node_count = 0
 
-            # Build set of class names for edge validation (only selected classes)
-            class_names = set(selected_classes) if selected_classes else set()
+            # Build sets for node existence checks (URI-keyed for cross-namespace safety)
+            cls_collisions = _build_name_collision_set(classes)
+            selected_class_names = set(selected_classes) if selected_classes else set()
+            displayed_class_uris: set = set()
 
             # Add classes as nodes (only selected classes)
             if show_classes and selected_classes:
                 for cls in classes:
                     if node_count >= max_nodes:
                         break
-                    if cls["name"] not in selected_classes:
+                    if cls["name"] not in selected_class_names:
                         continue
-                    label = cls["label"] if cls["label"] else cls["name"]
-                    title = f"Class: {cls['name']}"
+                    cls_node_id = _uid(cls["uri"])
+                    disp_cls_name = _disambiguated_name(cls, cls_collisions)
+                    label = cls["label"] if cls["label"] else disp_cls_name
+                    title = f"Class: {disp_cls_name}"
                     if cls["label"]:
                         title += f"\nLabel: {cls['label']}"
                     if cls["comment"]:
@@ -3343,34 +3347,44 @@ def render_visualization():
                     border_width = 3 if has_issue else 1
                     if has_issue:
                         title += "\n⚠ Has validation issues"
-                    net.add_node(cls["name"], label=label, title=title,
+                    net.add_node(cls_node_id, label=label, title=title,
                                color=node_color, borderWidth=border_width,
                                shape="box", size=25,
-                               ntype="Class", ename=cls["name"])
+                               ntype="Class", ename=cls_node_id)
+                    displayed_class_uris.add(cls["uri"])
                     node_count += 1
 
-                # Add class hierarchy edges (only if parent node exists in graph)
+                # Add class hierarchy edges (URI-based so cross-namespace collisions don't merge)
                 for cls in classes:
-                    for parent in cls["parents"]:
-                        if parent in class_names:
-                            net.add_edge(cls["name"], parent, label="subClassOf",
-                                       title=f"Subclass relation:\n{cls['name']} is a subclass of {parent}",
+                    if cls["uri"] not in displayed_class_uris:
+                        continue
+                    cls_node_id = _uid(cls["uri"])
+                    for parent_uri in cls.get("parent_uris", []):
+                        if parent_uri in displayed_class_uris:
+                            parent_node_id = _uid(parent_uri)
+                            net.add_edge(cls_node_id, parent_node_id, label="subClassOf",
+                                       title=f"Subclass relation:\n{cls['name']} is a subclass of {parent_uri.rsplit('#', 1)[-1].rsplit('/', 1)[-1]}",
                                        color="#81C784", arrows="to")
 
             # Add object properties as labeled edges between domain and range
             if show_properties and object_props and show_classes:
                 for prop in object_props:
-                    # Only show if both domain and range exist as class nodes
-                    if prop["domain"] and prop["range"] and prop["domain"] in class_names and prop["range"] in class_names:
+                    # Only show if both domain and range exist as class nodes (URI-keyed)
+                    dom_uri = prop.get("domain_uri", "")
+                    rng_uri = prop.get("range_uri", "")
+                    if (dom_uri and rng_uri
+                            and dom_uri in displayed_class_uris
+                            and rng_uri in displayed_class_uris):
+                        prop_node_id = _uid(prop["uri"])
                         label = prop["label"] if prop["label"] else prop["name"]
                         title = f"Object Property: {prop['name']}"
                         if prop["label"]:
                             title += f"\nLabel: {prop['label']}"
-                        net.add_edge(prop["domain"], prop["range"],
+                        net.add_edge(_uid(dom_uri), _uid(rng_uri),
                                    label=label,
                                    title=title,
                                    color="#2196F3", arrows="to",
-                                   ntype="Object Property", ename=prop["name"])
+                                   ntype="Object Property", ename=prop_node_id)
 
             # Add data properties (connected to displayed classes, or standalone if no domain)
             if show_data_props and data_props and node_count < max_nodes:
@@ -3378,9 +3392,11 @@ def render_visualization():
                     if node_count >= max_nodes:
                         break
                     # Skip if domain is set but the class node isn't displayed
-                    if prop["domain"] and show_classes and prop["domain"] not in class_names:
+                    dom_uri = prop.get("domain_uri", "")
+                    if dom_uri and show_classes and dom_uri not in displayed_class_uris:
                         continue
 
+                    prop_node_id = f"dprop_{_uid(prop['uri'])}"
                     label = prop["label"] if prop["label"] else prop["name"]
                     title = f"Data Property: {prop['name']}"
                     if prop["domain"]:
@@ -3390,15 +3406,15 @@ def render_visualization():
                     if prop["functional"]:
                         title += "\nFunctional: Yes"
 
-                    net.add_node(f"dprop_{prop['name']}", label=label, title=title,
+                    net.add_node(prop_node_id, label=label, title=title,
                                color={"background": "#9C27B0", "border": "#7B1FA2"},
                                shape="box", size=12, font={"color": "#f0f0f0"},
-                               ntype="Data Property", ename=prop["name"])
+                               ntype="Data Property", ename=_uid(prop["uri"]))
                     node_count += 1
 
                     # Connect to domain class
-                    if prop["domain"]:
-                        net.add_edge(prop["domain"], f"dprop_{prop['name']}",
+                    if dom_uri and dom_uri in displayed_class_uris:
+                        net.add_edge(_uid(dom_uri), prop_node_id,
                                    title=f"Domain:\n{prop['name']} has domain {prop['domain']}",
                                    color="#CE93D8", arrows="to", dashes=True)
 
@@ -3407,6 +3423,7 @@ def render_visualization():
                 for ind in individuals:
                     if node_count >= max_nodes:
                         break
+                    ind_node_id = f"ind_{_uid(ind['uri'])}"
                     label = ind["label"] if ind["label"] else ind["name"]
                     title = f"Individual: {ind['name']}"
                     if ind["classes"]:
@@ -3419,44 +3436,52 @@ def render_visualization():
                     border_width = 3 if has_issue else 1
                     if has_issue:
                         title += "\n⚠ Has validation issues"
-                    net.add_node(f"ind_{ind['name']}", label=label, title=title,
+                    net.add_node(ind_node_id, label=label, title=title,
                                color=ind_color, borderWidth=border_width,
                                shape="box", size=20,
-                               ntype="Individual", ename=ind["name"])
+                               ntype="Individual", ename=_uid(ind["uri"]))
                     node_count += 1
 
-                    # Connect to classes (only if class node is in the graph)
+                    # Connect to classes (only if class node is displayed)
                     if show_classes:
+                        # Map local class names to displayed URIs once per individual
                         for cls_name in ind["classes"]:
-                            if cls_name in class_names:
-                                net.add_edge(f"ind_{ind['name']}", cls_name,
-                                           label="type",
-                                           title=f"Instance of:\n{ind['name']} is an instance of {cls_name}",
-                                           color="#FFB74D", arrows="to")
+                            for c in classes:
+                                if c["name"] == cls_name and c["uri"] in displayed_class_uris:
+                                    net.add_edge(ind_node_id, _uid(c["uri"]),
+                                               label="type",
+                                               title=f"Instance of:\n{ind['name']} is an instance of {cls_name}",
+                                               color="#FFB74D", arrows="to")
+                                    break
 
                 # Add edges between individuals (object property assertions)
                 if show_ind_edges:
-                    ind_names = {ind["name"] for ind in individuals}
+                    ind_uri_by_name: dict[str, str] = {ind["name"]: ind["uri"] for ind in individuals}
                     for ind in individuals:
                         for prop in ind.get("properties", []):
-                            if prop["value"] in ind_names:
-                                net.add_edge(f"ind_{ind['name']}", f"ind_{prop['value']}",
+                            target_uri = ind_uri_by_name.get(prop["value"])
+                            if target_uri:
+                                net.add_edge(f"ind_{_uid(ind['uri'])}", f"ind_{_uid(target_uri)}",
                                            label=prop["property"],
                                            title=f"{prop['property']}:\n{ind['name']} → {prop['value']}",
                                            color="#FF9800", arrows="to")
 
-            # Add class relations (only if both nodes exist)
+            # Add class relations (only if both nodes exist) — URI-keyed
             class_relations = ont.get_class_relations()
             if show_classes and classes:
                 for rel in class_relations:
-                    if rel["subject"] in class_names and rel["object"] in class_names:
+                    subj_uri = rel.get("subject_uri", "")
+                    obj_uri = rel.get("object_uri", "")
+                    if subj_uri in displayed_class_uris and obj_uri in displayed_class_uris:
+                        subj_node = _uid(subj_uri)
+                        obj_node = _uid(obj_uri)
                         if rel["relation"] == "equivalentClass":
-                            net.add_edge(rel["subject"], rel["object"],
+                            net.add_edge(subj_node, obj_node,
                                        label="equivalentClass",
                                        title=f"Equivalent classes:\n{rel['subject']} and {rel['object']} represent the same concept",
                                        color="#9C27B0", arrows="to")
                         elif rel["relation"] == "disjointWith":
-                            net.add_edge(rel["subject"], rel["object"],
+                            net.add_edge(subj_node, obj_node,
                                        label="disjointWith",
                                        title=f"Disjoint classes:\n{rel['subject']} and {rel['object']} cannot share instances",
                                        color="#F44336", arrows="to")
