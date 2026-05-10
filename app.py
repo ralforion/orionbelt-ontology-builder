@@ -3128,7 +3128,9 @@ def render_visualization():
         # Store graph settings in session state for caching
         selected_classes_key = "_".join(sorted(selected_classes)) if selected_classes else "none"
         _graph_ver = 15  # Bump to invalidate cached graph data after code changes
-        graph_key = f"v{_graph_ver}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
+        # Include the ontology's triple count so an import/replace/undo invalidates the cached graph
+        ont_fingerprint = len(ont.graph)
+        graph_key = f"v{_graph_ver}_{ont_fingerprint}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
