@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2156,7 +2156,7 @@ def render_import_export():
 
     ont = st.session_state.ontology
 
-    _ie_tabs = ["Import", "Export", "New Ontology", "Templates", "Upper Ontologies"]
+    _ie_tabs = ["Import", "Export", "New Ontology", "Templates", "Upper Ontologies", "Reference Ontologies"]
     _ie_tab = st.segmented_control("Section", _ie_tabs, default="Import",
                                    key="ie_active_tab", label_visibility="collapsed")
     if not _ie_tab:
@@ -2605,6 +2605,106 @@ def render_import_export():
             st.button("Load Upper Ontology", type="primary",
                       key="apply_upper_ontology_btn",
                       on_click=_on_load_upper_ontology, args=(upper,))
+
+    if _ie_tab == "Reference Ontologies":
+        from templates import (get_reference_ontology_names,
+                               get_reference_ontology,
+                               load_reference_ontology_module)
+
+        def _on_load_reference_ontology(ref):
+            selected_modules = []
+            for mod in ref["modules"]:
+                if st.session_state.get(f"ref_mod_{mod['name']}", False):
+                    selected_modules.append(mod)
+
+            if not selected_modules:
+                st.session_state["_ref_onto_err"] = "Select at least one module."
+                return
+
+            try:
+                mode = st.session_state.ref_apply_mode
+                with st.spinner(f"Loading {ref['name']}…"):
+                    first = True
+                    for mod in selected_modules:
+                        fmt = mod.get("format", "turtle")
+                        content = load_reference_ontology_module(mod)
+                        if first and mode == "Replace current":
+                            ont.load_from_string(content, fmt)
+                            first = False
+                        else:
+                            ont.merge_from_string(content, fmt)
+                mod_names = ", ".join(m["name"] for m in selected_modules)
+                save_checkpoint(
+                    f"Load reference ontology: {ref['name']} ({mod_names})"
+                )
+                s = ont.get_statistics()
+                st.session_state["_ref_onto_msg"] = (
+                    f"Loaded {ref['name']} ({mod_names})! "
+                    f"— {s['classes']} classes, {s['object_properties']} obj props, "
+                    f"{s['data_properties']} data props, {s['content_triples']} triples"
+                )
+            except Exception as e:
+                st.session_state["_ref_onto_err"] = (
+                    f"Error loading reference ontology: {str(e)}"
+                )
+
+        st.subheader("Reference Ontologies")
+        st.caption(
+            "Import widely-used domain and reference vocabularies into the "
+            "current ontology. Bundled vocabularies load instantly; remote "
+            "vocabularies are downloaded once on first use and cached locally."
+        )
+
+        if "_ref_onto_msg" in st.session_state:
+            st.success(st.session_state.pop("_ref_onto_msg"))
+        if "_ref_onto_err" in st.session_state:
+            st.error(st.session_state.pop("_ref_onto_err"))
+
+        ref_names = get_reference_ontology_names()
+        selected_ref = st.selectbox("Select Reference Ontology", ref_names,
+                                    key="reference_ontology_select")
+
+        if selected_ref:
+            ref = get_reference_ontology(selected_ref)
+            st.write(f"**{ref['name']}** v{ref['version']}")
+            st.write(ref["description"])
+            st.caption(f"License: {ref['license']} — Attribution: {ref['attribution']}")
+            if ref.get("url"):
+                st.caption(f"More info: {ref['url']}")
+
+            has_remote = any("url" in m for m in ref["modules"])
+            if has_remote:
+                st.caption(
+                    "📡 Source: downloaded on first use, cached locally. "
+                    "Requires network access on first load."
+                )
+            else:
+                st.caption("💾 Source: bundled with the application (offline-ready).")
+
+            st.write("**Modules:**")
+            for mod in ref["modules"]:
+                default_on = mod.get("required", False) or mod.get("default", False)
+                st.checkbox(
+                    f"**{mod['name']}** — {mod['description']}",
+                    value=default_on,
+                    disabled=mod.get("required", False),
+                    key=f"ref_mod_{mod['name']}",
+                )
+
+            st.radio(
+                "Apply Mode",
+                ["Merge into current", "Replace current"],
+                horizontal=True,
+                key="ref_apply_mode",
+            )
+
+            st.button(
+                "Load Reference Ontology",
+                type="primary",
+                key="apply_reference_ontology_btn",
+                on_click=_on_load_reference_ontology,
+                args=(ref,),
+            )
 
 
 def render_advanced():
