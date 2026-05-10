@@ -7,7 +7,7 @@
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralfbecher/orionbelt-ontology-builder?style=social)](https://github.com/ralfbecher/orionbelt-ontology-builder)
-[![Version 1.2.1](https://img.shields.io/badge/version-1.2.1-purple.svg)](https://github.com/ralfbecher/orionbelt-ontology-builder/releases)
+[![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-purple.svg)](https://github.com/ralfbecher/orionbelt-ontology-builder/releases)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-ontology-builder/blob/main/LICENSE)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io)
@@ -27,7 +27,7 @@
 
 OrionBelt lets you build, edit, and maintain OWL ontologies and SKOS vocabularies in your browser. No Java, no desktop install - just `pip install` and go.
 
-It works with **OWL ontologies** (classes as `owl:Class`, properties as `owl:ObjectProperty` / `owl:DatatypeProperty`). Pure RDFS vocabularies like Schema.org that use `rdfs:Class` and `rdf:Property` are not supported.
+It works with **OWL ontologies** (classes as `owl:Class`, properties as `owl:ObjectProperty` / `owl:DatatypeProperty`). Pure RDFS vocabularies like schema.org that use `rdfs:Class` and `rdf:Property` are not currently surfaced in the Classes / Properties panels.
 
 It's not trying to be Protégé. It's meant for people who want something lighter: a workbench that's easy to pick up, hard to break things with, and good enough for real ontology work.
 
@@ -75,7 +75,14 @@ Five starter templates you can merge into or replace your current ontology: Orga
 
 ### Upper Ontologies
 
-Start from a professionally built upper ontology instead of redefining foundational concepts for every project. Currently ships with [**gist**](https://www.semanticarts.com/gist/) by Semantic Arts — a minimalist upper ontology covering ~100 classes (Event, Person, Organization, Agreement, Specification, etc.) and ~100 properties. Select which modules to load (Core, RDFS Annotations, SubClass Assertions, Media Types) and merge or replace your current ontology.
+Start from a professionally built upper ontology instead of redefining foundational concepts for every project. Two options ship in the box:
+
+- [**gist**](https://www.semanticarts.com/gist/) by Semantic Arts — a minimalist upper ontology covering ~100 classes (Event, Person, Organization, Agreement, Specification, etc.) and ~100 properties. Select which modules to load (Core, RDFS Annotations, SubClass Assertions, Media Types) and merge or replace your current ontology.
+- [**gUFO**](https://nemo-ufes.github.io/gufo/) (gentle UFO) — a lightweight OWL implementation of the Unified Foundational Ontology, suitable for OntoUML-style conceptual modeling with kinds, roles, phases, events, situations, qualities, and relators.
+
+### Reference Ontologies
+
+A separate tab for importing widely-used domain and reference vocabularies. The loader supports both bundled vocabularies (instant) and on-demand downloads (verified against a pinned SHA256 and cached on disk). Currently ships with [**PROV-O**](https://www.w3.org/TR/prov-o/), [**FOAF**](http://xmlns.com/foaf/spec/), and [**GoodRelations**](http://www.heppnetz.de/ontologies/goodrelations/) — all bundled.
 
 ### Import & export
 

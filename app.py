@@ -3,13 +3,14 @@ OrionBelt Ontology Builder - A Streamlit application for building, editing,
 and managing OWL ontologies.
 """
 
+import hashlib
 import logging
 import streamlit as st
 import traceback
 from datetime import datetime
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -117,6 +118,8 @@ def save_checkpoint(label: str = "Edit"):
     """Save a snapshot to the undo history after a mutation."""
     if st.session_state.get("undo_manager"):
         st.session_state.undo_manager.checkpoint(label)
+    # Bump mutation counter so derived UI caches (e.g. graph viz) invalidate
+    st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
 
 
 def log_error(error: Exception, context: str = ""):
@@ -183,20 +186,87 @@ def format_label_name(name: str, label: str) -> str:
     return name
 
 
-def _cb_toggle_view(prefix, name):
-    """Callback: open view panel, close edit."""
-    st.session_state[f"view_{prefix}_{name}"] = True
-    st.session_state[f"edit_{prefix}_{name}"] = False
+def _uid(uri: str) -> str:
+    """Stable short identifier for a URI — used as Streamlit key suffix.
 
-def _cb_toggle_edit(prefix, name):
-    """Callback: open edit panel, close view."""
-    st.session_state[f"edit_{prefix}_{name}"] = True
-    st.session_state[f"view_{prefix}_{name}"] = False
+    The local name of an imported resource may collide across namespaces
+    (e.g., gist:Organization and foaf:Organization both have local name
+    'Organization'). Using a hash of the full URI guarantees a unique key
+    per resource regardless of name collisions.
+    """
+    return hashlib.md5(uri.encode("utf-8")).hexdigest()[:12]
 
-def _cb_view_to_edit(prefix, name):
-    """Callback: switch from view to edit."""
-    st.session_state[f"view_{prefix}_{name}"] = False
-    st.session_state[f"edit_{prefix}_{name}"] = True
+
+def _prefix_for_uri(uri: str) -> str:
+    """Return the prefix bound to the namespace of a URI, or empty string.
+
+    Used by display disambiguation to surface the namespace when a local
+    name appears in more than one namespace.
+    """
+    ont = st.session_state.get("ontology")
+    if ont is None:
+        return ""
+    # Find the longest namespace whose URI is a prefix of the resource URI
+    best_prefix = ""
+    best_ns_len = 0
+    for prefix, ns in ont.graph.namespaces():
+        ns_str = str(ns)
+        if uri.startswith(ns_str) and len(ns_str) > best_ns_len:
+            best_prefix = prefix
+            best_ns_len = len(ns_str)
+    return best_prefix
+
+
+def _build_name_collision_set(items: list) -> set:
+    """Return the set of local names that appear under more than one URI.
+
+    `items` is a list of dicts each with 'name' and 'uri' fields. Result is
+    used by `_disambiguated_name` so single-namespace names render as just
+    the name and ambiguous names render with a namespace tag.
+    """
+    seen: dict[str, str] = {}
+    collisions: set[str] = set()
+    for it in items:
+        name = it.get("name")
+        uri = it.get("uri")
+        if not name or not uri:
+            continue
+        if name in seen:
+            if seen[name] != uri:
+                collisions.add(name)
+        else:
+            seen[name] = uri
+    return collisions
+
+
+def _disambiguated_name(item: dict, collisions: set) -> str:
+    """Return a display name that includes a namespace prefix when ambiguous.
+
+    `Organization` stays `Organization` if it's the only one; otherwise it
+    becomes `Organization (foaf)` / `Organization (gist)` etc.
+    """
+    name = item.get("name", "")
+    if name in collisions:
+        prefix = _prefix_for_uri(item.get("uri", ""))
+        if prefix:
+            return f"{name} ({prefix})"
+    return name
+
+
+def _cb_toggle_view(prefix, uid):
+    """Callback: open view panel, close edit. `uid` must be unique per resource."""
+    st.session_state[f"view_{prefix}_{uid}"] = True
+    st.session_state[f"edit_{prefix}_{uid}"] = False
+
+def _cb_toggle_edit(prefix, uid):
+    """Callback: open edit panel, close view. `uid` must be unique per resource."""
+    st.session_state[f"edit_{prefix}_{uid}"] = True
+    st.session_state[f"view_{prefix}_{uid}"] = False
+
+def _cb_view_to_edit(prefix, uid):
+    """Callback: switch from view to edit. `uid` must be unique per resource."""
+    st.session_state[f"view_{prefix}_{uid}"] = False
+    st.session_state[f"edit_{prefix}_{uid}"] = True
 
 def _cb_confirm_delete(key_suffix):
     """Callback: trigger delete confirmation."""
@@ -204,20 +274,29 @@ def _cb_confirm_delete(key_suffix):
 
 
 def build_class_options(classes: list, include_none: bool = False) -> tuple:
-    """Build class dropdown options with 'Label (name)' format, sorted by display text.
+    """Build class dropdown options with 'Label (disambiguated name)' format.
+
+    Display strings include a namespace tag when local names collide across
+    namespaces (e.g. 'Organization (foaf)' / 'Organization (gist)'), so the
+    dropdown never shows two visually identical entries. The lookup maps each
+    display string to the resource's full URI — pass this URI to ont methods
+    (`add_class`, `delete_class`, etc.) which already accept URIs via `_uri()`.
 
     Returns:
-        tuple: (display_options, name_lookup_dict)
+        tuple: (display_options, uri_lookup_dict). For the 'None' entry the
+        lookup value is None.
     """
     options = []
     lookup = {}
+    collisions = _build_name_collision_set(classes)
 
     # Build display strings and sort
     items = []
     for c in classes:
-        display = format_label_name(c["name"], c.get("label"))
+        disp_name = _disambiguated_name(c, collisions)
+        display = format_label_name(disp_name, c.get("label"))
         items.append(display)
-        lookup[display] = c["name"]
+        lookup[display] = c["uri"]
 
     # Sort alphabetically by display text (case-insensitive)
     items.sort(key=lambda x: x.lower())
@@ -408,34 +487,48 @@ def render_classes():
             # Class hierarchy view
             st.subheader("Class Hierarchy")
 
+            collisions = _build_name_collision_set(classes)
+
             # Sort classes by display name, but put actively viewed class first
-            sorted_classes = sorted(classes, key=lambda c: format_label_name(c['name'], c.get('label')).lower())
-            _active_cls = next((c for c in sorted_classes if st.session_state.get(f"view_class_{c['name']}", False) or st.session_state.get(f"edit_class_{c['name']}", False)), None)
+            sorted_classes = sorted(
+                classes,
+                key=lambda c: format_label_name(_disambiguated_name(c, collisions), c.get('label')).lower(),
+            )
+            _active_cls = next(
+                (c for c in sorted_classes
+                 if st.session_state.get(f"view_class_{_uid(c['uri'])}", False)
+                 or st.session_state.get(f"edit_class_{_uid(c['uri'])}", False)),
+                None,
+            )
             if _active_cls:
+                _active_uid = _uid(_active_cls["uri"])
                 for c in sorted_classes:
-                    if c["name"] != _active_cls["name"]:
-                        st.session_state.pop(f"view_class_{c['name']}", None)
-                        st.session_state.pop(f"edit_class_{c['name']}", None)
+                    c_uid = _uid(c["uri"])
+                    if c_uid != _active_uid:
+                        st.session_state.pop(f"view_class_{c_uid}", None)
+                        st.session_state.pop(f"edit_class_{c_uid}", None)
 
             for cls in sorted_classes:
-                display_name = format_label_name(cls['name'], cls.get('label'))
-                _cls_expanded = st.session_state.get(f"view_class_{cls['name']}", False) or st.session_state.get(f"edit_class_{cls['name']}", False)
+                cls_uid = _uid(cls["uri"])
+                disp_name = _disambiguated_name(cls, collisions)
+                display_name = format_label_name(disp_name, cls.get('label'))
+                _cls_expanded = st.session_state.get(f"view_class_{cls_uid}", False) or st.session_state.get(f"edit_class_{cls_uid}", False)
                 with st.expander(f"📦 **{display_name}**", expanded=_cls_expanded):
                     st.write(f"**URI:** `{cls['uri']}`" if cls['uri'].startswith("http://example.org/") else f"**URI:** {cls['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
                     with btn_view:
-                        st.button("👁️ View", key=f"btn_view_class_{cls['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_view, args=("class", cls['name']))
+                        st.button("👁️ View", key=f"btn_view_class_{cls_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_view, args=("class", cls_uid))
                     with btn_edit:
-                        st.button("✏️ Edit", key=f"btn_edit_class_{cls['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_edit, args=("class", cls['name']))
+                        st.button("✏️ Edit", key=f"btn_edit_class_{cls_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_edit, args=("class", cls_uid))
                     with btn_del:
-                        st.button("🗑️ Delete", key=f"btn_del_class_{cls['name']}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(f"class_{cls['name']}",))
+                        st.button("🗑️ Delete", key=f"btn_del_class_{cls_uid}", use_container_width=True,
+                                  on_click=_cb_confirm_delete, args=(f"class_{cls_uid}",))
 
                     # View details
-                    if st.session_state.get(f"view_class_{cls['name']}", False):
+                    if st.session_state.get(f"view_class_{cls_uid}", False):
                         st.divider()
                         st.write(f"**Name:** {cls['name']}")
                         st.write(f"**Label:** {cls['label'] or '—'}")
@@ -443,52 +536,51 @@ def render_classes():
                         st.write(f"**Parent Class:** {', '.join(cls['parents']) if cls['parents'] else '—'}")
                         if cls["children"]:
                             st.write(f"**Children:** {', '.join(cls['children'])}")
-                        st.button("✏️ Edit", key=f"btn_view_to_edit_class_{cls['name']}",
-                                  on_click=_cb_view_to_edit, args=("class", cls['name']))
+                        st.button("✏️ Edit", key=f"btn_view_to_edit_class_{cls_uid}",
+                                  on_click=_cb_view_to_edit, args=("class", cls_uid))
 
-                    if confirm_delete(cls["name"], "class", f"class_{cls['name']}"):
-                        ont.delete_class(cls["name"])
+                    if confirm_delete(cls["uri"], "class", f"class_{cls_uid}"):
+                        ont.delete_class(cls["uri"])
                         save_checkpoint("Delete class")
-                        set_flash_message(f"Class '{cls['name']}' deleted!", "success")
+                        set_flash_message(f"Class '{disp_name}' deleted!", "success")
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_class_{cls['name']}", False):
+                    if st.session_state.get(f"edit_class_{cls_uid}", False):
                         st.divider()
-                        with st.form(f"edit_class_form_{cls['name']}"):
-                            new_name = st.text_input("Name (URI local part)", value=cls["name"], key=f"name_{cls['name']}")
-                            new_label = st.text_input("Label", value=cls["label"], key=f"lbl_{cls['name']}")
-                            new_comment = st.text_area("Comment", value=cls["comment"], key=f"cmt_{cls['name']}")
+                        with st.form(f"edit_class_form_{cls_uid}"):
+                            new_name = st.text_input("Name (URI local part)", value=cls["name"], key=f"name_{cls_uid}")
+                            new_label = st.text_input("Label", value=cls["label"], key=f"lbl_{cls_uid}")
+                            new_comment = st.text_area("Comment", value=cls["comment"], key=f"cmt_{cls_uid}")
                             other_classes = [c for c in class_names if c != cls["name"]]
                             current_parent = cls["parents"][0] if cls["parents"] else "None"
                             new_parent = st.selectbox("Parent Class",
                                 options=["None"] + other_classes,
                                 index=0 if current_parent == "None" else
                                       (other_classes.index(current_parent) + 1 if current_parent in other_classes else 0),
-                                key=f"par_{cls['name']}")
+                                key=f"par_{cls_uid}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI so cross-namespace duplicates resolve correctly
+                                current_ref = cls["uri"]
                                 if new_name and new_name != cls["name"]:
-                                    if ont.rename_class(cls["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_class(cls["uri"], new_name):
+                                        current_ref = new_name  # post-rename, the resource lives in the base namespace
                                         save_checkpoint("Rename class")
                                         show_message(f"Class renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = cls["name"]
 
                                 if cls["parents"] and new_parent != cls["parents"][0]:
-                                    ont.update_class(current_name, remove_parent=cls["parents"][0])
-                                ont.update_class(current_name,
+                                    ont.update_class(current_ref, remove_parent=cls["parents"][0])
+                                ont.update_class(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     new_parent=new_parent if new_parent != "None" else None)
                                 save_checkpoint("Update class")
-                                st.session_state[f"edit_class_{cls['name']}"] = False
-                                show_message(f"Class '{current_name}' updated!", "success")
+                                st.session_state[f"edit_class_{cls_uid}"] = False
+                                show_message(f"Class updated!", "success")
                                 st.rerun()
 
             # Table view
@@ -534,62 +626,62 @@ def render_classes():
         if not classes:
             st.info("No classes to edit.")
         else:
-            # Build options with Label (name) format
+            # Build options with Label (disambiguated name) format; lookup is by URI
             class_options, class_lookup = build_class_options(classes)
             selected_display = st.selectbox("Select Class", options=class_options, key="edit_class_select")
-            selected_class = class_lookup.get(selected_display)
+            selected_uri = class_lookup.get(selected_display)
+            class_info = next((c for c in classes if c["uri"] == selected_uri), None) if selected_uri else None
 
-            if selected_class:
-                class_info = next((c for c in classes if c["name"] == selected_class), None)
+            if class_info:
+                selected_uid = _uid(class_info["uri"])
+                selected_class = class_info["name"]  # local-name shorthand for messaging
+                st.subheader(f"Edit: {selected_display}")
 
-                if class_info:
-                    st.subheader(f"Edit: {selected_class}")
+                with st.form("edit_class_form"):
+                    new_label = st.text_input("Label", value=class_info["label"])
+                    new_comment = st.text_area("Comment", value=class_info["comment"])
 
-                    with st.form("edit_class_form"):
-                        new_label = st.text_input("Label", value=class_info["label"])
-                        new_comment = st.text_area("Comment", value=class_info["comment"])
+                    other_classes = [c for c in class_names if c != selected_class]
+                    current_parent = class_info["parents"][0] if class_info["parents"] else "None"
+                    new_parent = st.selectbox("Parent Class",
+                                              options=["None"] + other_classes,
+                                              index=0 if current_parent == "None"
+                                              else (other_classes.index(current_parent) + 1
+                                                   if current_parent in other_classes else 0))
 
-                        other_classes = [c for c in class_names if c != selected_class]
-                        current_parent = class_info["parents"][0] if class_info["parents"] else "None"
-                        new_parent = st.selectbox("Parent Class",
-                                                  options=["None"] + other_classes,
-                                                  index=0 if current_parent == "None"
-                                                  else (other_classes.index(current_parent) + 1
-                                                       if current_parent in other_classes else 0))
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        update_btn = st.form_submit_button("Update Class")
+                    with col2:
+                        delete_btn = st.form_submit_button("Delete Class", type="secondary")
 
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            update_btn = st.form_submit_button("Update Class")
-                        with col2:
-                            delete_btn = st.form_submit_button("Delete Class", type="secondary")
+                    if update_btn:
+                        # Remove old parent if changed
+                        if class_info["parents"] and new_parent != class_info["parents"][0]:
+                            ont.update_class(class_info["uri"],
+                                             remove_parent=class_info["parents"][0])
 
-                        if update_btn:
-                            # Remove old parent if changed
-                            if class_info["parents"] and new_parent != class_info["parents"][0]:
-                                ont.update_class(selected_class,
-                                               remove_parent=class_info["parents"][0])
+                        ont.update_class(class_info["uri"],
+                                         new_label=new_label,
+                                         new_comment=new_comment,
+                                         new_parent=new_parent if new_parent != "None" else None)
+                        save_checkpoint("Update class")
+                        show_message(f"Class '{selected_display}' updated!", "success")
+                        st.rerun()
 
-                            ont.update_class(selected_class,
-                                           new_label=new_label,
-                                           new_comment=new_comment,
-                                           new_parent=new_parent if new_parent != "None" else None)
-                            save_checkpoint("Update class")
-                            show_message(f"Class '{selected_class}' updated!", "success")
-                            st.rerun()
+                    if delete_btn:
+                        st.session_state[f"confirm_delete_class_detail_{selected_uid}"] = True
+                        st.rerun()
 
-                        if delete_btn:
-                            st.session_state[f"confirm_delete_class_detail_{selected_class}"] = True
-                            st.rerun()
-
-                if confirm_delete(selected_class, "class", f"class_detail_{selected_class}"):
-                    ont.delete_class(selected_class)
+                if confirm_delete(class_info["uri"], "class", f"class_detail_{selected_uid}"):
+                    ont.delete_class(class_info["uri"])
                     save_checkpoint("Delete class")
-                    set_flash_message(f"Class '{selected_class}' deleted!", "success")
+                    set_flash_message(f"Class '{selected_display}' deleted!", "success")
                     st.rerun()
 
                 # Resource usages / backlinks
                 with st.expander("Show Usages"):
-                    usages = ont.get_resource_usages(selected_class)
+                    usages = ont.get_resource_usages(class_info["uri"])
                     if usages["inbound"]:
                         st.markdown("**Referenced by:**")
                         for u in usages["inbound"]:
@@ -719,31 +811,41 @@ def render_properties():
 
             st.caption(f"Showing {len(filtered_obj_props)} of {len(object_props)} properties")
 
-            _active_op = next((p for p in filtered_obj_props if st.session_state.get(f"view_objprop_{p['name']}", False) or st.session_state.get(f"edit_objprop_{p['name']}", False)), None)
+            op_collisions = _build_name_collision_set(object_props)
+            _active_op = next(
+                (p for p in filtered_obj_props
+                 if st.session_state.get(f"view_objprop_{_uid(p['uri'])}", False)
+                 or st.session_state.get(f"edit_objprop_{_uid(p['uri'])}", False)),
+                None,
+            )
             if _active_op:
+                _active_op_uid = _uid(_active_op["uri"])
                 for p in filtered_obj_props:
-                    if p["name"] != _active_op["name"]:
-                        st.session_state.pop(f"view_objprop_{p['name']}", None)
-                        st.session_state.pop(f"edit_objprop_{p['name']}", None)
+                    p_uid = _uid(p["uri"])
+                    if p_uid != _active_op_uid:
+                        st.session_state.pop(f"view_objprop_{p_uid}", None)
+                        st.session_state.pop(f"edit_objprop_{p_uid}", None)
 
             for prop in filtered_obj_props:
-                _op_expanded = st.session_state.get(f"view_objprop_{prop['name']}", False) or st.session_state.get(f"edit_objprop_{prop['name']}", False)
-                with st.expander(f"🔗 **{prop['name']}** ({prop['domain'] or '?'} → {prop['range'] or '?'})", expanded=_op_expanded):
+                prop_uid = _uid(prop["uri"])
+                disp_name = _disambiguated_name(prop, op_collisions)
+                _op_expanded = st.session_state.get(f"view_objprop_{prop_uid}", False) or st.session_state.get(f"edit_objprop_{prop_uid}", False)
+                with st.expander(f"🔗 **{disp_name}** ({prop['domain'] or '?'} → {prop['range'] or '?'})", expanded=_op_expanded):
                     st.write(f"**URI:** `{prop['uri']}`" if prop['uri'].startswith("http://example.org/") else f"**URI:** {prop['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
                     with btn_view:
-                        st.button("👁️ View", key=f"btn_view_objprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_view, args=("objprop", prop['name']))
+                        st.button("👁️ View", key=f"btn_view_objprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_view, args=("objprop", prop_uid))
                     with btn_edit:
-                        st.button("✏️ Edit", key=f"btn_edit_objprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_edit, args=("objprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_edit_objprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_edit, args=("objprop", prop_uid))
                     with btn_del:
-                        st.button("🗑️ Delete", key=f"btn_del_objprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(f"objprop_{prop['name']}",))
+                        st.button("🗑️ Delete", key=f"btn_del_objprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_confirm_delete, args=(f"objprop_{prop_uid}",))
 
                     # View details
-                    if st.session_state.get(f"view_objprop_{prop['name']}", False):
+                    if st.session_state.get(f"view_objprop_{prop_uid}", False):
                         st.divider()
                         st.write(f"**Name:** {prop['name']}")
                         st.write(f"**Label:** {prop['label'] or '—'}")
@@ -752,53 +854,52 @@ def render_properties():
                         st.write(f"**Range:** {prop['range'] or '—'}")
                         st.write(f"**Characteristics:** {', '.join(prop['characteristics']) if prop['characteristics'] else '—'}")
                         st.write(f"**Inverse of:** {prop.get('inverse_of') or '—'}")
-                        st.button("✏️ Edit", key=f"btn_view_to_edit_objprop_{prop['name']}",
-                                  on_click=_cb_view_to_edit, args=("objprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_view_to_edit_objprop_{prop_uid}",
+                                  on_click=_cb_view_to_edit, args=("objprop", prop_uid))
 
-                    if confirm_delete(prop["name"], "property", f"objprop_{prop['name']}"):
-                        ont.delete_property(prop["name"])
+                    if confirm_delete(prop["uri"], "property", f"objprop_{prop_uid}"):
+                        ont.delete_property(prop["uri"])
                         save_checkpoint("Delete property")
-                        set_flash_message(f"Property '{prop['name']}' deleted!", "success")
+                        set_flash_message(f"Property '{disp_name}' deleted!", "success")
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_objprop_{prop['name']}", False):
+                    if st.session_state.get(f"edit_objprop_{prop_uid}", False):
                         st.divider()
-                        with st.form(f"edit_objprop_form_{prop['name']}"):
-                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"objp_name_{prop['name']}")
-                            new_label = st.text_input("Label", value=prop["label"], key=f"objp_lbl_{prop['name']}")
-                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"objp_cmt_{prop['name']}")
+                        with st.form(f"edit_objprop_form_{prop_uid}"):
+                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"objp_name_{prop_uid}")
+                            new_label = st.text_input("Label", value=prop["label"], key=f"objp_lbl_{prop_uid}")
+                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"objp_cmt_{prop_uid}")
                             col1, col2 = st.columns(2)
                             with col1:
                                 new_domain = st.selectbox("Domain", options=["None"] + class_names,
                                     index=0 if not prop["domain"] else (class_names.index(prop["domain"]) + 1 if prop["domain"] in class_names else 0),
-                                    key=f"objp_dom_{prop['name']}")
+                                    key=f"objp_dom_{prop_uid}")
                             with col2:
                                 new_range = st.selectbox("Range", options=["None"] + class_names,
                                     index=0 if not prop["range"] else (class_names.index(prop["range"]) + 1 if prop["range"] in class_names else 0),
-                                    key=f"objp_rng_{prop['name']}")
+                                    key=f"objp_rng_{prop_uid}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI for cross-namespace safety
+                                current_ref = prop["uri"]
                                 if new_name and new_name != prop["name"]:
-                                    if ont.rename_property(prop["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_property(prop["uri"], new_name):
+                                        current_ref = new_name
                                         save_checkpoint("Rename property")
                                         show_message(f"Property renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = prop["name"]
 
-                                ont.update_property(current_name,
+                                ont.update_property(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     new_domain=new_domain if new_domain != "None" else "",
                                     new_range=new_range if new_range != "None" else "")
                                 save_checkpoint("Update property")
-                                st.session_state[f"edit_objprop_{prop['name']}"] = False
-                                show_message(f"Property '{current_name}' updated!", "success")
+                                st.session_state[f"edit_objprop_{prop_uid}"] = False
+                                show_message(f"Property updated!", "success")
                                 st.rerun()
 
     if _prop_tab == "Data Properties":
@@ -823,31 +924,41 @@ def render_properties():
 
             datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())
 
-            _active_dp = next((p for p in filtered_data_props if st.session_state.get(f"view_dataprop_{p['name']}", False) or st.session_state.get(f"edit_dataprop_{p['name']}", False)), None)
+            dp_collisions = _build_name_collision_set(data_props)
+            _active_dp = next(
+                (p for p in filtered_data_props
+                 if st.session_state.get(f"view_dataprop_{_uid(p['uri'])}", False)
+                 or st.session_state.get(f"edit_dataprop_{_uid(p['uri'])}", False)),
+                None,
+            )
             if _active_dp:
+                _active_dp_uid = _uid(_active_dp["uri"])
                 for p in filtered_data_props:
-                    if p["name"] != _active_dp["name"]:
-                        st.session_state.pop(f"view_dataprop_{p['name']}", None)
-                        st.session_state.pop(f"edit_dataprop_{p['name']}", None)
+                    p_uid = _uid(p["uri"])
+                    if p_uid != _active_dp_uid:
+                        st.session_state.pop(f"view_dataprop_{p_uid}", None)
+                        st.session_state.pop(f"edit_dataprop_{p_uid}", None)
 
             for prop in filtered_data_props:
-                _dp_expanded = st.session_state.get(f"view_dataprop_{prop['name']}", False) or st.session_state.get(f"edit_dataprop_{prop['name']}", False)
-                with st.expander(f"📝 **{prop['name']}** ({prop['domain'] or '?'} → {prop['range']})", expanded=_dp_expanded):
+                prop_uid = _uid(prop["uri"])
+                disp_name = _disambiguated_name(prop, dp_collisions)
+                _dp_expanded = st.session_state.get(f"view_dataprop_{prop_uid}", False) or st.session_state.get(f"edit_dataprop_{prop_uid}", False)
+                with st.expander(f"📝 **{disp_name}** ({prop['domain'] or '?'} → {prop['range']})", expanded=_dp_expanded):
                     st.write(f"**URI:** `{prop['uri']}`" if prop['uri'].startswith("http://example.org/") else f"**URI:** {prop['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
                     with btn_view:
-                        st.button("👁️ View", key=f"btn_view_dataprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_view, args=("dataprop", prop['name']))
+                        st.button("👁️ View", key=f"btn_view_dataprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_view, args=("dataprop", prop_uid))
                     with btn_edit:
-                        st.button("✏️ Edit", key=f"btn_edit_dataprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_edit, args=("dataprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_edit_dataprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_edit, args=("dataprop", prop_uid))
                     with btn_del:
-                        st.button("🗑️ Delete", key=f"btn_del_dataprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(f"dataprop_{prop['name']}",))
+                        st.button("🗑️ Delete", key=f"btn_del_dataprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_confirm_delete, args=(f"dataprop_{prop_uid}",))
 
                     # View details
-                    if st.session_state.get(f"view_dataprop_{prop['name']}", False):
+                    if st.session_state.get(f"view_dataprop_{prop_uid}", False):
                         st.divider()
                         st.write(f"**Name:** {prop['name']}")
                         st.write(f"**Label:** {prop['label'] or '—'}")
@@ -855,54 +966,53 @@ def render_properties():
                         st.write(f"**Domain:** {prop['domain'] or '—'}")
                         st.write(f"**Range (Datatype):** {prop['range']}")
                         st.write(f"**Functional:** {'Yes' if prop['functional'] else 'No'}")
-                        st.button("✏️ Edit", key=f"btn_view_to_edit_dataprop_{prop['name']}",
-                                  on_click=_cb_view_to_edit, args=("dataprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_view_to_edit_dataprop_{prop_uid}",
+                                  on_click=_cb_view_to_edit, args=("dataprop", prop_uid))
 
-                    if confirm_delete(prop["name"], "property", f"dataprop_{prop['name']}"):
-                        ont.delete_property(prop["name"])
+                    if confirm_delete(prop["uri"], "property", f"dataprop_{prop_uid}"):
+                        ont.delete_property(prop["uri"])
                         save_checkpoint("Delete property")
-                        set_flash_message(f"Property '{prop['name']}' deleted!", "success")
+                        set_flash_message(f"Property '{disp_name}' deleted!", "success")
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_dataprop_{prop['name']}", False):
+                    if st.session_state.get(f"edit_dataprop_{prop_uid}", False):
                         st.divider()
-                        with st.form(f"edit_dataprop_form_{prop['name']}"):
-                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"dp_name_{prop['name']}")
-                            new_label = st.text_input("Label", value=prop["label"], key=f"dp_lbl_{prop['name']}")
-                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"dp_cmt_{prop['name']}")
+                        with st.form(f"edit_dataprop_form_{prop_uid}"):
+                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"dp_name_{prop_uid}")
+                            new_label = st.text_input("Label", value=prop["label"], key=f"dp_lbl_{prop_uid}")
+                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"dp_cmt_{prop_uid}")
                             col1, col2 = st.columns(2)
                             with col1:
                                 new_domain = st.selectbox("Domain", options=["None"] + class_names,
                                     index=0 if not prop["domain"] else (class_names.index(prop["domain"]) + 1 if prop["domain"] in class_names else 0),
-                                    key=f"dp_dom_{prop['name']}")
+                                    key=f"dp_dom_{prop_uid}")
                             with col2:
                                 current_range = prop["range"] if prop["range"] in datatypes else "string"
                                 new_range = st.selectbox("Range (Datatype)", options=datatypes,
                                     index=datatypes.index(current_range) if current_range in datatypes else 0,
-                                    key=f"dp_rng_{prop['name']}")
+                                    key=f"dp_rng_{prop_uid}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI for cross-namespace safety
+                                current_ref = prop["uri"]
                                 if new_name and new_name != prop["name"]:
-                                    if ont.rename_property(prop["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_property(prop["uri"], new_name):
+                                        current_ref = new_name
                                         save_checkpoint("Rename property")
                                         show_message(f"Property renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = prop["name"]
 
-                                ont.update_property(current_name,
+                                ont.update_property(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     new_domain=new_domain if new_domain != "None" else "",
                                     new_range=new_range)
                                 save_checkpoint("Update property")
-                                st.session_state[f"edit_dataprop_{prop['name']}"] = False
-                                show_message(f"Property '{current_name}' updated!", "success")
+                                st.session_state[f"edit_dataprop_{prop_uid}"] = False
+                                show_message(f"Property updated!", "success")
                                 st.rerun()
 
     if _prop_tab == "Add Object Property":
@@ -1098,22 +1208,29 @@ def render_individuals():
         if not individuals:
             st.info("No individuals defined yet.")
         else:
-            # Use URI hash for unique widget keys (name may not be unique across classes)
-            def _ind_key(ind):
-                return str(abs(hash(ind['uri'])))[:8]
+            # Use URI hash for unique widget keys (name may not be unique across namespaces)
+            ind_collisions = _build_name_collision_set(individuals)
 
-            _active_ind = next((i for i in individuals if st.session_state.get(f"view_ind_{_ind_key(i)}", False) or st.session_state.get(f"edit_ind_{_ind_key(i)}", False)), None)
+            _active_ind = next(
+                (i for i in individuals
+                 if st.session_state.get(f"view_ind_{_uid(i['uri'])}", False)
+                 or st.session_state.get(f"edit_ind_{_uid(i['uri'])}", False)),
+                None,
+            )
             if _active_ind:
+                _active_ind_uid = _uid(_active_ind["uri"])
                 for i in individuals:
-                    if i["uri"] != _active_ind["uri"]:
-                        st.session_state.pop(f"view_ind_{_ind_key(i)}", None)
-                        st.session_state.pop(f"edit_ind_{_ind_key(i)}", None)
+                    i_uid = _uid(i["uri"])
+                    if i_uid != _active_ind_uid:
+                        st.session_state.pop(f"view_ind_{i_uid}", None)
+                        st.session_state.pop(f"edit_ind_{i_uid}", None)
 
             for ind in individuals:
                 classes_str = ", ".join(ind["classes"]) if ind["classes"] else "No class"
-                _ik = _ind_key(ind)
+                _ik = _uid(ind["uri"])
+                disp_ind_name = _disambiguated_name(ind, ind_collisions)
                 _ind_expanded = st.session_state.get(f"view_ind_{_ik}", False) or st.session_state.get(f"edit_ind_{_ik}", False)
-                with st.expander(f"👤 **{ind['name']}** ({classes_str})", expanded=_ind_expanded):
+                with st.expander(f"👤 **{disp_ind_name}** ({classes_str})", expanded=_ind_expanded):
                     st.write(f"**URI:** `{ind['uri']}`" if ind['uri'].startswith("http://example.org/") else f"**URI:** {ind['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
@@ -1143,15 +1260,15 @@ def render_individuals():
                         st.button("✏️ Edit", key=f"btn_view_to_edit_ind_{_ik}",
                                   on_click=_cb_view_to_edit, args=("ind", _ik))
 
-                    if confirm_delete(ind["name"], "individual", f"ind_{_ik}"):
-                        ont.delete_individual(ind["name"])
+                    if confirm_delete(ind["uri"], "individual", f"ind_{_ik}"):
+                        ont.delete_individual(ind["uri"])
                         save_checkpoint("Delete individual")
-                        set_flash_message(f"Individual '{ind['name']}' deleted!", "success")
+                        set_flash_message(f"Individual '{disp_ind_name}' deleted!", "success")
                         st.rerun()
 
                     # Resource usages
                     with st.expander("Show Usages", expanded=False):
-                        usages = ont.get_resource_usages(ind["name"])
+                        usages = ont.get_resource_usages(ind["uri"])
                         if usages["inbound"]:
                             st.markdown("**Referenced by:**")
                             for u in usages["inbound"]:
@@ -1186,26 +1303,25 @@ def render_individuals():
                                     key=f"ind_rem_cls_{_ik}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI for cross-namespace safety
+                                current_ref = ind["uri"]
                                 if new_name and new_name != ind["name"]:
-                                    if ont.rename_individual(ind["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_individual(ind["uri"], new_name):
+                                        current_ref = new_name
                                         save_checkpoint("Rename individual")
                                         show_message(f"Individual renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = ind["name"]
 
-                                ont.update_individual(current_name,
+                                ont.update_individual(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     add_class=add_class if add_class != "None" else None,
                                     remove_class=remove_class if remove_class != "None" else None)
                                 save_checkpoint("Update individual")
                                 st.session_state[f"edit_ind_{_ik}"] = False
-                                show_message(f"Individual '{current_name}' updated!", "success")
+                                show_message(f"Individual updated!", "success")
                                 st.rerun()
 
     if _ind_tab == "Add Individual":
@@ -1454,6 +1570,9 @@ def render_relations():
         if class_relations:
             st.write("**Class Relations:**")
             for rel in class_relations:
+                subj_uri = rel.get("subject_uri", rel["subject"])
+                obj_uri = rel.get("object_uri", rel["object"])
+                rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
                 col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
                 with col1:
                     st.write(f"📦 {rel['subject']}")
@@ -1462,8 +1581,8 @@ def render_relations():
                 with col3:
                     st.write(f"📦 {rel['object']}")
                 with col4:
-                    if st.button("🗑️", key=f"del_crel_{rel['subject']}_{rel['relation']}_{rel['object']}"):
-                        ont.remove_class_relation(rel['subject'], rel['relation'], rel['object'])
+                    if st.button("🗑️", key=f"del_crel_{rel_uid}"):
+                        ont.remove_class_relation(subj_uri, rel['relation'], obj_uri)
                         save_checkpoint("Delete class relation")
                         show_message("Relation deleted!", "success")
                         st.rerun()
@@ -1485,8 +1604,11 @@ def render_relations():
                 with col3:
                     st.write(f"🔗 {rel['object']}")
                 with col4:
-                    if st.button("🗑️", key=f"del_prel_{rel['subject']}_{rel['relation']}_{rel['object']}"):
-                        ont.remove_property_relation(rel['subject'], rel['relation'], rel['object'])
+                    subj_uri = rel.get("subject_uri", rel["subject"])
+                    obj_uri = rel.get("object_uri", rel["object"])
+                    rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
+                    if st.button("🗑️", key=f"del_prel_{rel_uid}"):
+                        ont.remove_property_relation(subj_uri, rel['relation'], obj_uri)
                         save_checkpoint("Delete property relation")
                         show_message("Relation deleted!", "success")
                         st.rerun()
@@ -1508,8 +1630,11 @@ def render_relations():
                 with col3:
                     st.write(f"👤 {rel['object']}")
                 with col4:
-                    if st.button("🗑️", key=f"del_irel_{rel['subject']}_{rel['relation']}_{rel['object']}"):
-                        ont.remove_individual_relation(rel['subject'], rel['relation'], rel['object'])
+                    subj_uri = rel.get("subject_uri", rel["subject"])
+                    obj_uri = rel.get("object_uri", rel["object"])
+                    rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
+                    if st.button("🗑️", key=f"del_irel_{rel_uid}"):
+                        ont.remove_individual_relation(subj_uri, rel['relation'], obj_uri)
                         save_checkpoint("Delete individual relation")
                         show_message("Relation deleted!", "success")
                         st.rerun()
@@ -2156,7 +2281,7 @@ def render_import_export():
 
     ont = st.session_state.ontology
 
-    _ie_tabs = ["Import", "Export", "New Ontology", "Templates", "Upper Ontologies"]
+    _ie_tabs = ["Import", "Export", "New Ontology", "Templates", "Upper Ontologies", "Reference Ontologies"]
     _ie_tab = st.segmented_control("Section", _ie_tabs, default="Import",
                                    key="ie_active_tab", label_visibility="collapsed")
     if not _ie_tab:
@@ -2606,6 +2731,106 @@ def render_import_export():
                       key="apply_upper_ontology_btn",
                       on_click=_on_load_upper_ontology, args=(upper,))
 
+    if _ie_tab == "Reference Ontologies":
+        from templates import (get_reference_ontology_names,
+                               get_reference_ontology,
+                               load_reference_ontology_module)
+
+        def _on_load_reference_ontology(ref):
+            selected_modules = []
+            for mod in ref["modules"]:
+                if st.session_state.get(f"ref_mod_{mod['name']}", False):
+                    selected_modules.append(mod)
+
+            if not selected_modules:
+                st.session_state["_ref_onto_err"] = "Select at least one module."
+                return
+
+            try:
+                mode = st.session_state.ref_apply_mode
+                with st.spinner(f"Loading {ref['name']}…"):
+                    first = True
+                    for mod in selected_modules:
+                        fmt = mod.get("format", "turtle")
+                        content = load_reference_ontology_module(mod)
+                        if first and mode == "Replace current":
+                            ont.load_from_string(content, fmt)
+                            first = False
+                        else:
+                            ont.merge_from_string(content, fmt)
+                mod_names = ", ".join(m["name"] for m in selected_modules)
+                save_checkpoint(
+                    f"Load reference ontology: {ref['name']} ({mod_names})"
+                )
+                s = ont.get_statistics()
+                st.session_state["_ref_onto_msg"] = (
+                    f"Loaded {ref['name']} ({mod_names})! "
+                    f"— {s['classes']} classes, {s['object_properties']} obj props, "
+                    f"{s['data_properties']} data props, {s['content_triples']} triples"
+                )
+            except Exception as e:
+                st.session_state["_ref_onto_err"] = (
+                    f"Error loading reference ontology: {str(e)}"
+                )
+
+        st.subheader("Reference Ontologies")
+        st.caption(
+            "Import widely-used domain and reference vocabularies into the "
+            "current ontology. Bundled vocabularies load instantly; remote "
+            "vocabularies are downloaded once on first use and cached locally."
+        )
+
+        if "_ref_onto_msg" in st.session_state:
+            st.success(st.session_state.pop("_ref_onto_msg"))
+        if "_ref_onto_err" in st.session_state:
+            st.error(st.session_state.pop("_ref_onto_err"))
+
+        ref_names = get_reference_ontology_names()
+        selected_ref = st.selectbox("Select Reference Ontology", ref_names,
+                                    key="reference_ontology_select")
+
+        if selected_ref:
+            ref = get_reference_ontology(selected_ref)
+            st.write(f"**{ref['name']}** v{ref['version']}")
+            st.write(ref["description"])
+            st.caption(f"License: {ref['license']} — Attribution: {ref['attribution']}")
+            if ref.get("url"):
+                st.caption(f"More info: {ref['url']}")
+
+            has_remote = any("url" in m for m in ref["modules"])
+            if has_remote:
+                st.caption(
+                    "📡 Source: downloaded on first use, cached locally. "
+                    "Requires network access on first load."
+                )
+            else:
+                st.caption("💾 Source: bundled with the application (offline-ready).")
+
+            st.write("**Modules:**")
+            for mod in ref["modules"]:
+                default_on = mod.get("required", False) or mod.get("default", False)
+                st.checkbox(
+                    f"**{mod['name']}** — {mod['description']}",
+                    value=default_on,
+                    disabled=mod.get("required", False),
+                    key=f"ref_mod_{mod['name']}",
+                )
+
+            st.radio(
+                "Apply Mode",
+                ["Merge into current", "Replace current"],
+                horizontal=True,
+                key="ref_apply_mode",
+            )
+
+            st.button(
+                "Load Reference Ontology",
+                type="primary",
+                key="apply_reference_ontology_btn",
+                on_click=_on_load_reference_ontology,
+                args=(ref,),
+            )
+
 
 def render_advanced():
     """Render the advanced OWL features page."""
@@ -3005,11 +3230,19 @@ def render_visualization():
             issues = ont.validate()
             validation_subjects = {i["subject"] for i in issues}
 
-        # Class filter
+        # Class filter — reset to "all selected" whenever the ontology mutates
+        # (load, import, replace, undo) so a previously narrowed filter doesn't
+        # silently hide most of the newly loaded content.
         all_class_names = [c["name"] for c in classes] if classes else []
         all_class_set = set(all_class_names)
-        if "_viz_cfg_selected_classes" not in st.session_state:
+        current_mutation = st.session_state.get("_ont_mutation_count", 0)
+        last_seen_mutation = st.session_state.get("_viz_cfg_classes_at_mutation")
+        if (
+            "_viz_cfg_selected_classes" not in st.session_state
+            or last_seen_mutation != current_mutation
+        ):
             st.session_state["_viz_cfg_selected_classes"] = all_class_names
+            st.session_state["_viz_cfg_classes_at_mutation"] = current_mutation
         else:
             valid = [c for c in st.session_state["_viz_cfg_selected_classes"] if c in all_class_set]
             if not valid and all_class_names:
@@ -3028,7 +3261,11 @@ def render_visualization():
         # Store graph settings in session state for caching
         selected_classes_key = "_".join(sorted(selected_classes)) if selected_classes else "none"
         _graph_ver = 15  # Bump to invalidate cached graph data after code changes
-        graph_key = f"v{_graph_ver}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
+        # Include a mutation counter that bumps on every checkpoint / undo / redo,
+        # so any change to the ontology — even one that preserves triple count —
+        # invalidates the cached graph data and the iframe re-renders.
+        ont_mutation = st.session_state.get("_ont_mutation_count", 0)
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -3090,18 +3327,22 @@ def render_visualization():
             max_nodes = 500
             node_count = 0
 
-            # Build set of class names for edge validation (only selected classes)
-            class_names = set(selected_classes) if selected_classes else set()
+            # Build sets for node existence checks (URI-keyed for cross-namespace safety)
+            cls_collisions = _build_name_collision_set(classes)
+            selected_class_names = set(selected_classes) if selected_classes else set()
+            displayed_class_uris: set = set()
 
             # Add classes as nodes (only selected classes)
             if show_classes and selected_classes:
                 for cls in classes:
                     if node_count >= max_nodes:
                         break
-                    if cls["name"] not in selected_classes:
+                    if cls["name"] not in selected_class_names:
                         continue
-                    label = cls["label"] if cls["label"] else cls["name"]
-                    title = f"Class: {cls['name']}"
+                    cls_node_id = _uid(cls["uri"])
+                    disp_cls_name = _disambiguated_name(cls, cls_collisions)
+                    label = cls["label"] if cls["label"] else disp_cls_name
+                    title = f"Class: {disp_cls_name}"
                     if cls["label"]:
                         title += f"\nLabel: {cls['label']}"
                     if cls["comment"]:
@@ -3114,34 +3355,44 @@ def render_visualization():
                     border_width = 3 if has_issue else 1
                     if has_issue:
                         title += "\n⚠ Has validation issues"
-                    net.add_node(cls["name"], label=label, title=title,
+                    net.add_node(cls_node_id, label=label, title=title,
                                color=node_color, borderWidth=border_width,
                                shape="box", size=25,
-                               ntype="Class", ename=cls["name"])
+                               ntype="Class", ename=cls_node_id)
+                    displayed_class_uris.add(cls["uri"])
                     node_count += 1
 
-                # Add class hierarchy edges (only if parent node exists in graph)
+                # Add class hierarchy edges (URI-based so cross-namespace collisions don't merge)
                 for cls in classes:
-                    for parent in cls["parents"]:
-                        if parent in class_names:
-                            net.add_edge(cls["name"], parent, label="subClassOf",
-                                       title=f"Subclass relation:\n{cls['name']} is a subclass of {parent}",
+                    if cls["uri"] not in displayed_class_uris:
+                        continue
+                    cls_node_id = _uid(cls["uri"])
+                    for parent_uri in cls.get("parent_uris", []):
+                        if parent_uri in displayed_class_uris:
+                            parent_node_id = _uid(parent_uri)
+                            net.add_edge(cls_node_id, parent_node_id, label="subClassOf",
+                                       title=f"Subclass relation:\n{cls['name']} is a subclass of {parent_uri.rsplit('#', 1)[-1].rsplit('/', 1)[-1]}",
                                        color="#81C784", arrows="to")
 
             # Add object properties as labeled edges between domain and range
             if show_properties and object_props and show_classes:
                 for prop in object_props:
-                    # Only show if both domain and range exist as class nodes
-                    if prop["domain"] and prop["range"] and prop["domain"] in class_names and prop["range"] in class_names:
+                    # Only show if both domain and range exist as class nodes (URI-keyed)
+                    dom_uri = prop.get("domain_uri", "")
+                    rng_uri = prop.get("range_uri", "")
+                    if (dom_uri and rng_uri
+                            and dom_uri in displayed_class_uris
+                            and rng_uri in displayed_class_uris):
+                        prop_node_id = _uid(prop["uri"])
                         label = prop["label"] if prop["label"] else prop["name"]
                         title = f"Object Property: {prop['name']}"
                         if prop["label"]:
                             title += f"\nLabel: {prop['label']}"
-                        net.add_edge(prop["domain"], prop["range"],
+                        net.add_edge(_uid(dom_uri), _uid(rng_uri),
                                    label=label,
                                    title=title,
                                    color="#2196F3", arrows="to",
-                                   ntype="Object Property", ename=prop["name"])
+                                   ntype="Object Property", ename=prop_node_id)
 
             # Add data properties (connected to displayed classes, or standalone if no domain)
             if show_data_props and data_props and node_count < max_nodes:
@@ -3149,9 +3400,11 @@ def render_visualization():
                     if node_count >= max_nodes:
                         break
                     # Skip if domain is set but the class node isn't displayed
-                    if prop["domain"] and show_classes and prop["domain"] not in class_names:
+                    dom_uri = prop.get("domain_uri", "")
+                    if dom_uri and show_classes and dom_uri not in displayed_class_uris:
                         continue
 
+                    prop_node_id = f"dprop_{_uid(prop['uri'])}"
                     label = prop["label"] if prop["label"] else prop["name"]
                     title = f"Data Property: {prop['name']}"
                     if prop["domain"]:
@@ -3161,15 +3414,15 @@ def render_visualization():
                     if prop["functional"]:
                         title += "\nFunctional: Yes"
 
-                    net.add_node(f"dprop_{prop['name']}", label=label, title=title,
+                    net.add_node(prop_node_id, label=label, title=title,
                                color={"background": "#9C27B0", "border": "#7B1FA2"},
                                shape="box", size=12, font={"color": "#f0f0f0"},
-                               ntype="Data Property", ename=prop["name"])
+                               ntype="Data Property", ename=_uid(prop["uri"]))
                     node_count += 1
 
                     # Connect to domain class
-                    if prop["domain"]:
-                        net.add_edge(prop["domain"], f"dprop_{prop['name']}",
+                    if dom_uri and dom_uri in displayed_class_uris:
+                        net.add_edge(_uid(dom_uri), prop_node_id,
                                    title=f"Domain:\n{prop['name']} has domain {prop['domain']}",
                                    color="#CE93D8", arrows="to", dashes=True)
 
@@ -3178,6 +3431,7 @@ def render_visualization():
                 for ind in individuals:
                     if node_count >= max_nodes:
                         break
+                    ind_node_id = f"ind_{_uid(ind['uri'])}"
                     label = ind["label"] if ind["label"] else ind["name"]
                     title = f"Individual: {ind['name']}"
                     if ind["classes"]:
@@ -3190,44 +3444,52 @@ def render_visualization():
                     border_width = 3 if has_issue else 1
                     if has_issue:
                         title += "\n⚠ Has validation issues"
-                    net.add_node(f"ind_{ind['name']}", label=label, title=title,
+                    net.add_node(ind_node_id, label=label, title=title,
                                color=ind_color, borderWidth=border_width,
                                shape="box", size=20,
-                               ntype="Individual", ename=ind["name"])
+                               ntype="Individual", ename=_uid(ind["uri"]))
                     node_count += 1
 
-                    # Connect to classes (only if class node is in the graph)
+                    # Connect to classes (only if class node is displayed)
                     if show_classes:
+                        # Map local class names to displayed URIs once per individual
                         for cls_name in ind["classes"]:
-                            if cls_name in class_names:
-                                net.add_edge(f"ind_{ind['name']}", cls_name,
-                                           label="type",
-                                           title=f"Instance of:\n{ind['name']} is an instance of {cls_name}",
-                                           color="#FFB74D", arrows="to")
+                            for c in classes:
+                                if c["name"] == cls_name and c["uri"] in displayed_class_uris:
+                                    net.add_edge(ind_node_id, _uid(c["uri"]),
+                                               label="type",
+                                               title=f"Instance of:\n{ind['name']} is an instance of {cls_name}",
+                                               color="#FFB74D", arrows="to")
+                                    break
 
                 # Add edges between individuals (object property assertions)
                 if show_ind_edges:
-                    ind_names = {ind["name"] for ind in individuals}
+                    ind_uri_by_name: dict[str, str] = {ind["name"]: ind["uri"] for ind in individuals}
                     for ind in individuals:
                         for prop in ind.get("properties", []):
-                            if prop["value"] in ind_names:
-                                net.add_edge(f"ind_{ind['name']}", f"ind_{prop['value']}",
+                            target_uri = ind_uri_by_name.get(prop["value"])
+                            if target_uri:
+                                net.add_edge(f"ind_{_uid(ind['uri'])}", f"ind_{_uid(target_uri)}",
                                            label=prop["property"],
                                            title=f"{prop['property']}:\n{ind['name']} → {prop['value']}",
                                            color="#FF9800", arrows="to")
 
-            # Add class relations (only if both nodes exist)
+            # Add class relations (only if both nodes exist) — URI-keyed
             class_relations = ont.get_class_relations()
             if show_classes and classes:
                 for rel in class_relations:
-                    if rel["subject"] in class_names and rel["object"] in class_names:
+                    subj_uri = rel.get("subject_uri", "")
+                    obj_uri = rel.get("object_uri", "")
+                    if subj_uri in displayed_class_uris and obj_uri in displayed_class_uris:
+                        subj_node = _uid(subj_uri)
+                        obj_node = _uid(obj_uri)
                         if rel["relation"] == "equivalentClass":
-                            net.add_edge(rel["subject"], rel["object"],
+                            net.add_edge(subj_node, obj_node,
                                        label="equivalentClass",
                                        title=f"Equivalent classes:\n{rel['subject']} and {rel['object']} represent the same concept",
                                        color="#9C27B0", arrows="to")
                         elif rel["relation"] == "disjointWith":
-                            net.add_edge(rel["subject"], rel["object"],
+                            net.add_edge(subj_node, obj_node,
                                        label="disjointWith",
                                        title=f"Disjoint classes:\n{rel['subject']} and {rel['object']} cannot share instances",
                                        color="#F44336", arrows="to")
@@ -3433,6 +3695,8 @@ def render_visualization():
                     "edges": edges_json,
                     "options": options_json,
                 }
+                # Bump seq so the iframe component re-initialises with the new data
+                st.session_state.viz_render_seq += 1
                 status.empty()
 
             except Exception as e:
@@ -3665,11 +3929,13 @@ def main():
         with undo_col:
             if st.button("Undo", disabled=not um.can_undo(), use_container_width=True, key="btn_undo"):
                 label = um.undo()
+                st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
                 set_flash_message(f"Undid: {label}", "info")
                 st.rerun()
         with redo_col:
             if st.button("Redo", disabled=not um.can_redo(), use_container_width=True, key="btn_redo"):
                 label = um.redo()
+                st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
                 set_flash_message(f"Redid: {label}", "info")
                 st.rerun()
 

@@ -1,5 +1,8 @@
 """Built-in ontology templates for bootstrapping new ontologies."""
 
+import hashlib
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 TEMPLATES = [
@@ -378,12 +381,39 @@ UPPER_ONTOLOGIES = [
             },
         ],
     },
+    {
+        "name": "gUFO (UFO / OntoUML)",
+        "version": "1.0.0",
+        "description": (
+            "A lightweight OWL 2 DL implementation of the Unified Foundational "
+            "Ontology (UFO). Designed for ontologically precise modeling of "
+            "kinds, roles, phases, events, situations, qualities, and relators. "
+            "Suitable for OntoUML-style conceptual modeling. Licensed under CC BY 4.0."
+        ),
+        "url": "https://nemo-ufes.github.io/gufo/",
+        "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        "attribution": (
+            "Almeida, J.P.A.; Guizzardi, G.; Sales, T.P.; Falbo, R.A. — "
+            "NEMO, Federal University of Espírito Santo"
+        ),
+        "modules": [
+            {
+                "name": "gufo",
+                "file": "gufo/gufo.ttl",
+                "description": (
+                    "Core gUFO ontology — foundational UFO classes (Endurant, "
+                    "Event, Situation, Quality, Relator, etc.) and properties"
+                ),
+                "required": True,
+            },
+        ],
+    },
 ]
 
 
 def get_upper_ontology_names() -> list:
-    """Return list of upper ontology names."""
-    return [o["name"] for o in UPPER_ONTOLOGIES]
+    """Return upper ontology names, sorted alphabetically (case-insensitive)."""
+    return sorted((o["name"] for o in UPPER_ONTOLOGIES), key=str.lower)
 
 
 def get_upper_ontology(name: str) -> dict:
@@ -398,3 +428,139 @@ def load_upper_ontology_module(module: dict) -> str:
     """Load a module's Turtle content from file."""
     file_path = SAMPLES_DIR / module["file"]
     return file_path.read_text(encoding="utf-8")
+
+
+CACHE_DIR = Path.home() / ".cache" / "orionbelt" / "ontologies"
+
+REFERENCE_ONTOLOGIES = [
+    {
+        "name": "PROV-O",
+        "version": "W3C Recommendation 2013-04-30",
+        "description": (
+            "The W3C PROV Ontology for representing provenance: agents, "
+            "activities, entities, and how they were generated, derived, and "
+            "used. The standard vocabulary for tracking 'who did what when' "
+            "in any domain."
+        ),
+        "url": "https://www.w3.org/TR/prov-o/",
+        "license": "W3C Document License (royalty-free)",
+        "attribution": "W3C Provenance Working Group",
+        "modules": [
+            {
+                "name": "prov-o",
+                "file": "prov-o.ttl",
+                "format": "turtle",
+                "description": "PROV-O ontology (bundled, offline-ready)",
+                "required": True,
+            },
+        ],
+    },
+    {
+        "name": "FOAF (Friend of a Friend)",
+        "version": "0.99",
+        "description": (
+            "Friend of a Friend — a Linked Data vocabulary for describing "
+            "people, organizations, social networks, and online identity. "
+            "One of the original Linked Data vocabularies and widely embedded "
+            "in other ontologies."
+        ),
+        "url": "http://xmlns.com/foaf/spec/",
+        "license": "Creative Commons Attribution 1.0",
+        "attribution": "Dan Brickley, Libby Miller",
+        "modules": [
+            {
+                "name": "foaf",
+                "file": "foaf.rdf",
+                "format": "xml",
+                "description": "FOAF specification (bundled, RDF/XML)",
+                "required": True,
+            },
+        ],
+    },
+    {
+        "name": "GoodRelations",
+        "version": "1.0",
+        "description": (
+            "GoodRelations — an OWL ontology for e-commerce: products, "
+            "offers, prices, payment methods, and business entities. Underlies "
+            "much of the schema.org Product/Offer model."
+        ),
+        "url": "http://www.heppnetz.de/ontologies/goodrelations/v1.html",
+        "license": "Creative Commons Attribution 3.0",
+        "attribution": "Martin Hepp",
+        "modules": [
+            {
+                "name": "goodrelations",
+                "file": "goodrelations.owl",
+                "format": "xml",
+                "description": "GoodRelations e-commerce vocabulary (bundled, RDF/XML)",
+                "required": True,
+            },
+        ],
+    },
+]
+
+
+def get_reference_ontology_names() -> list:
+    """Return reference ontology names, sorted alphabetically (case-insensitive)."""
+    return sorted((o["name"] for o in REFERENCE_ONTOLOGIES), key=str.lower)
+
+
+def get_reference_ontology(name: str) -> dict:
+    """Return a reference ontology definition by name, or None if not found."""
+    for o in REFERENCE_ONTOLOGIES:
+        if o["name"] == name:
+            return o
+    return None
+
+
+def load_reference_ontology_module(module: dict) -> str:
+    """Load a reference-ontology module from bundle (file:) or HTTPS (url:).
+
+    Downloaded files are cached on disk under CACHE_DIR keyed by SHA256 (or by
+    URL hash when no SHA256 is pinned). When a SHA256 is provided, the
+    downloaded bytes are verified against it before caching — a mismatch
+    raises rather than silently loading altered content.
+    """
+    if "file" in module:
+        return (SAMPLES_DIR / module["file"]).read_text(encoding="utf-8")
+    if "url" in module:
+        return _fetch_with_cache(module["url"], module.get("sha256"))
+    raise ValueError(
+        f"Module '{module.get('name')}' has neither 'file' nor 'url'"
+    )
+
+
+def _fetch_with_cache(url: str, expected_sha256: str | None = None) -> str:
+    """Download a URL with on-disk caching and optional SHA256 verification."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_key = expected_sha256 or hashlib.sha256(url.encode("utf-8")).hexdigest()
+    cache_file = CACHE_DIR / f"{cache_key}.dat"
+
+    if cache_file.exists():
+        return cache_file.read_text(encoding="utf-8")
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "orionbelt-ontology-builder/1.3"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Could not download ontology from {url}: {e.reason}"
+        ) from e
+
+    if expected_sha256:
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != expected_sha256:
+            raise RuntimeError(
+                f"SHA256 mismatch for {url}: expected {expected_sha256}, "
+                f"got {actual}. The remote file may have been updated; "
+                "please verify and update the registry."
+            )
+
+    text = data.decode("utf-8")
+    cache_file.write_text(text, encoding="utf-8")
+    return text

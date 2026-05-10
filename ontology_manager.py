@@ -485,7 +485,13 @@ class OntologyManager:
         self.graph.remove((None, None, class_uri))
 
     def get_classes(self) -> List[Dict[str, Any]]:
-        """Get all classes with their details."""
+        """Get all classes with their details.
+
+        Each entry includes both local-name lists (`parents`, `children`) and
+        URI lists (`parent_uris`, `child_uris`). The local-name lists keep
+        existing callers working; consumers that need to disambiguate across
+        namespaces (e.g. the graph visualizer) should use the URI lists.
+        """
         classes = []
         for class_uri in self.graph.subjects(RDF.type, OWL.Class):
             if isinstance(class_uri, BNode):
@@ -497,18 +503,22 @@ class OntologyManager:
                 "label": str(self.graph.value(class_uri, RDFS.label) or ""),
                 "comment": str(self.graph.value(class_uri, RDFS.comment) or ""),
                 "parents": [],
-                "children": []
+                "parent_uris": [],
+                "children": [],
+                "child_uris": [],
             }
 
             # Get parent classes
             for parent in self.graph.objects(class_uri, RDFS.subClassOf):
                 if isinstance(parent, URIRef):
                     class_info["parents"].append(self._local_name(parent))
+                    class_info["parent_uris"].append(str(parent))
 
             # Get child classes
             for child in self.graph.subjects(RDFS.subClassOf, class_uri):
                 if isinstance(child, URIRef):
                     class_info["children"].append(self._local_name(child))
+                    class_info["child_uris"].append(str(child))
 
             classes.append(class_info)
 
@@ -889,7 +899,9 @@ class OntologyManager:
                 "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
                 "comment": str(self.graph.value(prop_uri, RDFS.comment) or ""),
                 "domain": "",
+                "domain_uri": "",
                 "range": "",
+                "range_uri": "",
                 "characteristics": []
             }
 
@@ -901,6 +913,7 @@ class OntologyManager:
                         break
             if domain and isinstance(domain, URIRef):
                 prop_info["domain"] = self._local_name(domain)
+                prop_info["domain_uri"] = str(domain)
 
             range_ = self.graph.value(prop_uri, RDFS.range)
             if not range_ or not isinstance(range_, URIRef):
@@ -910,6 +923,7 @@ class OntologyManager:
                         break
             if range_ and isinstance(range_, URIRef):
                 prop_info["range"] = self._local_name(range_)
+                prop_info["range_uri"] = str(range_)
 
             # Check characteristics
             if (prop_uri, RDF.type, OWL.FunctionalProperty) in self.graph:
@@ -948,6 +962,7 @@ class OntologyManager:
                 "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
                 "comment": str(self.graph.value(prop_uri, RDFS.comment) or ""),
                 "domain": "",
+                "domain_uri": "",
                 "range": "",
                 "functional": False
             }
@@ -960,6 +975,7 @@ class OntologyManager:
                         break
             if domain and isinstance(domain, URIRef):
                 prop_info["domain"] = self._local_name(domain)
+                prop_info["domain_uri"] = str(domain)
 
             range_ = self.graph.value(prop_uri, RDFS.range)
             if range_:
@@ -1756,7 +1772,12 @@ class OntologyManager:
             self.graph.remove((class1_uri, relation, class2_uri))
 
     def get_class_relations(self, class_name: str = None) -> List[Dict[str, str]]:
-        """Get all class relations, optionally filtered by class."""
+        """Get all class relations, optionally filtered by class.
+
+        Each result dict includes both local names (subject/object) and full
+        URIs (subject_uri/object_uri) so callers can disambiguate when local
+        names collide across namespaces.
+        """
         relations = []
         for rel_name, rel_pred in self.CLASS_RELATIONS.items():
             for subj, obj in self.graph.subject_objects(rel_pred):
@@ -1766,8 +1787,10 @@ class OntologyManager:
                     if class_name is None or class_name in [subj_name, obj_name]:
                         relations.append({
                             "subject": subj_name,
+                            "subject_uri": str(subj),
                             "relation": rel_name,
-                            "object": obj_name
+                            "object": obj_name,
+                            "object_uri": str(obj),
                         })
         return relations
 
@@ -1788,7 +1811,10 @@ class OntologyManager:
             self.graph.remove((prop1_uri, relation, prop2_uri))
 
     def get_property_relations(self, prop_name: str = None) -> List[Dict[str, str]]:
-        """Get all property relations, optionally filtered by property."""
+        """Get all property relations, optionally filtered by property.
+
+        Each result dict includes both local names and full URIs.
+        """
         relations = []
         for rel_name, rel_pred in self.PROPERTY_RELATIONS.items():
             for subj, obj in self.graph.subject_objects(rel_pred):
@@ -1798,8 +1824,10 @@ class OntologyManager:
                     if prop_name is None or prop_name in [subj_name, obj_name]:
                         relations.append({
                             "subject": subj_name,
+                            "subject_uri": str(subj),
                             "relation": rel_name,
-                            "object": obj_name
+                            "object": obj_name,
+                            "object_uri": str(obj),
                         })
         return relations
 
@@ -1820,7 +1848,10 @@ class OntologyManager:
             self.graph.remove((ind1_uri, relation, ind2_uri))
 
     def get_individual_relations(self, ind_name: str = None) -> List[Dict[str, str]]:
-        """Get all individual relations (sameAs, differentFrom)."""
+        """Get all individual relations (sameAs, differentFrom).
+
+        Each result dict includes both local names and full URIs.
+        """
         relations = []
         for rel_name, rel_pred in self.INDIVIDUAL_RELATIONS.items():
             for subj, obj in self.graph.subject_objects(rel_pred):
@@ -1830,8 +1861,10 @@ class OntologyManager:
                     if ind_name is None or ind_name in [subj_name, obj_name]:
                         relations.append({
                             "subject": subj_name,
+                            "subject_uri": str(subj),
                             "relation": rel_name,
-                            "object": obj_name
+                            "object": obj_name,
+                            "object_uri": str(obj),
                         })
         return relations
 
