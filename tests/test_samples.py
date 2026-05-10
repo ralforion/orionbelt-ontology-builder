@@ -9,7 +9,9 @@ import subprocess
 import pytest
 from ontology_manager import OntologyManager
 
-SAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "samples")
+SAMPLES_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "orionbelt_ontology_builder", "samples"
+)
 
 SAMPLE_FILES = {
     "pizza": ("pizza.owl", "xml", "https://protege.stanford.edu/ontologies/pizza/pizza.owl"),

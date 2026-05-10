@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-ontology-builder/main/docs/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-ontology-builder/main/orionbelt_ontology_builder/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
 </p>
 
 <h1 align="center">OrionBelt Ontology Builder</h1>
@@ -7,7 +7,7 @@
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralfbecher/orionbelt-ontology-builder?style=social)](https://github.com/ralfbecher/orionbelt-ontology-builder)
-[![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-purple.svg)](https://github.com/ralfbecher/orionbelt-ontology-builder/releases)
+[![Version 1.3.1](https://img.shields.io/badge/version-1.3.1-purple.svg)](https://github.com/ralfbecher/orionbelt-ontology-builder/releases)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-ontology-builder/blob/main/LICENSE)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io)
@@ -18,7 +18,7 @@
 **Try it now:** [orionbelt.streamlit.app](https://orionbelt.streamlit.app/)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-ontology-builder/main/docs/assets/OrionBelt_Ontology_Builder.png" alt="OrionBelt Ontology Builder Screenshot" width="800">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-ontology-builder/main/orionbelt_ontology_builder/assets/OrionBelt_Ontology_Builder.png" alt="OrionBelt Ontology Builder Screenshot" width="800">
 </p>
 
 ---
@@ -158,13 +158,19 @@ Open http://localhost:8501
 
 ```
 orionbelt-ontology-builder/
-├── app.py                 # Streamlit UI
-├── ontology_manager.py    # Core OWL/SKOS engine (rdflib)
-├── templates.py           # Built-in ontology templates
-├── pyproject.toml         # Project metadata
-├── lib/                   # Frontend libraries (vis-network, Tom Select)
-├── tests/                 # 168 pytest tests
-└── docs/assets/           # Logos
+├── app.py                              # Streamlit Cloud entry point (delegates to package)
+├── ontology_manager.py                 # Backward-compat shim
+├── templates.py                        # Backward-compat shim
+├── orionbelt_ontology_builder/         # The actual installable package
+│   ├── app.py                          # Streamlit UI
+│   ├── ontology_manager.py             # Core OWL/SKOS engine (rdflib)
+│   ├── templates.py                    # Built-in templates / upper / reference ontologies
+│   ├── samples/                        # Bundled gist, gUFO, FOAF, PROV-O, GoodRelations, …
+│   ├── lib/                            # Frontend libraries (vis-network, Tom Select)
+│   ├── assets/                         # Logos and screenshots
+│   └── favicon.png
+├── pyproject.toml                      # Project metadata
+└── tests/                              # pytest suite
 ```
 
 Dependencies: streamlit, rdflib, owlrl, networkx, pyvis.
@@ -189,6 +195,6 @@ By contributing to this project, you agree to the [Contributor License Agreement
 
 <p align="center">
   <a href="https://ralforion.com">
-    <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-ontology-builder/main/docs/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
+    <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-ontology-builder/main/orionbelt_ontology_builder/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
 </p>

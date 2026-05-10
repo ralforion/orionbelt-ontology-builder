@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+include CLA.md
+include requirements.txt
+include MANIFEST.in
+recursive-include orionbelt_ontology_builder *.py *.png *.ttl *.owl *.rdf *.txt *.md *.html *.js *.css
+recursive-include tests *.py
