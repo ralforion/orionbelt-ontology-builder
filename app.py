@@ -811,31 +811,41 @@ def render_properties():
 
             st.caption(f"Showing {len(filtered_obj_props)} of {len(object_props)} properties")
 
-            _active_op = next((p for p in filtered_obj_props if st.session_state.get(f"view_objprop_{p['name']}", False) or st.session_state.get(f"edit_objprop_{p['name']}", False)), None)
+            op_collisions = _build_name_collision_set(object_props)
+            _active_op = next(
+                (p for p in filtered_obj_props
+                 if st.session_state.get(f"view_objprop_{_uid(p['uri'])}", False)
+                 or st.session_state.get(f"edit_objprop_{_uid(p['uri'])}", False)),
+                None,
+            )
             if _active_op:
+                _active_op_uid = _uid(_active_op["uri"])
                 for p in filtered_obj_props:
-                    if p["name"] != _active_op["name"]:
-                        st.session_state.pop(f"view_objprop_{p['name']}", None)
-                        st.session_state.pop(f"edit_objprop_{p['name']}", None)
+                    p_uid = _uid(p["uri"])
+                    if p_uid != _active_op_uid:
+                        st.session_state.pop(f"view_objprop_{p_uid}", None)
+                        st.session_state.pop(f"edit_objprop_{p_uid}", None)
 
             for prop in filtered_obj_props:
-                _op_expanded = st.session_state.get(f"view_objprop_{prop['name']}", False) or st.session_state.get(f"edit_objprop_{prop['name']}", False)
-                with st.expander(f"🔗 **{prop['name']}** ({prop['domain'] or '?'} → {prop['range'] or '?'})", expanded=_op_expanded):
+                prop_uid = _uid(prop["uri"])
+                disp_name = _disambiguated_name(prop, op_collisions)
+                _op_expanded = st.session_state.get(f"view_objprop_{prop_uid}", False) or st.session_state.get(f"edit_objprop_{prop_uid}", False)
+                with st.expander(f"🔗 **{disp_name}** ({prop['domain'] or '?'} → {prop['range'] or '?'})", expanded=_op_expanded):
                     st.write(f"**URI:** `{prop['uri']}`" if prop['uri'].startswith("http://example.org/") else f"**URI:** {prop['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
                     with btn_view:
-                        st.button("👁️ View", key=f"btn_view_objprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_view, args=("objprop", prop['name']))
+                        st.button("👁️ View", key=f"btn_view_objprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_view, args=("objprop", prop_uid))
                     with btn_edit:
-                        st.button("✏️ Edit", key=f"btn_edit_objprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_edit, args=("objprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_edit_objprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_edit, args=("objprop", prop_uid))
                     with btn_del:
-                        st.button("🗑️ Delete", key=f"btn_del_objprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(f"objprop_{prop['name']}",))
+                        st.button("🗑️ Delete", key=f"btn_del_objprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_confirm_delete, args=(f"objprop_{prop_uid}",))
 
                     # View details
-                    if st.session_state.get(f"view_objprop_{prop['name']}", False):
+                    if st.session_state.get(f"view_objprop_{prop_uid}", False):
                         st.divider()
                         st.write(f"**Name:** {prop['name']}")
                         st.write(f"**Label:** {prop['label'] or '—'}")
@@ -844,53 +854,52 @@ def render_properties():
                         st.write(f"**Range:** {prop['range'] or '—'}")
                         st.write(f"**Characteristics:** {', '.join(prop['characteristics']) if prop['characteristics'] else '—'}")
                         st.write(f"**Inverse of:** {prop.get('inverse_of') or '—'}")
-                        st.button("✏️ Edit", key=f"btn_view_to_edit_objprop_{prop['name']}",
-                                  on_click=_cb_view_to_edit, args=("objprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_view_to_edit_objprop_{prop_uid}",
+                                  on_click=_cb_view_to_edit, args=("objprop", prop_uid))
 
-                    if confirm_delete(prop["name"], "property", f"objprop_{prop['name']}"):
-                        ont.delete_property(prop["name"])
+                    if confirm_delete(prop["uri"], "property", f"objprop_{prop_uid}"):
+                        ont.delete_property(prop["uri"])
                         save_checkpoint("Delete property")
-                        set_flash_message(f"Property '{prop['name']}' deleted!", "success")
+                        set_flash_message(f"Property '{disp_name}' deleted!", "success")
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_objprop_{prop['name']}", False):
+                    if st.session_state.get(f"edit_objprop_{prop_uid}", False):
                         st.divider()
-                        with st.form(f"edit_objprop_form_{prop['name']}"):
-                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"objp_name_{prop['name']}")
-                            new_label = st.text_input("Label", value=prop["label"], key=f"objp_lbl_{prop['name']}")
-                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"objp_cmt_{prop['name']}")
+                        with st.form(f"edit_objprop_form_{prop_uid}"):
+                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"objp_name_{prop_uid}")
+                            new_label = st.text_input("Label", value=prop["label"], key=f"objp_lbl_{prop_uid}")
+                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"objp_cmt_{prop_uid}")
                             col1, col2 = st.columns(2)
                             with col1:
                                 new_domain = st.selectbox("Domain", options=["None"] + class_names,
                                     index=0 if not prop["domain"] else (class_names.index(prop["domain"]) + 1 if prop["domain"] in class_names else 0),
-                                    key=f"objp_dom_{prop['name']}")
+                                    key=f"objp_dom_{prop_uid}")
                             with col2:
                                 new_range = st.selectbox("Range", options=["None"] + class_names,
                                     index=0 if not prop["range"] else (class_names.index(prop["range"]) + 1 if prop["range"] in class_names else 0),
-                                    key=f"objp_rng_{prop['name']}")
+                                    key=f"objp_rng_{prop_uid}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI for cross-namespace safety
+                                current_ref = prop["uri"]
                                 if new_name and new_name != prop["name"]:
-                                    if ont.rename_property(prop["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_property(prop["uri"], new_name):
+                                        current_ref = new_name
                                         save_checkpoint("Rename property")
                                         show_message(f"Property renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = prop["name"]
 
-                                ont.update_property(current_name,
+                                ont.update_property(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     new_domain=new_domain if new_domain != "None" else "",
                                     new_range=new_range if new_range != "None" else "")
                                 save_checkpoint("Update property")
-                                st.session_state[f"edit_objprop_{prop['name']}"] = False
-                                show_message(f"Property '{current_name}' updated!", "success")
+                                st.session_state[f"edit_objprop_{prop_uid}"] = False
+                                show_message(f"Property updated!", "success")
                                 st.rerun()
 
     if _prop_tab == "Data Properties":
@@ -915,31 +924,41 @@ def render_properties():
 
             datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())
 
-            _active_dp = next((p for p in filtered_data_props if st.session_state.get(f"view_dataprop_{p['name']}", False) or st.session_state.get(f"edit_dataprop_{p['name']}", False)), None)
+            dp_collisions = _build_name_collision_set(data_props)
+            _active_dp = next(
+                (p for p in filtered_data_props
+                 if st.session_state.get(f"view_dataprop_{_uid(p['uri'])}", False)
+                 or st.session_state.get(f"edit_dataprop_{_uid(p['uri'])}", False)),
+                None,
+            )
             if _active_dp:
+                _active_dp_uid = _uid(_active_dp["uri"])
                 for p in filtered_data_props:
-                    if p["name"] != _active_dp["name"]:
-                        st.session_state.pop(f"view_dataprop_{p['name']}", None)
-                        st.session_state.pop(f"edit_dataprop_{p['name']}", None)
+                    p_uid = _uid(p["uri"])
+                    if p_uid != _active_dp_uid:
+                        st.session_state.pop(f"view_dataprop_{p_uid}", None)
+                        st.session_state.pop(f"edit_dataprop_{p_uid}", None)
 
             for prop in filtered_data_props:
-                _dp_expanded = st.session_state.get(f"view_dataprop_{prop['name']}", False) or st.session_state.get(f"edit_dataprop_{prop['name']}", False)
-                with st.expander(f"📝 **{prop['name']}** ({prop['domain'] or '?'} → {prop['range']})", expanded=_dp_expanded):
+                prop_uid = _uid(prop["uri"])
+                disp_name = _disambiguated_name(prop, dp_collisions)
+                _dp_expanded = st.session_state.get(f"view_dataprop_{prop_uid}", False) or st.session_state.get(f"edit_dataprop_{prop_uid}", False)
+                with st.expander(f"📝 **{disp_name}** ({prop['domain'] or '?'} → {prop['range']})", expanded=_dp_expanded):
                     st.write(f"**URI:** `{prop['uri']}`" if prop['uri'].startswith("http://example.org/") else f"**URI:** {prop['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
                     with btn_view:
-                        st.button("👁️ View", key=f"btn_view_dataprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_view, args=("dataprop", prop['name']))
+                        st.button("👁️ View", key=f"btn_view_dataprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_view, args=("dataprop", prop_uid))
                     with btn_edit:
-                        st.button("✏️ Edit", key=f"btn_edit_dataprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_toggle_edit, args=("dataprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_edit_dataprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_toggle_edit, args=("dataprop", prop_uid))
                     with btn_del:
-                        st.button("🗑️ Delete", key=f"btn_del_dataprop_{prop['name']}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(f"dataprop_{prop['name']}",))
+                        st.button("🗑️ Delete", key=f"btn_del_dataprop_{prop_uid}", use_container_width=True,
+                                  on_click=_cb_confirm_delete, args=(f"dataprop_{prop_uid}",))
 
                     # View details
-                    if st.session_state.get(f"view_dataprop_{prop['name']}", False):
+                    if st.session_state.get(f"view_dataprop_{prop_uid}", False):
                         st.divider()
                         st.write(f"**Name:** {prop['name']}")
                         st.write(f"**Label:** {prop['label'] or '—'}")
@@ -947,54 +966,53 @@ def render_properties():
                         st.write(f"**Domain:** {prop['domain'] or '—'}")
                         st.write(f"**Range (Datatype):** {prop['range']}")
                         st.write(f"**Functional:** {'Yes' if prop['functional'] else 'No'}")
-                        st.button("✏️ Edit", key=f"btn_view_to_edit_dataprop_{prop['name']}",
-                                  on_click=_cb_view_to_edit, args=("dataprop", prop['name']))
+                        st.button("✏️ Edit", key=f"btn_view_to_edit_dataprop_{prop_uid}",
+                                  on_click=_cb_view_to_edit, args=("dataprop", prop_uid))
 
-                    if confirm_delete(prop["name"], "property", f"dataprop_{prop['name']}"):
-                        ont.delete_property(prop["name"])
+                    if confirm_delete(prop["uri"], "property", f"dataprop_{prop_uid}"):
+                        ont.delete_property(prop["uri"])
                         save_checkpoint("Delete property")
-                        set_flash_message(f"Property '{prop['name']}' deleted!", "success")
+                        set_flash_message(f"Property '{disp_name}' deleted!", "success")
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_dataprop_{prop['name']}", False):
+                    if st.session_state.get(f"edit_dataprop_{prop_uid}", False):
                         st.divider()
-                        with st.form(f"edit_dataprop_form_{prop['name']}"):
-                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"dp_name_{prop['name']}")
-                            new_label = st.text_input("Label", value=prop["label"], key=f"dp_lbl_{prop['name']}")
-                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"dp_cmt_{prop['name']}")
+                        with st.form(f"edit_dataprop_form_{prop_uid}"):
+                            new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"dp_name_{prop_uid}")
+                            new_label = st.text_input("Label", value=prop["label"], key=f"dp_lbl_{prop_uid}")
+                            new_comment = st.text_area("Comment", value=prop["comment"], key=f"dp_cmt_{prop_uid}")
                             col1, col2 = st.columns(2)
                             with col1:
                                 new_domain = st.selectbox("Domain", options=["None"] + class_names,
                                     index=0 if not prop["domain"] else (class_names.index(prop["domain"]) + 1 if prop["domain"] in class_names else 0),
-                                    key=f"dp_dom_{prop['name']}")
+                                    key=f"dp_dom_{prop_uid}")
                             with col2:
                                 current_range = prop["range"] if prop["range"] in datatypes else "string"
                                 new_range = st.selectbox("Range (Datatype)", options=datatypes,
                                     index=datatypes.index(current_range) if current_range in datatypes else 0,
-                                    key=f"dp_rng_{prop['name']}")
+                                    key=f"dp_rng_{prop_uid}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI for cross-namespace safety
+                                current_ref = prop["uri"]
                                 if new_name and new_name != prop["name"]:
-                                    if ont.rename_property(prop["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_property(prop["uri"], new_name):
+                                        current_ref = new_name
                                         save_checkpoint("Rename property")
                                         show_message(f"Property renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = prop["name"]
 
-                                ont.update_property(current_name,
+                                ont.update_property(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     new_domain=new_domain if new_domain != "None" else "",
                                     new_range=new_range)
                                 save_checkpoint("Update property")
-                                st.session_state[f"edit_dataprop_{prop['name']}"] = False
-                                show_message(f"Property '{current_name}' updated!", "success")
+                                st.session_state[f"edit_dataprop_{prop_uid}"] = False
+                                show_message(f"Property updated!", "success")
                                 st.rerun()
 
     if _prop_tab == "Add Object Property":
@@ -1190,22 +1208,29 @@ def render_individuals():
         if not individuals:
             st.info("No individuals defined yet.")
         else:
-            # Use URI hash for unique widget keys (name may not be unique across classes)
-            def _ind_key(ind):
-                return str(abs(hash(ind['uri'])))[:8]
+            # Use URI hash for unique widget keys (name may not be unique across namespaces)
+            ind_collisions = _build_name_collision_set(individuals)
 
-            _active_ind = next((i for i in individuals if st.session_state.get(f"view_ind_{_ind_key(i)}", False) or st.session_state.get(f"edit_ind_{_ind_key(i)}", False)), None)
+            _active_ind = next(
+                (i for i in individuals
+                 if st.session_state.get(f"view_ind_{_uid(i['uri'])}", False)
+                 or st.session_state.get(f"edit_ind_{_uid(i['uri'])}", False)),
+                None,
+            )
             if _active_ind:
+                _active_ind_uid = _uid(_active_ind["uri"])
                 for i in individuals:
-                    if i["uri"] != _active_ind["uri"]:
-                        st.session_state.pop(f"view_ind_{_ind_key(i)}", None)
-                        st.session_state.pop(f"edit_ind_{_ind_key(i)}", None)
+                    i_uid = _uid(i["uri"])
+                    if i_uid != _active_ind_uid:
+                        st.session_state.pop(f"view_ind_{i_uid}", None)
+                        st.session_state.pop(f"edit_ind_{i_uid}", None)
 
             for ind in individuals:
                 classes_str = ", ".join(ind["classes"]) if ind["classes"] else "No class"
-                _ik = _ind_key(ind)
+                _ik = _uid(ind["uri"])
+                disp_ind_name = _disambiguated_name(ind, ind_collisions)
                 _ind_expanded = st.session_state.get(f"view_ind_{_ik}", False) or st.session_state.get(f"edit_ind_{_ik}", False)
-                with st.expander(f"👤 **{ind['name']}** ({classes_str})", expanded=_ind_expanded):
+                with st.expander(f"👤 **{disp_ind_name}** ({classes_str})", expanded=_ind_expanded):
                     st.write(f"**URI:** `{ind['uri']}`" if ind['uri'].startswith("http://example.org/") else f"**URI:** {ind['uri']}")
 
                     btn_view, btn_edit, btn_del, _ = st.columns([1, 1, 1, 4])
@@ -1235,15 +1260,15 @@ def render_individuals():
                         st.button("✏️ Edit", key=f"btn_view_to_edit_ind_{_ik}",
                                   on_click=_cb_view_to_edit, args=("ind", _ik))
 
-                    if confirm_delete(ind["name"], "individual", f"ind_{_ik}"):
-                        ont.delete_individual(ind["name"])
+                    if confirm_delete(ind["uri"], "individual", f"ind_{_ik}"):
+                        ont.delete_individual(ind["uri"])
                         save_checkpoint("Delete individual")
-                        set_flash_message(f"Individual '{ind['name']}' deleted!", "success")
+                        set_flash_message(f"Individual '{disp_ind_name}' deleted!", "success")
                         st.rerun()
 
                     # Resource usages
                     with st.expander("Show Usages", expanded=False):
-                        usages = ont.get_resource_usages(ind["name"])
+                        usages = ont.get_resource_usages(ind["uri"])
                         if usages["inbound"]:
                             st.markdown("**Referenced by:**")
                             for u in usages["inbound"]:
@@ -1278,26 +1303,25 @@ def render_individuals():
                                     key=f"ind_rem_cls_{_ik}")
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first
+                                # Handle rename first — pass URI for cross-namespace safety
+                                current_ref = ind["uri"]
                                 if new_name and new_name != ind["name"]:
-                                    if ont.rename_individual(ind["name"], new_name):
-                                        current_name = new_name
+                                    if ont.rename_individual(ind["uri"], new_name):
+                                        current_ref = new_name
                                         save_checkpoint("Rename individual")
                                         show_message(f"Individual renamed to '{new_name}'", "success")
                                     else:
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
-                                else:
-                                    current_name = ind["name"]
 
-                                ont.update_individual(current_name,
+                                ont.update_individual(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
                                     add_class=add_class if add_class != "None" else None,
                                     remove_class=remove_class if remove_class != "None" else None)
                                 save_checkpoint("Update individual")
                                 st.session_state[f"edit_ind_{_ik}"] = False
-                                show_message(f"Individual '{current_name}' updated!", "success")
+                                show_message(f"Individual updated!", "success")
                                 st.rerun()
 
     if _ind_tab == "Add Individual":
@@ -1546,6 +1570,9 @@ def render_relations():
         if class_relations:
             st.write("**Class Relations:**")
             for rel in class_relations:
+                subj_uri = rel.get("subject_uri", rel["subject"])
+                obj_uri = rel.get("object_uri", rel["object"])
+                rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
                 col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
                 with col1:
                     st.write(f"📦 {rel['subject']}")
@@ -1554,8 +1581,8 @@ def render_relations():
                 with col3:
                     st.write(f"📦 {rel['object']}")
                 with col4:
-                    if st.button("🗑️", key=f"del_crel_{rel['subject']}_{rel['relation']}_{rel['object']}"):
-                        ont.remove_class_relation(rel['subject'], rel['relation'], rel['object'])
+                    if st.button("🗑️", key=f"del_crel_{rel_uid}"):
+                        ont.remove_class_relation(subj_uri, rel['relation'], obj_uri)
                         save_checkpoint("Delete class relation")
                         show_message("Relation deleted!", "success")
                         st.rerun()
@@ -1577,8 +1604,11 @@ def render_relations():
                 with col3:
                     st.write(f"🔗 {rel['object']}")
                 with col4:
-                    if st.button("🗑️", key=f"del_prel_{rel['subject']}_{rel['relation']}_{rel['object']}"):
-                        ont.remove_property_relation(rel['subject'], rel['relation'], rel['object'])
+                    subj_uri = rel.get("subject_uri", rel["subject"])
+                    obj_uri = rel.get("object_uri", rel["object"])
+                    rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
+                    if st.button("🗑️", key=f"del_prel_{rel_uid}"):
+                        ont.remove_property_relation(subj_uri, rel['relation'], obj_uri)
                         save_checkpoint("Delete property relation")
                         show_message("Relation deleted!", "success")
                         st.rerun()
@@ -1600,8 +1630,11 @@ def render_relations():
                 with col3:
                     st.write(f"👤 {rel['object']}")
                 with col4:
-                    if st.button("🗑️", key=f"del_irel_{rel['subject']}_{rel['relation']}_{rel['object']}"):
-                        ont.remove_individual_relation(rel['subject'], rel['relation'], rel['object'])
+                    subj_uri = rel.get("subject_uri", rel["subject"])
+                    obj_uri = rel.get("object_uri", rel["object"])
+                    rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
+                    if st.button("🗑️", key=f"del_irel_{rel_uid}"):
+                        ont.remove_individual_relation(subj_uri, rel['relation'], obj_uri)
                         save_checkpoint("Delete individual relation")
                         show_message("Relation deleted!", "success")
                         st.rerun()

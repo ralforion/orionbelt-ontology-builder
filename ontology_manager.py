@@ -1756,7 +1756,12 @@ class OntologyManager:
             self.graph.remove((class1_uri, relation, class2_uri))
 
     def get_class_relations(self, class_name: str = None) -> List[Dict[str, str]]:
-        """Get all class relations, optionally filtered by class."""
+        """Get all class relations, optionally filtered by class.
+
+        Each result dict includes both local names (subject/object) and full
+        URIs (subject_uri/object_uri) so callers can disambiguate when local
+        names collide across namespaces.
+        """
         relations = []
         for rel_name, rel_pred in self.CLASS_RELATIONS.items():
             for subj, obj in self.graph.subject_objects(rel_pred):
@@ -1766,8 +1771,10 @@ class OntologyManager:
                     if class_name is None or class_name in [subj_name, obj_name]:
                         relations.append({
                             "subject": subj_name,
+                            "subject_uri": str(subj),
                             "relation": rel_name,
-                            "object": obj_name
+                            "object": obj_name,
+                            "object_uri": str(obj),
                         })
         return relations
 
@@ -1788,7 +1795,10 @@ class OntologyManager:
             self.graph.remove((prop1_uri, relation, prop2_uri))
 
     def get_property_relations(self, prop_name: str = None) -> List[Dict[str, str]]:
-        """Get all property relations, optionally filtered by property."""
+        """Get all property relations, optionally filtered by property.
+
+        Each result dict includes both local names and full URIs.
+        """
         relations = []
         for rel_name, rel_pred in self.PROPERTY_RELATIONS.items():
             for subj, obj in self.graph.subject_objects(rel_pred):
@@ -1798,8 +1808,10 @@ class OntologyManager:
                     if prop_name is None or prop_name in [subj_name, obj_name]:
                         relations.append({
                             "subject": subj_name,
+                            "subject_uri": str(subj),
                             "relation": rel_name,
-                            "object": obj_name
+                            "object": obj_name,
+                            "object_uri": str(obj),
                         })
         return relations
 
@@ -1820,7 +1832,10 @@ class OntologyManager:
             self.graph.remove((ind1_uri, relation, ind2_uri))
 
     def get_individual_relations(self, ind_name: str = None) -> List[Dict[str, str]]:
-        """Get all individual relations (sameAs, differentFrom)."""
+        """Get all individual relations (sameAs, differentFrom).
+
+        Each result dict includes both local names and full URIs.
+        """
         relations = []
         for rel_name, rel_pred in self.INDIVIDUAL_RELATIONS.items():
             for subj, obj in self.graph.subject_objects(rel_pred):
@@ -1830,8 +1845,10 @@ class OntologyManager:
                     if ind_name is None or ind_name in [subj_name, obj_name]:
                         relations.append({
                             "subject": subj_name,
+                            "subject_uri": str(subj),
                             "relation": rel_name,
-                            "object": obj_name
+                            "object": obj_name,
+                            "object_uri": str(obj),
                         })
         return relations
 
