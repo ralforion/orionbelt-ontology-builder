@@ -117,6 +117,8 @@ def save_checkpoint(label: str = "Edit"):
     """Save a snapshot to the undo history after a mutation."""
     if st.session_state.get("undo_manager"):
         st.session_state.undo_manager.checkpoint(label)
+    # Bump mutation counter so derived UI caches (e.g. graph viz) invalidate
+    st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
 
 
 def log_error(error: Exception, context: str = ""):
@@ -3128,9 +3130,11 @@ def render_visualization():
         # Store graph settings in session state for caching
         selected_classes_key = "_".join(sorted(selected_classes)) if selected_classes else "none"
         _graph_ver = 15  # Bump to invalidate cached graph data after code changes
-        # Include the ontology's triple count so an import/replace/undo invalidates the cached graph
-        ont_fingerprint = len(ont.graph)
-        graph_key = f"v{_graph_ver}_{ont_fingerprint}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
+        # Include a mutation counter that bumps on every checkpoint / undo / redo,
+        # so any change to the ontology — even one that preserves triple count —
+        # invalidates the cached graph data and the iframe re-renders.
+        ont_mutation = st.session_state.get("_ont_mutation_count", 0)
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -3535,6 +3539,8 @@ def render_visualization():
                     "edges": edges_json,
                     "options": options_json,
                 }
+                # Bump seq so the iframe component re-initialises with the new data
+                st.session_state.viz_render_seq += 1
                 status.empty()
 
             except Exception as e:
@@ -3767,11 +3773,13 @@ def main():
         with undo_col:
             if st.button("Undo", disabled=not um.can_undo(), use_container_width=True, key="btn_undo"):
                 label = um.undo()
+                st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
                 set_flash_message(f"Undid: {label}", "info")
                 st.rerun()
         with redo_col:
             if st.button("Redo", disabled=not um.can_redo(), use_container_width=True, key="btn_redo"):
                 label = um.redo()
+                st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
                 set_flash_message(f"Redid: {label}", "info")
                 st.rerun()
 
