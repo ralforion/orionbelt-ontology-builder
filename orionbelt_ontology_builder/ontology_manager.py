@@ -1090,13 +1090,17 @@ class OntologyManager:
                 "label": str(self.graph.value(ind_uri, RDFS.label) or ""),
                 "comment": str(self.graph.value(ind_uri, RDFS.comment) or ""),
                 "classes": [],
+                "class_uris": [],
                 "properties": []
             }
 
-            # Get classes
+            # Get classes — expose both the local name (for display) and the
+            # full URI (so consumers like the graph viewer can target the
+            # exact class even when local names collide across namespaces).
             for class_uri in self.graph.objects(ind_uri, RDF.type):
                 if isinstance(class_uri, URIRef) and class_uri != OWL.NamedIndividual:
                     ind_info["classes"].append(self._local_name(class_uri))
+                    ind_info["class_uris"].append(str(class_uri))
 
             # Get property assertions
             for pred, obj in self.graph.predicate_objects(ind_uri):
@@ -2334,8 +2338,10 @@ class OntologyManager:
     def search(self, query: str) -> List[Dict[str, str]]:
         """Search across all resource names, labels, and comments.
 
-        Returns a list of dicts with keys: name, type, label, match_field.
-        Results are case-insensitive partial matches.
+        Returns a list of dicts with keys: name, uri, type, label, match_field.
+        Results are case-insensitive partial matches. The full URI is included
+        so that callers can distinguish duplicate local names from different
+        namespaces.
         """
         if not query or not query.strip():
             return []
@@ -2371,6 +2377,7 @@ class OntologyManager:
                 if match_field:
                     results.append({
                         "name": name,
+                        "uri": str(subj),
                         "type": type_label,
                         "label": label,
                         "match_field": match_field,

@@ -117,3 +117,56 @@ class TestCrossNamespaceDuplicates:
         assert "subject_uri" in equiv[0]
         assert "object_uri" in equiv[0]
         assert {equiv[0]["subject_uri"], equiv[0]["object_uri"]} == {foaf_uri, gist_uri}
+
+    def test_update_property_with_uri_domain_preserves_namespace(self):
+        """Regression: editing an object property with a foaf:Organization
+        domain must not silently rewrite the domain to myont:Organization
+        even though both share the local name 'Organization'."""
+        from rdflib import RDFS
+        om, foaf_uri, gist_uri = self._make_two_orgs()
+        om.add_object_property("memberOf")
+        # Save with the foaf URI as domain
+        om.update_property("memberOf", new_domain=foaf_uri)
+        prop = next(p for p in om.get_object_properties() if p["name"] == "memberOf")
+        assert prop["domain_uri"] == foaf_uri
+        assert prop["domain_uri"] != gist_uri
+        # Re-save (no-op): domain must still be the foaf URI, not collapsed
+        om.update_property("memberOf", new_domain=foaf_uri)
+        prop2 = next(p for p in om.get_object_properties() if p["name"] == "memberOf")
+        assert prop2["domain_uri"] == foaf_uri
+
+    def test_add_class_relation_with_uris_targets_correct_resources(self):
+        """Regression: Add Class Relation must place the triple between the
+        URIs the user picked, not synthesise new base-namespace classes."""
+        from rdflib import URIRef, OWL
+        om, foaf_uri, gist_uri = self._make_two_orgs()
+        om.add_class_relation(foaf_uri, "equivalentClass", gist_uri)
+        # The triple must reference the imported URIs, not myont:Organization
+        triples = list(om.graph.triples((URIRef(foaf_uri), OWL.equivalentClass, URIRef(gist_uri))))
+        assert len(triples) == 1
+        my_org = om._uri("Organization")
+        bogus = list(om.graph.triples((my_org, OWL.equivalentClass, None)))
+        assert bogus == [], "must not have synthesised myont:Organization triple"
+
+    def test_individuals_expose_class_uris(self):
+        """Regression: get_individuals must expose class_uris so the graph
+        viewer can target the correct duplicate-named class."""
+        from rdflib import URIRef, RDF, OWL, Literal
+        om, foaf_uri, _gist_uri = self._make_two_orgs()
+        alice = om.namespace["alice"]
+        om.graph.add((alice, RDF.type, OWL.NamedIndividual))
+        om.graph.add((alice, RDF.type, URIRef(foaf_uri)))
+        inds = om.get_individuals()
+        alice_info = next(i for i in inds if i["name"] == "alice")
+        assert "class_uris" in alice_info
+        assert foaf_uri in alice_info["class_uris"]
+
+    def test_search_returns_uris(self):
+        """Regression: search() must include URI per result so sidebar
+        navigation can disambiguate cross-namespace duplicates."""
+        om, foaf_uri, gist_uri = self._make_two_orgs()
+        results = om.search("Organization")
+        org_results = [r for r in results if r["name"] == "Organization"]
+        assert len(org_results) == 2
+        assert all("uri" in r for r in org_results)
+        assert {r["uri"] for r in org_results} == {foaf_uri, gist_uri}

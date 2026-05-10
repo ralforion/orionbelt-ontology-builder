@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -282,18 +282,48 @@ def _cb_confirm_delete(key_suffix):
     st.session_state[f"confirm_delete_{key_suffix}"] = True
 
 
-def build_class_options(classes: list, include_none: bool = False) -> tuple:
-    """Build class dropdown options with 'Label (disambiguated name)' format.
+def build_uri_options(items: list, include_none: bool = False) -> tuple:
+    """Build dropdown options for any entity list (classes / properties /
+    individuals) where each item is a dict with at least 'name' and 'uri'.
 
     Display strings include a namespace tag when local names collide across
     namespaces (e.g. 'Organization (foaf)' / 'Organization (gist)'), so the
-    dropdown never shows two visually identical entries. The lookup maps each
-    display string to the resource's full URI — pass this URI to ont methods
-    (`add_class`, `delete_class`, etc.) which already accept URIs via `_uri()`.
+    dropdown never shows two visually identical entries. The lookup maps
+    each display string to the resource's full URI — pass this URI to
+    OntologyManager methods (which already accept URIs via `_uri()`) so a
+    cross-namespace duplicate is never silently rewritten into the user's
+    base namespace.
 
     Returns:
         tuple: (display_options, uri_lookup_dict). For the 'None' entry the
         lookup value is None.
+    """
+    options = []
+    lookup = {}
+    collisions = _build_name_collision_set(items)
+
+    rows = []
+    for it in items:
+        disp_name = _disambiguated_name(it, collisions)
+        display = format_label_name(disp_name, it.get("label"))
+        rows.append(display)
+        lookup[display] = it["uri"]
+
+    rows.sort(key=lambda x: x.lower())
+
+    if include_none:
+        options.append("None")
+        lookup["None"] = None
+
+    options.extend(rows)
+    return options, lookup
+
+
+def build_class_options(classes: list, include_none: bool = False) -> tuple:
+    """Build class dropdown options with 'Label (disambiguated name)' format.
+
+    Thin wrapper around :func:`build_uri_options` kept for clarity at call
+    sites that work specifically with classes.
     """
     options = []
     lookup = {}
@@ -879,15 +909,27 @@ def render_properties():
                             new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"objp_name_{prop_uid}")
                             new_label = st.text_input("Label", value=prop["label"], key=f"objp_lbl_{prop_uid}")
                             new_comment = st.text_area("Comment", value=prop["comment"], key=f"objp_cmt_{prop_uid}")
+                            # Build URI-keyed dropdowns for Domain/Range so a
+                            # foaf:Organization domain isn't silently rewritten
+                            # to myont:Organization on save.
+                            cls_opts, cls_lookup = build_class_options(classes, include_none=True)
+                            cur_dom_uri = prop.get("domain_uri", "")
+                            cur_rng_uri = prop.get("range_uri", "")
+                            cur_dom_disp = next((d for d, u in cls_lookup.items() if u == cur_dom_uri), "None")
+                            cur_rng_disp = next((d for d, u in cls_lookup.items() if u == cur_rng_uri), "None")
                             col1, col2 = st.columns(2)
                             with col1:
-                                new_domain = st.selectbox("Domain", options=["None"] + class_names,
-                                    index=0 if not prop["domain"] else (class_names.index(prop["domain"]) + 1 if prop["domain"] in class_names else 0),
-                                    key=f"objp_dom_{prop_uid}")
+                                dom_disp = st.selectbox(
+                                    "Domain", options=cls_opts,
+                                    index=cls_opts.index(cur_dom_disp) if cur_dom_disp in cls_opts else 0,
+                                    key=f"objp_dom_{prop_uid}",
+                                )
                             with col2:
-                                new_range = st.selectbox("Range", options=["None"] + class_names,
-                                    index=0 if not prop["range"] else (class_names.index(prop["range"]) + 1 if prop["range"] in class_names else 0),
-                                    key=f"objp_rng_{prop_uid}")
+                                rng_disp = st.selectbox(
+                                    "Range", options=cls_opts,
+                                    index=cls_opts.index(cur_rng_disp) if cur_rng_disp in cls_opts else 0,
+                                    key=f"objp_rng_{prop_uid}",
+                                )
 
                             if st.form_submit_button("Save Changes"):
                                 # Handle rename first — pass URI for cross-namespace safety
@@ -901,11 +943,13 @@ def render_properties():
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
 
+                                new_dom_uri = cls_lookup.get(dom_disp) or ""
+                                new_rng_uri = cls_lookup.get(rng_disp) or ""
                                 ont.update_property(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
-                                    new_domain=new_domain if new_domain != "None" else "",
-                                    new_range=new_range if new_range != "None" else "")
+                                    new_domain=new_dom_uri,
+                                    new_range=new_rng_uri)
                                 save_checkpoint("Update property")
                                 st.session_state[f"edit_objprop_{prop_uid}"] = False
                                 show_message(f"Property updated!", "success")
@@ -991,11 +1035,16 @@ def render_properties():
                             new_name = st.text_input("Name (URI local part)", value=prop["name"], key=f"dp_name_{prop_uid}")
                             new_label = st.text_input("Label", value=prop["label"], key=f"dp_lbl_{prop_uid}")
                             new_comment = st.text_area("Comment", value=prop["comment"], key=f"dp_cmt_{prop_uid}")
+                            cls_opts, cls_lookup = build_class_options(classes, include_none=True)
+                            cur_dom_uri = prop.get("domain_uri", "")
+                            cur_dom_disp = next((d for d, u in cls_lookup.items() if u == cur_dom_uri), "None")
                             col1, col2 = st.columns(2)
                             with col1:
-                                new_domain = st.selectbox("Domain", options=["None"] + class_names,
-                                    index=0 if not prop["domain"] else (class_names.index(prop["domain"]) + 1 if prop["domain"] in class_names else 0),
-                                    key=f"dp_dom_{prop_uid}")
+                                dom_disp = st.selectbox(
+                                    "Domain", options=cls_opts,
+                                    index=cls_opts.index(cur_dom_disp) if cur_dom_disp in cls_opts else 0,
+                                    key=f"dp_dom_{prop_uid}",
+                                )
                             with col2:
                                 current_range = prop["range"] if prop["range"] in datatypes else "string"
                                 new_range = st.selectbox("Range (Datatype)", options=datatypes,
@@ -1014,10 +1063,11 @@ def render_properties():
                                         show_message(f"Cannot rename: '{new_name}' already exists!", "error")
                                         st.rerun()
 
+                                new_dom_uri = cls_lookup.get(dom_disp) or ""
                                 ont.update_property(current_ref,
                                     new_label=new_label,
                                     new_comment=new_comment,
-                                    new_domain=new_domain if new_domain != "None" else "",
+                                    new_domain=new_dom_uri,
                                     new_range=new_range)
                                 save_checkpoint("Update property")
                                 st.session_state[f"edit_dataprop_{prop_uid}"] = False
@@ -1032,11 +1082,13 @@ def render_properties():
             label = st.text_input("Label")
             comment = st.text_area("Comment")
 
+            cls_opts, cls_lookup = build_class_options(classes, include_none=True)
+            obj_prop_opts, obj_prop_lookup = build_uri_options(object_props, include_none=True)
             col1, col2 = st.columns(2)
             with col1:
-                domain = st.selectbox("Domain (Class)", options=["None"] + class_names)
+                domain_disp = st.selectbox("Domain (Class)", options=cls_opts)
             with col2:
-                range_ = st.selectbox("Range (Class)", options=["None"] + class_names)
+                range_disp = st.selectbox("Range (Class)", options=cls_opts)
 
             st.write("**Property Characteristics:**")
             col1, col2, col3, col4 = st.columns(4)
@@ -1052,7 +1104,7 @@ def render_properties():
             with col4:
                 symmetric = st.checkbox("Symmetric")
 
-            inverse_of = st.selectbox("Inverse Of", options=["None"] + obj_prop_names)
+            inverse_disp = st.selectbox("Inverse Of", options=obj_prop_opts)
 
             submitted = st.form_submit_button("Add Object Property")
             if submitted:
@@ -1063,8 +1115,8 @@ def render_properties():
                 else:
                     ont.add_object_property(
                         name,
-                        domain=domain if domain != "None" else None,
-                        range_=range_ if range_ != "None" else None,
+                        domain=cls_lookup.get(domain_disp),
+                        range_=cls_lookup.get(range_disp),
                         label=label,
                         comment=comment,
                         functional=functional,
@@ -1074,7 +1126,7 @@ def render_properties():
                         asymmetric=asymmetric,
                         reflexive=reflexive,
                         irreflexive=irreflexive,
-                        inverse_of=inverse_of if inverse_of != "None" else None
+                        inverse_of=obj_prop_lookup.get(inverse_disp),
                     )
                     save_checkpoint("Add object property")
                     show_message(f"Object property '{name}' added!", "success")
@@ -1088,10 +1140,11 @@ def render_properties():
             label = st.text_input("Label", key="data_prop_label")
             comment = st.text_area("Comment", key="data_prop_comment")
 
+            cls_opts, cls_lookup = build_class_options(classes, include_none=True)
             col1, col2 = st.columns(2)
             with col1:
-                domain = st.selectbox("Domain (Class)", options=["None"] + class_names,
-                                     key="data_prop_domain")
+                domain_disp = st.selectbox("Domain (Class)", options=cls_opts,
+                                           key="data_prop_domain")
             with col2:
                 datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())
                 range_ = st.selectbox("Range (Datatype)", options=datatypes,
@@ -1108,7 +1161,7 @@ def render_properties():
                 else:
                     ont.add_data_property(
                         name,
-                        domain=domain if domain != "None" else None,
+                        domain=cls_lookup.get(domain_disp),
                         range_=range_,
                         label=label,
                         comment=comment,
@@ -1653,14 +1706,15 @@ def render_relations():
     if _rel_tab == "Class Relations":
         st.subheader("Add Class Relation")
 
-        if len(class_names) < 2:
+        if len(classes) < 2:
             st.warning("Need at least 2 classes to create relations.")
         else:
             with st.form("add_class_relation_form"):
+                cls_opts, cls_lookup = build_class_options(classes)
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    class1 = st.selectbox("Class 1", options=class_names, key="crel_class1")
+                    class1_disp = st.selectbox("Class 1", options=cls_opts, key="crel_class1")
                 with col2:
                     relation_type = st.selectbox("Relation Type", options=[
                         "subClassOf",
@@ -1668,7 +1722,7 @@ def render_relations():
                         "disjointWith"
                     ], key="crel_type")
                 with col3:
-                    class2 = st.selectbox("Class 2", options=class_names, key="crel_class2")
+                    class2_disp = st.selectbox("Class 2", options=cls_opts, key="crel_class2")
 
                 st.caption("""
                 - **subClassOf**: Class 1 is a subclass of Class 2
@@ -1678,25 +1732,29 @@ def render_relations():
 
                 submitted = st.form_submit_button("Add Class Relation")
                 if submitted:
-                    if class1 == class2:
+                    class1_uri = cls_lookup.get(class1_disp)
+                    class2_uri = cls_lookup.get(class2_disp)
+                    if class1_uri == class2_uri:
                         show_message("Please select two different classes!", "error")
                     else:
-                        ont.add_class_relation(class1, relation_type, class2)
+                        ont.add_class_relation(class1_uri, relation_type, class2_uri)
                         save_checkpoint("Add class relation")
-                        show_message(f"Relation added: {class1} {relation_type} {class2}", "success")
+                        show_message(f"Relation added: {class1_disp} {relation_type} {class2_disp}", "success")
                         st.rerun()
 
     if _rel_tab == "Property Relations":
         st.subheader("Add Property Relation")
 
-        if len(all_prop_names) < 2:
+        all_props = object_props + data_props
+        if len(all_props) < 2:
             st.warning("Need at least 2 properties to create relations.")
         else:
             with st.form("add_property_relation_form"):
+                prop_opts, prop_lookup = build_uri_options(all_props)
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    prop1 = st.selectbox("Property 1", options=all_prop_names, key="prel_prop1")
+                    prop1_disp = st.selectbox("Property 1", options=prop_opts, key="prel_prop1")
                 with col2:
                     relation_type = st.selectbox("Relation Type", options=[
                         "subPropertyOf",
@@ -1704,7 +1762,7 @@ def render_relations():
                         "inverseOf"
                     ], key="prel_type")
                 with col3:
-                    prop2 = st.selectbox("Property 2", options=all_prop_names, key="prel_prop2")
+                    prop2_disp = st.selectbox("Property 2", options=prop_opts, key="prel_prop2")
 
                 st.caption("""
                 - **subPropertyOf**: Property 1 is a sub-property of Property 2
@@ -1714,32 +1772,35 @@ def render_relations():
 
                 submitted = st.form_submit_button("Add Property Relation")
                 if submitted:
-                    if prop1 == prop2:
+                    prop1_uri = prop_lookup.get(prop1_disp)
+                    prop2_uri = prop_lookup.get(prop2_disp)
+                    if prop1_uri == prop2_uri:
                         show_message("Please select two different properties!", "error")
                     else:
-                        ont.add_property_relation(prop1, relation_type, prop2)
+                        ont.add_property_relation(prop1_uri, relation_type, prop2_uri)
                         save_checkpoint("Add property relation")
-                        show_message(f"Relation added: {prop1} {relation_type} {prop2}", "success")
+                        show_message(f"Relation added: {prop1_disp} {relation_type} {prop2_disp}", "success")
                         st.rerun()
 
     if _rel_tab == "Individual Relations":
         st.subheader("Add Individual Relation")
 
-        if len(ind_names) < 2:
+        if len(individuals) < 2:
             st.warning("Need at least 2 individuals to create relations.")
         else:
             with st.form("add_individual_relation_form"):
+                ind_opts, ind_lookup = build_uri_options(individuals)
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    ind1 = st.selectbox("Individual 1", options=ind_names, key="irel_ind1")
+                    ind1_disp = st.selectbox("Individual 1", options=ind_opts, key="irel_ind1")
                 with col2:
                     relation_type = st.selectbox("Relation Type", options=[
                         "sameAs",
                         "differentFrom"
                     ], key="irel_type")
                 with col3:
-                    ind2 = st.selectbox("Individual 2", options=ind_names, key="irel_ind2")
+                    ind2_disp = st.selectbox("Individual 2", options=ind_opts, key="irel_ind2")
 
                 st.caption("""
                 - **sameAs**: Individual 1 and Individual 2 refer to the same entity
@@ -1748,12 +1809,14 @@ def render_relations():
 
                 submitted = st.form_submit_button("Add Individual Relation")
                 if submitted:
-                    if ind1 == ind2:
+                    ind1_uri = ind_lookup.get(ind1_disp)
+                    ind2_uri = ind_lookup.get(ind2_disp)
+                    if ind1_uri == ind2_uri:
                         show_message("Please select two different individuals!", "error")
                     else:
-                        ont.add_individual_relation(ind1, relation_type, ind2)
+                        ont.add_individual_relation(ind1_uri, relation_type, ind2_uri)
                         save_checkpoint("Add individual relation")
-                        show_message(f"Relation added: {ind1} {relation_type} {ind2}", "success")
+                        show_message(f"Relation added: {ind1_disp} {relation_type} {ind2_disp}", "success")
                         st.rerun()
 
 
@@ -3459,17 +3522,19 @@ def render_visualization():
                                ntype="Individual", ename=_uid(ind["uri"]))
                     node_count += 1
 
-                    # Connect to classes (only if class node is displayed)
+                    # Connect to classes via URI so the edge points to the
+                    # exact class node, even when the same local name appears
+                    # in multiple namespaces.
                     if show_classes:
-                        # Map local class names to displayed URIs once per individual
-                        for cls_name in ind["classes"]:
-                            for c in classes:
-                                if c["name"] == cls_name and c["uri"] in displayed_class_uris:
-                                    net.add_edge(ind_node_id, _uid(c["uri"]),
-                                               label="type",
-                                               title=f"Instance of:\n{ind['name']} is an instance of {cls_name}",
-                                               color="#FFB74D", arrows="to")
-                                    break
+                        class_uris = ind.get("class_uris") or []
+                        cls_names = ind.get("classes") or []
+                        for idx, cls_uri in enumerate(class_uris):
+                            if cls_uri in displayed_class_uris:
+                                cls_name = cls_names[idx] if idx < len(cls_names) else cls_uri
+                                net.add_edge(ind_node_id, _uid(cls_uri),
+                                           label="type",
+                                           title=f"Instance of:\n{ind['name']} is an instance of {cls_name}",
+                                           color="#FFB74D", arrows="to")
 
                 # Add edges between individuals (object property assertions)
                 if show_ind_edges:
@@ -3974,16 +4039,23 @@ def main():
                 page = type_to_page.get(type_label, "Dashboard")
                 for r in items:
                     label_str = f" ({r['label']})" if r["label"] and r["label"] != r["name"] else ""
-                    if st.sidebar.button(f"{r['name']}{label_str}", key=f"search_{type_label}_{r['name']}",
+                    # Key the search button by URI hash so duplicate local
+                    # names in different namespaces produce distinct buttons.
+                    r_uri = r.get("uri", r["name"])
+                    r_uid = _uid(r_uri)
+                    if st.sidebar.button(f"{r['name']}{label_str}",
+                                         key=f"search_{type_label}_{r_uid}",
                                          use_container_width=True):
                         st.session_state.search_navigate_to = page
-                        # Set the view pane open for the selected resource
+                        # Open the view pane keyed by URI hash so we navigate
+                        # to the *exact* resource, not whichever shares the
+                        # same local name.
                         view_key_map = {
-                            "Class": f"view_class_{r['name']}",
-                            "Object Property": f"view_objprop_{r['name']}",
-                            "Data Property": f"view_dataprop_{r['name']}",
-                            "Individual": f"view_ind_{r['name']}",
-                            "SKOS Concept": f"view_skos_{str(abs(hash(r.get('uri', r['name']))))[:8]}",
+                            "Class": f"view_class_{r_uid}",
+                            "Object Property": f"view_objprop_{r_uid}",
+                            "Data Property": f"view_dataprop_{r_uid}",
+                            "Individual": f"view_ind_{r_uid}",
+                            "SKOS Concept": f"view_skos_{str(abs(hash(r_uri)))[:8]}",
                         }
                         view_key = view_key_map.get(type_label)
                         if view_key:
