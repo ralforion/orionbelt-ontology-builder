@@ -16,7 +16,7 @@ APP_VERSION = "1.3.2"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-GITHUB_ISSUES_URL = "https://github.com/ralfbecher/orionbelt-ontology-builder/issues"
+GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 
 _FAVICON = _Path(__file__).parent / "favicon.png"
 

@@ -35,9 +35,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ralfbecher/orionbelt-ontology-builder"
-Repository = "https://github.com/ralfbecher/orionbelt-ontology-builder"
-Issues = "https://github.com/ralfbecher/orionbelt-ontology-builder/issues"
+Homepage = "https://github.com/ralforion/orionbelt-ontology-builder"
+Repository = "https://github.com/ralforion/orionbelt-ontology-builder"
+Issues = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 Demo = "https://orionbelt.streamlit.app"
 
 [tool.pytest.ini_options]
