@@ -14,7 +14,6 @@ design/
 dist/
 build/
 .claude/settings.local.json
-CLAUDE.md
 
 # IDE
 .idea/
