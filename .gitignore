@@ -37,3 +37,6 @@ Thumbs.db
 !samples/**/*.owl
 !samples/**/*.rdf
 
+
+# Playwright MCP session artifacts
+.playwright-mcp/

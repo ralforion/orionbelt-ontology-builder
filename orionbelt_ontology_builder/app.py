@@ -11,12 +11,20 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.4.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
+
+# Browser-localStorage autosave: the working ontology lives only in Streamlit's
+# in-memory session state, so a page refresh starts a fresh session and would
+# otherwise discard all unsaved work. We mirror the graph into the browser's
+# localStorage and restore it automatically when a new session starts.
+AUTOSAVE_KEY = "orionbelt_ontology_builder_autosave"
+# localStorage is ~5 MB per origin; stay well under to leave headroom.
+AUTOSAVE_MAX_BYTES = 4_000_000
 
 _FAVICON = _Path(__file__).parent / "favicon.png"
 
@@ -121,6 +129,188 @@ def init_session_state():
         _s = ont.get_statistics()
         if _s["classes"] == 0 and _s["object_properties"] == 0 and _s["data_properties"] == 0 and _s.get("concepts", 0) == 0:
             st.session_state["nav_radio"] = "Import / Export"
+
+
+def _content_hash(text: str) -> str:
+    """Stable hash of a serialized ontology, used to skip redundant autosaves."""
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def _ontology_is_empty(ont) -> bool:
+    """True when the ontology has no user content (only metadata, if any)."""
+    s = ont.get_statistics()
+    return (
+        s["classes"] == 0
+        and s["object_properties"] == 0
+        and s["data_properties"] == 0
+        and s["individuals"] == 0
+        and s.get("concepts", 0) == 0
+    )
+
+
+def _get_local_storage():
+    """Return a browser-localStorage handle, or None if unavailable.
+
+    The component instance is constructed once per session (mounting the reader
+    component twice in one rerun would collide on its Streamlit key). On a fresh
+    page load the browser hands its stored items back on a *later* rerun, so we
+    refresh the cached handle's items from the component's latest value on every
+    call. If the optional dependency is missing or the component fails, autosave
+    is silently disabled so the rest of the app keeps working.
+    """
+    if "_local_storage" not in st.session_state:
+        try:
+            from streamlit_local_storage import LocalStorage
+            st.session_state["_local_storage"] = LocalStorage()
+        except Exception as e:  # pragma: no cover - depends on browser/runtime
+            logger.warning(f"localStorage autosave unavailable: {e}")
+            st.session_state["_local_storage"] = None
+    ls = st.session_state["_local_storage"]
+    if ls is not None:
+        latest = st.session_state.get(getattr(ls, "storedKey", None))
+        if isinstance(latest, dict):
+            ls.storedItems = latest
+    return ls
+
+
+def maybe_restore_autosave():
+    """Restore the ontology from browser localStorage when a session starts.
+
+    Runs after init_session_state(), while the freshly created ontology is still
+    empty. The localStorage component returns its empty default on the first
+    script run of a fresh page load and only delivers the real data on a
+    follow-up rerun, so this keeps retrying (no premature "restored" flag) until
+    either data arrives or the session already has content. The empty-session
+    guard makes it safe to run repeatedly — a loaded sample is never clobbered.
+    """
+    if st.session_state.get("_autosave_restored"):
+        return
+    ont = st.session_state.ontology
+    # Once the session has content (restored, imported, or freshly authored),
+    # there is nothing left to restore.
+    if not _ontology_is_empty(ont):
+        st.session_state["_autosave_restored"] = True
+        return
+
+    ls = _get_local_storage()
+    if ls is None:
+        st.session_state["_autosave_restored"] = True
+        return
+    saved = ls.getItem(AUTOSAVE_KEY)
+    # The localStorage component occasionally hands the value back wrapped in a
+    # {key: value} dict instead of the raw string; unwrap defensively.
+    if isinstance(saved, dict):
+        saved = saved.get(AUTOSAVE_KEY) or next(
+            (v for v in saved.values() if isinstance(v, str)), None
+        )
+    if not isinstance(saved, str) or not saved.strip():
+        # Data may not have arrived from the browser yet; try again next rerun.
+        return
+
+    try:
+        ont.load_from_string(saved, format="turtle")
+    except Exception as e:
+        log_error(e, context="Autosave restore")
+        st.session_state["_autosave_restored"] = True
+        return
+
+    st.session_state["_autosave_restored"] = True
+    st.session_state["_autosave_last_hash"] = _content_hash(saved)
+    # An empty-but-valid saved graph (e.g. after a discard) is loaded silently;
+    # there is no work to announce or navigate to.
+    if _ontology_is_empty(ont):
+        return
+    # Rebuild undo history so the restored graph becomes the baseline state.
+    try:
+        from .ontology_manager import UndoManager
+        st.session_state.undo_manager = UndoManager(ont)
+    except ImportError:
+        pass
+    st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
+    # init_session_state parks empty sessions on Import/Export; with content
+    # restored, the Dashboard is the more useful landing page.
+    if st.session_state.get("nav_radio") == "Import / Export":
+        st.session_state["nav_radio"] = "Dashboard"
+    st.toast("Restored your previous session from this browser's autosave.", icon="💾")
+
+
+def persist_autosave():
+    """Mirror the current ontology into browser localStorage when it changed.
+
+    Called at the end of each rerun. Skips when autosave is disabled, unchanged
+    since the last save, or too large for localStorage.
+    """
+    if not st.session_state.get("_autosave_enabled", True):
+        return
+    # Don't persist until restore has resolved, or the empty starting graph
+    # would overwrite saved data before it can be read back on a later rerun.
+    if not st.session_state.get("_autosave_restored"):
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        return
+    try:
+        ttl = st.session_state.ontology.export_to_string(format="turtle")
+    except Exception as e:
+        log_error(e, context="Autosave export")
+        return
+
+    if len(ttl.encode("utf-8")) > AUTOSAVE_MAX_BYTES:
+        if not st.session_state.get("_autosave_too_big_warned"):
+            st.session_state["_autosave_too_big_warned"] = True
+            st.sidebar.warning(
+                "Ontology is too large to autosave to this browser. "
+                "Export it manually so you don't lose work."
+            )
+        return
+
+    h = _content_hash(ttl)
+    if h == st.session_state.get("_autosave_last_hash"):
+        return
+    # Key the write by content hash so each distinct save mounts a fresh
+    # component instance — reusing one key across reruns can leave the component
+    # writing a stale/wrapped value.
+    ls.setItem(AUTOSAVE_KEY, ttl, key=f"orionbelt_autosave_set_{h[:12]}")
+    st.session_state["_autosave_last_hash"] = h
+
+
+def render_autosave_sidebar():
+    """Sidebar controls: toggle autosave and discard the saved session."""
+    ls = _get_local_storage()
+    if ls is None:
+        return
+    st.sidebar.checkbox(
+        "Autosave to this browser",
+        value=st.session_state.get("_autosave_enabled", True),
+        key="_autosave_enabled",
+        help=(
+            "Saves your ontology in this browser's local storage and restores "
+            "it automatically if the page reloads. Local to this browser only "
+            "— not a replacement for Export."
+        ),
+    )
+    if (
+        st.session_state.get("_autosave_enabled", True)
+        and st.session_state.get("_autosave_last_hash")
+        and not _ontology_is_empty(st.session_state.ontology)
+    ):
+        st.sidebar.caption("✓ Saved in this browser")
+    if st.sidebar.button("Discard saved session", key="_autosave_discard", use_container_width=True):
+        # Reset the workspace to a clean slate. We deliberately don't call the
+        # component's deleteItem (its delete path is unreliable); instead the
+        # now-empty graph is mirrored out by persist_autosave on the rerun,
+        # overwriting the saved copy via the dependable setItem path.
+        OntologyManager = get_ontology_manager_class()
+        st.session_state.ontology = OntologyManager()
+        try:
+            from .ontology_manager import UndoManager
+            st.session_state.undo_manager = UndoManager(st.session_state.ontology)
+        except ImportError:
+            st.session_state.undo_manager = None
+        st.session_state["_autosave_last_hash"] = None
+        st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
+        st.toast("Cleared this browser's autosave and reset the workspace.", icon="🗑️")
+        st.rerun()
 
 
 def save_checkpoint(label: str = "Edit"):
@@ -3935,6 +4125,7 @@ def main():
     """Main application entry point."""
     _configure_page()
     init_session_state()
+    maybe_restore_autosave()
 
     # Sidebar navigation — asset path resolved relative to this module so it
     # works under both `streamlit run` and `pip install` deployments.
@@ -4015,6 +4206,8 @@ def main():
                 st.session_state["_ont_mutation_count"] = st.session_state.get("_ont_mutation_count", 0) + 1
                 set_flash_message(f"Redid: {label}", "info")
                 st.rerun()
+
+    render_autosave_sidebar()
 
     st.sidebar.divider()
 
@@ -4122,6 +4315,10 @@ def main():
                 st.session_state.error_log = []
                 st.rerun()
             st.markdown(f"[Report on GitHub]({GITHUB_ISSUES_URL}/new)")
+
+    # Mirror the current ontology to browser localStorage (after all edits for
+    # this rerun have been applied) so a refresh can restore it.
+    persist_autosave()
 
 
 if __name__ == "__main__":
