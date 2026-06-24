@@ -2377,7 +2377,7 @@ def render_skos_vocabulary():
                                   on_click=_cb_toggle_edit, args=("skos", _ck))
                     with btn_del:
                         st.button("🗑️ Delete", key=f"btn_del_{_ck}", use_container_width=True,
-                                  on_click=_cb_confirm_delete, args=(_ck,))
+                                  on_click=_cb_confirm_delete, args=(f"c_{_ck}",))
 
                     # View details
                     if st.session_state.get(_sk, False):
