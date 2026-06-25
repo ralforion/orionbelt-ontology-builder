@@ -141,7 +141,7 @@ class OntologyManager:
         # Ensure at least the default namespace
         if "(default)" not in seen:
             prefixes.append({"prefix": "(default)", "namespace": self.base_uri})
-        prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
+        prefixes.sort(key=lambda x: "" if x["prefix"] == "(default)" else x["prefix"])
         return prefixes
 
     def get_all_prefixes(self) -> List[Dict[str, str]]:
@@ -162,7 +162,7 @@ class OntologyManager:
                     "source": source,
                 }
             )
-        prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
+        prefixes.sort(key=lambda x: "" if x["prefix"] == "(default)" else x["prefix"])
         return prefixes
 
     def add_prefix(self, prefix: str, namespace: str):
@@ -197,7 +197,7 @@ class OntologyManager:
                 {"prefix": prefix if prefix else "(default)", "namespace": namespace}
             )
         # Sort by prefix name, with default first
-        prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
+        prefixes.sort(key=lambda x: "" if x["prefix"] == "(default)" else x["prefix"])
         return prefixes
 
     def _extract_prefixes_from_jsonld(self, data: str) -> List[Dict[str, str]]:
@@ -233,7 +233,7 @@ class OntologyManager:
                             "namespace": value,
                         }
                     )
-        prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
+        prefixes.sort(key=lambda x: "" if x["prefix"] == "(default)" else x["prefix"])
         return prefixes
 
     def get_ontology_metadata(self) -> Dict[str, str]:
