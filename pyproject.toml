@@ -5,7 +5,7 @@ description = "A Streamlit application for building, editing, and managing OWL o
 readme = "README.md"
 license = {text = "BSL-1.1"}
 requires-python = ">=3.10"
-authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}]
+authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "info@ralforion.com"}]
 keywords = ["ontology", "owl", "rdf", "rdflib", "streamlit", "semantic-web", "knowledge-graph"]
 classifiers = [
     "Development Status :: 4 - Beta",
