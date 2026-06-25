@@ -10,13 +10,15 @@
 [![Version 1.5.0](https://img.shields.io/badge/version-1.5.0-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-ontology-builder/blob/main/LICENSE)
+
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io)
-[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-ralforion-2496ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder)
-[![Docker Pulls](https://img.shields.io/docker/pulls/ralforion/orionbelt-ontology-builder.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder)
-[![Docker Image Size](https://img.shields.io/docker/image-size/ralforion/orionbelt-ontology-builder/latest.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder/tags)
 [![rdflib](https://img.shields.io/badge/rdflib-7.0+-2E86C1.svg)](https://rdflib.readthedocs.io)
 [![OWL-RL](https://img.shields.io/badge/OWL--RL-reasoning-green.svg)](https://owl-rl.readthedocs.io)
 [![vis-network](https://img.shields.io/badge/vis--network-9.1-97C2FC.svg)](https://visjs.github.io/vis-network/docs/network/)
+
+[![Docker Hub](https://img.shields.io/docker/v/ralforion/orionbelt-ontology-builder?logo=docker&logoColor=white&label=Docker%20Hub&color=2496ED&sort=semver)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder/tags)
+[![Docker pulls](https://img.shields.io/docker/pulls/ralforion/orionbelt-ontology-builder?logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder)
+[![Image size](https://img.shields.io/docker/image-size/ralforion/orionbelt-ontology-builder/latest?logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder/tags)
 
 **Try it now:** [orionbelt.streamlit.app](https://orionbelt.streamlit.app/)
 
