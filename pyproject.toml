@@ -44,7 +44,7 @@ Issues = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 Demo = "https://orionbelt.streamlit.app"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
