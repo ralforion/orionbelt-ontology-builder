@@ -1,0 +1,40 @@
+# Version control & CI
+.git
+.github
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Editor / OS cruft
+.idea/
+.vscode/
+.devcontainer/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local dev / docs not needed at runtime
+design/
+tests/
+uv.lock
+.streamlit/secrets.toml
+.playwright-mcp/
+.claude/
+
+# Large local working file (not part of the app)
+ontology_orionbelt_1_semantic.ttl
+
+# Docker
+Dockerfile
+.dockerignore
