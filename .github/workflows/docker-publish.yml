@@ -1,0 +1,64 @@
+name: Docker Publish
+
+# Build and push the application image to Docker Hub.
+# - On version tags (v1.2.3) → publish :1.2.3, :1.2, :1, :latest
+# - On pushes to main        → publish :main and :edge
+#
+# Requires two repository secrets:
+#   DOCKERHUB_USERNAME — Docker Hub account / org (e.g. ralforion)
+#   DOCKERHUB_TOKEN    — a Docker Hub access token (Account Settings → Security)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orionbelt-ontology-builder
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Don't try to push from forks / PRs where secrets are unavailable.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=ref,event=branch
+          labels: |
+            org.opencontainers.image.title=OrionBelt Ontology Builder
+            org.opencontainers.image.description=A browser-based ontology workbench for building, editing, and managing OWL/SKOS ontologies.
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
