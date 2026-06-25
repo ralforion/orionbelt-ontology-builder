@@ -16,14 +16,20 @@ def test_class_no_outbound_structural(populated_om):
 
 
 def test_individual_inbound_after_assertion(populated_om):
-    populated_om.add_individual_property("alice", "worksFor", "acme", is_object_property=True)
+    populated_om.add_individual_property(
+        "alice", "worksFor", "acme", is_object_property=True
+    )
     usages = populated_om.get_resource_usages("acme")
-    assert any(u["subject"] == "alice" and u["predicate"] == "worksFor"
-               for u in usages["inbound"])
+    assert any(
+        u["subject"] == "alice" and u["predicate"] == "worksFor"
+        for u in usages["inbound"]
+    )
 
 
 def test_property_as_predicate(populated_om):
-    populated_om.add_individual_property("alice", "worksFor", "acme", is_object_property=True)
+    populated_om.add_individual_property(
+        "alice", "worksFor", "acme", is_object_property=True
+    )
     usages = populated_om.get_resource_usages("worksFor")
     assert len(usages["as_predicate"]) >= 1
 

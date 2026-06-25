@@ -4,6 +4,7 @@ import hashlib
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 TEMPLATES = [
     {
@@ -323,7 +324,7 @@ def get_template_names() -> list:
     return [t["name"] for t in TEMPLATES]
 
 
-def get_template(name: str) -> dict:
+def get_template(name: str) -> Optional[dict]:
     """Return a template by name, or None if not found."""
     for t in TEMPLATES:
         if t["name"] == name:
@@ -416,7 +417,7 @@ def get_upper_ontology_names() -> list:
     return sorted((o["name"] for o in UPPER_ONTOLOGIES), key=str.lower)
 
 
-def get_upper_ontology(name: str) -> dict:
+def get_upper_ontology(name: str) -> Optional[dict]:
     """Return an upper ontology definition by name, or None if not found."""
     for o in UPPER_ONTOLOGIES:
         if o["name"] == name:
@@ -506,7 +507,7 @@ def get_reference_ontology_names() -> list:
     return sorted((o["name"] for o in REFERENCE_ONTOLOGIES), key=str.lower)
 
 
-def get_reference_ontology(name: str) -> dict:
+def get_reference_ontology(name: str) -> Optional[dict]:
     """Return a reference ontology definition by name, or None if not found."""
     for o in REFERENCE_ONTOLOGIES:
         if o["name"] == name:
@@ -526,9 +527,7 @@ def load_reference_ontology_module(module: dict) -> str:
         return (SAMPLES_DIR / module["file"]).read_text(encoding="utf-8")
     if "url" in module:
         return _fetch_with_cache(module["url"], module.get("sha256"))
-    raise ValueError(
-        f"Module '{module.get('name')}' has neither 'file' nor 'url'"
-    )
+    raise ValueError(f"Module '{module.get('name')}' has neither 'file' nor 'url'")
 
 
 def _fetch_with_cache(url: str, expected_sha256: str | None = None) -> str:
@@ -548,9 +547,7 @@ def _fetch_with_cache(url: str, expected_sha256: str | None = None) -> str:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = resp.read()
     except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"Could not download ontology from {url}: {e.reason}"
-        ) from e
+        raise RuntimeError(f"Could not download ontology from {url}: {e.reason}") from e
 
     if expected_sha256:
         actual = hashlib.sha256(data).hexdigest()

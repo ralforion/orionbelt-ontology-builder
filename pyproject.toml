@@ -33,6 +33,8 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
 ]
 
 [project.urls]
@@ -40,6 +42,10 @@ Homepage = "https://github.com/ralforion/orionbelt-ontology-builder"
 Repository = "https://github.com/ralforion/orionbelt-ontology-builder"
 Issues = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 Demo = "https://orionbelt.streamlit.app"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

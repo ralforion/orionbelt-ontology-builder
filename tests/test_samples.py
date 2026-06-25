@@ -14,11 +14,19 @@ SAMPLES_DIR = os.path.join(
 )
 
 SAMPLE_FILES = {
-    "pizza": ("pizza.owl", "xml", "https://protege.stanford.edu/ontologies/pizza/pizza.owl"),
+    "pizza": (
+        "pizza.owl",
+        "xml",
+        "https://protege.stanford.edu/ontologies/pizza/pizza.owl",
+    ),
     "foaf": ("foaf.rdf", "xml", "http://xmlns.com/foaf/spec/index.rdf"),
     "wine": ("wine.owl", "xml", "https://www.w3.org/TR/owl-guide/wine.rdf"),
     "prov-o": ("prov-o.ttl", "turtle", "https://www.w3.org/ns/prov-o"),
-    "goodrelations": ("goodrelations.owl", "xml", "http://purl.org/goodrelations/v1.owl"),
+    "goodrelations": (
+        "goodrelations.owl",
+        "xml",
+        "http://purl.org/goodrelations/v1.owl",
+    ),
     "geography": ("geography-thesaurus.ttl", "turtle", None),
 }
 
@@ -30,9 +38,14 @@ def _download(filename, url):
     try:
         subprocess.run(
             ["curl", "-sL", "-o", path, url],
-            timeout=30, check=True,
+            timeout=30,
+            check=True,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ):
         pytest.skip(f"Could not download {filename}")
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         pytest.skip(f"Download produced empty file for {filename}")
@@ -51,6 +64,7 @@ def _load(name):
 
 
 # ---------- Import & basic stats ----------
+
 
 class TestSampleImport:
     """Verify all samples load without errors and contain expected content."""
@@ -95,10 +109,13 @@ class TestSampleImport:
 
 # ---------- Validation ----------
 
+
 class TestSampleValidation:
     """Run validation on real ontologies and check it doesn't crash."""
 
-    @pytest.mark.parametrize("name", ["pizza", "wine", "foaf", "prov-o", "goodrelations"])
+    @pytest.mark.parametrize(
+        "name", ["pizza", "wine", "foaf", "prov-o", "goodrelations"]
+    )
     def test_validation_runs(self, name):
         om = _load(name)
         issues = om.validate()
@@ -116,6 +133,7 @@ class TestSampleValidation:
 
 
 # ---------- Search ----------
+
 
 class TestSampleSearch:
     """Test search on real ontologies."""
@@ -137,6 +155,7 @@ class TestSampleSearch:
 
 
 # ---------- Export round-trip ----------
+
 
 class TestSampleRoundTrip:
     """Export and re-import to check round-trip stability."""
@@ -167,6 +186,7 @@ class TestSampleRoundTrip:
 
 # ---------- Diff ----------
 
+
 class TestSampleDiff:
     """Test diff engine against real ontologies."""
 
@@ -179,6 +199,7 @@ class TestSampleDiff:
     def test_diff_after_adding_class(self):
         om = _load("foaf")
         from rdflib import Graph
+
         original = Graph()
         for t in om.graph:
             original.add(t)
@@ -191,6 +212,7 @@ class TestSampleDiff:
 
 
 # ---------- Hierarchy ----------
+
 
 class TestSampleHierarchy:
     """Test hierarchy extraction on real ontologies."""
@@ -207,6 +229,7 @@ class TestSampleHierarchy:
 
 
 # ---------- Statistics ----------
+
 
 class TestSampleStatistics:
     """Test statistics on real ontologies."""

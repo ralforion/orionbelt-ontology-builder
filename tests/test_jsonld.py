@@ -4,7 +4,7 @@ import pytest
 from ontology_manager import OntologyManager
 
 
-JSONLD_MINIMAL = '''{
+JSONLD_MINIMAL = """{
   "@context": {
     "owl": "http://www.w3.org/2002/07/owl#",
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
@@ -28,9 +28,9 @@ JSONLD_MINIMAL = '''{
       "rdfs:subClassOf": {"@id": "ex:Animal"}
     }
   ]
-}'''
+}"""
 
-JSONLD_NO_CONTEXT = '''{
+JSONLD_NO_CONTEXT = """{
   "@graph": [
     {
       "@id": "http://example.org/ont",
@@ -41,7 +41,7 @@ JSONLD_NO_CONTEXT = '''{
       "@type": "http://www.w3.org/2002/07/owl#Class"
     }
   ]
-}'''
+}"""
 
 
 @pytest.fixture
@@ -88,13 +88,13 @@ class TestJsonLdPrefixExtraction:
         assert prefixes == []
 
     def test_list_context_merged(self, om):
-        data = '''{
+        data = """{
           "@context": [
             {"ex": "http://example.org/"},
             {"foaf": "http://xmlns.com/foaf/0.1/"}
           ],
           "@graph": []
-        }'''
+        }"""
         prefixes = om._extract_prefixes_from_jsonld(data)
         names = [p["prefix"] for p in prefixes]
         assert "ex" in names
@@ -115,5 +115,5 @@ class TestJsonLdRoundTrip:
 
     def test_loaded_prefixes_populated(self, om):
         om.load_from_string(JSONLD_MINIMAL, format="json-ld")
-        assert hasattr(om, '_loaded_prefixes')
+        assert hasattr(om, "_loaded_prefixes")
         assert len(om._loaded_prefixes) > 0

@@ -4,11 +4,16 @@ OntologyManager - Core class for managing OWL ontologies using rdflib.
 
 from rdflib import Graph, Namespace, URIRef, Literal, BNode
 from rdflib.namespace import RDF, RDFS, OWL, XSD, SKOS, DC, DCTERMS
+from rdflib.term import Node
 from rdflib.collection import Collection
-from typing import Optional, List, Dict, Tuple, Any, Set
+from typing import Optional, List, Dict, Tuple, Any, Set, cast
 import owlrl
 
-_UNSET = object()  # sentinel: "parameter not provided"
+_UNSET: Any = object()  # sentinel: "parameter not provided"
+
+# A triple and a list of (old_triple, new_triple) rename operations.
+_Triple = Tuple[Node, Node, Node]
+_TripleUpdates = List[Tuple[_Triple, _Triple]]
 
 # domainIncludes/rangeIncludes from Schema.org and gist
 _SCHEMA = Namespace("https://schema.org/")
@@ -74,8 +79,9 @@ class OntologyManager:
         self.ontology_uri = URIRef(base_uri.rstrip("#").rstrip("/"))
         self.graph.add((self.ontology_uri, RDF.type, OWL.Ontology))
 
-    def set_ontology_metadata(self, label=_UNSET, comment=_UNSET,
-                              creator=_UNSET, version_iri=_UNSET):
+    def set_ontology_metadata(
+        self, label=_UNSET, comment=_UNSET, creator=_UNSET, version_iri=_UNSET
+    ):
         """Set ontology-level metadata.
 
         Pass a non-empty string to set a value.
@@ -127,7 +133,7 @@ class OntologyManager:
                 seen.add(display)
                 prefixes.append({"prefix": display, "namespace": str(ns)})
         # Include loaded prefixes not yet in graph
-        if hasattr(self, '_loaded_prefixes') and self._loaded_prefixes:
+        if hasattr(self, "_loaded_prefixes") and self._loaded_prefixes:
             for p in self._loaded_prefixes:
                 if p["prefix"] not in seen:
                     seen.add(p["prefix"])
@@ -149,11 +155,13 @@ class OntologyManager:
                 source = "default"
             else:
                 source = "custom"
-            prefixes.append({
-                "prefix": display,
-                "namespace": str(ns),
-                "source": source,
-            })
+            prefixes.append(
+                {
+                    "prefix": display,
+                    "namespace": str(ns),
+                    "source": source,
+                }
+            )
         prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
         return prefixes
 
@@ -178,16 +186,16 @@ class OntologyManager:
     def _extract_prefixes_from_ttl(self, data: str) -> List[Dict[str, str]]:
         """Extract @prefix declarations from TTL content."""
         import re
+
         prefixes = []
         # Match @prefix declarations: @prefix name: <uri> .
-        pattern = r'@prefix\s+([a-zA-Z0-9_-]*)\s*:\s*<([^>]+)>\s*\.'
+        pattern = r"@prefix\s+([a-zA-Z0-9_-]*)\s*:\s*<([^>]+)>\s*\."
         for match in re.finditer(pattern, data):
             prefix = match.group(1)
             namespace = match.group(2)
-            prefixes.append({
-                "prefix": prefix if prefix else "(default)",
-                "namespace": namespace
-            })
+            prefixes.append(
+                {"prefix": prefix if prefix else "(default)", "namespace": namespace}
+            )
         # Sort by prefix name, with default first
         prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
         return prefixes
@@ -195,7 +203,8 @@ class OntologyManager:
     def _extract_prefixes_from_jsonld(self, data: str) -> List[Dict[str, str]]:
         """Extract prefix declarations from JSON-LD @context."""
         import json
-        prefixes = []
+
+        prefixes: List[Dict[str, str]] = []
         try:
             doc = json.loads(data)
         except (json.JSONDecodeError, TypeError):
@@ -215,20 +224,27 @@ class OntologyManager:
             for key, value in context.items():
                 if key.startswith("@"):
                     continue
-                if isinstance(value, str) and (value.startswith("http://") or
-                                                value.startswith("https://")):
-                    prefixes.append({
-                        "prefix": key if key else "(default)",
-                        "namespace": value,
-                    })
+                if isinstance(value, str) and (
+                    value.startswith("http://") or value.startswith("https://")
+                ):
+                    prefixes.append(
+                        {
+                            "prefix": key if key else "(default)",
+                            "namespace": value,
+                        }
+                    )
         prefixes.sort(key=lambda x: ("" if x["prefix"] == "(default)" else x["prefix"]))
         return prefixes
 
     def get_ontology_metadata(self) -> Dict[str, str]:
         """Get ontology-level metadata."""
         metadata = {}
-        for pred, key in [(RDFS.label, "label"), (RDFS.comment, "comment"),
-                          (DCTERMS.creator, "creator"), (OWL.versionIRI, "version_iri")]:
+        for pred, key in [
+            (RDFS.label, "label"),
+            (RDFS.comment, "comment"),
+            (DCTERMS.creator, "creator"),
+            (OWL.versionIRI, "version_iri"),
+        ]:
             value = self.graph.value(self.ontology_uri, pred)
             if value:
                 metadata[key] = str(value)
@@ -270,10 +286,10 @@ class OntologyManager:
             for s, p, o in self.graph:
                 new_s, new_o = s, o
                 if isinstance(s, URIRef) and str(s).startswith(old_base_uri):
-                    local_name = str(s)[len(old_base_uri):]
+                    local_name = str(s)[len(old_base_uri) :]
                     new_s = URIRef(new_base_uri + local_name)
                 if isinstance(o, URIRef) and str(o).startswith(old_base_uri):
-                    local_name = str(o)[len(old_base_uri):]
+                    local_name = str(o)[len(old_base_uri) :]
                     new_o = URIRef(new_base_uri + local_name)
                 if new_s != s or new_o != o:
                     updates.append(((s, p, o), (new_s, p, new_o)))
@@ -291,7 +307,7 @@ class OntologyManager:
             return URIRef(local_name)
         return self.namespace[local_name]
 
-    def _local_name(self, uri: URIRef) -> str:
+    def _local_name(self, uri: Node) -> str:
         """Extract local name from a URI."""
         uri_str = str(uri)
         if "#" in uri_str:
@@ -300,8 +316,13 @@ class OntologyManager:
 
     # ==================== CLASS OPERATIONS ====================
 
-    def add_class(self, name: str, parent: str = None, label: str = None,
-                  comment: str = None) -> URIRef:
+    def add_class(
+        self,
+        name: str,
+        parent: Optional[str] = None,
+        label: Optional[str] = None,
+        comment: Optional[str] = None,
+    ) -> URIRef:
         """Add a new OWL class."""
         class_uri = self._uri(name)
         self.graph.add((class_uri, RDF.type, OWL.Class))
@@ -317,8 +338,14 @@ class OntologyManager:
 
         return class_uri
 
-    def update_class(self, name: str, new_label: str = None, new_comment: str = None,
-                     new_parent: str = None, remove_parent: str = None):
+    def update_class(
+        self,
+        name: str,
+        new_label: Optional[str] = None,
+        new_comment: Optional[str] = None,
+        new_parent: Optional[str] = None,
+        remove_parent: Optional[str] = None,
+    ):
         """Update an existing class."""
         class_uri = self._uri(name)
 
@@ -351,7 +378,7 @@ class OntologyManager:
             return False
 
         # Collect all triples to update
-        updates = []
+        updates: _TripleUpdates = []
 
         # Triples where old_uri is subject
         for p, o in self.graph.predicate_objects(old_uri):
@@ -368,7 +395,9 @@ class OntologyManager:
 
         return True
 
-    def get_delete_impact(self, name: str, resource_type: str = "class") -> Dict[str, Any]:
+    def get_delete_impact(
+        self, name: str, resource_type: str = "class"
+    ) -> Dict[str, Any]:
         """Analyse the impact of deleting a resource before executing it.
 
         Args:
@@ -399,7 +428,10 @@ class OntologyManager:
 
             # Instances typed with this class
             for ind in self.graph.subjects(RDF.type, uri):
-                if isinstance(ind, URIRef) and (ind, RDF.type, OWL.NamedIndividual) in self.graph:
+                if (
+                    isinstance(ind, URIRef)
+                    and (ind, RDF.type, OWL.NamedIndividual) in self.graph
+                ):
                     impact["instances"].append(self._local_name(ind))
 
             # Properties that use this class as domain
@@ -440,16 +472,27 @@ class OntologyManager:
         impact["direct_triples"] = len(list(self.graph.predicate_objects(uri)))
 
         # Count annotations (literal-valued predicates on this resource)
-        structural = {RDF.type, RDFS.subClassOf, RDFS.subPropertyOf,
-                      RDFS.domain, RDFS.range, OWL.equivalentClass,
-                      OWL.disjointWith, OWL.inverseOf}
+        structural = {
+            RDF.type,
+            RDFS.subClassOf,
+            RDFS.subPropertyOf,
+            RDFS.domain,
+            RDFS.range,
+            OWL.equivalentClass,
+            OWL.disjointWith,
+            OWL.inverseOf,
+        }
         for p, o in self.graph.predicate_objects(uri):
             if p not in structural and isinstance(o, Literal):
                 impact["annotations"] += 1
 
         # Total affected triples (as subject + as object + as predicate for properties)
         ref_count = len(list(self.graph.subject_predicates(uri)))
-        pred_count = len(list(self.graph.subject_objects(uri))) if resource_type == "property" else 0
+        pred_count = (
+            len(list(self.graph.subject_objects(uri)))
+            if resource_type == "property"
+            else 0
+        )
         impact["total_triples"] = impact["direct_triples"] + ref_count + pred_count
 
         return impact
@@ -458,20 +501,32 @@ class OntologyManager:
         """Format an impact dict into a human-readable summary string."""
         parts = []
         rt = impact["resource_type"]
-        parts.append(f"Deleting {rt} **{impact['resource']}** will remove {impact['total_triples']} triple(s).")
+        parts.append(
+            f"Deleting {rt} **{impact['resource']}** will remove {impact['total_triples']} triple(s)."
+        )
 
         if impact["subclasses"]:
-            parts.append(f"- {len(impact['subclasses'])} subclass link(s) lost: {', '.join(impact['subclasses'])}")
+            parts.append(
+                f"- {len(impact['subclasses'])} subclass link(s) lost: {', '.join(impact['subclasses'])}"
+            )
         if impact["instances"]:
-            parts.append(f"- {len(impact['instances'])} instance(s) lose their class type: {', '.join(impact['instances'])}")
+            parts.append(
+                f"- {len(impact['instances'])} instance(s) lose their class type: {', '.join(impact['instances'])}"
+            )
         if impact["domain_of"]:
-            parts.append(f"- {len(impact['domain_of'])} property domain reference(s) lost: {', '.join(impact['domain_of'])}")
+            parts.append(
+                f"- {len(impact['domain_of'])} property domain reference(s) lost: {', '.join(impact['domain_of'])}"
+            )
         if impact["range_of"]:
-            parts.append(f"- {len(impact['range_of'])} property range reference(s) lost: {', '.join(impact['range_of'])}")
+            parts.append(
+                f"- {len(impact['range_of'])} property range reference(s) lost: {', '.join(impact['range_of'])}"
+            )
         if impact["annotations"]:
             parts.append(f"- {impact['annotations']} annotation(s) removed")
         if impact["property_assertions"]:
-            parts.append(f"- {len(impact['property_assertions'])} property assertion(s) removed")
+            parts.append(
+                f"- {len(impact['property_assertions'])} property assertion(s) removed"
+            )
         if impact["relations"]:
             parts.append(f"- {len(impact['relations'])} inbound relation(s) removed")
 
@@ -497,7 +552,7 @@ class OntologyManager:
             if isinstance(class_uri, BNode):
                 continue  # Skip anonymous classes (restrictions)
 
-            class_info = {
+            class_info: Dict[str, Any] = {
                 "uri": str(class_uri),
                 "name": self._local_name(class_uri),
                 "label": str(self.graph.value(class_uri, RDFS.label) or ""),
@@ -526,7 +581,7 @@ class OntologyManager:
 
     def get_class_hierarchy(self) -> Dict[str, List[str]]:
         """Get class hierarchy as adjacency list."""
-        hierarchy = {}
+        hierarchy: Dict[str, List[str]] = {}
         for class_uri in self.graph.subjects(RDF.type, OWL.Class):
             if isinstance(class_uri, BNode):
                 continue
@@ -540,7 +595,9 @@ class OntologyManager:
     # ==================== BULK OPERATIONS ====================
 
     @staticmethod
-    def parse_bulk_text(text: str, columns: List[str] = None) -> List[Dict[str, str]]:
+    def parse_bulk_text(
+        text: str, columns: Optional[List[str]] = None
+    ) -> List[Dict[str, str]]:
         """Parse multi-line text into list of dicts.
 
         Supports:
@@ -606,8 +663,9 @@ class OntologyManager:
 
         return result
 
-    def bulk_add_properties(self, entries: List[Dict[str, str]],
-                            property_type: str = "object") -> Dict[str, Any]:
+    def bulk_add_properties(
+        self, entries: List[Dict[str, str]], property_type: str = "object"
+    ) -> Dict[str, Any]:
         """Batch create properties.
 
         Each entry dict can have: name, domain, range, label.
@@ -633,9 +691,13 @@ class OntologyManager:
                 range_ = entry.get("range", "").strip() or None
                 label = entry.get("label", "").strip() or None
                 if property_type == "object":
-                    self.add_object_property(name, domain=domain, range_=range_, label=label)
+                    self.add_object_property(
+                        name, domain=domain, range_=range_, label=label
+                    )
                 else:
-                    self.add_data_property(name, domain=domain, range_=range_ or "string", label=label)
+                    self.add_data_property(
+                        name, domain=domain, range_=range_ or "string", label=label
+                    )
                 result["created"].append(name)
                 existing.add(name)
             except Exception as e:
@@ -727,40 +789,58 @@ class OntologyManager:
             action = update.get("action", "add").strip().lower()
 
             if not resource or not predicate:
-                result["errors"].append({
-                    "resource": resource,
-                    "error": "Missing resource or predicate",
-                })
+                result["errors"].append(
+                    {
+                        "resource": resource,
+                        "error": "Missing resource or predicate",
+                    }
+                )
                 continue
 
             try:
                 if action == "delete":
-                    self.delete_annotation(resource, predicate, value=value or None, lang=lang)
+                    self.delete_annotation(
+                        resource, predicate, value=value or None, lang=lang
+                    )
                 else:
                     if not value:
-                        result["errors"].append({
-                            "resource": resource,
-                            "error": "Missing value for add",
-                        })
+                        result["errors"].append(
+                            {
+                                "resource": resource,
+                                "error": "Missing value for add",
+                            }
+                        )
                         continue
                     self.add_annotation(resource, predicate, value, lang=lang)
                 result["applied"] += 1
             except Exception as e:
-                result["errors"].append({
-                    "resource": resource,
-                    "error": str(e),
-                })
+                result["errors"].append(
+                    {
+                        "resource": resource,
+                        "error": str(e),
+                    }
+                )
 
         return result
 
     # ==================== PROPERTY OPERATIONS ====================
 
-    def add_object_property(self, name: str, domain: str = None, range_: str = None,
-                            label: str = None, comment: str = None,
-                            functional: bool = False, inverse_functional: bool = False,
-                            transitive: bool = False, symmetric: bool = False,
-                            asymmetric: bool = False, reflexive: bool = False,
-                            irreflexive: bool = False, inverse_of: str = None) -> URIRef:
+    def add_object_property(
+        self,
+        name: str,
+        domain: Optional[str] = None,
+        range_: Optional[str] = None,
+        label: Optional[str] = None,
+        comment: Optional[str] = None,
+        functional: bool = False,
+        inverse_functional: bool = False,
+        transitive: bool = False,
+        symmetric: bool = False,
+        asymmetric: bool = False,
+        reflexive: bool = False,
+        irreflexive: bool = False,
+        inverse_of: Optional[str] = None,
+    ) -> URIRef:
         """Add a new object property."""
         prop_uri = self._uri(name)
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
@@ -794,9 +874,15 @@ class OntologyManager:
 
         return prop_uri
 
-    def add_data_property(self, name: str, domain: str = None, range_: str = "string",
-                          label: str = None, comment: str = None,
-                          functional: bool = False) -> URIRef:
+    def add_data_property(
+        self,
+        name: str,
+        domain: Optional[str] = None,
+        range_: str = "string",
+        label: Optional[str] = None,
+        comment: Optional[str] = None,
+        functional: bool = False,
+    ) -> URIRef:
         """Add a new data property."""
         prop_uri = self._uri(name)
         self.graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
@@ -815,8 +901,14 @@ class OntologyManager:
 
         return prop_uri
 
-    def update_property(self, name: str, new_label: str = None, new_comment: str = None,
-                        new_domain: str = None, new_range: str = None):
+    def update_property(
+        self,
+        name: str,
+        new_label: Optional[str] = None,
+        new_comment: Optional[str] = None,
+        new_domain: Optional[str] = None,
+        new_range: Optional[str] = None,
+    ):
         """Update an existing property."""
         prop_uri = self._uri(name)
 
@@ -840,7 +932,9 @@ class OntologyManager:
             if new_range:
                 # Check if it's a datatype or class
                 if new_range in self.XSD_DATATYPES:
-                    self.graph.add((prop_uri, RDFS.range, self.XSD_DATATYPES[new_range]))
+                    self.graph.add(
+                        (prop_uri, RDFS.range, self.XSD_DATATYPES[new_range])
+                    )
                 else:
                     self.graph.add((prop_uri, RDFS.range, self._uri(new_range)))
 
@@ -853,12 +947,15 @@ class OntologyManager:
         new_uri = self._uri(new_name)
 
         # Check if new name already exists
-        if (new_uri, RDF.type, OWL.ObjectProperty) in self.graph or \
-           (new_uri, RDF.type, OWL.DatatypeProperty) in self.graph:
+        if (new_uri, RDF.type, OWL.ObjectProperty) in self.graph or (
+            new_uri,
+            RDF.type,
+            OWL.DatatypeProperty,
+        ) in self.graph:
             return False
 
         # Collect all triples to update
-        updates = []
+        updates: _TripleUpdates = []
 
         # Triples where old_uri is subject
         for p, o in self.graph.predicate_objects(old_uri):
@@ -893,7 +990,7 @@ class OntologyManager:
             if isinstance(prop_uri, BNode):
                 continue
 
-            prop_info = {
+            prop_info: Dict[str, Any] = {
                 "uri": str(prop_uri),
                 "name": self._local_name(prop_uri),
                 "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
@@ -902,7 +999,7 @@ class OntologyManager:
                 "domain_uri": "",
                 "range": "",
                 "range_uri": "",
-                "characteristics": []
+                "characteristics": [],
             }
 
             domain = self.graph.value(prop_uri, RDFS.domain)
@@ -964,7 +1061,7 @@ class OntologyManager:
                 "domain": "",
                 "domain_uri": "",
                 "range": "",
-                "functional": False
+                "functional": False,
             }
 
             domain = self.graph.value(prop_uri, RDFS.domain)
@@ -981,7 +1078,11 @@ class OntologyManager:
             if range_:
                 prop_info["range"] = self._local_name(range_)
 
-            prop_info["functional"] = (prop_uri, RDF.type, OWL.FunctionalProperty) in self.graph
+            prop_info["functional"] = (
+                prop_uri,
+                RDF.type,
+                OWL.FunctionalProperty,
+            ) in self.graph
 
             properties.append(prop_info)
 
@@ -989,8 +1090,13 @@ class OntologyManager:
 
     # ==================== INDIVIDUAL OPERATIONS ====================
 
-    def add_individual(self, name: str, class_name: str, label: str = None,
-                       comment: str = None) -> URIRef:
+    def add_individual(
+        self,
+        name: str,
+        class_name: str,
+        label: Optional[str] = None,
+        comment: Optional[str] = None,
+    ) -> URIRef:
         """Add a new individual (instance)."""
         ind_uri = self._uri(name)
         class_uri = self._uri(class_name)
@@ -1005,8 +1111,13 @@ class OntologyManager:
 
         return ind_uri
 
-    def add_individual_property(self, individual: str, property_name: str, value: Any,
-                                is_object_property: bool = True):
+    def add_individual_property(
+        self,
+        individual: str,
+        property_name: str,
+        value: Any,
+        is_object_property: bool = True,
+    ):
         """Add a property assertion to an individual."""
         ind_uri = self._uri(individual)
         prop_uri = self._uri(property_name)
@@ -1017,8 +1128,14 @@ class OntologyManager:
         else:
             self.graph.add((ind_uri, prop_uri, Literal(value)))
 
-    def update_individual(self, name: str, new_label: str = None, new_comment: str = None,
-                          add_class: str = None, remove_class: str = None):
+    def update_individual(
+        self,
+        name: str,
+        new_label: Optional[str] = None,
+        new_comment: Optional[str] = None,
+        add_class: Optional[str] = None,
+        remove_class: Optional[str] = None,
+    ):
         """Update an existing individual."""
         ind_uri = self._uri(name)
 
@@ -1051,7 +1168,7 @@ class OntologyManager:
             return False
 
         # Collect all triples to update
-        updates = []
+        updates: _TripleUpdates = []
 
         # Triples where old_uri is subject
         for p, o in self.graph.predicate_objects(old_uri):
@@ -1084,14 +1201,14 @@ class OntologyManager:
                 continue
             seen.add(str(ind_uri))
 
-            ind_info = {
+            ind_info: Dict[str, Any] = {
                 "uri": str(ind_uri),
                 "name": self._local_name(ind_uri),
                 "label": str(self.graph.value(ind_uri, RDFS.label) or ""),
                 "comment": str(self.graph.value(ind_uri, RDFS.comment) or ""),
                 "classes": [],
                 "class_uris": [],
-                "properties": []
+                "properties": [],
             }
 
             # Get classes — expose both the local name (for display) and the
@@ -1110,7 +1227,9 @@ class OntologyManager:
                         value = self._local_name(obj)
                     else:
                         value = str(obj)
-                    ind_info["properties"].append({"property": prop_name, "value": value})
+                    ind_info["properties"].append(
+                        {"property": prop_name, "value": value}
+                    )
 
             individuals.append(ind_info)
 
@@ -1118,8 +1237,14 @@ class OntologyManager:
 
     # ==================== RESTRICTION OPERATIONS ====================
 
-    def add_restriction(self, class_name: str, property_name: str, restriction_type: str,
-                        value: Any, on_class: str = None) -> BNode:
+    def add_restriction(
+        self,
+        class_name: str,
+        property_name: str,
+        restriction_type: str,
+        value: Any,
+        on_class: Optional[str] = None,
+    ) -> BNode:
         """Add a restriction to a class."""
         class_uri = self._uri(class_name)
         prop_uri = self._uri(property_name)
@@ -1140,13 +1265,30 @@ class OntologyManager:
                 self.graph.add((restriction, restriction_pred, Literal(value)))
             else:
                 self.graph.add((restriction, restriction_pred, self._uri(value)))
-        elif restriction_type in ["minCardinality", "maxCardinality", "exactCardinality"]:
-            self.graph.add((restriction, restriction_pred,
-                          Literal(int(value), datatype=XSD.nonNegativeInteger)))
-        elif restriction_type in ["minQualifiedCardinality", "maxQualifiedCardinality",
-                                  "qualifiedCardinality"]:
-            self.graph.add((restriction, restriction_pred,
-                          Literal(int(value), datatype=XSD.nonNegativeInteger)))
+        elif restriction_type in [
+            "minCardinality",
+            "maxCardinality",
+            "exactCardinality",
+        ]:
+            self.graph.add(
+                (
+                    restriction,
+                    restriction_pred,
+                    Literal(int(value), datatype=XSD.nonNegativeInteger),
+                )
+            )
+        elif restriction_type in [
+            "minQualifiedCardinality",
+            "maxQualifiedCardinality",
+            "qualifiedCardinality",
+        ]:
+            self.graph.add(
+                (
+                    restriction,
+                    restriction_pred,
+                    Literal(int(value), datatype=XSD.nonNegativeInteger),
+                )
+            )
             if on_class:
                 self.graph.add((restriction, OWL.onClass, self._uri(on_class)))
 
@@ -1155,7 +1297,9 @@ class OntologyManager:
 
         return restriction
 
-    def get_restrictions(self, class_name: str = None) -> List[Dict[str, Any]]:
+    def get_restrictions(
+        self, class_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Get restrictions, optionally filtered by class."""
         restrictions = []
 
@@ -1164,12 +1308,12 @@ class OntologyManager:
             if not prop:
                 continue
 
-            rest_info = {
+            rest_info: Dict[str, Any] = {
                 "property": self._local_name(prop),
                 "type": None,
                 "value": None,
                 "on_class": None,
-                "applied_to": []
+                "applied_to": [],
             }
 
             # Determine restriction type
@@ -1197,7 +1341,9 @@ class OntologyManager:
 
         return restrictions
 
-    def delete_restriction(self, class_name: str, property_name: str, restriction_type: str):
+    def delete_restriction(
+        self, class_name: str, property_name: str, restriction_type: str
+    ):
         """Delete a restriction from a class."""
         class_uri = self._uri(class_name)
         prop_uri = self._uri(property_name)
@@ -1216,7 +1362,9 @@ class OntologyManager:
 
     # ==================== ANNOTATION OPERATIONS ====================
 
-    def add_annotation(self, subject: str, predicate: str, value: str, lang: str = None):
+    def add_annotation(
+        self, subject: str, predicate: str, value: str, lang: Optional[str] = None
+    ):
         """Add an annotation to any resource.
 
         Args:
@@ -1267,14 +1415,28 @@ class OntologyManager:
         # Get all predicates for this subject, excluding rdf:type, rdfs:subClassOf,
         # rdfs:domain, rdfs:range, and other structural predicates
         structural_predicates = {
-            RDF.type, RDFS.subClassOf, RDFS.subPropertyOf,
-            RDFS.domain, RDFS.range,
-            OWL.equivalentClass, OWL.equivalentProperty, OWL.disjointWith,
-            OWL.inverseOf, OWL.propertyChainAxiom,
-            OWL.onProperty, OWL.someValuesFrom, OWL.allValuesFrom,
-            OWL.hasValue, OWL.minCardinality, OWL.maxCardinality, OWL.cardinality,
-            OWL.unionOf, OWL.intersectionOf, OWL.complementOf, OWL.oneOf,
-            OWL.imports
+            RDF.type,
+            RDFS.subClassOf,
+            RDFS.subPropertyOf,
+            RDFS.domain,
+            RDFS.range,
+            OWL.equivalentClass,
+            OWL.equivalentProperty,
+            OWL.disjointWith,
+            OWL.inverseOf,
+            OWL.propertyChainAxiom,
+            OWL.onProperty,
+            OWL.someValuesFrom,
+            OWL.allValuesFrom,
+            OWL.hasValue,
+            OWL.minCardinality,
+            OWL.maxCardinality,
+            OWL.cardinality,
+            OWL.unionOf,
+            OWL.intersectionOf,
+            OWL.complementOf,
+            OWL.oneOf,
+            OWL.imports,
         }
 
         for pred, obj in self.graph.predicate_objects(subj_uri):
@@ -1291,12 +1453,14 @@ class OntologyManager:
             ann = {
                 "predicate": local_name,
                 "predicate_uri": pred_uri,
-                "predicate_prefixed": f"{prefix}:{local_name}" if prefix else local_name,
-                "value": str(obj)
+                "predicate_prefixed": f"{prefix}:{local_name}"
+                if prefix
+                else local_name,
+                "value": str(obj),
             }
-            if hasattr(obj, 'language') and obj.language:
+            if hasattr(obj, "language") and obj.language:
                 ann["language"] = obj.language
-            if hasattr(obj, 'datatype') and obj.datatype:
+            if hasattr(obj, "datatype") and obj.datatype:
                 ann["datatype"] = self._local_name(obj.datatype)
             annotations.append(ann)
 
@@ -1307,14 +1471,28 @@ class OntologyManager:
     def get_used_annotation_predicates(self) -> List[Dict[str, str]]:
         """Get all unique annotation predicates used in the ontology."""
         structural_predicates = {
-            RDF.type, RDFS.subClassOf, RDFS.subPropertyOf,
-            RDFS.domain, RDFS.range,
-            OWL.equivalentClass, OWL.equivalentProperty, OWL.disjointWith,
-            OWL.inverseOf, OWL.propertyChainAxiom,
-            OWL.onProperty, OWL.someValuesFrom, OWL.allValuesFrom,
-            OWL.hasValue, OWL.minCardinality, OWL.maxCardinality, OWL.cardinality,
-            OWL.unionOf, OWL.intersectionOf, OWL.complementOf, OWL.oneOf,
-            OWL.imports
+            RDF.type,
+            RDFS.subClassOf,
+            RDFS.subPropertyOf,
+            RDFS.domain,
+            RDFS.range,
+            OWL.equivalentClass,
+            OWL.equivalentProperty,
+            OWL.disjointWith,
+            OWL.inverseOf,
+            OWL.propertyChainAxiom,
+            OWL.onProperty,
+            OWL.someValuesFrom,
+            OWL.allValuesFrom,
+            OWL.hasValue,
+            OWL.minCardinality,
+            OWL.maxCardinality,
+            OWL.cardinality,
+            OWL.unionOf,
+            OWL.intersectionOf,
+            OWL.complementOf,
+            OWL.oneOf,
+            OWL.imports,
         }
 
         predicates = {}
@@ -1332,7 +1510,7 @@ class OntologyManager:
                     predicates[pred_uri] = {
                         "uri": pred_uri,
                         "local_name": self._local_name(pred),
-                        "prefix": self._get_prefix_for_uri(pred_uri)
+                        "prefix": self._get_prefix_for_uri(pred_uri),
                     }
 
         # Sort by local name
@@ -1347,8 +1525,14 @@ class OntologyManager:
                 return prefix if prefix else "(default)"
         return ""
 
-    def delete_annotation(self, subject: str, predicate: str, value: str = None,
-                          lang: str = None, datatype: str = None):
+    def delete_annotation(
+        self,
+        subject: str,
+        predicate: str,
+        value: Optional[str] = None,
+        lang: Optional[str] = None,
+        datatype: Optional[str] = None,
+    ):
         """Delete an annotation from a resource.
 
         Matches language-tagged and datatype-qualified literals when lang/datatype
@@ -1358,9 +1542,12 @@ class OntologyManager:
         subj_uri = self._uri(subject)
 
         annotation_predicates = {
-            "label": RDFS.label, "comment": RDFS.comment,
-            "prefLabel": SKOS.prefLabel, "altLabel": SKOS.altLabel,
-            "definition": SKOS.definition, "note": SKOS.note,
+            "label": RDFS.label,
+            "comment": RDFS.comment,
+            "prefLabel": SKOS.prefLabel,
+            "altLabel": SKOS.altLabel,
+            "definition": SKOS.definition,
+            "note": SKOS.note,
         }
 
         pred_uri = annotation_predicates.get(predicate, self._uri(predicate))
@@ -1389,10 +1576,14 @@ class OntologyManager:
     # ==================== SKOS VOCABULARY OPERATIONS ====================
 
     SKOS_RELATIONS = {
-        "broader": SKOS.broader, "narrower": SKOS.narrower,
-        "related": SKOS.related, "broadMatch": SKOS.broadMatch,
-        "narrowMatch": SKOS.narrowMatch, "exactMatch": SKOS.exactMatch,
-        "closeMatch": SKOS.closeMatch, "relatedMatch": SKOS.relatedMatch,
+        "broader": SKOS.broader,
+        "narrower": SKOS.narrower,
+        "related": SKOS.related,
+        "broadMatch": SKOS.broadMatch,
+        "narrowMatch": SKOS.narrowMatch,
+        "exactMatch": SKOS.exactMatch,
+        "closeMatch": SKOS.closeMatch,
+        "relatedMatch": SKOS.relatedMatch,
     }
 
     SKOS_INVERSES = {
@@ -1402,8 +1593,9 @@ class OntologyManager:
 
     SKOS_SYMMETRIC = {SKOS.related, SKOS.closeMatch, SKOS.exactMatch, SKOS.relatedMatch}
 
-    def add_concept_scheme(self, name: str, label: str = None,
-                           comment: str = None) -> URIRef:
+    def add_concept_scheme(
+        self, name: str, label: Optional[str] = None, comment: Optional[str] = None
+    ) -> URIRef:
         """Add a new SKOS ConceptScheme."""
         scheme_uri = self._uri(name)
         self.graph.add((scheme_uri, RDF.type, SKOS.ConceptScheme))
@@ -1423,26 +1615,27 @@ class OntologyManager:
             label = str(self.graph.value(uri, RDFS.label) or "")
             comment = str(self.graph.value(uri, RDFS.comment) or "")
             # Count concepts in this scheme
-            concept_count = sum(
-                1 for _ in self.graph.subjects(SKOS.inScheme, uri)
+            concept_count = sum(1 for _ in self.graph.subjects(SKOS.inScheme, uri))
+            schemes.append(
+                {
+                    "name": name,
+                    "uri": str(uri),
+                    "label": label,
+                    "comment": comment,
+                    "concept_count": concept_count,
+                }
             )
-            schemes.append({
-                "name": name,
-                "uri": str(uri),
-                "label": label,
-                "comment": comment,
-                "concept_count": concept_count,
-            })
         return sorted(schemes, key=lambda s: s["name"])
 
-    def update_concept_scheme(self, name: str, new_label: str = _UNSET,
-                              new_comment: str = _UNSET):
+    def update_concept_scheme(
+        self, name: str, new_label: str = _UNSET, new_comment: str = _UNSET
+    ):
         """Update a SKOS ConceptScheme's properties."""
         uri = self._uri(name)
         # Resolve actual URI from graph if _uri doesn't match
         for s_uri in self.graph.subjects(RDF.type, SKOS.ConceptScheme):
             if self._local_name(s_uri) == name:
-                uri = s_uri
+                uri = cast(URIRef, s_uri)
                 break
 
         if new_label is not _UNSET:
@@ -1461,15 +1654,21 @@ class OntologyManager:
         # Resolve actual URI from graph if _uri doesn't match
         for s_uri in self.graph.subjects(RDF.type, SKOS.ConceptScheme):
             if self._local_name(s_uri) == name:
-                uri = s_uri
+                uri = cast(URIRef, s_uri)
                 break
         self.graph.remove((uri, None, None))
         self.graph.remove((None, SKOS.inScheme, uri))
         self.graph.remove((None, None, uri))
 
-    def add_concept(self, name: str, scheme: str = None,
-                    pref_label: str = None, definition: str = None,
-                    broader: str = None, lang: str = None) -> URIRef:
+    def add_concept(
+        self,
+        name: str,
+        scheme: Optional[str] = None,
+        pref_label: Optional[str] = None,
+        definition: Optional[str] = None,
+        broader: Optional[str] = None,
+        lang: Optional[str] = None,
+    ) -> URIRef:
         """Add a SKOS Concept with optional scheme/broader links."""
         concept_uri = self._uri(name)
         self.graph.add((concept_uri, RDF.type, SKOS.Concept))
@@ -1480,13 +1679,17 @@ class OntologyManager:
 
         if pref_label:
             if lang:
-                self.graph.add((concept_uri, SKOS.prefLabel, Literal(pref_label, lang=lang)))
+                self.graph.add(
+                    (concept_uri, SKOS.prefLabel, Literal(pref_label, lang=lang))
+                )
             else:
                 self.graph.add((concept_uri, SKOS.prefLabel, Literal(pref_label)))
 
         if definition:
             if lang:
-                self.graph.add((concept_uri, SKOS.definition, Literal(definition, lang=lang)))
+                self.graph.add(
+                    (concept_uri, SKOS.definition, Literal(definition, lang=lang))
+                )
             else:
                 self.graph.add((concept_uri, SKOS.definition, Literal(definition)))
 
@@ -1497,7 +1700,7 @@ class OntologyManager:
 
         return concept_uri
 
-    def get_concepts(self, scheme: str = None) -> List[Dict[str, Any]]:
+    def get_concepts(self, scheme: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get SKOS Concepts, optionally filtered by scheme."""
         # Resolve scheme name to URI by looking it up in the graph
         scheme_uri = None
@@ -1527,41 +1730,52 @@ class OntologyManager:
             alt_labels = [str(o) for o in self.graph.objects(uri, SKOS.altLabel)]
 
             broader_list = [
-                self._local_name(o) for o in self.graph.objects(uri, SKOS.broader)
+                self._local_name(o)
+                for o in self.graph.objects(uri, SKOS.broader)
                 if isinstance(o, URIRef)
             ]
             narrower_list = [
-                self._local_name(o) for o in self.graph.objects(uri, SKOS.narrower)
+                self._local_name(o)
+                for o in self.graph.objects(uri, SKOS.narrower)
                 if isinstance(o, URIRef)
             ]
             related_list = [
-                self._local_name(o) for o in self.graph.objects(uri, SKOS.related)
+                self._local_name(o)
+                for o in self.graph.objects(uri, SKOS.related)
                 if isinstance(o, URIRef)
             ]
 
             schemes = [
-                self._local_name(o) for o in self.graph.objects(uri, SKOS.inScheme)
+                self._local_name(o)
+                for o in self.graph.objects(uri, SKOS.inScheme)
                 if isinstance(o, URIRef)
             ]
 
-            concepts.append({
-                "name": name,
-                "uri": str(uri),
-                "prefLabel": pref_label,
-                "definition": definition,
-                "altLabels": alt_labels,
-                "broader": broader_list,
-                "narrower": narrower_list,
-                "related": related_list,
-                "schemes": schemes,
-            })
+            concepts.append(
+                {
+                    "name": name,
+                    "uri": str(uri),
+                    "prefLabel": pref_label,
+                    "definition": definition,
+                    "altLabels": alt_labels,
+                    "broader": broader_list,
+                    "narrower": narrower_list,
+                    "related": related_list,
+                    "schemes": schemes,
+                }
+            )
 
         return sorted(concepts, key=lambda c: c["name"])
 
-    def update_concept(self, name: str, new_pref_label: str = _UNSET,
-                       new_definition: str = _UNSET,
-                       new_broader: str = _UNSET,
-                       add_scheme: str = None, remove_scheme: str = None):
+    def update_concept(
+        self,
+        name: str,
+        new_pref_label: str = _UNSET,
+        new_definition: str = _UNSET,
+        new_broader: str = _UNSET,
+        add_scheme: Optional[str] = None,
+        remove_scheme: Optional[str] = None,
+    ):
         """Update a SKOS Concept's properties."""
         uri = self._uri(name)
 
@@ -1635,7 +1849,9 @@ class OntologyManager:
         self.graph.remove((uri, None, None))
         self.graph.remove((None, None, uri))
 
-    def get_concept_hierarchy(self, scheme: str = None) -> Dict[str, List[str]]:
+    def get_concept_hierarchy(
+        self, scheme: Optional[str] = None
+    ) -> Dict[str, List[str]]:
         """Return concept hierarchy as {parent: [children]} dict."""
         hierarchy: Dict[str, List[str]] = {}
         concepts = self.get_concepts(scheme=scheme)
@@ -1669,21 +1885,25 @@ class OntologyManager:
         for concept in concepts:
             # Missing prefLabel
             if not concept["prefLabel"]:
-                issues.append({
-                    "severity": "warning",
-                    "type": "missing_prefLabel",
-                    "subject": concept["name"],
-                    "message": f"Concept '{concept['name']}' has no prefLabel",
-                })
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "type": "missing_prefLabel",
+                        "subject": concept["name"],
+                        "message": f"Concept '{concept['name']}' has no prefLabel",
+                    }
+                )
 
             # Not in any scheme
             if not concept["schemes"] and schemes:
-                issues.append({
-                    "severity": "info",
-                    "type": "no_scheme",
-                    "subject": concept["name"],
-                    "message": f"Concept '{concept['name']}' is not in any ConceptScheme",
-                })
+                issues.append(
+                    {
+                        "severity": "info",
+                        "type": "no_scheme",
+                        "subject": concept["name"],
+                        "message": f"Concept '{concept['name']}' is not in any ConceptScheme",
+                    }
+                )
 
         # Duplicate prefLabels within schemes
         for scheme in schemes:
@@ -1692,12 +1912,14 @@ class OntologyManager:
             for concept in scheme_concepts:
                 lbl = concept["prefLabel"]
                 if lbl and lbl in labels_seen:
-                    issues.append({
-                        "severity": "warning",
-                        "type": "duplicate_prefLabel",
-                        "subject": concept["name"],
-                        "message": f"Duplicate prefLabel '{lbl}' in scheme '{scheme['name']}' (also on '{labels_seen[lbl]}')",
-                    })
+                    issues.append(
+                        {
+                            "severity": "warning",
+                            "type": "duplicate_prefLabel",
+                            "subject": concept["name"],
+                            "message": f"Duplicate prefLabel '{lbl}' in scheme '{scheme['name']}' (also on '{labels_seen[lbl]}')",
+                        }
+                    )
                 elif lbl:
                     labels_seen[lbl] = concept["name"]
 
@@ -1727,12 +1949,14 @@ class OntologyManager:
                 chain.append(current)
 
             if has_cycle:
-                issues.append({
-                    "severity": "error",
-                    "type": "broader_cycle",
-                    "subject": concept["name"],
-                    "message": f"Broader/narrower cycle detected: {' -> '.join(chain)}",
-                })
+                issues.append(
+                    {
+                        "severity": "error",
+                        "type": "broader_cycle",
+                        "subject": concept["name"],
+                        "message": f"Broader/narrower cycle detected: {' -> '.join(chain)}",
+                    }
+                )
 
         return issues
 
@@ -1775,7 +1999,9 @@ class OntologyManager:
         if relation:
             self.graph.remove((class1_uri, relation, class2_uri))
 
-    def get_class_relations(self, class_name: str = None) -> List[Dict[str, str]]:
+    def get_class_relations(
+        self, class_name: Optional[str] = None
+    ) -> List[Dict[str, str]]:
         """Get all class relations, optionally filtered by class.
 
         Each result dict includes both local names (subject/object) and full
@@ -1789,13 +2015,15 @@ class OntologyManager:
                     subj_name = self._local_name(subj)
                     obj_name = self._local_name(obj)
                     if class_name is None or class_name in [subj_name, obj_name]:
-                        relations.append({
-                            "subject": subj_name,
-                            "subject_uri": str(subj),
-                            "relation": rel_name,
-                            "object": obj_name,
-                            "object_uri": str(obj),
-                        })
+                        relations.append(
+                            {
+                                "subject": subj_name,
+                                "subject_uri": str(subj),
+                                "relation": rel_name,
+                                "object": obj_name,
+                                "object_uri": str(obj),
+                            }
+                        )
         return relations
 
     def add_property_relation(self, prop1: str, relation_type: str, prop2: str):
@@ -1814,7 +2042,9 @@ class OntologyManager:
         if relation:
             self.graph.remove((prop1_uri, relation, prop2_uri))
 
-    def get_property_relations(self, prop_name: str = None) -> List[Dict[str, str]]:
+    def get_property_relations(
+        self, prop_name: Optional[str] = None
+    ) -> List[Dict[str, str]]:
         """Get all property relations, optionally filtered by property.
 
         Each result dict includes both local names and full URIs.
@@ -1826,13 +2056,15 @@ class OntologyManager:
                     subj_name = self._local_name(subj)
                     obj_name = self._local_name(obj)
                     if prop_name is None or prop_name in [subj_name, obj_name]:
-                        relations.append({
-                            "subject": subj_name,
-                            "subject_uri": str(subj),
-                            "relation": rel_name,
-                            "object": obj_name,
-                            "object_uri": str(obj),
-                        })
+                        relations.append(
+                            {
+                                "subject": subj_name,
+                                "subject_uri": str(subj),
+                                "relation": rel_name,
+                                "object": obj_name,
+                                "object_uri": str(obj),
+                            }
+                        )
         return relations
 
     def add_individual_relation(self, ind1: str, relation_type: str, ind2: str):
@@ -1851,7 +2083,9 @@ class OntologyManager:
         if relation:
             self.graph.remove((ind1_uri, relation, ind2_uri))
 
-    def get_individual_relations(self, ind_name: str = None) -> List[Dict[str, str]]:
+    def get_individual_relations(
+        self, ind_name: Optional[str] = None
+    ) -> List[Dict[str, str]]:
         """Get all individual relations (sameAs, differentFrom).
 
         Each result dict includes both local names and full URIs.
@@ -1863,13 +2097,15 @@ class OntologyManager:
                     subj_name = self._local_name(subj)
                     obj_name = self._local_name(obj)
                     if ind_name is None or ind_name in [subj_name, obj_name]:
-                        relations.append({
-                            "subject": subj_name,
-                            "subject_uri": str(subj),
-                            "relation": rel_name,
-                            "object": obj_name,
-                            "object_uri": str(obj),
-                        })
+                        relations.append(
+                            {
+                                "subject": subj_name,
+                                "subject_uri": str(subj),
+                                "relation": rel_name,
+                                "object": obj_name,
+                                "object_uri": str(obj),
+                            }
+                        )
         return relations
 
     # ==================== ADVANCED OWL FEATURES ====================
@@ -1877,7 +2113,7 @@ class OntologyManager:
     def add_property_chain(self, property_name: str, chain_properties: List[str]):
         """Add a property chain axiom (owl:propertyChainAxiom)."""
         prop_uri = self._uri(property_name)
-        chain_uris = [self._uri(p) for p in chain_properties]
+        chain_uris: List[Node] = [self._uri(p) for p in chain_properties]
 
         # Create RDF list for the chain
         chain_list = BNode()
@@ -1890,14 +2126,23 @@ class OntologyManager:
         for prop, chain_list in self.graph.subject_objects(OWL.propertyChainAxiom):
             if isinstance(prop, URIRef):
                 chain = list(Collection(self.graph, chain_list))
-                chains.append({
-                    "property": self._local_name(prop),
-                    "chain": [self._local_name(p) for p in chain if isinstance(p, URIRef)]
-                })
+                chains.append(
+                    {
+                        "property": self._local_name(prop),
+                        "chain": [
+                            self._local_name(p) for p in chain if isinstance(p, URIRef)
+                        ],
+                    }
+                )
         return chains
 
-    def add_class_expression(self, class_name: str, expression_type: str,
-                            classes: List[str] = None, individuals: List[str] = None):
+    def add_class_expression(
+        self,
+        class_name: str,
+        expression_type: str,
+        classes: Optional[List[str]] = None,
+        individuals: Optional[List[str]] = None,
+    ):
         """Add a class expression (unionOf, intersectionOf, complementOf, oneOf)."""
         class_uri = self._uri(class_name)
 
@@ -1907,14 +2152,14 @@ class OntologyManager:
 
         elif expression_type == "oneOf" and individuals:
             # oneOf takes a list of individuals
-            ind_uris = [self._uri(i) for i in individuals]
+            ind_uris: List[Node] = [self._uri(i) for i in individuals]
             list_node = BNode()
             Collection(self.graph, list_node, ind_uris)
             self.graph.add((class_uri, OWL.oneOf, list_node))
 
         elif expression_type in ["unionOf", "intersectionOf"] and classes:
             # unionOf and intersectionOf take a list of classes
-            class_uris = [self._uri(c) for c in classes]
+            class_uris: List[Node] = [self._uri(c) for c in classes]
             list_node = BNode()
             Collection(self.graph, list_node, class_uris)
             if expression_type == "unionOf":
@@ -1922,7 +2167,9 @@ class OntologyManager:
             else:
                 self.graph.add((class_uri, OWL.intersectionOf, list_node))
 
-    def get_class_expressions(self, class_name: str = None) -> List[Dict[str, Any]]:
+    def get_class_expressions(
+        self, class_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Get class expressions for a class or all classes."""
         expressions = []
 
@@ -1930,7 +2177,7 @@ class OntologyManager:
             (OWL.unionOf, "unionOf"),
             (OWL.intersectionOf, "intersectionOf"),
             (OWL.complementOf, "complementOf"),
-            (OWL.oneOf, "oneOf")
+            (OWL.oneOf, "oneOf"),
         ]
 
         for pred, expr_type in expression_types:
@@ -1949,7 +2196,11 @@ class OntologyManager:
                         # It's a list
                         try:
                             members = list(Collection(self.graph, obj))
-                            expr["members"] = [self._local_name(m) for m in members if isinstance(m, URIRef)]
+                            expr["members"] = [
+                                self._local_name(m)
+                                for m in members
+                                if isinstance(m, URIRef)
+                            ]
                         except Exception:
                             pass
 
@@ -1963,7 +2214,7 @@ class OntologyManager:
         all_diff = BNode()
         self.graph.add((all_diff, RDF.type, OWL.AllDifferent))
 
-        ind_uris = [self._uri(i) for i in individuals]
+        ind_uris: List[Node] = [self._uri(i) for i in individuals]
         list_node = BNode()
         Collection(self.graph, list_node, ind_uris)
         self.graph.add((all_diff, OWL.distinctMembers, list_node))
@@ -1976,7 +2227,9 @@ class OntologyManager:
             if members_list:
                 try:
                     members = list(Collection(self.graph, members_list))
-                    all_diffs.append([self._local_name(m) for m in members if isinstance(m, URIRef)])
+                    all_diffs.append(
+                        [self._local_name(m) for m in members if isinstance(m, URIRef)]
+                    )
                 except Exception:
                     pass
         return all_diffs
@@ -1984,13 +2237,13 @@ class OntologyManager:
     def add_has_key(self, class_name: str, properties: List[str]):
         """Add an owl:hasKey axiom to a class."""
         class_uri = self._uri(class_name)
-        prop_uris = [self._uri(p) for p in properties]
+        prop_uris: List[Node] = [self._uri(p) for p in properties]
 
         list_node = BNode()
         Collection(self.graph, list_node, prop_uris)
         self.graph.add((class_uri, OWL.hasKey, list_node))
 
-    def get_has_keys(self, class_name: str = None) -> List[Dict[str, Any]]:
+    def get_has_keys(self, class_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get owl:hasKey axioms."""
         keys = []
         for subj, key_list in self.graph.subject_objects(OWL.hasKey):
@@ -2000,10 +2253,16 @@ class OntologyManager:
                     continue
                 try:
                     props = list(Collection(self.graph, key_list))
-                    keys.append({
-                        "class": subj_name,
-                        "properties": [self._local_name(p) for p in props if isinstance(p, URIRef)]
-                    })
+                    keys.append(
+                        {
+                            "class": subj_name,
+                            "properties": [
+                                self._local_name(p)
+                                for p in props
+                                if isinstance(p, URIRef)
+                            ],
+                        }
+                    )
                 except Exception:
                     pass
         return keys
@@ -2011,7 +2270,7 @@ class OntologyManager:
     def add_disjoint_union(self, class_name: str, disjoint_classes: List[str]):
         """Add an owl:disjointUnionOf axiom (class is disjoint union of listed classes)."""
         class_uri = self._uri(class_name)
-        class_uris = [self._uri(c) for c in disjoint_classes]
+        class_uris: List[Node] = [self._uri(c) for c in disjoint_classes]
 
         list_node = BNode()
         Collection(self.graph, list_node, class_uris)
@@ -2024,10 +2283,16 @@ class OntologyManager:
             if isinstance(subj, URIRef):
                 try:
                     members = list(Collection(self.graph, union_list))
-                    unions.append({
-                        "class": self._local_name(subj),
-                        "members": [self._local_name(m) for m in members if isinstance(m, URIRef)]
-                    })
+                    unions.append(
+                        {
+                            "class": self._local_name(subj),
+                            "members": [
+                                self._local_name(m)
+                                for m in members
+                                if isinstance(m, URIRef)
+                            ],
+                        }
+                    )
                 except Exception:
                     pass
         return unions
@@ -2036,7 +2301,7 @@ class OntologyManager:
 
     def load_from_file(self, file_path: str, format: str = "turtle"):
         """Load ontology from a file."""
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
         if format == "turtle":
             self._loaded_prefixes = self._extract_prefixes_from_ttl(content)
@@ -2079,8 +2344,12 @@ class OntologyManager:
         # Compute incoming stats
         incoming_stats = {
             "classes": sum(1 for _ in temp.subjects(RDF.type, OWL.Class)),
-            "object_properties": sum(1 for _ in temp.subjects(RDF.type, OWL.ObjectProperty)),
-            "data_properties": sum(1 for _ in temp.subjects(RDF.type, OWL.DatatypeProperty)),
+            "object_properties": sum(
+                1 for _ in temp.subjects(RDF.type, OWL.ObjectProperty)
+            ),
+            "data_properties": sum(
+                1 for _ in temp.subjects(RDF.type, OWL.DatatypeProperty)
+            ),
             "individuals": sum(1 for _ in temp.subjects(RDF.type, OWL.NamedIndividual)),
             "total_triples": len(temp),
         }
@@ -2110,8 +2379,12 @@ class OntologyManager:
         values are semantically problematic.
         """
         conflict_preds = {
-            RDFS.label, RDFS.domain, RDFS.range, RDFS.comment,
-            OWL.versionIRI, DCTERMS.creator,
+            RDFS.label,
+            RDFS.domain,
+            RDFS.range,
+            RDFS.comment,
+            OWL.versionIRI,
+            DCTERMS.creator,
         }
 
         conflicts = []
@@ -2123,18 +2396,21 @@ class OntologyManager:
                 continue
             incoming_value = o
             if incoming_value not in current_values:
-                conflicts.append({
-                    "subject": self._local_name(s),
-                    "predicate": self._local_name(p),
-                    "current_values": [
-                        self._local_name(v) if isinstance(v, URIRef) else str(v)
-                        for v in current_values
-                    ],
-                    "incoming_value": (
-                        self._local_name(incoming_value)
-                        if isinstance(incoming_value, URIRef) else str(incoming_value)
-                    ),
-                })
+                conflicts.append(
+                    {
+                        "subject": self._local_name(s),
+                        "predicate": self._local_name(p),
+                        "current_values": [
+                            self._local_name(v) if isinstance(v, URIRef) else str(v)
+                            for v in current_values
+                        ],
+                        "incoming_value": (
+                            self._local_name(incoming_value)
+                            if isinstance(incoming_value, URIRef)
+                            else str(incoming_value)
+                        ),
+                    }
+                )
 
         # Deduplicate (same subject+predicate can appear multiple times)
         seen = set()
@@ -2146,8 +2422,9 @@ class OntologyManager:
                 unique.append(c)
         return unique
 
-    def merge_from_graph(self, other_graph: Graph,
-                         strategy: str = IMPORT_MERGE) -> Dict[str, Any]:
+    def merge_from_graph(
+        self, other_graph: Graph, strategy: str = IMPORT_MERGE
+    ) -> Dict[str, Any]:
         """Merge another graph into the current graph using the specified strategy.
 
         Returns a dict with:
@@ -2176,8 +2453,12 @@ class OntologyManager:
         elif strategy == IMPORT_MERGE_OVERWRITE:
             # For conflict predicates: remove current, add incoming
             conflict_preds = {
-                RDFS.label, RDFS.domain, RDFS.range, RDFS.comment,
-                OWL.versionIRI, DCTERMS.creator,
+                RDFS.label,
+                RDFS.domain,
+                RDFS.range,
+                RDFS.comment,
+                OWL.versionIRI,
+                DCTERMS.creator,
             }
             conflicts_resolved = 0
             for s, p, o in other_graph:
@@ -2208,8 +2489,9 @@ class OntologyManager:
             "conflicts_resolved": 0,
         }
 
-    def merge_from_string(self, data: str, format: str = "turtle",
-                          strategy: str = IMPORT_MERGE) -> Dict[str, Any]:
+    def merge_from_string(
+        self, data: str, format: str = "turtle", strategy: str = IMPORT_MERGE
+    ) -> Dict[str, Any]:
         """Parse data and merge into current graph."""
         temp = Graph()
         temp.parse(data=data, format=format)
@@ -2222,20 +2504,24 @@ class OntologyManager:
         for prefix, ns in other_graph.namespaces():
             ns_str = str(ns)
             if prefix in current_ns and current_ns[prefix] != ns_str:
-                conflicts.append({
-                    "prefix": prefix,
-                    "current_namespace": current_ns[prefix],
-                    "incoming_namespace": ns_str,
-                })
+                conflicts.append(
+                    {
+                        "prefix": prefix,
+                        "current_namespace": current_ns[prefix],
+                        "incoming_namespace": ns_str,
+                    }
+                )
         return conflicts
 
-    def _reconcile_prefixes_after_merge(self, other_graph: Graph,
-                                         prefix_resolution: Dict[str, str] = None):
+    def _reconcile_prefixes_after_merge(
+        self, other_graph: Graph, prefix_resolution: Optional[Dict[str, str]] = None
+    ):
         """Re-bind prefixes after a merge operation."""
         for prefix, ns in other_graph.namespaces():
             if prefix_resolution and prefix in prefix_resolution:
-                self.graph.bind(prefix, Namespace(prefix_resolution[prefix]),
-                                override=True)
+                self.graph.bind(
+                    prefix, Namespace(prefix_resolution[prefix]), override=True
+                )
             else:
                 # Current bindings take precedence
                 self.graph.bind(prefix, ns, override=False)
@@ -2279,7 +2565,7 @@ class OntologyManager:
 
         sample_uri = self._find_sample_resource_uri()
         if sample_uri and uri_str in sample_uri:
-            remainder = sample_uri[len(uri_str):]
+            remainder = sample_uri[len(uri_str) :]
             if remainder.startswith("/"):
                 return uri_str + "/"
             elif remainder.startswith("#"):
@@ -2288,8 +2574,12 @@ class OntologyManager:
 
     def _find_sample_resource_uri(self) -> Optional[str]:
         """Find a sample resource URI from classes or properties in the graph."""
-        for rdf_type in (OWL.Class, OWL.ObjectProperty, OWL.DatatypeProperty,
-                         OWL.NamedIndividual):
+        for rdf_type in (
+            OWL.Class,
+            OWL.ObjectProperty,
+            OWL.DatatypeProperty,
+            OWL.NamedIndividual,
+        ):
             for s in self.graph.subjects(RDF.type, rdf_type):
                 if isinstance(s, URIRef):
                     return str(s)
@@ -2298,8 +2588,13 @@ class OntologyManager:
     def _infer_namespace_from_graph(self) -> Optional[str]:
         """Infer namespace from graph prefixes and resource URIs when no owl:Ontology exists."""
         STANDARD_NAMESPACES = {
-            str(OWL), str(RDF), str(RDFS), str(XSD),
-            str(SKOS), str(DC), str(DCTERMS),
+            str(OWL),
+            str(RDF),
+            str(RDFS),
+            str(XSD),
+            str(SKOS),
+            str(DC),
+            str(DCTERMS),
         }
 
         # Try the default prefix first (most likely the ontology namespace)
@@ -2310,16 +2605,21 @@ class OntologyManager:
 
         # Try to find the most common namespace among typed resources
         from collections import Counter
+
         ns_counter: Counter = Counter()
-        for rdf_type in (OWL.Class, OWL.ObjectProperty, OWL.DatatypeProperty,
-                         OWL.NamedIndividual):
+        for rdf_type in (
+            OWL.Class,
+            OWL.ObjectProperty,
+            OWL.DatatypeProperty,
+            OWL.NamedIndividual,
+        ):
             for s in self.graph.subjects(RDF.type, rdf_type):
                 if isinstance(s, URIRef):
                     uri_str = str(s)
                     for sep in ("#", "/"):
                         idx = uri_str.rfind(sep)
                         if idx != -1:
-                            candidate = uri_str[:idx + 1]
+                            candidate = uri_str[: idx + 1]
                             if candidate not in STANDARD_NAMESPACES:
                                 ns_counter[candidate] += 1
                             break
@@ -2375,13 +2675,15 @@ class OntologyManager:
                     match_field = "comment"
 
                 if match_field:
-                    results.append({
-                        "name": name,
-                        "uri": str(subj),
-                        "type": type_label,
-                        "label": label,
-                        "match_field": match_field,
-                    })
+                    results.append(
+                        {
+                            "name": name,
+                            "uri": str(subj),
+                            "type": type_label,
+                            "label": label,
+                            "match_field": match_field,
+                        }
+                    )
 
         results.sort(key=lambda r: (r["match_field"] != "name", r["name"].lower()))
         return results
@@ -2399,35 +2701,44 @@ class OntologyManager:
         uri = self._uri(name)
 
         structural_preds = {
-            RDF.type, RDFS.subClassOf, RDFS.subPropertyOf,
-            OWL.equivalentClass, OWL.disjointWith,
+            RDF.type,
+            RDFS.subClassOf,
+            RDFS.subPropertyOf,
+            OWL.equivalentClass,
+            OWL.disjointWith,
         }
 
         outbound: List[Dict[str, str]] = []
         for p, o in self.graph.predicate_objects(uri):
             if p in structural_preds:
                 continue
-            outbound.append({
-                "predicate": self._local_name(p),
-                "object": self._local_name(o) if isinstance(o, URIRef) else str(o),
-                "object_type": "uri" if isinstance(o, URIRef) else "literal",
-            })
+            outbound.append(
+                {
+                    "predicate": self._local_name(p),
+                    "object": self._local_name(o) if isinstance(o, URIRef) else str(o),
+                    "object_type": "uri" if isinstance(o, URIRef) else "literal",
+                }
+            )
 
         inbound: List[Dict[str, str]] = []
         for s, p in self.graph.subject_predicates(uri):
             if isinstance(s, BNode):
                 continue
-            inbound.append({
-                "subject": self._local_name(s) if isinstance(s, URIRef) else str(s),
-                "predicate": self._local_name(p),
-            })
+            inbound.append(
+                {
+                    "subject": self._local_name(s) if isinstance(s, URIRef) else str(s),
+                    "predicate": self._local_name(p),
+                }
+            )
 
         as_predicate: List[Dict[str, str]] = []
         for s, o in self.graph.subject_objects(uri):
-            as_predicate.append({
-                "subject": self._local_name(s) if isinstance(s, URIRef) else str(s),
-                "object": self._local_name(o) if isinstance(o, URIRef) else str(o),
-            })
+            as_predicate.append(
+                {
+                    "subject": self._local_name(s) if isinstance(s, URIRef) else str(s),
+                    "object": self._local_name(o) if isinstance(o, URIRef) else str(o),
+                }
+            )
 
         return {
             "outbound": outbound,
@@ -2483,24 +2794,30 @@ class OntologyManager:
                 subj, set(added_by_subj.keys()), set(removed_by_subj.keys())
             )
             counts[change_type] = counts.get(change_type, 0) + 1
-            modified_resources.append({
-                "name": subj,
-                "change_type": change_type,
-                "added_triples": added_by_subj.get(subj, []),
-                "removed_triples": removed_by_subj.get(subj, []),
-            })
+            modified_resources.append(
+                {
+                    "name": subj,
+                    "change_type": change_type,
+                    "added_triples": added_by_subj.get(subj, []),
+                    "removed_triples": removed_by_subj.get(subj, []),
+                }
+            )
 
         # Build string representations for triple lists
         added_triples = [
-            (self._local_name(s) if isinstance(s, URIRef) else str(s),
-             self._local_name(p),
-             self._local_name(o) if isinstance(o, URIRef) else str(o))
+            (
+                self._local_name(s) if isinstance(s, URIRef) else str(s),
+                self._local_name(p),
+                self._local_name(o) if isinstance(o, URIRef) else str(o),
+            )
             for s, p, o in named_added
         ]
         removed_triples = [
-            (self._local_name(s) if isinstance(s, URIRef) else str(s),
-             self._local_name(p),
-             self._local_name(o) if isinstance(o, URIRef) else str(o))
+            (
+                self._local_name(s) if isinstance(s, URIRef) else str(s),
+                self._local_name(p),
+                self._local_name(o) if isinstance(o, URIRef) else str(o),
+            )
             for s, p, o in named_removed
         ]
 
@@ -2540,16 +2857,18 @@ class OntologyManager:
             name = self._local_name(s) if isinstance(s, URIRef) else str(s)
             if name not in groups:
                 groups[name] = []
-            groups[name].append({
-                "predicate": self._local_name(p),
-                "object": self._local_name(o) if isinstance(o, URIRef) else str(o),
-                "object_type": "uri" if isinstance(o, URIRef) else "literal",
-            })
+            groups[name].append(
+                {
+                    "predicate": self._local_name(p),
+                    "object": self._local_name(o) if isinstance(o, URIRef) else str(o),
+                    "object_type": "uri" if isinstance(o, URIRef) else "literal",
+                }
+            )
         return groups
 
-    def _classify_resource_change(self, subject: str,
-                                   added_subjects: Set[str],
-                                   removed_subjects: Set[str]) -> str:
+    def _classify_resource_change(
+        self, subject: str, added_subjects: Set[str], removed_subjects: Set[str]
+    ) -> str:
         """Classify what happened to a resource: 'added', 'removed', or 'modified'."""
         in_added = subject in added_subjects
         in_removed = subject in removed_subjects
@@ -2573,9 +2892,15 @@ class OntologyManager:
             for t in all_triples:
                 if t["predicate"] == "type":
                     obj = t["object"]
-                    if obj in ("Class", "ObjectProperty", "DatatypeProperty",
-                               "NamedIndividual", "Ontology", "AnnotationProperty",
-                               "Restriction"):
+                    if obj in (
+                        "Class",
+                        "ObjectProperty",
+                        "DatatypeProperty",
+                        "NamedIndividual",
+                        "Ontology",
+                        "AnnotationProperty",
+                        "Restriction",
+                    ):
                         res_type = obj
                         break
 
@@ -2621,8 +2946,9 @@ class OntologyManager:
 
         return summaries
 
-    def format_diff_report(self, diff: Dict[str, Any],
-                           report_format: str = "markdown") -> str:
+    def format_diff_report(
+        self, diff: Dict[str, Any], report_format: str = "markdown"
+    ) -> str:
         """Format a diff result as a human-readable report."""
         stats = diff["stats"]
         lines = []
@@ -2630,23 +2956,34 @@ class OntologyManager:
         if report_format == "markdown":
             lines.append("# Ontology Change Report\n")
             lines.append("## Summary\n")
-            lines.append(f"- **Added:** {stats['added']} triples across "
-                         f"{stats['resources_added']} resources")
-            lines.append(f"- **Removed:** {stats['removed']} triples across "
-                         f"{stats['resources_removed']} resources")
+            lines.append(
+                f"- **Added:** {stats['added']} triples across "
+                f"{stats['resources_added']} resources"
+            )
+            lines.append(
+                f"- **Removed:** {stats['removed']} triples across "
+                f"{stats['resources_removed']} resources"
+            )
             lines.append(f"- **Modified:** {stats['resources_modified']} resources")
             lines.append(f"- **Unchanged:** {stats['unchanged']} triples")
             if stats["bnode_added"] or stats["bnode_removed"]:
-                lines.append(f"- **Anonymous nodes:** {stats['bnode_added']} added, "
-                             f"{stats['bnode_removed']} removed")
+                lines.append(
+                    f"- **Anonymous nodes:** {stats['bnode_added']} added, "
+                    f"{stats['bnode_removed']} removed"
+                )
             lines.append("")
 
             # Group resources by change type
-            for change_type, heading in [("added", "Added Resources"),
-                                          ("removed", "Removed Resources"),
-                                          ("modified", "Modified Resources")]:
-                resources = [r for r in diff["modified_resources"]
-                             if r["change_type"] == change_type]
+            for change_type, heading in [
+                ("added", "Added Resources"),
+                ("removed", "Removed Resources"),
+                ("modified", "Modified Resources"),
+            ]:
+                resources = [
+                    r
+                    for r in diff["modified_resources"]
+                    if r["change_type"] == change_type
+                ]
                 if resources:
                     lines.append(f"## {heading}\n")
                     for res in resources:
@@ -2660,9 +2997,11 @@ class OntologyManager:
             # Plain text format
             lines.append("Ontology Change Report")
             lines.append("=" * 40)
-            lines.append(f"Added: {stats['added']} triples, "
-                         f"Removed: {stats['removed']} triples, "
-                         f"Modified: {stats['resources_modified']} resources")
+            lines.append(
+                f"Added: {stats['added']} triples, "
+                f"Removed: {stats['removed']} triples, "
+                f"Modified: {stats['resources_modified']} resources"
+            )
             lines.append("")
             for line in diff["summary"]:
                 lines.append(f"  {line}")
@@ -2674,18 +3013,25 @@ class OntologyManager:
     def validate(self, check_missing_domain_range: bool = True) -> List[Dict[str, str]]:
         """Validate the ontology and return issues."""
         issues = []
+        # ``pred`` is reused across loops that bind it to both predicate URIRefs
+        # and arbitrary graph terms; declare the broader rdflib type up front.
+        pred: Node
 
         # Check for classes without labels
         for class_uri in self.graph.subjects(RDF.type, OWL.Class):
             if isinstance(class_uri, BNode):
                 continue
-            if not self.graph.value(class_uri, RDFS.label) and not self.graph.value(class_uri, SKOS.prefLabel):
-                issues.append({
-                    "severity": "warning",
-                    "type": "missing_label",
-                    "subject": self._local_name(class_uri),
-                    "message": f"Class '{self._local_name(class_uri)}' has no label (rdfs:label or skos:prefLabel)"
-                })
+            if not self.graph.value(class_uri, RDFS.label) and not self.graph.value(
+                class_uri, SKOS.prefLabel
+            ):
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "type": "missing_label",
+                        "subject": self._local_name(class_uri),
+                        "message": f"Class '{self._local_name(class_uri)}' has no label (rdfs:label or skos:prefLabel)",
+                    }
+                )
 
         # Check for properties without domain/range
         # Also accept schema:domainIncludes / gist:domainIncludes (and rangeIncludes)
@@ -2704,30 +3050,36 @@ class OntologyManager:
                 if isinstance(prop_uri, BNode):
                     continue
                 if not _has_domain(prop_uri):
-                    issues.append({
-                        "severity": "info",
-                        "type": "missing_domain",
-                        "subject": self._local_name(prop_uri),
-                        "message": f"Object property '{self._local_name(prop_uri)}' has no domain"
-                    })
+                    issues.append(
+                        {
+                            "severity": "info",
+                            "type": "missing_domain",
+                            "subject": self._local_name(prop_uri),
+                            "message": f"Object property '{self._local_name(prop_uri)}' has no domain",
+                        }
+                    )
                 if not _has_range(prop_uri):
-                    issues.append({
-                        "severity": "info",
-                        "type": "missing_range",
-                        "subject": self._local_name(prop_uri),
-                        "message": f"Object property '{self._local_name(prop_uri)}' has no range"
-                    })
+                    issues.append(
+                        {
+                            "severity": "info",
+                            "type": "missing_range",
+                            "subject": self._local_name(prop_uri),
+                            "message": f"Object property '{self._local_name(prop_uri)}' has no range",
+                        }
+                    )
 
             for prop_uri in self.graph.subjects(RDF.type, OWL.DatatypeProperty):
                 if isinstance(prop_uri, BNode):
                     continue
                 if not _has_domain(prop_uri):
-                    issues.append({
-                        "severity": "info",
-                        "type": "missing_domain",
-                        "subject": self._local_name(prop_uri),
-                        "message": f"Data property '{self._local_name(prop_uri)}' has no domain"
-                    })
+                    issues.append(
+                        {
+                            "severity": "info",
+                            "type": "missing_domain",
+                            "subject": self._local_name(prop_uri),
+                            "message": f"Data property '{self._local_name(prop_uri)}' has no domain",
+                        }
+                    )
 
         # Check for orphan classes (no parent, no children, not used)
         all_classes = set()
@@ -2790,24 +3142,31 @@ class OntologyManager:
         orphan_classes = all_classes - used_classes
         for orphan_uri in orphan_classes:
             name = self._local_name(URIRef(orphan_uri))
-            issues.append({
-                "severity": "info",
-                "type": "orphan_class",
-                "subject": name,
-                "message": f"Class '{name}' is not used in any hierarchy, property domain/range, restriction, or instance typing"
-            })
+            issues.append(
+                {
+                    "severity": "info",
+                    "type": "orphan_class",
+                    "subject": name,
+                    "message": f"Class '{name}' is not used in any hierarchy, property domain/range, restriction, or instance typing",
+                }
+            )
 
         # Check individuals have at least one class
         for ind_uri in self.graph.subjects(RDF.type, OWL.NamedIndividual):
-            classes = [c for c in self.graph.objects(ind_uri, RDF.type)
-                      if c != OWL.NamedIndividual]
+            classes = [
+                c
+                for c in self.graph.objects(ind_uri, RDF.type)
+                if c != OWL.NamedIndividual
+            ]
             if not classes:
-                issues.append({
-                    "severity": "warning",
-                    "type": "untyped_individual",
-                    "subject": self._local_name(ind_uri),
-                    "message": f"Individual '{self._local_name(ind_uri)}' has no class type"
-                })
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "type": "untyped_individual",
+                        "subject": self._local_name(ind_uri),
+                        "message": f"Individual '{self._local_name(ind_uri)}' has no class type",
+                    }
+                )
 
         # Check domain/range usage for property assertions on individuals
         def _expand_superclasses(class_uris: Set[str]) -> Set[str]:
@@ -2828,8 +3187,11 @@ class OntologyManager:
             if not isinstance(ind_uri, URIRef):
                 continue
             ind_name = self._local_name(ind_uri)
-            ind_direct_classes = {str(c) for c in self.graph.objects(ind_uri, RDF.type)
-                                  if isinstance(c, URIRef) and c != OWL.NamedIndividual}
+            ind_direct_classes = {
+                str(c)
+                for c in self.graph.objects(ind_uri, RDF.type)
+                if isinstance(c, URIRef) and c != OWL.NamedIndividual
+            }
             ind_all_classes = _expand_superclasses(ind_direct_classes)
 
             for pred, obj in self.graph.predicate_objects(ind_uri):
@@ -2839,40 +3201,62 @@ class OntologyManager:
                 # Check object properties
                 if (pred, RDF.type, OWL.ObjectProperty) in self.graph:
                     domain = self.graph.value(pred, RDFS.domain)
-                    if domain and isinstance(domain, URIRef) and str(domain) not in ind_all_classes:
-                        issues.append({
-                            "severity": "warning",
-                            "type": "domain_mismatch",
-                            "subject": ind_name,
-                            "message": f"Individual '{ind_name}' uses property '{self._local_name(pred)}' but is not typed as '{self._local_name(domain)}'"
-                        })
+                    if (
+                        domain
+                        and isinstance(domain, URIRef)
+                        and str(domain) not in ind_all_classes
+                    ):
+                        issues.append(
+                            {
+                                "severity": "warning",
+                                "type": "domain_mismatch",
+                                "subject": ind_name,
+                                "message": f"Individual '{ind_name}' uses property '{self._local_name(pred)}' but is not typed as '{self._local_name(domain)}'",
+                            }
+                        )
 
                     range_ = self.graph.value(pred, RDFS.range)
-                    if range_ and isinstance(range_, URIRef) and isinstance(obj, URIRef):
-                        obj_direct = {str(c) for c in self.graph.objects(obj, RDF.type)
-                                      if isinstance(c, URIRef) and c != OWL.NamedIndividual}
+                    if (
+                        range_
+                        and isinstance(range_, URIRef)
+                        and isinstance(obj, URIRef)
+                    ):
+                        obj_direct = {
+                            str(c)
+                            for c in self.graph.objects(obj, RDF.type)
+                            if isinstance(c, URIRef) and c != OWL.NamedIndividual
+                        }
                         obj_all_classes = _expand_superclasses(obj_direct)
                         if str(range_) not in obj_all_classes:
-                            issues.append({
-                                "severity": "warning",
-                                "type": "range_mismatch",
-                                "subject": ind_name,
-                                "message": f"Property '{self._local_name(pred)}' on '{ind_name}' expects range '{self._local_name(range_)}' but '{self._local_name(obj)}' is not typed as such"
-                            })
+                            issues.append(
+                                {
+                                    "severity": "warning",
+                                    "type": "range_mismatch",
+                                    "subject": ind_name,
+                                    "message": f"Property '{self._local_name(pred)}' on '{ind_name}' expects range '{self._local_name(range_)}' but '{self._local_name(obj)}' is not typed as such",
+                                }
+                            )
 
                 # Check data properties
                 elif (pred, RDF.type, OWL.DatatypeProperty) in self.graph:
                     domain = self.graph.value(pred, RDFS.domain)
-                    if domain and isinstance(domain, URIRef) and str(domain) not in ind_all_classes:
-                        issues.append({
-                            "severity": "warning",
-                            "type": "domain_mismatch",
-                            "subject": ind_name,
-                            "message": f"Individual '{ind_name}' uses data property '{self._local_name(pred)}' but is not typed as '{self._local_name(domain)}'"
-                        })
+                    if (
+                        domain
+                        and isinstance(domain, URIRef)
+                        and str(domain) not in ind_all_classes
+                    ):
+                        issues.append(
+                            {
+                                "severity": "warning",
+                                "type": "domain_mismatch",
+                                "subject": ind_name,
+                                "message": f"Individual '{ind_name}' uses data property '{self._local_name(pred)}' but is not typed as '{self._local_name(domain)}'",
+                            }
+                        )
 
         # Check for duplicate rdfs:label values across resources
         from collections import defaultdict
+
         label_to_resources: Dict[str, List[str]] = defaultdict(list)
         for subj, label_val in self.graph.subject_objects(RDFS.label):
             if isinstance(subj, URIRef) and isinstance(label_val, Literal):
@@ -2881,12 +3265,14 @@ class OntologyManager:
                 label_to_resources[label_str].append(name)
         for label_str, resources in label_to_resources.items():
             if len(resources) > 1:
-                issues.append({
-                    "severity": "warning",
-                    "type": "duplicate_label",
-                    "subject": ", ".join(sorted(resources)),
-                    "message": f"Duplicate label '{label_str}' shared by: {', '.join(sorted(resources))}"
-                })
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "type": "duplicate_label",
+                        "subject": ", ".join(sorted(resources)),
+                        "message": f"Duplicate label '{label_str}' shared by: {', '.join(sorted(resources))}",
+                    }
+                )
 
         return issues
 
@@ -2917,7 +3303,7 @@ class OntologyManager:
             "individuals": 0,
             "restrictions": 0,
             "total_triples": len(self.graph),
-            "content_triples": len(self.graph) - ontology_meta_count
+            "content_triples": len(self.graph) - ontology_meta_count,
         }
 
         for _ in self.graph.subjects(RDF.type, OWL.Class):
@@ -2935,7 +3321,9 @@ class OntologyManager:
         for _ in self.graph.subjects(RDF.type, OWL.Restriction):
             stats["restrictions"] += 1
 
-        stats["concept_schemes"] = sum(1 for _ in self.graph.subjects(RDF.type, SKOS.ConceptScheme))
+        stats["concept_schemes"] = sum(
+            1 for _ in self.graph.subjects(RDF.type, SKOS.ConceptScheme)
+        )
         stats["concepts"] = sum(1 for _ in self.graph.subjects(RDF.type, SKOS.Concept))
 
         return stats

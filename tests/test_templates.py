@@ -7,10 +7,14 @@ import pytest
 from rdflib import Graph
 from orionbelt_ontology_builder import templates as templates_module
 from orionbelt_ontology_builder.templates import (
-    get_template_names, get_template, render_template,
-    get_upper_ontology_names, get_upper_ontology,
+    get_template_names,
+    get_template,
+    render_template,
+    get_upper_ontology_names,
+    get_upper_ontology,
     load_upper_ontology_module,
-    get_reference_ontology_names, get_reference_ontology,
+    get_reference_ontology_names,
+    get_reference_ontology,
     load_reference_ontology_module,
     _fetch_with_cache,
 )
@@ -224,7 +228,9 @@ class TestReferenceOntologies:
         cache_file = tmp_path / f"{sha}.dat"
         cache_file.write_bytes(payload)
 
-        with patch("orionbelt_ontology_builder.templates.urllib.request.urlopen") as mock_urlopen:
+        with patch(
+            "orionbelt_ontology_builder.templates.urllib.request.urlopen"
+        ) as mock_urlopen:
             result = _fetch_with_cache("https://example.invalid/x", sha)
             mock_urlopen.assert_not_called()
         assert result == payload.decode("utf-8")
@@ -244,7 +250,10 @@ class TestReferenceOntologies:
             def read(self):
                 return payload
 
-        with patch("orionbelt_ontology_builder.templates.urllib.request.urlopen", return_value=_Resp()):
+        with patch(
+            "orionbelt_ontology_builder.templates.urllib.request.urlopen",
+            return_value=_Resp(),
+        ):
             with pytest.raises(RuntimeError, match="SHA256 mismatch"):
                 _fetch_with_cache("https://example.invalid/x", wrong_sha)
 
@@ -266,7 +275,10 @@ class TestReferenceOntologies:
             def read(self):
                 return payload
 
-        with patch("orionbelt_ontology_builder.templates.urllib.request.urlopen", return_value=_Resp()) as mock:
+        with patch(
+            "orionbelt_ontology_builder.templates.urllib.request.urlopen",
+            return_value=_Resp(),
+        ) as mock:
             result1 = _fetch_with_cache("https://example.invalid/x", sha)
             result2 = _fetch_with_cache("https://example.invalid/x", sha)
             # Second call should hit the cache, not the network

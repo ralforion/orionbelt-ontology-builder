@@ -4,7 +4,10 @@ import pytest
 from rdflib import Graph, URIRef
 from rdflib.namespace import RDFS
 from ontology_manager import (
-    OntologyManager, IMPORT_REPLACE, IMPORT_MERGE, IMPORT_MERGE_OVERWRITE,
+    OntologyManager,
+    IMPORT_REPLACE,
+    IMPORT_MERGE,
+    IMPORT_MERGE_OVERWRITE,
 )
 
 

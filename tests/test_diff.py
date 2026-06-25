@@ -13,6 +13,7 @@ def base_om():
     m.add_class("Dog", parent="Animal", label="Dog")
     return m
 
+
 class TestCompareGraphs:
     def test_identical_graphs_produce_empty_diff(self, base_om):
         other = Graph()
@@ -36,8 +37,9 @@ class TestCompareGraphs:
         assert diff["stats"]["added"] >= 2
         assert diff["stats"]["resources_added"] >= 1
         # Cat should appear in added resources
-        added_names = [r["name"] for r in diff["modified_resources"]
-                       if r["change_type"] == "added"]
+        added_names = [
+            r["name"] for r in diff["modified_resources"] if r["change_type"] == "added"
+        ]
         assert "Cat" in added_names
 
     def test_removed_triples_detected(self, base_om):
@@ -53,8 +55,11 @@ class TestCompareGraphs:
 
         diff = base_om.compare_graphs(other)
         assert diff["stats"]["removed"] > 0
-        removed_names = [r["name"] for r in diff["modified_resources"]
-                         if r["change_type"] == "removed"]
+        removed_names = [
+            r["name"]
+            for r in diff["modified_resources"]
+            if r["change_type"] == "removed"
+        ]
         assert "Dog" in removed_names
 
     def test_modified_resource_detected(self, base_om):
@@ -67,8 +72,9 @@ class TestCompareGraphs:
         other.add((dog_uri, RDFS.label, Literal("Puppy")))
 
         diff = base_om.compare_graphs(other)
-        modified = [r for r in diff["modified_resources"]
-                    if r["change_type"] == "modified"]
+        modified = [
+            r for r in diff["modified_resources"] if r["change_type"] == "modified"
+        ]
         assert any(r["name"] == "Dog" for r in modified)
 
     def test_bnode_triples_counted_but_not_surfaced(self):

@@ -136,7 +136,12 @@ class TestBulkUpdateAnnotations:
     def test_delete_annotation(self, om_with_classes):
         # Person already has label "Person"
         updates = [
-            {"resource": "Person", "predicate": "label", "value": "Person", "action": "delete"},
+            {
+                "resource": "Person",
+                "predicate": "label",
+                "value": "Person",
+                "action": "delete",
+            },
         ]
         result = om_with_classes.bulk_update_annotations(updates)
         assert result["applied"] == 1

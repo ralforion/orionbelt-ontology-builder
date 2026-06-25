@@ -65,7 +65,7 @@ class TestCrossNamespaceDuplicates:
     """
 
     def _make_two_orgs(self):
-        from rdflib import Graph, RDF, OWL, RDFS, Literal, URIRef
+        from rdflib import RDF, OWL, RDFS, Literal, URIRef
         from ontology_manager import OntologyManager
 
         om = OntologyManager(base_uri="http://example.org/myont#")
@@ -108,7 +108,8 @@ class TestCrossNamespaceDuplicates:
 
     def test_class_relations_expose_uris(self):
         """Regression for Relations tab key collisions."""
-        from rdflib import URIRef, RDF, OWL
+        from rdflib import URIRef, OWL
+
         om, foaf_uri, gist_uri = self._make_two_orgs()
         om.graph.add((URIRef(foaf_uri), OWL.equivalentClass, URIRef(gist_uri)))
         rels = om.get_class_relations()
@@ -122,7 +123,6 @@ class TestCrossNamespaceDuplicates:
         """Regression: editing an object property with a foaf:Organization
         domain must not silently rewrite the domain to myont:Organization
         even though both share the local name 'Organization'."""
-        from rdflib import RDFS
         om, foaf_uri, gist_uri = self._make_two_orgs()
         om.add_object_property("memberOf")
         # Save with the foaf URI as domain
@@ -139,10 +139,13 @@ class TestCrossNamespaceDuplicates:
         """Regression: Add Class Relation must place the triple between the
         URIs the user picked, not synthesise new base-namespace classes."""
         from rdflib import URIRef, OWL
+
         om, foaf_uri, gist_uri = self._make_two_orgs()
         om.add_class_relation(foaf_uri, "equivalentClass", gist_uri)
         # The triple must reference the imported URIs, not myont:Organization
-        triples = list(om.graph.triples((URIRef(foaf_uri), OWL.equivalentClass, URIRef(gist_uri))))
+        triples = list(
+            om.graph.triples((URIRef(foaf_uri), OWL.equivalentClass, URIRef(gist_uri)))
+        )
         assert len(triples) == 1
         my_org = om._uri("Organization")
         bogus = list(om.graph.triples((my_org, OWL.equivalentClass, None)))
@@ -151,7 +154,8 @@ class TestCrossNamespaceDuplicates:
     def test_individuals_expose_class_uris(self):
         """Regression: get_individuals must expose class_uris so the graph
         viewer can target the correct duplicate-named class."""
-        from rdflib import URIRef, RDF, OWL, Literal
+        from rdflib import URIRef, RDF, OWL
+
         om, foaf_uri, _gist_uri = self._make_two_orgs()
         alice = om.namespace["alice"]
         om.graph.add((alice, RDF.type, OWL.NamedIndividual))

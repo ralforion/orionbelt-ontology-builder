@@ -28,13 +28,17 @@ def test_class_impact_total_triples_positive(populated_om):
 
 
 def test_property_impact_shows_assertions(populated_om):
-    populated_om.add_individual_property("alice", "worksFor", "acme", is_object_property=True)
+    populated_om.add_individual_property(
+        "alice", "worksFor", "acme", is_object_property=True
+    )
     impact = populated_om.get_delete_impact("worksFor", "property")
     assert len(impact["property_assertions"]) >= 1
 
 
 def test_individual_impact_shows_relations(populated_om):
-    populated_om.add_individual_property("alice", "worksFor", "acme", is_object_property=True)
+    populated_om.add_individual_property(
+        "alice", "worksFor", "acme", is_object_property=True
+    )
     impact = populated_om.get_delete_impact("acme", "individual")
     assert len(impact["relations"]) >= 1
 
