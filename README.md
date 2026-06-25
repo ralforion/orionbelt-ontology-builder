@@ -11,6 +11,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-ontology-builder/blob/main/LICENSE)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-ralforion-2496ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/ralforion/orionbelt-ontology-builder)
 [![rdflib](https://img.shields.io/badge/rdflib-7.0+-2E86C1.svg)](https://rdflib.readthedocs.io)
 [![OWL-RL](https://img.shields.io/badge/OWL--RL-reasoning-green.svg)](https://owl-rl.readthedocs.io)
 [![vis-network](https://img.shields.io/badge/vis--network-9.1-97C2FC.svg)](https://visjs.github.io/vis-network/docs/network/)
@@ -133,6 +134,25 @@ streamlit run app.py
 ```
 
 Open http://localhost:8501
+
+### Run with Docker
+
+A prebuilt image is published to Docker Hub. No local Python setup required:
+
+```bash
+docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
+```
+
+Then open http://localhost:8501. Use `:1.4.0` to pin a specific version instead of `latest`.
+
+To build the image yourself from a checkout:
+
+```bash
+docker build -t ralforion/orionbelt-ontology-builder .
+docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
+```
+
+The container runs Streamlit headless on `0.0.0.0:8501` as a non-root user.
 
 ---
 
