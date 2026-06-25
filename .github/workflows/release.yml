@@ -1,0 +1,26 @@
+name: Release
+
+# Create a GitHub Release whenever a version tag (v1.2.3) is pushed.
+# Runs independently of Docker Publish — both react to the same tag push.
+# Release notes are auto-generated from merged PRs / commits since the
+# previous tag.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
