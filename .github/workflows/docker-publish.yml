@@ -2,7 +2,6 @@ name: Docker Publish
 
 # Build and push the application image to Docker Hub.
 # - On version tags (v1.2.3) → publish :1.2.3, :1.2, :1, :latest
-# - On pushes to main        → publish :main and :edge
 #
 # Requires two repository secrets:
 #   DOCKERHUB_USERNAME — Docker Hub account / org (e.g. ralforion)
@@ -10,7 +9,6 @@ name: Docker Publish
 
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
@@ -20,8 +18,6 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Don't try to push from forks / PRs where secrets are unavailable.
-    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -46,8 +42,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=edge,enable={{is_default_branch}}
-            type=ref,event=branch
           labels: |
             org.opencontainers.image.title=OrionBelt Ontology Builder
             org.opencontainers.image.description=A browser-based ontology workbench for building, editing, and managing OWL/SKOS ontologies.
