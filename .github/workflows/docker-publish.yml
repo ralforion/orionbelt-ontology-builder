@@ -1,14 +1,21 @@
 name: Docker Publish
 
-# Build and push the application image to Docker Hub.
-# - On version tags (v1.2.3) → publish :1.2.3, :1.2, :1, :latest
+# Build and push the OrionBelt Ontology Builder image to Docker Hub, and keep
+# the Hub repo overview in sync with README.md.
+#
+# - image       → only on version tags (v1.2.3): publishes :1.2.3, :1.2, :1, :latest
+# - description → on pushes to main and manual runs: syncs README.md to the
+#                 Docker Hub overview. This job never builds an image, so no
+#                 rolling :main / :edge tags are created.
 #
 # Requires two repository secrets:
-#   DOCKERHUB_USERNAME — Docker Hub account / org (e.g. ralforion)
+#   DOCKERHUB_USERNAME — Docker Hub account / org
 #   DOCKERHUB_TOKEN    — a Docker Hub access token (Account Settings → Security)
+#                        with read/write scope (read-only fails the description sync)
 
 on:
   push:
+    branches: [main]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
@@ -16,8 +23,10 @@ env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orionbelt-ontology-builder
 
 jobs:
-  publish:
+  image:
     runs-on: ubuntu-latest
+    # Build/push only for released version tags — never for branch or PR pushes.
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -57,11 +66,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Update Docker Hub repository overview
+  description:
+    runs-on: ubuntu-latest
+    # Sync the README to the Hub overview on main pushes, manual runs, and
+    # releases. Independent of the image build — no image is produced here.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync Docker Hub description
         uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE }}
-          short-description: "A browser-based ontology workbench built with Streamlit and rdflib."
+          short-description: A browser-based ontology workbench built with Streamlit and rdflib
           readme-filepath: ./README.md
