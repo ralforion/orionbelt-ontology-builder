@@ -4419,6 +4419,8 @@ def render_visualization():
             "node_spacing": 150,
             "maximize": False,
             "highlight_issues": False,
+            "focus_mode": False,
+            "focus_depth": 1,
         }
         for _k, _v in _viz_cfg.items():
             cfg_key = f"_viz_cfg_{_k}"
@@ -4576,26 +4578,95 @@ def render_visualization():
             st.session_state["_viz_cfg_selected_classes"] = all_class_names
             st.session_state["_viz_cfg_classes_at_mutation"] = current_mutation
         else:
-            valid = [
+            # Drop names that no longer exist, but keep an intentionally empty
+            # selection empty — repopulating here would make "Clear all" (the
+            # multiselect's ✕) snap straight back to every class. The mutation
+            # branch above is what resets to "all" when the ontology changes.
+            st.session_state["_viz_cfg_selected_classes"] = [
                 c
                 for c in st.session_state["_viz_cfg_selected_classes"]
                 if c in all_class_set
             ]
-            if not valid and all_class_names:
-                valid = all_class_names
-            st.session_state["_viz_cfg_selected_classes"] = valid
         st.session_state["viz_selected_classes"] = st.session_state[
             "_viz_cfg_selected_classes"
         ]
+
+        # Focus mode: centre the view on one node (class, individual or SKOS
+        # concept) and show only its neighbourhood within N hops. The pruning
+        # runs after the full graph is built (see below), so "depth" counts real
+        # links of every type — not just subclass chains. Seed options are keyed
+        # to the same node ids the graph builder assigns.
+        focus_targets: dict[str, str] = {}
+        if show_classes:
+            for c in classes:
+                focus_targets[f"Class: {c['name']}"] = _uid(c["uri"])
+        if show_individuals:
+            for ind in individuals:
+                focus_targets[f"Individual: {ind['name']}"] = f"ind_{_uid(ind['uri'])}"
+        if show_skos and _has_skos:
+            for concept in ont.get_concepts():
+                focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
+
+        focus_seed_id = None
+        focus_depth = 0
         with st.expander("Filter Classes", expanded=False):
-            selected_classes = st.multiselect(
-                "Select classes to display",
-                options=all_class_names,
-                help="Choose which classes to show in the graph",
-                key="viz_selected_classes",
+            focus_mode = st.checkbox(
+                "Focus on one node",
+                key="viz_focus_mode",
                 on_change=_viz_sync,
-                args=("_viz_cfg_selected_classes", "viz_selected_classes"),
+                args=("_viz_cfg_focus_mode", "viz_focus_mode"),
+                help=(
+                    "Show only a chosen node plus everything linked to it within "
+                    "N hops, across all node types — handy for large ontologies "
+                    "where showing everything at once is overwhelming."
+                ),
             )
+            if focus_mode and focus_targets:
+                focus_labels = list(focus_targets.keys())
+                saved_seed = st.session_state.get("_viz_cfg_focus_seed")
+                if saved_seed not in set(focus_labels):
+                    saved_seed = focus_labels[0]
+                st.session_state["_viz_cfg_focus_seed"] = saved_seed
+                st.session_state["viz_focus_seed"] = saved_seed
+                fcol1, fcol2 = st.columns([3, 1])
+                with fcol1:
+                    focus_seed = st.selectbox(
+                        "Focus node",
+                        options=focus_labels,
+                        key="viz_focus_seed",
+                        on_change=_viz_sync,
+                        args=("_viz_cfg_focus_seed", "viz_focus_seed"),
+                        help="Class, individual or SKOS concept to centre on. "
+                        "Toggle the entity-type checkboxes above to list more.",
+                    )
+                with fcol2:
+                    focus_depth = st.slider(
+                        "Depth (hops)",
+                        1,
+                        5,
+                        key="viz_focus_depth",
+                        on_change=_viz_sync,
+                        args=("_viz_cfg_focus_depth", "viz_focus_depth"),
+                        help="1 = direct neighbours only; higher pulls in further links.",
+                    )
+                focus_seed_id = focus_targets.get(focus_seed)
+                # Build the full graph so the neighbourhood isn't pre-limited;
+                # the post-build prune narrows it to the chosen node's links.
+                selected_classes = all_class_names
+            elif focus_mode:
+                st.info(
+                    "Enable Classes, Individuals or SKOS above to pick a focus node."
+                )
+                selected_classes = []
+            else:
+                selected_classes = st.multiselect(
+                    "Select classes to display",
+                    options=all_class_names,
+                    help="Choose which classes to show in the graph",
+                    key="viz_selected_classes",
+                    on_change=_viz_sync,
+                    args=("_viz_cfg_selected_classes", "viz_selected_classes"),
+                )
 
         # Store graph settings in session state for caching
         selected_classes_key = (
@@ -4606,7 +4677,7 @@ def render_visualization():
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
         ont_mutation = st.session_state.get("_ont_mutation_count", 0)
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}"
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{focus_mode}_{focus_seed_id}_{focus_depth}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -5172,6 +5243,36 @@ def render_visualization():
                                 color="#B0BEC5",
                                 arrows="to",
                             )
+
+            # Focus mode: keep only the chosen node's neighbourhood within
+            # focus_depth hops over the assembled edges (BFS over all node
+            # types, so depth counts real graph links rather than class hops).
+            if focus_mode and focus_seed_id:
+                present_ids = {n["id"] for n in net.nodes}
+                if focus_seed_id in present_ids:
+                    adj: dict = {}
+                    for edge in net.edges:
+                        adj.setdefault(edge["from"], set()).add(edge["to"])
+                        adj.setdefault(edge["to"], set()).add(edge["from"])
+                    keep = {focus_seed_id}
+                    frontier = {focus_seed_id}
+                    for _ in range(focus_depth):
+                        nxt = set()
+                        for nid in frontier:
+                            nxt |= adj.get(nid, set()) - keep
+                        if not nxt:
+                            break
+                        keep |= nxt
+                        frontier = nxt
+                    net.nodes = [n for n in net.nodes if n["id"] in keep]
+                    net.edges = [
+                        e for e in net.edges if e["from"] in keep and e["to"] in keep
+                    ]
+                else:
+                    # Seed wasn't built (e.g. beyond the node cap) — show nothing
+                    # rather than the whole graph, which would be misleading.
+                    net.nodes = []
+                    net.edges = []
 
             # Spread parallel edges so they don't overlap
             from collections import defaultdict as _defaultdict
