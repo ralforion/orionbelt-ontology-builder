@@ -158,6 +158,26 @@ docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 
 The container runs Streamlit headless on `0.0.0.0:8501` as a non-root user.
 
+### Upload size limit
+
+Imported files are capped at **200 MB** by default (Streamlit's `maxUploadSize`).
+To import larger ontologies, raise the limit in `.streamlit/config.toml`:
+
+```toml
+[server]
+maxUploadSize = 1000   # MB
+```
+
+or pass it at launch:
+
+```bash
+streamlit run app.py --server.maxUploadSize 1000
+```
+
+Parsing happens in memory, so the practical ceiling is the host machine's
+available RAM rather than this setting. The hosted demo is RAM-limited and keeps
+the 200 MB default; raise the value only when self-hosting with enough memory.
+
 ---
 
 ## Pages

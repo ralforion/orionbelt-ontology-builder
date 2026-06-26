@@ -3477,10 +3477,16 @@ def render_import_export():
             import_method = st.radio("Import Method", ["Upload File", "Paste Content"])
 
             if import_method == "Upload File":
+                _max_upload_mb = st.get_option("server.maxUploadSize")
                 uploaded_file = st.file_uploader(
                     "Choose an ontology file",
                     type=["ttl", "owl", "rdf", "xml", "n3", "nt", "jsonld", "json"],
-                    help="Supported formats: Turtle (.ttl), RDF/XML (.owl, .rdf, .xml), N3 (.n3), N-Triples (.nt), JSON-LD (.jsonld, .json)",
+                    help=(
+                        "Supported formats: Turtle (.ttl), RDF/XML (.owl, .rdf, .xml), "
+                        "N3 (.n3), N-Triples (.nt), JSON-LD (.jsonld, .json). "
+                        f"Maximum file size: {_max_upload_mb} MB — raise it via "
+                        "server.maxUploadSize in .streamlit/config.toml."
+                    ),
                     key=f"import_uploader_{st.session_state.get('import_uploader_key', 0)}",
                 )
 

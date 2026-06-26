@@ -1,2 +1,9 @@
 [theme]
 primaryColor = "#0D2B7A"
+
+[server]
+# Maximum upload size in MB for the Import page file uploader.
+# Streamlit's default is 200. Raise this to import larger ontologies — but
+# note that parsing happens in memory, so the practical ceiling is the host's
+# available RAM (the hosted demo on Streamlit Community Cloud is RAM-limited).
+maxUploadSize = 200
