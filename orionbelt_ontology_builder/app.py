@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -4434,6 +4434,17 @@ def render_visualization():
             """Callback to persist widget value when changed."""
             st.session_state[cfg_key] = st.session_state[wid_key]
 
+        def _viz_focus_toggle():
+            """Persist the focus toggle and, when it turns on, seed the focus
+            nodes from the classes selected in the multiselect — so the
+            neighbourhood grows from exactly what the user had picked (one class
+            or several). An empty selection falls back to the first node."""
+            on = st.session_state["viz_focus_mode"]
+            st.session_state["_viz_cfg_focus_mode"] = on
+            if on:
+                sel = st.session_state.get("_viz_cfg_selected_classes") or []
+                st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
+
         _cols = (
             st.columns([1, 1, 1, 1, 1, 1, 1, 1])
             if _has_skos
@@ -4607,14 +4618,13 @@ def render_visualization():
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
 
-        focus_seed_id = None
+        focus_seed_ids: list = []
         focus_depth = 0
         with st.expander("Filter Classes", expanded=False):
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
-                on_change=_viz_sync,
-                args=("_viz_cfg_focus_mode", "viz_focus_mode"),
+                on_change=_viz_focus_toggle,
                 help=(
                     "Show only a chosen node plus everything linked to it within "
                     "N hops, across all node types — handy for large ontologies "
@@ -4623,21 +4633,35 @@ def render_visualization():
             )
             if focus_mode and focus_targets:
                 focus_labels = list(focus_targets.keys())
-                saved_seed = st.session_state.get("_viz_cfg_focus_seed")
-                if saved_seed not in set(focus_labels):
-                    saved_seed = focus_labels[0]
-                st.session_state["_viz_cfg_focus_seed"] = saved_seed
-                st.session_state["viz_focus_seed"] = saved_seed
+                label_set = set(focus_labels)
+                # Default the focus seeds to the classes selected in the
+                # multiselect, so the neighbourhood grows from exactly what the
+                # user had picked (one class or several).
+                saved_seeds = st.session_state.get("_viz_cfg_focus_seeds")
+                if saved_seeds is None:
+                    saved_seeds = [
+                        f"Class: {c}"
+                        for c in (
+                            st.session_state.get("_viz_cfg_selected_classes") or []
+                        )
+                        if f"Class: {c}" in label_set
+                    ]
+                saved_seeds = [s for s in saved_seeds if s in label_set]
+                if not saved_seeds:
+                    saved_seeds = [focus_labels[0]]
+                st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
+                st.session_state["viz_focus_seeds"] = saved_seeds
                 fcol1, fcol2 = st.columns([3, 1])
                 with fcol1:
-                    focus_seed = st.selectbox(
-                        "Focus node",
+                    focus_seeds = st.multiselect(
+                        "Focus node(s)",
                         options=focus_labels,
-                        key="viz_focus_seed",
+                        key="viz_focus_seeds",
                         on_change=_viz_sync,
-                        args=("_viz_cfg_focus_seed", "viz_focus_seed"),
-                        help="Class, individual or SKOS concept to centre on. "
-                        "Toggle the entity-type checkboxes above to list more.",
+                        args=("_viz_cfg_focus_seeds", "viz_focus_seeds"),
+                        help="Classes, individuals or SKOS concepts to centre on. "
+                        "The neighbourhood grows from all of them. Toggle the "
+                        "entity-type checkboxes above to list more.",
                     )
                 with fcol2:
                     focus_depth = st.slider(
@@ -4649,13 +4673,15 @@ def render_visualization():
                         args=("_viz_cfg_focus_depth", "viz_focus_depth"),
                         help="1 = direct neighbours only; higher pulls in further links.",
                     )
-                focus_seed_id = focus_targets.get(focus_seed)
+                focus_seed_ids = [
+                    focus_targets[s] for s in focus_seeds if s in focus_targets
+                ]
                 # Build the full graph so the neighbourhood isn't pre-limited;
-                # the post-build prune narrows it to the chosen node's links.
+                # the post-build prune narrows it to the seeds' links.
                 selected_classes = all_class_names
             elif focus_mode:
                 st.info(
-                    "Enable Classes, Individuals or SKOS above to pick a focus node."
+                    "Enable Classes, Individuals or SKOS above to pick focus nodes."
                 )
                 selected_classes = []
             else:
@@ -4677,7 +4703,7 @@ def render_visualization():
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
         ont_mutation = st.session_state.get("_ont_mutation_count", 0)
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{focus_mode}_{focus_seed_id}_{focus_depth}"
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -5244,18 +5270,20 @@ def render_visualization():
                                 arrows="to",
                             )
 
-            # Focus mode: keep only the chosen node's neighbourhood within
+            # Focus mode: keep only the seed nodes' neighbourhood within
             # focus_depth hops over the assembled edges (BFS over all node
             # types, so depth counts real graph links rather than class hops).
-            if focus_mode and focus_seed_id:
+            # Several seeds grow the neighbourhood from all of them at once.
+            if focus_mode and focus_seed_ids:
                 present_ids = {n["id"] for n in net.nodes}
-                if focus_seed_id in present_ids:
+                seeds = {sid for sid in focus_seed_ids if sid in present_ids}
+                if seeds:
                     adj: dict = {}
                     for edge in net.edges:
                         adj.setdefault(edge["from"], set()).add(edge["to"])
                         adj.setdefault(edge["to"], set()).add(edge["from"])
-                    keep = {focus_seed_id}
-                    frontier = {focus_seed_id}
+                    keep = set(seeds)
+                    frontier = set(seeds)
                     for _ in range(focus_depth):
                         nxt = set()
                         for nid in frontier:
@@ -5269,7 +5297,7 @@ def render_visualization():
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
                     ]
                 else:
-                    # Seed wasn't built (e.g. beyond the node cap) — show nothing
+                    # No seed was built (e.g. beyond the node cap) — show nothing
                     # rather than the whole graph, which would be misleading.
                     net.nodes = []
                     net.edges = []
