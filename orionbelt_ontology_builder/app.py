@@ -862,6 +862,9 @@ def render_classes():
                                 "Name (URI local part)",
                                 value=cls["name"],
                                 key=f"name_{cls_uid}",
+                                help="Renaming updates every reference to this "
+                                "class — no links are lost, unlike "
+                                "delete-and-recreate.",
                             )
                             new_label = st.text_input(
                                 "Label", value=cls["label"], key=f"lbl_{cls_uid}"
@@ -1350,6 +1353,9 @@ def render_properties():
                                 "Name (URI local part)",
                                 value=prop["name"],
                                 key=f"objp_name_{prop_uid}",
+                                help="Renaming updates every reference to this "
+                                "property, including assertions that use it — "
+                                "no links are lost.",
                             )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"objp_lbl_{prop_uid}"
@@ -1545,6 +1551,9 @@ def render_properties():
                                 "Name (URI local part)",
                                 value=prop["name"],
                                 key=f"dp_name_{prop_uid}",
+                                help="Renaming updates every reference to this "
+                                "property, including assertions that use it — "
+                                "no links are lost.",
                             )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"dp_lbl_{prop_uid}"
@@ -1980,6 +1989,9 @@ def render_individuals():
                                 "Name (URI local part)",
                                 value=ind["name"],
                                 key=f"ind_name_{_ik}",
+                                help="Renaming updates every reference to this "
+                                "individual — no links are lost, unlike "
+                                "delete-and-recreate.",
                             )
                             new_label = st.text_input(
                                 "Label", value=ind["label"], key=f"ind_lbl_{_ik}"
@@ -3007,6 +3019,14 @@ def render_skos_vocabulary():
                     if st.session_state.get(f"edit_scheme_{scheme['name']}", False):
                         st.divider()
                         with st.form(f"edit_scheme_form_{scheme['name']}"):
+                            new_name = st.text_input(
+                                "Name (URI local part)",
+                                value=scheme["name"],
+                                key=f"scheme_name_{scheme['name']}",
+                                help="Renaming updates every reference, including "
+                                "the inScheme links from its concepts — no "
+                                "membership is lost.",
+                            )
                             new_label = st.text_input(
                                 "Label",
                                 value=scheme["label"] or "",
@@ -3018,20 +3038,30 @@ def render_skos_vocabulary():
                                 key=f"scheme_cmt_{scheme['name']}",
                             )
                             if st.form_submit_button("Save Changes"):
-                                ont.update_concept_scheme(
-                                    scheme["name"],
-                                    new_label=new_label,
-                                    new_comment=new_comment,
-                                )
-                                save_checkpoint("Update concept scheme")
-                                st.session_state[f"edit_scheme_{scheme['name']}"] = (
-                                    False
-                                )
-                                st.session_state[f"view_scheme_{scheme['name']}"] = True
-                                show_message(
-                                    f"Scheme '{scheme['name']}' updated!", "success"
-                                )
-                                st.rerun()
+                                renamed = bool(new_name and new_name != scheme["name"])
+                                if renamed and not ont.rename_concept_scheme(
+                                    scheme["name"], new_name
+                                ):
+                                    show_message(
+                                        f"Cannot rename: '{new_name}' already exists!",
+                                        "error",
+                                    )
+                                else:
+                                    target = new_name if renamed else scheme["name"]
+                                    ont.update_concept_scheme(
+                                        target,
+                                        new_label=new_label,
+                                        new_comment=new_comment,
+                                    )
+                                    save_checkpoint("Update concept scheme")
+                                    st.session_state[
+                                        f"edit_scheme_{scheme['name']}"
+                                    ] = False
+                                    st.session_state[f"view_scheme_{target}"] = True
+                                    show_message(
+                                        f"Scheme '{target}' updated!", "success"
+                                    )
+                                    st.rerun()
 
         st.divider()
         st.subheader("Add Concept Scheme")
@@ -3204,6 +3234,14 @@ def render_skos_vocabulary():
                     if st.session_state.get(_ek, False):
                         st.divider()
                         with st.form(f"edit_concept_form_{_ck}"):
+                            new_name = st.text_input(
+                                "Name (URI local part)",
+                                value=concept["name"],
+                                key=f"cname_{_ck}",
+                                help="Renaming updates every reference to this "
+                                "concept (broader/narrower, inScheme, etc.) — "
+                                "nothing is lost, unlike delete-and-recreate.",
+                            )
                             new_pref = st.text_input(
                                 "Preferred Label",
                                 value=concept["prefLabel"] or "",
@@ -3255,51 +3293,72 @@ def render_skos_vocabulary():
                             )
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle broader change
-                                broader_val = (
-                                    new_broader if new_broader != "None" else ""
-                                )
-                                old_broader = (
-                                    concept["broader"][0] if concept["broader"] else ""
-                                )
-                                broader_changed = broader_val != old_broader
+                                # Rename first (updates all references) so the
+                                # rest of the update targets the new name.
+                                renamed = bool(new_name and new_name != concept["name"])
+                                if renamed and not ont.rename_concept(
+                                    concept["name"], new_name
+                                ):
+                                    show_message(
+                                        f"Cannot rename: '{new_name}' already exists!",
+                                        "error",
+                                    )
+                                else:
+                                    target = new_name if renamed else concept["name"]
+                                    # Handle broader change
+                                    broader_val = (
+                                        new_broader if new_broader != "None" else ""
+                                    )
+                                    old_broader = (
+                                        concept["broader"][0]
+                                        if concept["broader"]
+                                        else ""
+                                    )
+                                    broader_changed = broader_val != old_broader
 
-                                # Handle scheme change
-                                old_scheme = (
-                                    concept["schemes"][0]
-                                    if concept.get("schemes")
-                                    else ""
-                                )
-                                new_scheme_val = (
-                                    new_scheme if new_scheme != "None" else ""
-                                )
-                                add_s = (
-                                    new_scheme_val
-                                    if new_scheme_val and new_scheme_val != old_scheme
-                                    else None
-                                )
-                                remove_s = (
-                                    old_scheme
-                                    if old_scheme and old_scheme != new_scheme_val
-                                    else None
-                                )
+                                    # Handle scheme change
+                                    old_scheme = (
+                                        concept["schemes"][0]
+                                        if concept.get("schemes")
+                                        else ""
+                                    )
+                                    new_scheme_val = (
+                                        new_scheme if new_scheme != "None" else ""
+                                    )
+                                    add_s = (
+                                        new_scheme_val
+                                        if new_scheme_val
+                                        and new_scheme_val != old_scheme
+                                        else None
+                                    )
+                                    remove_s = (
+                                        old_scheme
+                                        if old_scheme and old_scheme != new_scheme_val
+                                        else None
+                                    )
 
-                                _update_kwargs = dict(
-                                    new_pref_label=new_pref,
-                                    new_definition=new_def,
-                                    add_scheme=add_s,
-                                    remove_scheme=remove_s,
-                                )
-                                if broader_changed:
-                                    _update_kwargs["new_broader"] = broader_val
-                                ont.update_concept(concept["name"], **_update_kwargs)
-                                save_checkpoint("Update concept")
-                                st.session_state[_ek] = False
-                                st.session_state[_sk] = True
-                                show_message(
-                                    f"Concept '{concept['name']}' updated!", "success"
-                                )
-                                st.rerun()
+                                    _update_kwargs = dict(
+                                        new_pref_label=new_pref,
+                                        new_definition=new_def,
+                                        add_scheme=add_s,
+                                        remove_scheme=remove_s,
+                                    )
+                                    if broader_changed:
+                                        _update_kwargs["new_broader"] = broader_val
+                                    ont.update_concept(target, **_update_kwargs)
+                                    save_checkpoint("Update concept")
+                                    st.session_state[_ek] = False
+                                    if renamed:
+                                        _new_ck = str(
+                                            abs(hash(str(ont._uri(new_name))))
+                                        )[:8]
+                                        st.session_state[f"view_skos_{_new_ck}"] = True
+                                    else:
+                                        st.session_state[_sk] = True
+                                    show_message(
+                                        f"Concept '{target}' updated!", "success"
+                                    )
+                                    st.rerun()
 
         st.divider()
         st.subheader("Add Concept")

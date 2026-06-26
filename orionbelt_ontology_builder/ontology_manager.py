@@ -365,6 +365,22 @@ class OntologyManager:
         if new_parent:
             self.graph.add((class_uri, RDFS.subClassOf, self._uri(new_parent)))
 
+    # Entity types that share the local-name space; a rename target must not
+    # already be any of these, since they would collide on the same URI.
+    _ENTITY_TYPES = (
+        OWL.Class,
+        OWL.ObjectProperty,
+        OWL.DatatypeProperty,
+        OWL.NamedIndividual,
+        SKOS.Concept,
+        SKOS.ConceptScheme,
+    )
+
+    def _name_in_use(self, uri: URIRef) -> bool:
+        """True if `uri` is already defined as any class, property, individual,
+        SKOS concept or scheme. Guards renames against cross-type collisions."""
+        return any((uri, RDF.type, t) in self.graph for t in self._ENTITY_TYPES)
+
     def rename_class(self, old_name: str, new_name: str) -> bool:
         """Rename a class, updating all references."""
         if old_name == new_name:
@@ -373,8 +389,8 @@ class OntologyManager:
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name)
 
-        # Check if new name already exists
-        if (new_uri, RDF.type, OWL.Class) in self.graph:
+        # Refuse if the target name is already used by any entity (any type).
+        if self._name_in_use(new_uri):
             return False
 
         # Collect all triples to update
@@ -946,12 +962,8 @@ class OntologyManager:
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name)
 
-        # Check if new name already exists
-        if (new_uri, RDF.type, OWL.ObjectProperty) in self.graph or (
-            new_uri,
-            RDF.type,
-            OWL.DatatypeProperty,
-        ) in self.graph:
+        # Refuse if the target name is already used by any entity (any type).
+        if self._name_in_use(new_uri):
             return False
 
         # Collect all triples to update
@@ -1163,8 +1175,8 @@ class OntologyManager:
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name)
 
-        # Check if new name already exists
-        if (new_uri, RDF.type, OWL.NamedIndividual) in self.graph:
+        # Refuse if the target name is already used by any entity (any type).
+        if self._name_in_use(new_uri):
             return False
 
         # Collect all triples to update
@@ -1648,6 +1660,39 @@ class OntologyManager:
             if new_comment:
                 self.graph.add((uri, RDFS.comment, Literal(new_comment)))
 
+    def rename_concept_scheme(self, old_name: str, new_name: str) -> bool:
+        """Rename a SKOS ConceptScheme, updating all references.
+
+        Re-points every triple where the scheme is subject or object (including
+        the ``skos:inScheme`` links from its concepts), so no membership is lost.
+        """
+        if old_name == new_name:
+            return True
+
+        # Resolve the actual scheme URI from the graph (mirrors update/delete).
+        old_uri = self._uri(old_name)
+        for s_uri in self.graph.subjects(RDF.type, SKOS.ConceptScheme):
+            if self._local_name(s_uri) == old_name:
+                old_uri = cast(URIRef, s_uri)
+                break
+
+        new_uri = self._uri(new_name)
+        # Refuse if the target name is already used by any entity (any type).
+        if self._name_in_use(new_uri):
+            return False
+
+        updates: _TripleUpdates = []
+        for p, o in self.graph.predicate_objects(old_uri):
+            updates.append(((old_uri, p, o), (new_uri, p, o)))
+        for s, p in self.graph.subject_predicates(old_uri):
+            updates.append(((s, p, old_uri), (s, p, new_uri)))
+
+        for old_triple, new_triple in updates:
+            self.graph.remove(old_triple)
+            self.graph.add(new_triple)
+
+        return True
+
     def delete_concept_scheme(self, name: str):
         """Delete a ConceptScheme and remove inScheme references."""
         uri = self._uri(name)
@@ -1805,6 +1850,31 @@ class OntologyManager:
 
         if remove_scheme:
             self.graph.remove((uri, SKOS.inScheme, self._uri(remove_scheme)))
+
+    def rename_concept(self, old_name: str, new_name: str) -> bool:
+        """Rename a SKOS concept, updating all references."""
+        if old_name == new_name:
+            return True
+
+        old_uri = self._uri(old_name)
+        new_uri = self._uri(new_name)
+
+        # Refuse if the target name is already used by any entity (any type).
+        if self._name_in_use(new_uri):
+            return False
+
+        # Collect all triples to update (old_uri as subject and as object)
+        updates: _TripleUpdates = []
+        for p, o in self.graph.predicate_objects(old_uri):
+            updates.append(((old_uri, p, o), (new_uri, p, o)))
+        for s, p in self.graph.subject_predicates(old_uri):
+            updates.append(((s, p, old_uri), (s, p, new_uri)))
+
+        for old_triple, new_triple in updates:
+            self.graph.remove(old_triple)
+            self.graph.add(new_triple)
+
+        return True
 
     def add_concept_relation(self, concept1: str, relation: str, concept2: str):
         """Add a SKOS relation between two concepts.
