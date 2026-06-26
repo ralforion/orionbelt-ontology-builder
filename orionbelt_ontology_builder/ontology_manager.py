@@ -2636,12 +2636,16 @@ class OntologyManager:
     # ==================== SEARCH ====================
 
     def search(self, query: str) -> List[Dict[str, str]]:
-        """Search across all resource names, labels, and comments.
+        """Search across resource names, labels, comments and SKOS labels.
+
+        Matches (case-insensitive, partial) against the local name, rdfs:label,
+        skos:prefLabel, skos:altLabel and rdfs:comment of every class, property,
+        individual and SKOS concept. altLabel matching in particular improves
+        discoverability for vocabularies with synonyms.
 
         Returns a list of dicts with keys: name, uri, type, label, match_field.
-        Results are case-insensitive partial matches. The full URI is included
-        so that callers can distinguish duplicate local names from different
-        namespaces.
+        The full URI is included so callers can distinguish duplicate local
+        names from different namespaces.
         """
         if not query or not query.strip():
             return []
@@ -2655,7 +2659,17 @@ class OntologyManager:
             (OWL.ObjectProperty, "Object Property"),
             (OWL.DatatypeProperty, "Data Property"),
             (OWL.NamedIndividual, "Individual"),
+            (SKOS.Concept, "SKOS Concept"),
         ]
+
+        # Lower rank = higher priority when ordering results.
+        field_rank = {
+            "name": 0,
+            "label": 1,
+            "prefLabel": 2,
+            "altLabel": 3,
+            "comment": 4,
+        }
 
         for rdf_type, type_label in type_map:
             for subj in self.graph.subjects(RDF.type, rdf_type):
@@ -2665,27 +2679,37 @@ class OntologyManager:
                 name = self._local_name(subj)
                 label = str(self.graph.value(subj, RDFS.label) or "")
                 comment = str(self.graph.value(subj, RDFS.comment) or "")
+                pref_label = str(self.graph.value(subj, SKOS.prefLabel) or "")
+                alt_labels = [str(o) for o in self.graph.objects(subj, SKOS.altLabel)]
 
                 match_field = None
                 if q in name.lower():
                     match_field = "name"
-                elif q in label.lower():
+                elif label and q in label.lower():
                     match_field = "label"
-                elif q in comment.lower():
+                elif pref_label and q in pref_label.lower():
+                    match_field = "prefLabel"
+                elif any(q in alt.lower() for alt in alt_labels):
+                    match_field = "altLabel"
+                elif comment and q in comment.lower():
                     match_field = "comment"
 
                 if match_field:
                     results.append(
                         {
+                            # Fall back to prefLabel so SKOS concepts (which
+                            # rarely carry rdfs:label) still show a label.
                             "name": name,
                             "uri": str(subj),
                             "type": type_label,
-                            "label": label,
+                            "label": label or pref_label,
                             "match_field": match_field,
                         }
                     )
 
-        results.sort(key=lambda r: (r["match_field"] != "name", r["name"].lower()))
+        results.sort(
+            key=lambda r: (field_rank.get(r["match_field"], 9), r["name"].lower())
+        )
         return results
 
     # ==================== RESOURCE USAGES ====================
