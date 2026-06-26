@@ -1374,6 +1374,49 @@ class OntologyManager:
 
     # ==================== ANNOTATION OPERATIONS ====================
 
+    # Common annotation predicate local names -> URIs. Shared by add and
+    # delete so the two never drift apart (a stale subset on delete is what
+    # made skos:example and others impossible to remove).
+    _ANNOTATION_PREDICATES = {
+        "label": RDFS.label,
+        "comment": RDFS.comment,
+        "seeAlso": RDFS.seeAlso,
+        "isDefinedBy": RDFS.isDefinedBy,
+        "prefLabel": SKOS.prefLabel,
+        "altLabel": SKOS.altLabel,
+        "definition": SKOS.definition,
+        "example": SKOS.example,
+        "note": SKOS.note,
+        "title": DCTERMS.title,
+        "description": DCTERMS.description,
+        "creator": DCTERMS.creator,
+        "contributor": DCTERMS.contributor,
+        "date": DCTERMS.date,
+        "deprecated": OWL.deprecated,
+    }
+
+    def _resolve_predicate_uri(self, predicate: str) -> URIRef:
+        """Resolve an annotation predicate to a URI.
+
+        Accepts a full URI, a known local name (label, comment, example, ...),
+        a ``prefix:local`` CURIE bound in the graph, or a bare local name
+        (falls back to the base namespace).
+        """
+        predicate = predicate.strip()
+        if predicate.startswith("http://") or predicate.startswith("https://"):
+            return URIRef(predicate)
+        mapped = self._ANNOTATION_PREDICATES.get(predicate)
+        if mapped is not None:
+            return mapped
+        if ":" in predicate:
+            prefix, _, local = predicate.partition(":")
+            for bound_prefix, ns in self.graph.namespaces():
+                if bound_prefix == prefix or (
+                    prefix == "(default)" and bound_prefix == ""
+                ):
+                    return URIRef(str(ns) + local)
+        return self._uri(predicate)
+
     def add_annotation(
         self, subject: str, predicate: str, value: str, lang: Optional[str] = None
     ):
@@ -1386,31 +1429,7 @@ class OntologyManager:
             lang: Optional language tag
         """
         subj_uri = self._uri(subject)
-
-        # Map common annotation names to URIs
-        annotation_predicates = {
-            "label": RDFS.label,
-            "comment": RDFS.comment,
-            "seeAlso": RDFS.seeAlso,
-            "isDefinedBy": RDFS.isDefinedBy,
-            "prefLabel": SKOS.prefLabel,
-            "altLabel": SKOS.altLabel,
-            "definition": SKOS.definition,
-            "example": SKOS.example,
-            "note": SKOS.note,
-            "title": DCTERMS.title,
-            "description": DCTERMS.description,
-            "creator": DCTERMS.creator,
-            "contributor": DCTERMS.contributor,
-            "date": DCTERMS.date,
-            "deprecated": OWL.deprecated,
-        }
-
-        # Check if predicate is a full URI
-        if predicate.startswith("http://") or predicate.startswith("https://"):
-            pred_uri = URIRef(predicate)
-        else:
-            pred_uri = annotation_predicates.get(predicate, self._uri(predicate))
+        pred_uri = self._resolve_predicate_uri(predicate)
 
         if lang:
             literal = Literal(value, lang=lang)
@@ -1552,17 +1571,7 @@ class OntologyManager:
         for any literal with a matching string value regardless of tag.
         """
         subj_uri = self._uri(subject)
-
-        annotation_predicates = {
-            "label": RDFS.label,
-            "comment": RDFS.comment,
-            "prefLabel": SKOS.prefLabel,
-            "altLabel": SKOS.altLabel,
-            "definition": SKOS.definition,
-            "note": SKOS.note,
-        }
-
-        pred_uri = annotation_predicates.get(predicate, self._uri(predicate))
+        pred_uri = self._resolve_predicate_uri(predicate)
 
         if value is None:
             self.graph.remove((subj_uri, pred_uri, None))

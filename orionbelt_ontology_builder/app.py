@@ -2745,7 +2745,7 @@ def render_annotations():
                                 ):
                                     ont.delete_annotation(
                                         resource_name,
-                                        ann["predicate"],
+                                        ann.get("predicate_uri", ann["predicate"]),
                                         ann["value"],
                                         lang=ann.get("language"),
                                         datatype=ann.get("datatype"),
@@ -2872,7 +2872,9 @@ def render_annotations():
                 annotation_data.append(
                     {
                         "Resource": res["name"],
-                        "Predicate": a.get("predicate_label", ""),
+                        "Predicate": a.get(
+                            "predicate_prefixed", a.get("predicate", "")
+                        ),
                         "Value": a.get("value", ""),
                         "Language": a.get("language", ""),
                         "Action": "keep",
