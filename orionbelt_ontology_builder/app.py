@@ -997,6 +997,12 @@ def render_classes():
                 st.subheader(f"Edit: {selected_display}")
 
                 with st.form("edit_class_form"):
+                    new_name = st.text_input(
+                        "Name (URI local part)",
+                        value=class_info["name"],
+                        help="Renaming updates every reference to this class — "
+                        "no links are lost, unlike delete-and-recreate.",
+                    )
                     new_label = st.text_input("Label", value=class_info["label"])
                     new_comment = st.text_area("Comment", value=class_info["comment"])
 
@@ -1025,24 +1031,40 @@ def render_classes():
                         )
 
                     if update_btn:
+                        # Rename first (updates all references) so the rest of
+                        # the update targets the renamed class.
+                        current_ref = class_info["uri"]
+                        if new_name and new_name != class_info["name"]:
+                            if ont.rename_class(class_info["uri"], new_name):
+                                current_ref = new_name
+                            else:
+                                show_message(
+                                    f"Cannot rename: '{new_name}' already exists!",
+                                    "error",
+                                )
+                                st.rerun()
+
                         # Remove old parent if changed
                         if (
                             class_info["parents"]
                             and new_parent != class_info["parents"][0]
                         ):
                             ont.update_class(
-                                class_info["uri"],
+                                current_ref,
                                 remove_parent=class_info["parents"][0],
                             )
 
                         ont.update_class(
-                            class_info["uri"],
+                            current_ref,
                             new_label=new_label,
                             new_comment=new_comment,
                             new_parent=new_parent if new_parent != "None" else None,
                         )
                         save_checkpoint("Update class")
-                        show_message(f"Class '{selected_display}' updated!", "success")
+                        show_message(
+                            f"Class '{new_name or selected_display}' updated!",
+                            "success",
+                        )
                         st.rerun()
 
                     if delete_btn:
