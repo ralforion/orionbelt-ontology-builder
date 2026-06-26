@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-ontology-builder"
-version = "1.5.0"
+version = "1.5.1"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
 license = {text = "BSL-1.1"}
