@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
