@@ -7,7 +7,7 @@
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralforion/orionbelt-ontology-builder?style=social)](https://github.com/ralforion/orionbelt-ontology-builder)
-[![Version 1.6.2](https://img.shields.io/badge/version-1.6.2-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
+[![Version 1.7.0](https://img.shields.io/badge/version-1.7.0-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-ontology-builder/blob/main/LICENSE)
 
@@ -165,7 +165,7 @@ A prebuilt image is published to Docker Hub. No local Python setup required:
 docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 ```
 
-Then open http://localhost:8501. Use `:1.6.2` to pin a specific version instead of `latest`.
+Then open http://localhost:8501. Use `:1.7.0` to pin a specific version instead of `latest`.
 
 To build the image yourself from a checkout:
 
