@@ -139,6 +139,24 @@ streamlit run app.py
 
 Open http://localhost:8501
 
+### Run as a command
+
+Installing the package also provides an `orionbelt-ontology-builder` command that
+launches the app for you, so there is no need to call `streamlit run` yourself:
+
+```bash
+# Install as an isolated tool and run it (uv or pipx)
+uv tool install orionbelt-ontology-builder
+orionbelt-ontology-builder            # boots the app, opens the browser
+
+# Or run it one-off without installing
+uvx orionbelt-ontology-builder
+pipx run orionbelt-ontology-builder
+```
+
+Any extra arguments are forwarded to Streamlit, e.g.
+`orionbelt-ontology-builder --server.port 8502`.
+
 ### Run with Docker
 
 A prebuilt image is published to Docker Hub. No local Python setup required:
