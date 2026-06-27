@@ -7,7 +7,7 @@
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralforion/orionbelt-ontology-builder?style=social)](https://github.com/ralforion/orionbelt-ontology-builder)
-[![Version 1.7.2](https://img.shields.io/badge/version-1.7.2-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
+[![Version 1.8.0](https://img.shields.io/badge/version-1.8.0-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-ontology-builder/blob/main/LICENSE)
 
@@ -157,6 +157,22 @@ pipx run orionbelt-ontology-builder
 Any extra arguments are forwarded to Streamlit, e.g.
 `orionbelt-ontology-builder --server.port 8502`.
 
+### Run as a native desktop app
+
+Prefer a native window over a browser tab? Install the optional `desktop` extra
+and use the `orionbelt-ontology-builder-desktop` command. It runs the app in a
+native window (via [`streamlit-desktop-app`](https://pypi.org/project/streamlit-desktop-app/),
+pywebview + a real Streamlit server), so there is no browser tab to manage and no
+manual start/stop of the server:
+
+```bash
+pip install "orionbelt-ontology-builder[desktop]"
+orionbelt-ontology-builder-desktop    # opens a native window
+```
+
+This is fully opt-in: the plain install and the `orionbelt-ontology-builder`
+command above are unchanged.
+
 ### Run with Docker
 
 A prebuilt image is published to Docker Hub. No local Python setup required:
@@ -165,7 +181,7 @@ A prebuilt image is published to Docker Hub. No local Python setup required:
 docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 ```
 
-Then open http://localhost:8501. Use `:1.7.2` to pin a specific version instead of `latest`.
+Then open http://localhost:8501. Use `:1.8.0` to pin a specific version instead of `latest`.
 
 To build the image yourself from a checkout:
 
