@@ -1684,9 +1684,7 @@ def render_properties():
                 )
                 with st.form("reuse_obj_prop_form"):
                     reuse_opts, reuse_lookup = build_uri_options(object_props)
-                    prop_disp = st.selectbox(
-                        "Existing property *", options=reuse_opts
-                    )
+                    prop_disp = st.selectbox("Existing property *", options=reuse_opts)
 
                     cls_opts, cls_lookup = build_class_options(classes)
                     col1, col2 = st.columns(2)
