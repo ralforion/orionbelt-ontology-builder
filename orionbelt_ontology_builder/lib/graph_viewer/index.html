@@ -73,6 +73,13 @@ function renderGraph(args) {
     var nodes = new vis.DataSet(JSON.parse(args.nodes));
     var edges = new vis.DataSet(JSON.parse(args.edges));
     var options = JSON.parse(args.options);
+    // Theme edge labels: light text with a background-coloured halo (not a hard
+    // white stroke), so labels read cleanly over edges in both light and dark
+    // and don't turn into white blobs in dark mode (issue #62).
+    options.edges = options.edges || {};
+    options.edges.font = Object.assign({}, options.edges.font, {
+        color: theme.text, strokeColor: theme.bg, strokeWidth: 4
+    });
     // Batch stabilization: compute layout before first render, then freeze.
     // Scale iterations with node count for quality vs speed balance.
     var nCount = JSON.parse(args.nodes).length;

@@ -80,6 +80,26 @@ _CUSTOM_CSS = """
 </style>
 """
 
+# In dark mode the brand navy primary (#0D2B7A) reads fine as a filled
+# button/checkbox but is too dark as the *text/indicator* colour on the selected
+# tab and segmented-control pill. Lighten just those to a readable blue; only
+# injected when the active theme is dark.
+_DARK_ACCENT = "#6EA8FE"
+_DARK_CSS = f"""
+<style>
+    [data-testid="stBaseButton-segmented_controlActive"] {{
+        color: {_DARK_ACCENT} !important;
+        border-color: {_DARK_ACCENT} !important;
+    }}
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+        color: {_DARK_ACCENT} !important;
+    }}
+    .stTabs [data-baseweb="tab-highlight"] {{
+        background-color: {_DARK_ACCENT} !important;
+    }}
+</style>
+"""
+
 
 def _configure_page() -> None:
     """Apply page config and custom CSS. Called from main() so it fires on
@@ -94,6 +114,11 @@ def _configure_page() -> None:
         )
         st.session_state["_page_configured"] = True
     st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
+    try:
+        if st.context.theme.get("type") == "dark":
+            st.markdown(_DARK_CSS, unsafe_allow_html=True)
+    except Exception:
+        pass
     if "app_started" not in st.session_state:
         st.session_state.app_started = True
         logger.info(f"{APP_NAME} v{APP_VERSION}")
