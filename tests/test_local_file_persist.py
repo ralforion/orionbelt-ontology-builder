@@ -304,8 +304,9 @@ def test_localstorage_oversized_disables_until_mutation(fake_st, monkeypatch):
     monkeypatch.setattr(
         type(om),
         "export_to_string",
-        lambda self, format="turtle": serialized.append(1)
-        or real_export(self, format=format),
+        lambda self, format="turtle": (
+            serialized.append(1) or real_export(self, format=format)
+        ),
     )
 
     app._persist_autosave_to_localstorage()  # serializes once, finds it too big
