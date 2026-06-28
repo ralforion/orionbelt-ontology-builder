@@ -40,3 +40,6 @@ Thumbs.db
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+
+# Screenshot artifacts written to the repo root during browser-driven verification
+/*.png
