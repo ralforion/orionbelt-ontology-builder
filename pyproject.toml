@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-ontology-builder"
-version = "1.9.1"
+version = "1.9.2"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
 license = {text = "BSL-1.1"}
@@ -39,8 +39,10 @@ desktop = [
     # pywebview needs a native GUI/web-rendering backend at runtime. macOS
     # bundles one (Cocoa/WebKit via pywebview's pyobjc deps), but on Linux and
     # Windows none ships by default, so the desktop launcher fails without an
-    # explicit backend. PySide6 (Qt + QtWebEngine) provides a portable one.
-    "pyside6; sys_platform != 'darwin'",
+    # explicit backend. pywebview's Qt backend loads through qtpy, so PySide6
+    # alone is not enough; pulling pywebview's own pyside6 extra installs both
+    # qtpy and PySide6 (Qt + QtWebEngine), the combination it expects.
+    "pywebview[pyside6]; sys_platform != 'darwin'",
 ]
 dev = [
     "pytest>=7.0",
