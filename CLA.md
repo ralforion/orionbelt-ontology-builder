@@ -42,4 +42,4 @@ By submitting a pull request or other Contribution to this project, you indicate
 
 ---
 
-Copyright 2025 [RALFORION d.o.o.](https://ralforion.com)
+Copyright 2025–2026 [RALFORION d.o.o.](https://ralforion.com)

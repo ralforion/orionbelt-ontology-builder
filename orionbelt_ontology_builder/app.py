@@ -5624,10 +5624,21 @@ def main():
 
     # Sidebar navigation — asset path resolved relative to this module so it
     # works under both `streamlit run` and `pip install` deployments.
-    _logo_path = _Path(__file__).parent / "assets" / "ORIONBELT_Logo.png"
+    # Use the white logo in dark mode so it stays legible (the colour logo is
+    # dark on transparent). st.context.theme reflects the active theme on recent
+    # Streamlit; older versions fall back to the colour logo.
+    _dark_mode = False
+    try:
+        _dark_mode = st.context.theme.type == "dark"
+    except Exception:
+        pass
+    _logo_file = "ORIONBELT Logo w.png" if _dark_mode else "ORIONBELT_Logo.png"
+    _logo_path = _Path(__file__).parent / "assets" / _logo_file
     st.sidebar.image(str(_logo_path), width=200)
     st.sidebar.markdown("# Ontology Builder")
-    st.sidebar.markdown("\u00a9 2025 [RALFORION d.o.o.](https://ralforion.com)")
+    st.sidebar.markdown(
+        "\u00a9 2025\u20132026 [RALFORION d.o.o.](https://ralforion.com)"
+    )
     _gh_repo = GITHUB_ISSUES_URL.rsplit("/", 1)[0]
     st.sidebar.markdown(
         f"<small>v{APP_VERSION} · "

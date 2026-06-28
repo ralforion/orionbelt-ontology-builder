@@ -263,7 +263,7 @@ An ontology-based MCP server that analyzes relational database schemas (PostgreS
 
 ## License
 
-Copyright 2025 [RALFORION d.o.o.](https://ralforion.com)
+Copyright 2025–2026 [RALFORION d.o.o.](https://ralforion.com)
 
 Licensed under the [Business Source License 1.1](LICENSE). The Licensed Work will convert to Apache License 2.0 on 2030-03-30.
 
