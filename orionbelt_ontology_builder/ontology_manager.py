@@ -502,14 +502,19 @@ class OntologyManager:
             if p not in structural and isinstance(o, Literal):
                 impact["annotations"] += 1
 
-        # Total affected triples (as subject + as object + as predicate for properties)
-        ref_count = len(list(self.graph.subject_predicates(uri)))
-        pred_count = (
-            len(list(self.graph.subject_objects(uri)))
-            if resource_type == "property"
-            else 0
-        )
-        impact["total_triples"] = impact["direct_triples"] + ref_count + pred_count
+        # Total affected triples. Build the exact set deletion would remove so
+        # the preview matches delete_class/delete_property — which also purge the
+        # whole restriction blank nodes that reference this resource (a class
+        # used as a restriction value contributes only one direct triple, but
+        # removing the orphaned restriction takes its other triples too).
+        removed = set(self.graph.triples((uri, None, None)))
+        removed.update(self.graph.triples((None, None, uri)))
+        if resource_type == "property":
+            removed.update(self.graph.triples((None, uri, None)))
+        for r in self._restrictions_referencing(uri):
+            removed.update(self.graph.triples((r, None, None)))
+            removed.update(self.graph.triples((None, RDFS.subClassOf, r)))
+        impact["total_triples"] = len(removed)
 
         return impact
 
@@ -551,6 +556,9 @@ class OntologyManager:
     def delete_class(self, name: str):
         """Delete a class and all its references."""
         class_uri = self._uri(name)
+        # Remove restrictions this class owns or that point at it as a value, so
+        # reused-property links (link_classes) don't leave orphan blank nodes.
+        self._purge_restrictions_referencing(class_uri)
         # Remove all triples where this class is subject or object
         self.graph.remove((class_uri, None, None))
         self.graph.remove((None, None, class_uri))
@@ -988,9 +996,48 @@ class OntologyManager:
 
         return True
 
+    def _restrictions_referencing(self, node: Node) -> set:
+        """Return the ``owl:Restriction`` blank nodes that reference ``node``.
+
+        A restriction is a blank node carrying ``owl:onProperty`` plus a
+        constraint (``someValuesFrom``/``allValuesFrom``/``hasValue``/cardinality)
+        and is attached to its owning class via ``rdfs:subClassOf``. A node is
+        "referenced" when it is the restriction's property/value (the bnode
+        points at it) or its owning class (it points at the bnode). Shared by
+        :meth:`_purge_restrictions_referencing` and :meth:`get_delete_impact` so
+        the cleanup and its preview never drift.
+        """
+        targets = set()
+        # Restrictions that mention `node` as a value: onProperty (property),
+        # someValuesFrom/allValuesFrom/hasValue/onClass (a class value).
+        for r in self.graph.subjects(None, node):
+            if isinstance(r, BNode) and (r, RDF.type, OWL.Restriction) in self.graph:
+                targets.add(r)
+        # Restrictions owned by `node` (node rdfs:subClassOf [ a owl:Restriction ]).
+        for r in self.graph.objects(node, RDFS.subClassOf):
+            if isinstance(r, BNode) and (r, RDF.type, OWL.Restriction) in self.graph:
+                targets.add(r)
+        return targets
+
+    def _purge_restrictions_referencing(self, node: Node) -> None:
+        """Remove ``owl:Restriction`` blank nodes that reference ``node``.
+
+        When the property, the owning class, or a class used as the
+        restriction's value is deleted, the leftover restriction is malformed or
+        orphaned. This removes each such restriction whole, along with any
+        ``subClassOf`` links to it, so deletes never leave a dangling restriction
+        behind (e.g. the reused property links created by :meth:`link_classes`).
+        """
+        for r in self._restrictions_referencing(node):
+            self.graph.remove((None, RDFS.subClassOf, r))
+            self.graph.remove((r, None, None))
+
     def delete_property(self, name: str):
         """Delete a property and all its references."""
         prop_uri = self._uri(name)
+        # Drop reused-property restrictions (link_classes) before the blanket
+        # removal, while their onProperty triple still points at this property.
+        self._purge_restrictions_referencing(prop_uri)
         self.graph.remove((prop_uri, None, None))
         self.graph.remove((None, None, prop_uri))
         self.graph.remove((None, prop_uri, None))
@@ -1309,6 +1356,40 @@ class OntologyManager:
 
         return restriction
 
+    #: ``link_classes`` semantics keyword -> restriction predicate name.
+    LINK_SEMANTICS = {
+        "all": "allValuesFrom",
+        "some": "someValuesFrom",
+    }
+
+    def link_classes(
+        self,
+        source: str,
+        property_name: str,
+        target: str,
+        semantics: str = "all",
+    ) -> BNode:
+        """Link two classes via an existing property, reusing the property.
+
+        This is the OWL-correct way to use one object property across many class
+        pairs (``A``-``P``-``B``, ``C``-``P``-``D``, ...): each pair becomes a
+        class restriction on the *source* class rather than another
+        ``rdfs:domain``/``rdfs:range`` axiom (stacking those would *intersect*
+        the domains, not union them). Thin wrapper over :meth:`add_restriction`.
+
+        ``semantics`` selects the restriction flavour: ``"all"`` (default) writes
+        ``source rdfs:subClassOf [ owl:onProperty P ; owl:allValuesFrom target ]``
+        ("if source relates via P, the value is a target"); ``"some"`` writes an
+        ``owl:someValuesFrom`` existential ("source relates via P to some target").
+        """
+        restriction_type = self.LINK_SEMANTICS.get(semantics)
+        if restriction_type is None:
+            raise ValueError(
+                f"Unknown link semantics: {semantics!r} "
+                f"(expected one of {sorted(self.LINK_SEMANTICS)})"
+            )
+        return self.add_restriction(source, property_name, restriction_type, target)
+
     def get_restrictions(
         self, class_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
@@ -1322,10 +1403,17 @@ class OntologyManager:
 
             rest_info: Dict[str, Any] = {
                 "property": self._local_name(prop),
+                # Full URIs alongside the display-friendly local names so callers
+                # can delete a restriction whose property/class live in an
+                # external namespace (local names would resolve to the wrong URI).
+                "property_uri": str(prop),
                 "type": None,
                 "value": None,
+                "value_uri": None,
                 "on_class": None,
+                "on_class_uri": None,
                 "applied_to": [],
+                "applied_to_uris": [],
             }
 
             # Determine restriction type
@@ -1335,6 +1423,7 @@ class OntologyManager:
                     rest_info["type"] = rtype
                     if isinstance(val, URIRef):
                         rest_info["value"] = self._local_name(val)
+                        rest_info["value_uri"] = str(val)
                     else:
                         rest_info["value"] = str(val)
                     break
@@ -1342,11 +1431,13 @@ class OntologyManager:
             on_class = self.graph.value(restriction, OWL.onClass)
             if on_class:
                 rest_info["on_class"] = self._local_name(on_class)
+                rest_info["on_class_uri"] = str(on_class)
 
             # Find classes this restriction applies to
             for cls in self.graph.subjects(RDFS.subClassOf, restriction):
                 if isinstance(cls, URIRef):
                     rest_info["applied_to"].append(self._local_name(cls))
+                    rest_info["applied_to_uris"].append(str(cls))
 
             if class_name is None or class_name in rest_info["applied_to"]:
                 restrictions.append(rest_info)
