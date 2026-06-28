@@ -5460,6 +5460,33 @@ def render_visualization():
                 default=None,
             )
 
+            # Ctrl/Cmd-click in the graph requests focusing on a node: add it to
+            # the "Focus on one node" seeds and enable focus mode (issue #56). The
+            # reqId guard ensures each click is applied once (the component value
+            # persists across reruns).
+            if isinstance(selection, dict) and selection.get("focusRequest"):
+                _req_id = selection.get("reqId")
+                if _req_id and _req_id != st.session_state.get("_viz_last_focus_req"):
+                    st.session_state["_viz_last_focus_req"] = _req_id
+                    _id_to_label = {v: k for k, v in focus_targets.items()}
+                    _focus_label = _id_to_label.get(selection.get("nodeId"))
+                    if _focus_label:
+                        st.session_state["_viz_cfg_focus_mode"] = True
+                        _seeds = list(
+                            st.session_state.get("_viz_cfg_focus_seeds") or []
+                        )
+                        if _focus_label not in _seeds:
+                            _seeds.append(_focus_label)
+                        st.session_state["_viz_cfg_focus_seeds"] = _seeds
+                        st.toast(f"Focusing on {_focus_label}", icon="🎯")
+                        st.rerun()
+                    else:
+                        st.toast(
+                            "Focus is available for classes, individuals, and "
+                            "SKOS concepts.",
+                            icon="ℹ️",
+                        )
+
             # Status bar outside iframe — dark styled
             _type_to_page = {
                 "Class": "Classes",

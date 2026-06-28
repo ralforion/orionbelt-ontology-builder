@@ -164,17 +164,18 @@ function renderGraph(args) {
         sendToStreamlit("streamlit:setComponentValue", {value: {selected: false}});
     });
 
-    // Ctrl/Cmd-click a node to focus (center + zoom) on it — handy for
-    // exploring without typing the name into the class filter (issue #56).
+    // Ctrl/Cmd-click a node to add it to the "Focus on one node" selection, so
+    // the graph narrows to that node's neighbourhood without typing its name
+    // into the focus picker (issue #56). reqId makes each request distinct so
+    // the Python side applies it once. Sent after the normal selectNode value,
+    // so this is the value Streamlit keeps for this interaction.
     network.on('click', function(params) {
         if (!params.nodes.length) return;
         var ev = params.event && params.event.srcEvent;
         if (!ev || !(ev.ctrlKey || ev.metaKey)) return;
-        network.focus(params.nodes[0], {
-            scale: 1.6,
-            animation: { duration: 400, easingFunction: 'easeInOutQuad' }
+        sendToStreamlit("streamlit:setComponentValue", {
+            value: {focusRequest: true, reqId: Date.now(), nodeId: params.nodes[0]}
         });
-        network.selectNodes([params.nodes[0]]);
     });
 }
 
