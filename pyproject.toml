@@ -21,7 +21,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "streamlit>=1.28.0",
+    "streamlit==1.49.1",
     "rdflib>=7.0.0",
     "owlrl>=6.0.2",
     "networkx>=3.0",

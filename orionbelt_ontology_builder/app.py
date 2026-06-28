@@ -88,16 +88,59 @@ _CUSTOM_CSS = """
 </style>
 """
 
-# In dark mode the brand navy primary (#0D2B7A) reads fine as a filled
-# button/checkbox but is too dark as the *text/indicator* colour on the selected
-# tab and segmented-control pill. Lighten just those to a readable blue; only
-# injected when the active theme is dark.
+# Streamlit's built-in Light/Dark theme presets (the "⋮ → Settings → Theme"
+# menu) replace the whole theme — including primaryColor — with Streamlit's
+# default red, ignoring the configured brand colour. So we force the brand
+# primary onto the key controls with CSS, applied in every theme. Scoped to
+# stable data-testid / data-baseweb hooks (and :has(input:checked) for the
+# checked state) so unchecked controls are untouched.
+# NOTE: this targets Streamlit's internal DOM; re-verify on a Streamlit bump
+# (the version is pinned in pyproject.toml for exactly this reason).
+_BRAND = local_store.BRAND_PRIMARY_COLOR  # "#0D2B7A"
+_BRAND_TINT = "rgba(13, 43, 122, 0.12)"
+_BRAND_CSS = f"""
+<style>
+    /* Primary buttons */
+    [data-testid="stBaseButton-primary"] {{
+        background-color: {_BRAND} !important;
+        border-color: {_BRAND} !important;
+    }}
+    /* Checked checkbox box */
+    [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > span {{
+        background-color: {_BRAND} !important;
+        border-color: {_BRAND} !important;
+    }}
+    /* Selected radio (its control circle; not the label wrapper) */
+    [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) > div:first-child {{
+        background-color: {_BRAND} !important;
+        border-color: {_BRAND} !important;
+    }}
+    /* Active segmented-control pill and tab */
+    [data-testid="stBaseButton-segmented_controlActive"] {{
+        color: {_BRAND} !important;
+        border-color: {_BRAND} !important;
+        background-color: {_BRAND_TINT} !important;
+    }}
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+        color: {_BRAND} !important;
+    }}
+    .stTabs [data-baseweb="tab-highlight"] {{
+        background-color: {_BRAND} !important;
+    }}
+</style>
+"""
+
+# The brand navy is fine as a filled button/checkbox/radio but too dark as the
+# *text/indicator* colour on the selected tab and pill against a dark backdrop.
+# Injected only in dark mode, after _BRAND_CSS, so it wins for those accents.
 _DARK_ACCENT = "#6EA8FE"
+_DARK_TINT = "rgba(110, 168, 254, 0.15)"
 _DARK_CSS = f"""
 <style>
     [data-testid="stBaseButton-segmented_controlActive"] {{
         color: {_DARK_ACCENT} !important;
         border-color: {_DARK_ACCENT} !important;
+        background-color: {_DARK_TINT} !important;
     }}
     .stTabs [data-baseweb="tab"][aria-selected="true"] {{
         color: {_DARK_ACCENT} !important;
@@ -122,6 +165,10 @@ def _configure_page() -> None:
         )
         st.session_state["_page_configured"] = True
     st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
+    # Force the brand primary on key controls in every theme (Streamlit's preset
+    # themes would otherwise revert it to red), then lighten tab/pill accents in
+    # dark mode (injected after, so it wins there).
+    st.markdown(_BRAND_CSS, unsafe_allow_html=True)
     try:
         if st.context.theme.get("type") == "dark":
             st.markdown(_DARK_CSS, unsafe_allow_html=True)

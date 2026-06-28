@@ -35,7 +35,6 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
 
     monkeypatch.delenv(ENV_FLAG, raising=False)
-    monkeypatch.delenv("STREAMLIT_THEME_PRIMARY_COLOR", raising=False)
 
     desktop.run()
 
@@ -43,8 +42,9 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     assert captured["title"] == APP_NAME
     # A native launch runs locally, so disk-backed persistence is opted in.
     assert os.environ[ENV_FLAG] == "1"
-    # Brand theme is applied via env so config.toml isn't needed in the subprocess.
-    assert os.environ["STREAMLIT_THEME_PRIMARY_COLOR"] == BRAND_PRIMARY_COLOR
+    # Brand colour passed as an explicit Streamlit option (not via env) so it
+    # applies in the subprocess regardless of CWD.
+    assert captured["options"]["theme.primaryColor"] == BRAND_PRIMARY_COLOR
 
 
 def test_run_without_dependency_exits_cleanly(monkeypatch):

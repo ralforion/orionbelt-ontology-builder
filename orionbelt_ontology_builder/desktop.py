@@ -42,15 +42,15 @@ def run() -> None:
     # Running locally with full filesystem access — opt into the disk-backed
     # autosave / linked-file persistence (off by default on the cloud).
     os.environ[ENV_FLAG] = "1"
-    # The desktop subprocess inherits this env, so the brand colour applies even
-    # though config.toml isn't found outside the repo (otherwise Streamlit's
-    # default red shows). setdefault lets a user override win.
-    os.environ.setdefault("STREAMLIT_THEME_PRIMARY_COLOR", BRAND_PRIMARY_COLOR)
 
+    # Pass the brand colour as an explicit Streamlit option so it applies
+    # regardless of CWD (config.toml is only found from the repo root) and
+    # without relying on env inheritance into the Streamlit subprocess.
     entry = Path(__file__).parent / "streamlit_entry.py"
     start_desktop_app(
         script_path=str(entry),
         title=APP_NAME,
+        options={"theme.primaryColor": BRAND_PRIMARY_COLOR},
         width=1280,
         height=800,
     )

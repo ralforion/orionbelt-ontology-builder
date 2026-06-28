@@ -51,24 +51,24 @@ def test_run_invokes_streamlit_with_entry_and_forwards_args(monkeypatch):
     assert argv[-2:] == ["--server.port", "8502"]
 
 
-def test_run_opts_into_local_persistence(monkeypatch):
-    """A local launch should enable disk-backed persistence via the env flag."""
+def test_run_opts_into_persistence_and_brand_theme(monkeypatch):
+    """A local launch enables disk persistence and passes the brand colour."""
     monkeypatch.delenv(ENV_FLAG, raising=False)
+    captured = {}
 
     class _FakeStcli:
         @staticmethod
         def main():
-            pass
+            captured["argv"] = list(sys.argv)
 
     import streamlit.web
 
     monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
     monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
     monkeypatch.setattr(sys, "exit", lambda code=0: None)
-    monkeypatch.delenv("STREAMLIT_THEME_PRIMARY_COLOR", raising=False)
 
     cli.run()
 
     assert os.environ[ENV_FLAG] == "1"
-    # Brand theme is applied via env so config.toml isn't needed.
-    assert os.environ["STREAMLIT_THEME_PRIMARY_COLOR"] == BRAND_PRIMARY_COLOR
+    # Brand colour passed as an explicit flag so config.toml isn't needed.
+    assert f"--theme.primaryColor={BRAND_PRIMARY_COLOR}" in captured["argv"]
