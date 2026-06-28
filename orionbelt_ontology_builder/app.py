@@ -1652,62 +1652,148 @@ def render_properties():
     if _prop_tab == "Add Object Property":
         st.subheader("Add Object Property")
 
-        with st.form("add_obj_prop_form"):
-            name = st.text_input("Property Name *")
-            label = st.text_input("Label")
-            comment = st.text_area("Comment")
+        # The mode selector lives ABOVE the form on purpose: widgets inside an
+        # st.form don't trigger a rerun until submit, so an in-form radio could
+        # not reactively swap the rendered fields.
+        _op_mode = st.radio(
+            "Mode",
+            ["New property", "Reuse existing property"],
+            horizontal=True,
+            key="obj_prop_mode",
+            help=(
+                "Reuse links an existing property to another class pair via a "
+                "restriction, so one property can connect many pairs "
+                "(A→P→B, C→P→D) without duplicating it."
+            ),
+        )
 
-            cls_opts, cls_lookup = build_class_options(classes, include_none=True)
-            obj_prop_opts, obj_prop_lookup = build_uri_options(
-                object_props, include_none=True
-            )
-            col1, col2 = st.columns(2)
-            with col1:
-                domain_disp = st.selectbox("Domain (Class)", options=cls_opts)
-            with col2:
-                range_disp = st.selectbox("Range (Class)", options=cls_opts)
-
-            st.write("**Property Characteristics:**")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                functional = st.checkbox("Functional")
-                asymmetric = st.checkbox("Asymmetric")
-            with col2:
-                inverse_functional = st.checkbox("Inverse Functional")
-                reflexive = st.checkbox("Reflexive")
-            with col3:
-                transitive = st.checkbox("Transitive")
-                irreflexive = st.checkbox("Irreflexive")
-            with col4:
-                symmetric = st.checkbox("Symmetric")
-
-            inverse_disp = st.selectbox("Inverse Of", options=obj_prop_opts)
-
-            submitted = st.form_submit_button("Add Object Property")
-            if submitted:
-                if not name:
-                    show_message("Property name is required!", "error")
-                elif name in obj_prop_names or name in data_prop_names:
-                    show_message(f"Property '{name}' already exists!", "error")
-                else:
-                    ont.add_object_property(
-                        name,
-                        domain=cls_lookup.get(domain_disp),
-                        range_=cls_lookup.get(range_disp),
-                        label=label,
-                        comment=comment,
-                        functional=functional,
-                        inverse_functional=inverse_functional,
-                        transitive=transitive,
-                        symmetric=symmetric,
-                        asymmetric=asymmetric,
-                        reflexive=reflexive,
-                        irreflexive=irreflexive,
-                        inverse_of=obj_prop_lookup.get(inverse_disp),
+        if _op_mode == "Reuse existing property":
+            if not object_props:
+                st.info(
+                    "No object properties yet. Create one with **New property** "
+                    "first, then reuse it here."
+                )
+            elif not classes:
+                st.info("Add at least one class to link via a property.")
+            else:
+                st.caption(
+                    "Reuse a single property across class pairs. Each pair is "
+                    "recorded as a restriction on the source class, which is the "
+                    "OWL-correct way to keep one property and intact reasoning "
+                    "(repeating domain/range would intersect, not union)."
+                )
+                with st.form("reuse_obj_prop_form"):
+                    reuse_opts, reuse_lookup = build_uri_options(object_props)
+                    prop_disp = st.selectbox(
+                        "Existing property *", options=reuse_opts
                     )
-                    save_checkpoint("Add object property")
-                    show_message(f"Object property '{name}' added!", "success")
-                    st.rerun()
+
+                    cls_opts, cls_lookup = build_class_options(classes)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        source_disp = st.selectbox("Source class *", options=cls_opts)
+                    with col2:
+                        target_disp = st.selectbox("Target class *", options=cls_opts)
+
+                    link_disp = st.radio(
+                        "Link type",
+                        ["allValuesFrom (recommended)", "someValuesFrom"],
+                        key="reuse_link_type",
+                        help=(
+                            "allValuesFrom: if the source relates via this "
+                            "property, the value is a target (types the pair, no "
+                            "existence claim). someValuesFrom: the source relates "
+                            "via this property to some target (asserts existence)."
+                        ),
+                    )
+
+                    linked = st.form_submit_button("Link classes")
+                    if linked:
+                        prop_name = reuse_lookup.get(prop_disp)
+                        source = cls_lookup.get(source_disp)
+                        target = cls_lookup.get(target_disp)
+                        if not (prop_name and source and target):
+                            show_message(
+                                "Property, source and target are required!", "error"
+                            )
+                        else:
+                            semantics = (
+                                "some"
+                                if link_disp.startswith("someValuesFrom")
+                                else "all"
+                            )
+                            ont.link_classes(
+                                source, prop_name, target, semantics=semantics
+                            )
+                            save_checkpoint("Reuse object property")
+                            _rtype = (
+                                "someValuesFrom"
+                                if semantics == "some"
+                                else "allValuesFrom"
+                            )
+                            show_message(
+                                f"Linked {source_disp} → {prop_disp} → "
+                                f"{target_disp} ({_rtype}).",
+                                "success",
+                            )
+                            st.rerun()
+        else:
+            with st.form("add_obj_prop_form"):
+                name = st.text_input("Property Name *")
+                label = st.text_input("Label")
+                comment = st.text_area("Comment")
+
+                cls_opts, cls_lookup = build_class_options(classes, include_none=True)
+                obj_prop_opts, obj_prop_lookup = build_uri_options(
+                    object_props, include_none=True
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    domain_disp = st.selectbox("Domain (Class)", options=cls_opts)
+                with col2:
+                    range_disp = st.selectbox("Range (Class)", options=cls_opts)
+
+                st.write("**Property Characteristics:**")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    functional = st.checkbox("Functional")
+                    asymmetric = st.checkbox("Asymmetric")
+                with col2:
+                    inverse_functional = st.checkbox("Inverse Functional")
+                    reflexive = st.checkbox("Reflexive")
+                with col3:
+                    transitive = st.checkbox("Transitive")
+                    irreflexive = st.checkbox("Irreflexive")
+                with col4:
+                    symmetric = st.checkbox("Symmetric")
+
+                inverse_disp = st.selectbox("Inverse Of", options=obj_prop_opts)
+
+                submitted = st.form_submit_button("Add Object Property")
+                if submitted:
+                    if not name:
+                        show_message("Property name is required!", "error")
+                    elif name in obj_prop_names or name in data_prop_names:
+                        show_message(f"Property '{name}' already exists!", "error")
+                    else:
+                        ont.add_object_property(
+                            name,
+                            domain=cls_lookup.get(domain_disp),
+                            range_=cls_lookup.get(range_disp),
+                            label=label,
+                            comment=comment,
+                            functional=functional,
+                            inverse_functional=inverse_functional,
+                            transitive=transitive,
+                            symmetric=symmetric,
+                            asymmetric=asymmetric,
+                            reflexive=reflexive,
+                            irreflexive=irreflexive,
+                            inverse_of=obj_prop_lookup.get(inverse_disp),
+                        )
+                        save_checkpoint("Add object property")
+                        show_message(f"Object property '{name}' added!", "success")
+                        st.rerun()
 
     if _prop_tab == "Add Data Property":
         st.subheader("Add Data Property")

@@ -1309,6 +1309,40 @@ class OntologyManager:
 
         return restriction
 
+    #: ``link_classes`` semantics keyword -> restriction predicate name.
+    LINK_SEMANTICS = {
+        "all": "allValuesFrom",
+        "some": "someValuesFrom",
+    }
+
+    def link_classes(
+        self,
+        source: str,
+        property_name: str,
+        target: str,
+        semantics: str = "all",
+    ) -> BNode:
+        """Link two classes via an existing property, reusing the property.
+
+        This is the OWL-correct way to use one object property across many class
+        pairs (``A``-``P``-``B``, ``C``-``P``-``D``, ...): each pair becomes a
+        class restriction on the *source* class rather than another
+        ``rdfs:domain``/``rdfs:range`` axiom (stacking those would *intersect*
+        the domains, not union them). Thin wrapper over :meth:`add_restriction`.
+
+        ``semantics`` selects the restriction flavour: ``"all"`` (default) writes
+        ``source rdfs:subClassOf [ owl:onProperty P ; owl:allValuesFrom target ]``
+        ("if source relates via P, the value is a target"); ``"some"`` writes an
+        ``owl:someValuesFrom`` existential ("source relates via P to some target").
+        """
+        restriction_type = self.LINK_SEMANTICS.get(semantics)
+        if restriction_type is None:
+            raise ValueError(
+                f"Unknown link semantics: {semantics!r} "
+                f"(expected one of {sorted(self.LINK_SEMANTICS)})"
+            )
+        return self.add_restriction(source, property_name, restriction_type, target)
+
     def get_restrictions(
         self, class_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
