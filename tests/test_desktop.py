@@ -34,6 +34,12 @@ def test_run_invokes_start_desktop_app(monkeypatch, tmp_path):
     fake_module.start_desktop_app = _fake_start_desktop_app
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
 
+    # pywebview ships only with the optional desktop extra, so stub it out to
+    # keep this test runnable without that extra installed.
+    fake_webview = types.ModuleType("webview")
+    fake_webview.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
     # Keep the persistent-storage setup off the real home directory.
     monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
     monkeypatch.delenv(ENV_FLAG, raising=False)
