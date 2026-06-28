@@ -198,6 +198,30 @@ def _disk_restore_source():
     return None, None
 
 
+def _block_disk_persist(message: str) -> None:
+    """Stop disk autosave for the session and record why.
+
+    Used when an existing recovery/linked file can't be read or parsed, so the
+    end-of-rerun persistence never overwrites a file we failed to load.
+    """
+    st.session_state["_disk_persist_blocked"] = True
+    st.session_state["_disk_persist_block_msg"] = message
+
+
+def _mark_disk_source_hash(label: str, h: str) -> None:
+    """Record the restored-from file's hash so it isn't immediately rewritten.
+
+    Only the file we actually read is up to date; the other target is left
+    unset so the next persist refreshes it from the restored graph.
+    """
+    if label == "linked file":
+        st.session_state["_linked_last_hash"] = h
+        st.session_state["_recovery_last_hash"] = None
+    else:
+        st.session_state["_recovery_last_hash"] = h
+        st.session_state["_linked_last_hash"] = None
+
+
 def _restore_autosave_from_disk(ont):
     """Restore the working ontology from disk on a local/desktop run.
 
@@ -210,14 +234,26 @@ def _restore_autosave_from_disk(ont):
     if path is None:
         return
     saved = local_store.read_text(path)
-    if not saved or not saved.strip():
+    if saved is None:
+        # The file exists (see _disk_restore_source) but is unreadable. Don't let
+        # persistence clobber it with the current graph.
+        _block_disk_persist(
+            f"Couldn't read the {label}. Disk autosave is paused so it isn't "
+            "overwritten — fix or re-link the file, then reload."
+        )
+        return
+    if not saved.strip():
         return
     try:
         ont.load_from_string(saved, format="turtle")
     except Exception as e:
         log_error(e, context="Autosave restore (disk)")
+        _block_disk_persist(
+            f"The {label} couldn't be parsed. Disk autosave is paused so the "
+            "file isn't overwritten — fix or re-link it, then reload."
+        )
         return
-    st.session_state["_autosave_last_hash"] = _content_hash(saved)
+    _mark_disk_source_hash(label, _content_hash(saved))
     # An empty-but-valid saved graph is loaded silently; nothing to announce.
     if _ontology_is_empty(ont):
         return
@@ -307,11 +343,18 @@ def maybe_restore_autosave():
 def _persist_autosave_to_disk():
     """Mirror the working ontology to disk on a local/desktop run.
 
-    Always keeps the crash-recovery snapshot current, and mirrors to the user's
-    linked file when one is set. No size cap (these are real files) and deduped
-    by content hash so an unchanged graph isn't rewritten — which would
-    otherwise churn a synced linked folder.
+    Keeps the crash-recovery snapshot current and mirrors to the user's linked
+    file when one is set. No size cap (these are real files). The recovery and
+    linked targets are tracked with independent hashes so each is deduped on its
+    own and a failed write to one is retried on the next rerun even if the
+    ontology hasn't changed since — letting a transient permission/sync error
+    recover without waiting for the next edit.
     """
+    # A failed restore (unreadable/corrupt recovery or linked file) pauses disk
+    # writes so we never overwrite a file we couldn't load.
+    if st.session_state.get("_disk_persist_blocked"):
+        return
+
     try:
         ttl = st.session_state.ontology.export_to_string(format="turtle")
     except Exception as e:
@@ -319,28 +362,28 @@ def _persist_autosave_to_disk():
         return
 
     h = _content_hash(ttl)
-    if h == st.session_state.get("_autosave_last_hash"):
-        return
 
-    try:
-        local_store.atomic_write(local_store.recovery_file(), ttl)
-    except OSError as e:
-        # Leave the hash unset so the next rerun retries the recovery write.
-        log_error(e, context="Recovery write")
-        return
+    if h != st.session_state.get("_recovery_last_hash"):
+        try:
+            local_store.atomic_write(local_store.recovery_file(), ttl)
+            st.session_state["_recovery_last_hash"] = h
+        except OSError as e:
+            # Leave the hash unset so the next rerun retries the recovery write.
+            log_error(e, context="Recovery write")
 
     linked = local_store.get_linked_path()
-    if linked is not None:
+    if linked is not None and h != st.session_state.get("_linked_last_hash"):
         try:
             local_store.atomic_write(linked, ttl)
+            # Only record the hash on success, so a failed write retries next
+            # rerun even though the content is unchanged.
+            st.session_state["_linked_last_hash"] = h
             st.session_state["_linked_write_warned"] = False
         except OSError as e:
             log_error(e, context="Linked-file write")
             if not st.session_state.get("_linked_write_warned"):
                 st.session_state["_linked_write_warned"] = True
                 st.sidebar.warning(f"Couldn't write the linked file: {e}")
-
-    st.session_state["_autosave_last_hash"] = h
 
 
 def persist_autosave():
@@ -389,8 +432,45 @@ def persist_autosave():
     st.session_state["_autosave_last_hash"] = h
 
 
+def _load_linked_file(target) -> bool:
+    """Replace the working ontology with the contents of ``target``.
+
+    Returns True on success. Used when linking to an existing, non-empty file so
+    "point at my Nextcloud ontology" opens that file instead of overwriting it.
+    """
+    saved = local_store.read_text(target)
+    if saved is None or not saved.strip():
+        return False
+    try:
+        OntologyManager = get_ontology_manager_class()
+        new_ont = OntologyManager()
+        new_ont.load_from_string(saved, format="turtle")
+    except Exception as e:
+        log_error(e, context="Linked file load")
+        return False
+    st.session_state.ontology = new_ont
+    h = _content_hash(saved)
+    # The linked file already holds this content; refresh recovery from it next.
+    st.session_state["_linked_last_hash"] = h
+    st.session_state["_recovery_last_hash"] = None
+    try:
+        from .ontology_manager import UndoManager
+
+        st.session_state.undo_manager = UndoManager(new_ont)
+    except ImportError:
+        pass
+    st.session_state["_ont_mutation_count"] = (
+        st.session_state.get("_ont_mutation_count", 0) + 1
+    )
+    return True
+
+
 def _render_disk_autosave_sidebar():
     """Sidebar controls for the local disk-backed autosave and linked file."""
+    if st.session_state.get("_disk_persist_blocked"):
+        st.sidebar.warning(
+            st.session_state.get("_disk_persist_block_msg", "Disk autosave is paused.")
+        )
     st.sidebar.checkbox(
         "Autosave to disk",
         value=st.session_state.get("_autosave_enabled", True),
@@ -403,7 +483,10 @@ def _render_disk_autosave_sidebar():
     )
     if (
         st.session_state.get("_autosave_enabled", True)
-        and st.session_state.get("_autosave_last_hash")
+        and (
+            st.session_state.get("_recovery_last_hash")
+            or st.session_state.get("_linked_last_hash")
+        )
         and not _ontology_is_empty(st.session_state.ontology)
     ):
         st.sidebar.caption("✓ Saved to disk")
@@ -421,16 +504,57 @@ def _render_disk_autosave_sidebar():
             key="_linked_path_input",
             placeholder="/path/to/my-ontology.ttl",
         )
+
+        # Decide up front whether the chosen path is an existing, non-empty file.
+        # If so, default to LOADING it (the issue's "open my ontology" workflow)
+        # rather than silently overwriting it with the current graph.
+        typed = path_str.strip()
+        target = _Path(typed).expanduser() if typed else None
+        file_has_content = bool(
+            target
+            and target.exists()
+            and target.is_file()
+            and (local_store.read_text(target) or "").strip()
+        )
+        existing_action = None
+        if file_has_content:
+            existing_action = st.radio(
+                "That file already exists:",
+                [
+                    "Load it into the workspace",
+                    "Overwrite it with the current ontology",
+                ],
+                key="_linked_existing_action",
+            )
+
         set_col, clear_col = st.columns(2)
         with set_col:
             if st.button("Link", use_container_width=True, key="_linked_set"):
                 p = path_str.strip()
                 if p:
+                    load_it = (
+                        file_has_content
+                        and existing_action == "Load it into the workspace"
+                    )
                     local_store.set_linked_path(p)
-                    # Force a write to the new target on the next rerun.
-                    st.session_state["_autosave_last_hash"] = None
                     st.session_state["_linked_write_warned"] = False
-                    st.toast(f"Linked working file: {p}", icon="🔗")
+                    # A fresh link clears any earlier restore-failure pause.
+                    st.session_state["_disk_persist_blocked"] = False
+                    st.session_state.pop("_disk_persist_block_msg", None)
+                    if load_it:
+                        if _load_linked_file(_Path(p).expanduser()):
+                            st.toast(f"Linked and loaded {p}", icon="🔗")
+                        else:
+                            # Couldn't load it; don't overwrite either.
+                            _block_disk_persist(
+                                "Couldn't load the linked file. Disk autosave is "
+                                "paused so it isn't overwritten."
+                            )
+                            st.toast(f"Linked {p}, but couldn't load it", icon="⚠️")
+                    else:
+                        # New file or an explicit overwrite: write current state.
+                        st.session_state["_linked_last_hash"] = None
+                        st.toast(f"Linked working file: {p}", icon="🔗")
                     st.rerun()
         with clear_col:
             if st.button(

@@ -182,13 +182,18 @@ native desktop window), it persists to disk instead of browser storage:
   `~/.orionbelt_ontology_builder/` on every change, so an unexpected close
   (crash, freeze) is recovered automatically on the next launch.
 - **Linked working file.** Use the sidebar's "Linked working file" control to
-  point the app at any file path. The app then tracks that file and reloads it on
-  startup. Point it at a synced folder (Nextcloud, Dropbox, ...) for fully
-  automatic off-machine backups.
+  point the app at any file path. If the file already exists, you choose whether
+  to **load it** into the workspace (the default, so pointing at an existing
+  ontology opens it) or **overwrite** it with the current ontology; a new path is
+  created from your current work. Once linked, the file tracks your working
+  ontology and is loaded again on startup. Point it at a synced folder
+  (Nextcloud, Dropbox, ...) for fully automatic off-machine backups.
 
-Writes are atomic, so a backup tool never sees a half-written file. The hosted
-demo on Streamlit Cloud has no local filesystem, so it keeps using per-browser
-autosave instead.
+Writes are atomic, so a backup tool never sees a half-written file. If a
+linked or recovery file can't be read or parsed on startup, disk autosave is
+paused (with a sidebar notice) so the unreadable file is never overwritten. The
+hosted demo on Streamlit Cloud has no local filesystem, so it keeps using
+per-browser autosave instead.
 
 ### Run with Docker
 
