@@ -6,6 +6,7 @@ and managing OWL ontologies.
 import hashlib
 import logging
 import streamlit as st
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path as _Path
@@ -27,6 +28,11 @@ GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/iss
 AUTOSAVE_KEY = "orionbelt_ontology_builder_autosave"
 # localStorage is ~5 MB per origin; stay well under to leave headroom.
 AUTOSAVE_MAX_BYTES = 4_000_000
+# Disk autosave (local/desktop) is gated on the mutation counter and debounced:
+# the graph is only serialized when it actually changed and edits have settled,
+# so normal UI reruns do no work even for large ontologies. Important actions
+# (import, new ontology, linking a file) force an immediate flush.
+AUTOSAVE_DEBOUNCE_SECONDS = 2.0
 
 _FAVICON = _Path(__file__).parent / "favicon.png"
 
@@ -183,6 +189,13 @@ def _get_local_storage():
     return ls
 
 
+def _rdf_format_for_path(path):
+    """rdflib format for a file path (Turtle if the extension is unknown)."""
+    from .ontology_manager import rdf_format_for_path
+
+    return rdf_format_for_path(path)
+
+
 def _disk_restore_source():
     """Return ``(path, label)`` to restore from on a local run, else ``(None, None)``.
 
@@ -208,18 +221,24 @@ def _block_disk_persist(message: str) -> None:
     st.session_state["_disk_persist_block_msg"] = message
 
 
-def _mark_disk_source_hash(label: str, h: str) -> None:
-    """Record the restored-from file's hash so it isn't immediately rewritten.
+def _current_mutation_count() -> int:
+    """The app's monotonic graph-change counter (bumped on every mutation)."""
+    return st.session_state.get("_ont_mutation_count", 0)
+
+
+def _mark_disk_source_saved(label: str) -> None:
+    """Record that the restored-from file is already current at this revision.
 
     Only the file we actually read is up to date; the other target is left
-    unset so the next persist refreshes it from the restored graph.
+    behind so the next persist refreshes it from the restored graph.
     """
+    mc = _current_mutation_count()
     if label == "linked file":
-        st.session_state["_linked_last_hash"] = h
-        st.session_state["_recovery_last_hash"] = None
+        st.session_state["_linked_saved_rev"] = mc
+        st.session_state["_recovery_saved_rev"] = None
     else:
-        st.session_state["_recovery_last_hash"] = h
-        st.session_state["_linked_last_hash"] = None
+        st.session_state["_recovery_saved_rev"] = mc
+        st.session_state["_linked_saved_rev"] = None
 
 
 def _restore_autosave_from_disk(ont):
@@ -227,33 +246,25 @@ def _restore_autosave_from_disk(ont):
 
     Disk reads are synchronous (unlike the browser component, which delivers
     data on a later rerun), so this resolves in a single pass and always marks
-    the session restored.
+    the session restored. Parses straight from the file (no whole-file string in
+    memory) and pauses disk autosave if the file can't be read or parsed, so a
+    bad file is never overwritten.
     """
     st.session_state["_autosave_restored"] = True
     path, label = _disk_restore_source()
     if path is None:
         return
-    saved = local_store.read_text(path)
-    if saved is None:
-        # The file exists (see _disk_restore_source) but is unreadable. Don't let
-        # persistence clobber it with the current graph.
-        _block_disk_persist(
-            f"Couldn't read the {label}. Disk autosave is paused so it isn't "
-            "overwritten — fix or re-link the file, then reload."
-        )
-        return
-    if not saved.strip():
-        return
+    fmt = "turtle" if label == "recovery file" else _rdf_format_for_path(path)
     try:
-        ont.load_from_string(saved, format="turtle")
+        ont.load_from_file(str(path), format=fmt)
     except Exception as e:
         log_error(e, context="Autosave restore (disk)")
         _block_disk_persist(
-            f"The {label} couldn't be parsed. Disk autosave is paused so the "
-            "file isn't overwritten — fix or re-link it, then reload."
+            f"The {label} couldn't be read or parsed. Disk autosave is paused so "
+            "it isn't overwritten — fix or re-link it, then reload."
         )
         return
-    _mark_disk_source_hash(label, _content_hash(saved))
+    _mark_disk_source_saved(label)
     # An empty-but-valid saved graph is loaded silently; nothing to announce.
     if _ontology_is_empty(ont):
         return
@@ -343,41 +354,58 @@ def maybe_restore_autosave():
 def _persist_autosave_to_disk():
     """Mirror the working ontology to disk on a local/desktop run.
 
-    Keeps the crash-recovery snapshot current and mirrors to the user's linked
-    file when one is set. No size cap (these are real files). The recovery and
-    linked targets are tracked with independent hashes so each is deduped on its
-    own and a failed write to one is retried on the next rerun even if the
-    ontology hasn't changed since — letting a transient permission/sync error
-    recover without waiting for the next edit.
+    Gated on the mutation counter so normal UI reruns do *no* work (no
+    serialization, no hashing) even for large ontologies: a target is written
+    only when the graph changed since it was last saved. Writes are debounced —
+    once edits settle for AUTOSAVE_DEBOUNCE_SECONDS — and coalesce rapid edits,
+    while important actions force an immediate flush via ``_force_disk_flush``.
+    Recovery and linked file track their save revisions independently, so one
+    failed linked write neither suppresses recovery nor blocks its own retry.
+
+    Tradeoff: edits made in the last debounce window before a crash may be lost;
+    the sidebar shows "Saved to disk" only once the flush has completed.
     """
     # A failed restore (unreadable/corrupt recovery or linked file) pauses disk
     # writes so we never overwrite a file we couldn't load.
     if st.session_state.get("_disk_persist_blocked"):
         return
 
-    try:
-        ttl = st.session_state.ontology.export_to_string(format="turtle")
-    except Exception as e:
-        log_error(e, context="Autosave export (disk)")
-        return
-
-    h = _content_hash(ttl)
-
-    if h != st.session_state.get("_recovery_last_hash"):
-        try:
-            local_store.atomic_write(local_store.recovery_file(), ttl)
-            st.session_state["_recovery_last_hash"] = h
-        except OSError as e:
-            # Leave the hash unset so the next rerun retries the recovery write.
-            log_error(e, context="Recovery write")
+    mc = _current_mutation_count()
+    # Stamp the time whenever the graph changes, so the debounce measures idle
+    # time since the last edit.
+    if mc != st.session_state.get("_disk_last_seen_rev"):
+        st.session_state["_disk_last_seen_rev"] = mc
+        st.session_state["_disk_last_mutation_at"] = time.time()
 
     linked = local_store.get_linked_path()
-    if linked is not None and h != st.session_state.get("_linked_last_hash"):
+    recovery_dirty = mc != st.session_state.get("_recovery_saved_rev")
+    linked_dirty = linked is not None and mc != st.session_state.get(
+        "_linked_saved_rev"
+    )
+    if not (recovery_dirty or linked_dirty):
+        return  # nothing changed — the common rerun does no work
+
+    force = st.session_state.pop("_force_disk_flush", False)
+    settled = (
+        time.time() - st.session_state.get("_disk_last_mutation_at", 0.0)
+        >= AUTOSAVE_DEBOUNCE_SECONDS
+    )
+    if not force and not settled:
+        return  # wait for edits to settle; a later rerun flushes
+
+    ont = st.session_state.ontology
+    if recovery_dirty:
         try:
-            local_store.atomic_write(linked, ttl)
-            # Only record the hash on success, so a failed write retries next
-            # rerun even though the content is unchanged.
-            st.session_state["_linked_last_hash"] = h
+            ont.save_to_file(local_store.recovery_file(), format="turtle")
+            st.session_state["_recovery_saved_rev"] = mc
+        except OSError as e:
+            # Leave the revision unset so the next rerun retries.
+            log_error(e, context="Recovery write")
+
+    if linked_dirty:
+        try:
+            ont.save_to_file(linked, format=_rdf_format_for_path(linked))
+            st.session_state["_linked_saved_rev"] = mc
             st.session_state["_linked_write_warned"] = False
         except OSError as e:
             log_error(e, context="Linked-file write")
@@ -435,33 +463,32 @@ def persist_autosave():
 def _load_linked_file(target) -> bool:
     """Replace the working ontology with the contents of ``target``.
 
-    Returns True on success. Used when linking to an existing, non-empty file so
-    "point at my Nextcloud ontology" opens that file instead of overwriting it.
+    Returns True on success. Used when linking to an existing file so "point at
+    my Nextcloud ontology" opens that file instead of overwriting it. Parses
+    straight from the path, in the format implied by its extension.
     """
-    saved = local_store.read_text(target)
-    if saved is None or not saved.strip():
-        return False
     try:
         OntologyManager = get_ontology_manager_class()
         new_ont = OntologyManager()
-        new_ont.load_from_string(saved, format="turtle")
+        new_ont.load_from_file(str(target), format=_rdf_format_for_path(target))
     except Exception as e:
         log_error(e, context="Linked file load")
         return False
     st.session_state.ontology = new_ont
-    h = _content_hash(saved)
-    # The linked file already holds this content; refresh recovery from it next.
-    st.session_state["_linked_last_hash"] = h
-    st.session_state["_recovery_last_hash"] = None
+    st.session_state["_ont_mutation_count"] = (
+        st.session_state.get("_ont_mutation_count", 0) + 1
+    )
+    # The linked file already holds this content at the new revision; recovery is
+    # left behind so the next flush refreshes it from the loaded graph.
+    mc = _current_mutation_count()
+    st.session_state["_linked_saved_rev"] = mc
+    st.session_state["_recovery_saved_rev"] = None
     try:
         from .ontology_manager import UndoManager
 
         st.session_state.undo_manager = UndoManager(new_ont)
     except ImportError:
         pass
-    st.session_state["_ont_mutation_count"] = (
-        st.session_state.get("_ont_mutation_count", 0) + 1
-    )
     return True
 
 
@@ -481,15 +508,20 @@ def _render_disk_autosave_sidebar():
             "set one below."
         ),
     )
-    if (
-        st.session_state.get("_autosave_enabled", True)
-        and (
-            st.session_state.get("_recovery_last_hash")
-            or st.session_state.get("_linked_last_hash")
-        )
-        and not _ontology_is_empty(st.session_state.ontology)
+    if st.session_state.get("_autosave_enabled", True) and not _ontology_is_empty(
+        st.session_state.ontology
     ):
-        st.sidebar.caption("✓ Saved to disk")
+        # Report saved state truthfully: only "saved" once the debounced flush
+        # has caught up to the current revision.
+        mc = _current_mutation_count()
+        saved = st.session_state.get("_recovery_saved_rev") == mc and (
+            local_store.get_linked_path() is None
+            or st.session_state.get("_linked_saved_rev") == mc
+        )
+        if saved:
+            st.sidebar.caption("✓ Saved to disk")
+        elif st.session_state.get("_recovery_saved_rev") is not None:
+            st.sidebar.caption("• Autosaving…")
 
     linked = local_store.get_linked_path()
     with st.sidebar.expander("Linked working file", expanded=linked is not None):
@@ -541,6 +573,9 @@ def _render_disk_autosave_sidebar():
                     # A fresh link clears any earlier restore-failure pause.
                     st.session_state["_disk_persist_blocked"] = False
                     st.session_state.pop("_disk_persist_block_msg", None)
+                    # Linking a file is an important action: flush immediately
+                    # rather than waiting out the debounce window.
+                    st.session_state["_force_disk_flush"] = True
                     if load_it:
                         if _load_linked_file(_Path(p).expanduser()):
                             st.toast(f"Linked and loaded {p}", icon="🔗")
@@ -553,7 +588,7 @@ def _render_disk_autosave_sidebar():
                             st.toast(f"Linked {p}, but couldn't load it", icon="⚠️")
                     else:
                         # New file or an explicit overwrite: write current state.
-                        st.session_state["_linked_last_hash"] = None
+                        st.session_state["_linked_saved_rev"] = None
                         st.toast(f"Linked working file: {p}", icon="🔗")
                     st.rerun()
         with clear_col:
@@ -626,6 +661,15 @@ def save_checkpoint(label: str = "Edit"):
     st.session_state["_ont_mutation_count"] = (
         st.session_state.get("_ont_mutation_count", 0) + 1
     )
+
+
+def request_disk_flush():
+    """Force the next disk autosave to write now, skipping the debounce window.
+
+    Call after important actions (import, new ontology) so a large, deliberate
+    change is persisted immediately rather than waiting for edits to settle.
+    """
+    st.session_state["_force_disk_flush"] = True
 
 
 def log_error(error: Exception, context: str = ""):
@@ -3832,6 +3876,7 @@ def render_import_export():
                 ont.load_from_string(content, format=format_)
                 st.session_state.ontology = ont
                 save_checkpoint("Import ontology")
+                request_disk_flush()
                 set_flash_message(
                     f"Ontology imported successfully! ({len(ont.graph)} triples)",
                     "success",
@@ -3992,6 +4037,7 @@ def render_import_export():
                             )
                         st.session_state.ontology = ont
                         save_checkpoint("Import ontology")
+                        request_disk_flush()
                         st.session_state.import_preview = None
                         st.session_state.import_content = None
                         st.session_state.import_format = None
@@ -4142,6 +4188,12 @@ def render_import_export():
                     st.session_state.undo_manager = UndoManager(
                         st.session_state.ontology
                     )
+                    # Replacing the graph is a deliberate change; bump the
+                    # revision and flush it to disk immediately.
+                    st.session_state["_ont_mutation_count"] = (
+                        st.session_state.get("_ont_mutation_count", 0) + 1
+                    )
+                    request_disk_flush()
                     show_message("New ontology created!", "success")
                     st.rerun()
 

@@ -187,13 +187,19 @@ native desktop window), it persists to disk instead of browser storage:
   ontology opens it) or **overwrite** it with the current ontology; a new path is
   created from your current work. Once linked, the file tracks your working
   ontology and is loaded again on startup. Point it at a synced folder
-  (Nextcloud, Dropbox, ...) for fully automatic off-machine backups.
+  (Nextcloud, Dropbox, ...) for fully automatic off-machine backups. The format
+  follows the file extension (`.ttl`, `.owl`/`.rdf`, `.nt`, `.n3`, `.jsonld`;
+  Turtle if unknown).
 
-Writes are atomic, so a backup tool never sees a half-written file. If a
-linked or recovery file can't be read or parsed on startup, disk autosave is
-paused (with a sidebar notice) so the unreadable file is never overwritten. The
-hosted demo on Streamlit Cloud has no local filesystem, so it keeps using
-per-browser autosave instead.
+Autosave is gated on actual edits and debounced, so normal clicking around does
+no work even for large ontologies — the graph is serialized straight to a temp
+file and atomically swapped in only after edits settle (and immediately after an
+import or a new-ontology action). The sidebar shows "Saved to disk" only once
+that write completes, so a crash can lose at most the last second or two of
+edits. If a linked or recovery file can't be read or parsed on startup, disk
+autosave is paused (with a sidebar notice) so the unreadable file is never
+overwritten. The hosted demo on Streamlit Cloud has no local filesystem, so it
+keeps using per-browser autosave instead.
 
 ### Run with Docker
 
