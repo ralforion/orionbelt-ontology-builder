@@ -3914,6 +3914,12 @@ def render_import_export():
                 from .ontology_manager import UndoManager
 
                 st.session_state.undo_manager = UndoManager(st.session_state.ontology)
+                # Replacing the graph is a deliberate change; bump the revision
+                # and flush so the cleared state is persisted immediately.
+                st.session_state["_ont_mutation_count"] = (
+                    st.session_state.get("_ont_mutation_count", 0) + 1
+                )
+                request_autosave_flush()
                 st.session_state["_ontology_cleared"] = "Ontology cleared!"
                 st.rerun()
 
@@ -4258,6 +4264,7 @@ def render_import_export():
             else:
                 ont.merge_from_string(rendered, "turtle")
             save_checkpoint(f"Apply template: {selected}")
+            request_autosave_flush()
             s = ont.get_statistics()
             st.session_state["_template_msg"] = (
                 f"Template '{selected}' applied! "
@@ -4328,6 +4335,7 @@ def render_import_export():
                         ont.merge_from_string(content, "turtle")
                 mod_names = ", ".join(m["name"] for m in selected_modules)
                 save_checkpoint(f"Load upper ontology: {upper['name']} ({mod_names})")
+                request_autosave_flush()
                 s = ont.get_statistics()
                 st.session_state["_upper_onto_msg"] = (
                     f"Loaded {upper['name']} ({mod_names})! "
@@ -4421,6 +4429,7 @@ def render_import_export():
                             ont.merge_from_string(content, fmt)
                 mod_names = ", ".join(m["name"] for m in selected_modules)
                 save_checkpoint(f"Load reference ontology: {ref['name']} ({mod_names})")
+                request_autosave_flush()
                 s = ont.get_statistics()
                 st.session_state["_ref_onto_msg"] = (
                     f"Loaded {ref['name']} ({mod_names})! "
@@ -4828,6 +4837,7 @@ def render_validation():
             try:
                 new_triples = ont.apply_reasoning(profile=profile[1])
                 save_checkpoint("Apply reasoning")
+                request_autosave_flush()
                 show_message(
                     f"Reasoning complete! {new_triples} new triples inferred.",
                     "success",
