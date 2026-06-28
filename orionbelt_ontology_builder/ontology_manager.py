@@ -2,12 +2,35 @@
 OntologyManager - Core class for managing OWL ontologies using rdflib.
 """
 
+import os
+import tempfile
+from pathlib import Path
 from rdflib import Graph, Namespace, URIRef, Literal, BNode
 from rdflib.namespace import RDF, RDFS, OWL, XSD, SKOS, DC, DCTERMS
 from rdflib.term import Node
 from rdflib.collection import Collection
 from typing import Optional, List, Dict, Tuple, Any, Set, cast
 import owlrl
+
+#: RDF serialization format for a file, keyed by lower-case extension. Used so a
+#: linked working file can be a format other than Turtle (e.g. .owl/.rdf).
+RDF_FORMAT_BY_SUFFIX = {
+    ".ttl": "turtle",
+    ".turtle": "turtle",
+    ".owl": "xml",
+    ".rdf": "xml",
+    ".xml": "xml",
+    ".nt": "nt",
+    ".n3": "n3",
+    ".jsonld": "json-ld",
+    ".json": "json-ld",
+}
+
+
+def rdf_format_for_path(path, default: str = "turtle") -> str:
+    """Return the rdflib format for ``path`` based on its extension."""
+    return RDF_FORMAT_BY_SUFFIX.get(Path(path).suffix.lower(), default)
+
 
 _UNSET: Any = object()  # sentinel: "parameter not provided"
 
@@ -2482,6 +2505,32 @@ class OntologyManager:
         self.graph = Graph()
         self.graph.parse(file_path, format=format)
         self._update_namespace_from_graph()
+
+    def save_to_file(self, file_path, format: Optional[str] = None) -> None:
+        """Serialize the graph straight to ``file_path``, atomically.
+
+        Streams the serialization to a temp file in the same directory via
+        ``Graph.serialize(destination=...)`` and then ``os.replace``s it into
+        place, so no giant in-memory string is built and a reader/backup tool
+        never sees a half-written file. ``format`` defaults to the file's
+        extension (Turtle if unknown).
+        """
+        fmt = format or rdf_format_for_path(file_path)
+        p = Path(file_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=str(p.parent), prefix=p.name + ".", suffix=".tmp"
+        )
+        os.close(fd)
+        try:
+            self.graph.serialize(destination=tmp, format=fmt)
+            os.replace(tmp, str(p))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     def load_from_string(self, data: str, format: str = "turtle"):
         """Load ontology from a string."""

@@ -173,6 +173,39 @@ orionbelt-ontology-builder-desktop    # opens a native window
 This is fully opt-in: the plain install and the `orionbelt-ontology-builder`
 command above are unchanged.
 
+### Local file storage
+
+When you launch the app locally (the `orionbelt-ontology-builder` command or the
+native desktop window), it persists to disk instead of browser storage:
+
+- **Crash recovery.** With no linked file set, your working ontology is saved to
+  a recovery file under `~/.orionbelt_ontology_builder/` on every change, so an
+  unexpected close (crash, freeze) is recovered automatically on the next launch.
+  When a linked file is set it becomes the store (below), and the recovery file
+  is only written as a fallback if a linked-file write fails — so each change is
+  one write, not two.
+- **Linked working file.** Use the sidebar's "Linked working file" control to
+  point the app at any file path. If the file already exists, you choose whether
+  to **load it** into the workspace (the default, so pointing at an existing
+  ontology opens it) or **overwrite** it with the current ontology; a new path is
+  created from your current work. Once linked, the file tracks your working
+  ontology and is loaded again on startup. Point it at a synced folder
+  (Nextcloud, Dropbox, ...) for fully automatic off-machine backups. The format
+  follows the file extension (`.ttl`, `.owl`/`.rdf`, `.nt`, `.n3`, `.jsonld`;
+  Turtle if unknown).
+
+Autosave is gated on actual edits and debounced, so normal clicking around does
+no work even for large ontologies — the graph is serialized straight to a temp
+file and atomically swapped in only after edits settle (and immediately after an
+import or a new-ontology action). The sidebar shows "Saved to disk" only once
+that write completes, so a crash can lose at most the last second or two of
+edits. If a linked or recovery file can't be read or parsed on startup, disk
+autosave is paused (with a sidebar notice) so the unreadable file is never
+overwritten. The hosted demo on Streamlit Cloud has no local filesystem, so it
+keeps using per-browser autosave instead — which shares the same dirty/debounced
+scheduling and disables itself (until the graph shrinks) when an ontology exceeds
+the browser storage quota.
+
 ### Run with Docker
 
 A prebuilt image is published to Docker Hub. No local Python setup required:

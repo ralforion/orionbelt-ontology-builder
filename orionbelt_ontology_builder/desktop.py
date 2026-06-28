@@ -15,10 +15,12 @@ This reuses the same in-package Streamlit entry script as the console launcher
 (:mod:`orionbelt_ontology_builder.cli`).
 """
 
+import os
 import sys
 from pathlib import Path
 
 from .app import APP_NAME
+from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG
 
 
 def run() -> None:
@@ -36,6 +38,14 @@ def run() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # Running locally with full filesystem access — opt into the disk-backed
+    # autosave / linked-file persistence (off by default on the cloud).
+    os.environ[ENV_FLAG] = "1"
+    # The desktop subprocess inherits this env, so the brand colour applies even
+    # though config.toml isn't found outside the repo (otherwise Streamlit's
+    # default red shows). setdefault lets a user override win.
+    os.environ.setdefault("STREAMLIT_THEME_PRIMARY_COLOR", BRAND_PRIMARY_COLOR)
 
     entry = Path(__file__).parent / "streamlit_entry.py"
     start_desktop_app(
