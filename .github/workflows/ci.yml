@@ -34,3 +34,42 @@ jobs:
 
       - name: Test (pytest)
         run: uv run pytest
+
+  # Guards against regression of issue #68: the `desktop` extra must install a
+  # resolvable pywebview Qt backend (qtpy + PySide6) on Linux. We only need the
+  # GUI base libraries so PySide6.QtGui imports; the full QtWebEngine widget
+  # additionally needs Chromium runtime libs that are the host desktop's concern.
+  desktop-extra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt GUI runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
+            libfontconfig1 libfreetype6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install with desktop extra
+        run: uv sync --extra desktop
+
+      - name: Verify Qt backend resolves
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run python - <<'PY'
+          from qtpy import QtCore  # raised ModuleNotFoundError: qtpy before the fix (issue #68)
+          import qtpy
+          print("qtpy binding ->", qtpy.API_NAME)
+          assert qtpy.API_NAME == "PySide6", qtpy.API_NAME
+          print("PASS: desktop extra provides a resolvable Qt backend")
+          PY
