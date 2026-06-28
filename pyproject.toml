@@ -36,6 +36,11 @@ orionbelt-ontology-builder-desktop = "orionbelt_ontology_builder.desktop:run"
 [project.optional-dependencies]
 desktop = [
     "streamlit-desktop-app>=0.3.3",
+    # pywebview needs a native GUI/web-rendering backend at runtime. macOS
+    # bundles one (Cocoa/WebKit via pywebview's pyobjc deps), but on Linux and
+    # Windows none ships by default, so the desktop launcher fails without an
+    # explicit backend. PySide6 (Qt + QtWebEngine) provides a portable one.
+    "pyside6; sys_platform != 'darwin'",
 ]
 dev = [
     "pytest>=7.0",

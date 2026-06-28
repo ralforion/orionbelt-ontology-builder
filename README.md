@@ -170,6 +170,10 @@ pip install "orionbelt-ontology-builder[desktop]"
 orionbelt-ontology-builder-desktop    # opens a native window
 ```
 
+On Linux and Windows the extra also installs PySide6 to give pywebview a native
+rendering backend (macOS uses the system WebKit backend, so it is not needed
+there).
+
 This is fully opt-in: the plain install and the `orionbelt-ontology-builder`
 command above are unchanged.
 
