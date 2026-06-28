@@ -239,3 +239,41 @@ def test_get_restrictions_exposes_uris_and_delete_round_trips_external_ns():
         is True
     )
     assert om.get_restrictions() == []
+
+
+def _impact_matches_actual(resource, rtype):
+    """Build a fresh graph with a reused link, then assert the delete-impact
+    preview total equals the triples actually removed by the delete."""
+    from ontology_manager import OntologyManager
+
+    om = OntologyManager()
+    for c in ("A", "B", "C", "D"):
+        om.add_class(c)
+    om.add_object_property("relatedTo")
+    om.link_classes("A", "relatedTo", "B")
+    om.link_classes("C", "relatedTo", "D")
+
+    predicted = om.get_delete_impact(resource, rtype)["total_triples"]
+    before = len(om.graph)
+    if rtype == "class":
+        om.delete_class(resource)
+    else:
+        om.delete_property(resource)
+    actual = before - len(om.graph)
+    return predicted, actual
+
+
+def test_delete_impact_preview_counts_purged_restrictions():
+    """The preview must include the restriction triples the purge removes (#58)."""
+    # Deleting the reused property removes both restrictions whole.
+    predicted, actual = _impact_matches_actual("relatedTo", "property")
+    assert predicted == actual
+    assert actual > 1  # property decl + the two restrictions, not just one triple
+
+    # Deleting a target class removes the restriction that points at it.
+    predicted, actual = _impact_matches_actual("B", "class")
+    assert predicted == actual
+
+    # Deleting a source class removes the restriction it owns.
+    predicted, actual = _impact_matches_actual("A", "class")
+    assert predicted == actual

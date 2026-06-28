@@ -502,14 +502,19 @@ class OntologyManager:
             if p not in structural and isinstance(o, Literal):
                 impact["annotations"] += 1
 
-        # Total affected triples (as subject + as object + as predicate for properties)
-        ref_count = len(list(self.graph.subject_predicates(uri)))
-        pred_count = (
-            len(list(self.graph.subject_objects(uri)))
-            if resource_type == "property"
-            else 0
-        )
-        impact["total_triples"] = impact["direct_triples"] + ref_count + pred_count
+        # Total affected triples. Build the exact set deletion would remove so
+        # the preview matches delete_class/delete_property — which also purge the
+        # whole restriction blank nodes that reference this resource (a class
+        # used as a restriction value contributes only one direct triple, but
+        # removing the orphaned restriction takes its other triples too).
+        removed = set(self.graph.triples((uri, None, None)))
+        removed.update(self.graph.triples((None, None, uri)))
+        if resource_type == "property":
+            removed.update(self.graph.triples((None, uri, None)))
+        for r in self._restrictions_referencing(uri):
+            removed.update(self.graph.triples((r, None, None)))
+            removed.update(self.graph.triples((None, RDFS.subClassOf, r)))
+        impact["total_triples"] = len(removed)
 
         return impact
 
@@ -991,17 +996,16 @@ class OntologyManager:
 
         return True
 
-    def _purge_restrictions_referencing(self, node: Node) -> None:
-        """Remove ``owl:Restriction`` blank nodes that reference ``node``.
+    def _restrictions_referencing(self, node: Node) -> set:
+        """Return the ``owl:Restriction`` blank nodes that reference ``node``.
 
         A restriction is a blank node carrying ``owl:onProperty`` plus a
         constraint (``someValuesFrom``/``allValuesFrom``/``hasValue``/cardinality)
-        and is attached to its owning class via ``rdfs:subClassOf``. When the
-        property, the owning class, or a class used as the restriction's value is
-        deleted, the leftover restriction is malformed or orphaned. This removes
-        each such restriction whole, along with any ``subClassOf`` links to it,
-        so deletes never leave a dangling restriction behind (e.g. the reused
-        property links created by :meth:`link_classes`).
+        and is attached to its owning class via ``rdfs:subClassOf``. A node is
+        "referenced" when it is the restriction's property/value (the bnode
+        points at it) or its owning class (it points at the bnode). Shared by
+        :meth:`_purge_restrictions_referencing` and :meth:`get_delete_impact` so
+        the cleanup and its preview never drift.
         """
         targets = set()
         # Restrictions that mention `node` as a value: onProperty (property),
@@ -1013,7 +1017,18 @@ class OntologyManager:
         for r in self.graph.objects(node, RDFS.subClassOf):
             if isinstance(r, BNode) and (r, RDF.type, OWL.Restriction) in self.graph:
                 targets.add(r)
-        for r in targets:
+        return targets
+
+    def _purge_restrictions_referencing(self, node: Node) -> None:
+        """Remove ``owl:Restriction`` blank nodes that reference ``node``.
+
+        When the property, the owning class, or a class used as the
+        restriction's value is deleted, the leftover restriction is malformed or
+        orphaned. This removes each such restriction whole, along with any
+        ``subClassOf`` links to it, so deletes never leave a dangling restriction
+        behind (e.g. the reused property links created by :meth:`link_classes`).
+        """
+        for r in self._restrictions_referencing(node):
             self.graph.remove((None, RDFS.subClassOf, r))
             self.graph.remove((r, None, None))
 
