@@ -1,10 +1,12 @@
 """Tests for the console entry point (``orionbelt-ontology-builder``)."""
 
+import os
 import sys
 from importlib.metadata import entry_points
 from pathlib import Path
 
 import orionbelt_ontology_builder.cli as cli
+from orionbelt_ontology_builder.local_store import ENV_FLAG
 
 
 def test_entry_point_registered():
@@ -47,3 +49,23 @@ def test_run_invokes_streamlit_with_entry_and_forwards_args(monkeypatch):
     assert argv[:2] == ["streamlit", "run"]
     assert argv[2].endswith("streamlit_entry.py")
     assert argv[-2:] == ["--server.port", "8502"]
+
+
+def test_run_opts_into_local_persistence(monkeypatch):
+    """A local launch should enable disk-backed persistence via the env flag."""
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
+    class _FakeStcli:
+        @staticmethod
+        def main():
+            pass
+
+    import streamlit.web
+
+    monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
+    monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
+    monkeypatch.setattr(sys, "exit", lambda code=0: None)
+
+    cli.run()
+
+    assert os.environ[ENV_FLAG] == "1"

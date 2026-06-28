@@ -15,10 +15,12 @@ This reuses the same in-package Streamlit entry script as the console launcher
 (:mod:`orionbelt_ontology_builder.cli`).
 """
 
+import os
 import sys
 from pathlib import Path
 
 from .app import APP_NAME
+from .local_store import ENV_FLAG
 
 
 def run() -> None:
@@ -36,6 +38,10 @@ def run() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # Running locally with full filesystem access — opt into the disk-backed
+    # autosave / linked-file persistence (off by default on the cloud).
+    os.environ[ENV_FLAG] = "1"
 
     entry = Path(__file__).parent / "streamlit_entry.py"
     start_desktop_app(

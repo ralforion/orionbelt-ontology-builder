@@ -1,5 +1,6 @@
 """Tests for the native desktop launcher (``orionbelt-ontology-builder-desktop``)."""
 
+import os
 import sys
 import types
 from importlib.metadata import entry_points
@@ -8,6 +9,7 @@ import pytest
 
 import orionbelt_ontology_builder.desktop as desktop
 from orionbelt_ontology_builder.app import APP_NAME
+from orionbelt_ontology_builder.local_store import ENV_FLAG
 
 
 def test_entry_point_registered():
@@ -32,10 +34,14 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     fake_module.start_desktop_app = _fake_start_desktop_app
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
 
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
     desktop.run()
 
     assert captured["script_path"].endswith("streamlit_entry.py")
     assert captured["title"] == APP_NAME
+    # A native launch runs locally, so disk-backed persistence is opted in.
+    assert os.environ[ENV_FLAG] == "1"
 
 
 def test_run_without_dependency_exits_cleanly(monkeypatch):

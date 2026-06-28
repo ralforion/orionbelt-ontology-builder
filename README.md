@@ -173,6 +173,23 @@ orionbelt-ontology-builder-desktop    # opens a native window
 This is fully opt-in: the plain install and the `orionbelt-ontology-builder`
 command above are unchanged.
 
+### Local file storage
+
+When you launch the app locally (the `orionbelt-ontology-builder` command or the
+native desktop window), it persists to disk instead of browser storage:
+
+- **Crash recovery.** Your working ontology is mirrored to a recovery file under
+  `~/.orionbelt_ontology_builder/` on every change, so an unexpected close
+  (crash, freeze) is recovered automatically on the next launch.
+- **Linked working file.** Use the sidebar's "Linked working file" control to
+  point the app at any file path. The app then tracks that file and reloads it on
+  startup. Point it at a synced folder (Nextcloud, Dropbox, ...) for fully
+  automatic off-machine backups.
+
+Writes are atomic, so a backup tool never sees a half-written file. The hosted
+demo on Streamlit Cloud has no local filesystem, so it keeps using per-browser
+autosave instead.
+
 ### Run with Docker
 
 A prebuilt image is published to Docker Hub. No local Python setup required:

@@ -10,6 +10,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path as _Path
 
+from . import local_store
+
 APP_NAME = "OrionBelt Ontology Builder"
 APP_VERSION = "1.8.0"
 
@@ -181,6 +183,58 @@ def _get_local_storage():
     return ls
 
 
+def _disk_restore_source():
+    """Return ``(path, label)`` to restore from on a local run, else ``(None, None)``.
+
+    Prefers the user's linked working file; falls back to the crash-recovery
+    snapshot written by :func:`persist_autosave`.
+    """
+    linked = local_store.get_linked_path()
+    if linked is not None and linked.exists():
+        return linked, "linked file"
+    rec = local_store.recovery_file()
+    if rec.exists():
+        return rec, "recovery file"
+    return None, None
+
+
+def _restore_autosave_from_disk(ont):
+    """Restore the working ontology from disk on a local/desktop run.
+
+    Disk reads are synchronous (unlike the browser component, which delivers
+    data on a later rerun), so this resolves in a single pass and always marks
+    the session restored.
+    """
+    st.session_state["_autosave_restored"] = True
+    path, label = _disk_restore_source()
+    if path is None:
+        return
+    saved = local_store.read_text(path)
+    if not saved or not saved.strip():
+        return
+    try:
+        ont.load_from_string(saved, format="turtle")
+    except Exception as e:
+        log_error(e, context="Autosave restore (disk)")
+        return
+    st.session_state["_autosave_last_hash"] = _content_hash(saved)
+    # An empty-but-valid saved graph is loaded silently; nothing to announce.
+    if _ontology_is_empty(ont):
+        return
+    try:
+        from .ontology_manager import UndoManager
+
+        st.session_state.undo_manager = UndoManager(ont)
+    except ImportError:
+        pass
+    st.session_state["_ont_mutation_count"] = (
+        st.session_state.get("_ont_mutation_count", 0) + 1
+    )
+    if st.session_state.get("nav_radio") == "Import / Export":
+        st.session_state["nav_radio"] = "Dashboard"
+    st.toast(f"Restored your previous session from the {label}.", icon="💾")
+
+
 def maybe_restore_autosave():
     """Restore the ontology from browser localStorage when a session starts.
 
@@ -198,6 +252,11 @@ def maybe_restore_autosave():
     # there is nothing left to restore.
     if not _ontology_is_empty(ont):
         st.session_state["_autosave_restored"] = True
+        return
+
+    # Local/desktop runs persist to disk instead of browser localStorage.
+    if local_store.local_persist_enabled():
+        _restore_autosave_from_disk(ont)
         return
 
     ls = _get_local_storage()
@@ -245,6 +304,45 @@ def maybe_restore_autosave():
     st.toast("Restored your previous session from this browser's autosave.", icon="💾")
 
 
+def _persist_autosave_to_disk():
+    """Mirror the working ontology to disk on a local/desktop run.
+
+    Always keeps the crash-recovery snapshot current, and mirrors to the user's
+    linked file when one is set. No size cap (these are real files) and deduped
+    by content hash so an unchanged graph isn't rewritten — which would
+    otherwise churn a synced linked folder.
+    """
+    try:
+        ttl = st.session_state.ontology.export_to_string(format="turtle")
+    except Exception as e:
+        log_error(e, context="Autosave export (disk)")
+        return
+
+    h = _content_hash(ttl)
+    if h == st.session_state.get("_autosave_last_hash"):
+        return
+
+    try:
+        local_store.atomic_write(local_store.recovery_file(), ttl)
+    except OSError as e:
+        # Leave the hash unset so the next rerun retries the recovery write.
+        log_error(e, context="Recovery write")
+        return
+
+    linked = local_store.get_linked_path()
+    if linked is not None:
+        try:
+            local_store.atomic_write(linked, ttl)
+            st.session_state["_linked_write_warned"] = False
+        except OSError as e:
+            log_error(e, context="Linked-file write")
+            if not st.session_state.get("_linked_write_warned"):
+                st.session_state["_linked_write_warned"] = True
+                st.sidebar.warning(f"Couldn't write the linked file: {e}")
+
+    st.session_state["_autosave_last_hash"] = h
+
+
 def persist_autosave():
     """Mirror the current ontology into browser localStorage when it changed.
 
@@ -257,6 +355,12 @@ def persist_autosave():
     # would overwrite saved data before it can be read back on a later rerun.
     if not st.session_state.get("_autosave_restored"):
         return
+
+    # Local/desktop runs persist to disk instead of browser localStorage.
+    if local_store.local_persist_enabled():
+        _persist_autosave_to_disk()
+        return
+
     ls = _get_local_storage()
     if ls is None:
         return
@@ -285,8 +389,69 @@ def persist_autosave():
     st.session_state["_autosave_last_hash"] = h
 
 
+def _render_disk_autosave_sidebar():
+    """Sidebar controls for the local disk-backed autosave and linked file."""
+    st.sidebar.checkbox(
+        "Autosave to disk",
+        value=st.session_state.get("_autosave_enabled", True),
+        key="_autosave_enabled",
+        help=(
+            "Mirrors your ontology to a recovery file on this machine so an "
+            "unexpected close can be recovered, and to a linked file if you "
+            "set one below."
+        ),
+    )
+    if (
+        st.session_state.get("_autosave_enabled", True)
+        and st.session_state.get("_autosave_last_hash")
+        and not _ontology_is_empty(st.session_state.ontology)
+    ):
+        st.sidebar.caption("✓ Saved to disk")
+
+    linked = local_store.get_linked_path()
+    with st.sidebar.expander("Linked working file", expanded=linked is not None):
+        st.caption(
+            "Point this at a file in a synced folder (Nextcloud, Dropbox, ...) "
+            "for automatic off-machine backups. It tracks your working ontology "
+            "and is loaded again on startup."
+        )
+        path_str = st.text_input(
+            "File path",
+            value=str(linked) if linked else "",
+            key="_linked_path_input",
+            placeholder="/path/to/my-ontology.ttl",
+        )
+        set_col, clear_col = st.columns(2)
+        with set_col:
+            if st.button("Link", use_container_width=True, key="_linked_set"):
+                p = path_str.strip()
+                if p:
+                    local_store.set_linked_path(p)
+                    # Force a write to the new target on the next rerun.
+                    st.session_state["_autosave_last_hash"] = None
+                    st.session_state["_linked_write_warned"] = False
+                    st.toast(f"Linked working file: {p}", icon="🔗")
+                    st.rerun()
+        with clear_col:
+            if st.button(
+                "Unlink",
+                use_container_width=True,
+                key="_linked_clear",
+                disabled=linked is None,
+            ):
+                local_store.set_linked_path(None)
+                st.toast("Unlinked working file.", icon="🔗")
+                st.rerun()
+        if linked is not None:
+            st.caption(f"Linked: `{linked}`")
+
+
 def render_autosave_sidebar():
     """Sidebar controls: toggle autosave and discard the saved session."""
+    # Local/desktop runs persist to disk and get a different control set.
+    if local_store.local_persist_enabled():
+        _render_disk_autosave_sidebar()
+        return
     ls = _get_local_storage()
     if ls is None:
         return
