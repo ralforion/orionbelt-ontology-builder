@@ -154,10 +154,26 @@ def test_force_flush_bypasses_debounce(fake_st, monkeypatch):
     assert not fake_st.session_state.get("_force_autosave_flush")  # consumed
 
 
-# ---- separate recovery/linked state + retry ------------------------------
+# ---- one write per change: linked is the store, recovery is a fallback ----
 
 
-def test_linked_failure_neither_suppresses_recovery_nor_blocks_retry(
+def test_healthy_linked_file_does_not_also_write_recovery(fake_st, tmp_path):
+    """With a linked file set, recovery.ttl is not written on every change."""
+    linked = tmp_path / "linked.ttl"
+    local_store.set_linked_path(str(linked))
+    om = _populated()
+    fake_st.session_state.ontology = om
+    _set_state(fake_st, mc=1, recovery=None, linked=None, settled=True)
+
+    app._persist_autosave_to_disk()
+
+    assert linked.exists()  # linked written
+    assert not local_store.recovery_file().exists()  # recovery NOT written
+    assert fake_st.session_state["_linked_saved_rev"] == 1
+    assert fake_st.session_state.get("_recovery_saved_rev") is None
+
+
+def test_linked_failure_falls_back_to_recovery_and_retries(
     fake_st, tmp_path, monkeypatch
 ):
     linked = tmp_path / "linked.ttl"
@@ -237,7 +253,8 @@ def test_load_linked_file_replaces_workspace_and_marks_saved(fake_st, tmp_path):
     assert {c["name"] for c in loaded.get_classes()} == {"A", "B"}
     mc = fake_st.session_state["_ont_mutation_count"]
     assert fake_st.session_state["_linked_saved_rev"] == mc  # won't be rewritten
-    assert fake_st.session_state["_recovery_saved_rev"] is None  # refreshed next
+    # Recovery is a fallback only; loading a linked file doesn't mark it saved.
+    assert fake_st.session_state.get("_recovery_saved_rev") is None
 
 
 def test_link_load_does_not_overwrite_existing_file(fake_st, tmp_path):

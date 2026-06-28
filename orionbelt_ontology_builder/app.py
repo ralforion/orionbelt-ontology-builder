@@ -395,12 +395,15 @@ def _persist_autosave_to_disk():
     """Mirror the working ontology to disk on a local/desktop run.
 
     Gated on the mutation counter so normal UI reruns do *no* work (no
-    serialization, no hashing) even for large ontologies: a target is written
-    only when the graph changed since it was last saved. Writes are debounced —
-    once edits settle for AUTOSAVE_DEBOUNCE_SECONDS — and coalesce rapid edits,
-    while important actions force an immediate flush via request_autosave_flush.
-    Recovery and linked file track their save revisions independently, so one
-    failed linked write neither suppresses recovery nor blocks its own retry.
+    serialization, no hashing) even for large ontologies: the graph is written
+    only when it changed since the last save. Writes are debounced — once edits
+    settle for AUTOSAVE_DEBOUNCE_SECONDS — and coalesce rapid edits, while
+    important actions force an immediate flush via request_autosave_flush.
+
+    One write per change, not two: when a linked file is set it *is* the
+    persistent store (restore prefers it), so the recovery snapshot is only
+    written as a fallback if the linked write fails (e.g. a synced folder is
+    offline). With no linked file, the recovery snapshot is the store.
 
     Tradeoff: edits made in the last debounce window before a crash may be lost;
     the sidebar shows "Saved to disk" only once the flush has completed.
@@ -411,38 +414,41 @@ def _persist_autosave_to_disk():
         return
 
     mc = _autosave_tick()
-    linked = local_store.get_linked_path()
-    recovery_dirty = mc != st.session_state.get("_recovery_saved_rev")
-    linked_dirty = linked is not None and mc != st.session_state.get(
-        "_linked_saved_rev"
-    )
-    if not (recovery_dirty or linked_dirty):
-        return  # nothing changed — the common rerun does no work
-    if not _autosave_ready():
-        return  # wait for edits to settle; a later rerun flushes
-
     ont = st.session_state.ontology
-    if recovery_dirty:
-        try:
-            ont.save_to_file(local_store.recovery_file(), format="turtle")
-            st.session_state["_recovery_saved_rev"] = mc
-        except OSError as e:
-            # Leave the revision unset so the next rerun retries.
-            log_error(e, context="Recovery write")
+    linked = local_store.get_linked_path()
 
-    if linked_dirty:
+    if linked is not None:
+        if mc == st.session_state.get("_linked_saved_rev"):
+            return  # linked store already current
+        if not _autosave_ready():
+            return
         try:
             ont.save_to_file(linked, format=_rdf_format_for_path(linked))
             st.session_state["_linked_saved_rev"] = mc
             st.session_state["_linked_write_warned"] = False
+            st.session_state.pop("_force_autosave_flush", None)
+            return  # linked file is the store; no second write
         except OSError as e:
             log_error(e, context="Linked-file write")
             if not st.session_state.get("_linked_write_warned"):
                 st.session_state["_linked_write_warned"] = True
-                st.sidebar.warning(f"Couldn't write the linked file: {e}")
+                st.sidebar.warning(
+                    f"Couldn't write the linked file: {e}. "
+                    "Falling back to the local recovery snapshot."
+                )
+            # Fall through to write recovery as a safety net for these edits.
 
-    # The forced flush is consumed once a write pass has run for any backend.
-    st.session_state.pop("_force_autosave_flush", None)
+    if mc == st.session_state.get("_recovery_saved_rev"):
+        return
+    if not _autosave_ready():
+        return
+    try:
+        ont.save_to_file(local_store.recovery_file(), format="turtle")
+        st.session_state["_recovery_saved_rev"] = mc
+        st.session_state.pop("_force_autosave_flush", None)
+    except OSError as e:
+        # Leave the revision unset so the next rerun retries.
+        log_error(e, context="Recovery write")
 
 
 def _persist_autosave_to_localstorage():
@@ -530,11 +536,10 @@ def _load_linked_file(target) -> bool:
     st.session_state["_ont_mutation_count"] = (
         st.session_state.get("_ont_mutation_count", 0) + 1
     )
-    # The linked file already holds this content at the new revision; recovery is
-    # left behind so the next flush refreshes it from the loaded graph.
-    mc = _current_mutation_count()
-    st.session_state["_linked_saved_rev"] = mc
-    st.session_state["_recovery_saved_rev"] = None
+    # The linked file already holds this content at the new revision, so it
+    # won't be rewritten on the next flush. (Recovery is a fallback only, so it
+    # isn't refreshed while a healthy linked file is the store.)
+    st.session_state["_linked_saved_rev"] = _current_mutation_count()
     try:
         from .ontology_manager import UndoManager
 
@@ -555,24 +560,26 @@ def _render_disk_autosave_sidebar():
         value=st.session_state.get("_autosave_enabled", True),
         key="_autosave_enabled",
         help=(
-            "Mirrors your ontology to a recovery file on this machine so an "
-            "unexpected close can be recovered, and to a linked file if you "
-            "set one below."
+            "Saves your ontology to a linked file if you set one below, "
+            "otherwise to a recovery file on this machine so an unexpected "
+            "close can be recovered."
         ),
     )
     if st.session_state.get("_autosave_enabled", True) and not _ontology_is_empty(
         st.session_state.ontology
     ):
-        # Report saved state truthfully: only "saved" once the debounced flush
-        # has caught up to the current revision.
+        # Track the active store: the linked file when set, else recovery. Report
+        # "saved" only once the debounced flush has caught up to the revision.
         mc = _current_mutation_count()
-        saved = st.session_state.get("_recovery_saved_rev") == mc and (
-            local_store.get_linked_path() is None
-            or st.session_state.get("_linked_saved_rev") == mc
+        active_key = (
+            "_linked_saved_rev"
+            if local_store.get_linked_path() is not None
+            else "_recovery_saved_rev"
         )
-        if saved:
+        saved_rev = st.session_state.get(active_key)
+        if saved_rev == mc:
             st.sidebar.caption("✓ Saved to disk")
-        elif st.session_state.get("_recovery_saved_rev") is not None:
+        elif saved_rev is not None:
             st.sidebar.caption("• Autosaving…")
 
     linked = local_store.get_linked_path()

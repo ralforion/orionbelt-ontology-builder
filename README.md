@@ -178,9 +178,12 @@ command above are unchanged.
 When you launch the app locally (the `orionbelt-ontology-builder` command or the
 native desktop window), it persists to disk instead of browser storage:
 
-- **Crash recovery.** Your working ontology is mirrored to a recovery file under
-  `~/.orionbelt_ontology_builder/` on every change, so an unexpected close
-  (crash, freeze) is recovered automatically on the next launch.
+- **Crash recovery.** With no linked file set, your working ontology is saved to
+  a recovery file under `~/.orionbelt_ontology_builder/` on every change, so an
+  unexpected close (crash, freeze) is recovered automatically on the next launch.
+  When a linked file is set it becomes the store (below), and the recovery file
+  is only written as a fallback if a linked-file write fails — so each change is
+  one write, not two.
 - **Linked working file.** Use the sidebar's "Linked working file" control to
   point the app at any file path. If the file already exists, you choose whether
   to **load it** into the workspace (the default, so pointing at an existing
