@@ -29,6 +29,12 @@ from pathlib import Path
 #: Env var the local launchers set to opt the filesystem features in.
 ENV_FLAG = "ORIONBELT_LOCAL_PERSIST"
 
+#: Brand primary colour, mirroring ``.streamlit/config.toml`` ``[theme]``. The
+#: launchers export it as ``STREAMLIT_THEME_PRIMARY_COLOR`` so the brand colour
+#: applies even when launched outside the repo (where config.toml isn't found
+#: and Streamlit would otherwise fall back to its default red).
+BRAND_PRIMARY_COLOR = "#0D2B7A"
+
 #: Per-user application data directory (created on demand).
 _DIR_NAME = ".orionbelt_ontology_builder"
 #: Crash-recovery snapshot the app mirrors the working ontology into.

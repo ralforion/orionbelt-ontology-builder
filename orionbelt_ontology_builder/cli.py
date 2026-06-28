@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from .local_store import ENV_FLAG
+from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG
 
 
 def run() -> None:
@@ -26,6 +26,10 @@ def run() -> None:
     # disk-backed autosave / linked-file persistence (the cloud deployment runs
     # ``streamlit run app.py`` directly and never sets this).
     os.environ[ENV_FLAG] = "1"
+    # Apply the brand theme regardless of CWD: config.toml is only found when
+    # launched from the repo root, so without this the console/desktop runs fall
+    # back to Streamlit's default red. setdefault lets a user override win.
+    os.environ.setdefault("STREAMLIT_THEME_PRIMARY_COLOR", BRAND_PRIMARY_COLOR)
 
     entry = Path(__file__).parent / "streamlit_entry.py"
     sys.argv = ["streamlit", "run", str(entry), *sys.argv[1:]]

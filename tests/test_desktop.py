@@ -9,7 +9,7 @@ import pytest
 
 import orionbelt_ontology_builder.desktop as desktop
 from orionbelt_ontology_builder.app import APP_NAME
-from orionbelt_ontology_builder.local_store import ENV_FLAG
+from orionbelt_ontology_builder.local_store import BRAND_PRIMARY_COLOR, ENV_FLAG
 
 
 def test_entry_point_registered():
@@ -35,6 +35,7 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
 
     monkeypatch.delenv(ENV_FLAG, raising=False)
+    monkeypatch.delenv("STREAMLIT_THEME_PRIMARY_COLOR", raising=False)
 
     desktop.run()
 
@@ -42,6 +43,8 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     assert captured["title"] == APP_NAME
     # A native launch runs locally, so disk-backed persistence is opted in.
     assert os.environ[ENV_FLAG] == "1"
+    # Brand theme is applied via env so config.toml isn't needed in the subprocess.
+    assert os.environ["STREAMLIT_THEME_PRIMARY_COLOR"] == BRAND_PRIMARY_COLOR
 
 
 def test_run_without_dependency_exits_cleanly(monkeypatch):

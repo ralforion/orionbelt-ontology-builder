@@ -6,7 +6,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 
 import orionbelt_ontology_builder.cli as cli
-from orionbelt_ontology_builder.local_store import ENV_FLAG
+from orionbelt_ontology_builder.local_store import BRAND_PRIMARY_COLOR, ENV_FLAG
 
 
 def test_entry_point_registered():
@@ -65,7 +65,10 @@ def test_run_opts_into_local_persistence(monkeypatch):
     monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
     monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
     monkeypatch.setattr(sys, "exit", lambda code=0: None)
+    monkeypatch.delenv("STREAMLIT_THEME_PRIMARY_COLOR", raising=False)
 
     cli.run()
 
     assert os.environ[ENV_FLAG] == "1"
+    # Brand theme is applied via env so config.toml isn't needed.
+    assert os.environ["STREAMLIT_THEME_PRIMARY_COLOR"] == BRAND_PRIMARY_COLOR
