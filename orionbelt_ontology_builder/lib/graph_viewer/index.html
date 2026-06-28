@@ -60,6 +60,16 @@ function renderGraph(args) {
     el.style.height = height + 'px';
     sendToStreamlit("streamlit:setFrameHeight", {height: height});
 
+    // Theme the canvas + overlays to match the app, so the graph isn't a white
+    // box in dark mode (issue #62). Defaults keep the original light look.
+    var theme = args.theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
+    document.documentElement.style.background = theme.bg;
+    document.body.style.background = theme.bg;
+    var dlBtn = document.getElementById('download-btn');
+    dlBtn.style.background = theme.panel;
+    var dlSvg = dlBtn.querySelector('svg');
+    if (dlSvg) dlSvg.style.fill = theme.text;
+
     var nodes = new vis.DataSet(JSON.parse(args.nodes));
     var edges = new vis.DataSet(JSON.parse(args.edges));
     var options = JSON.parse(args.options);
@@ -135,6 +145,8 @@ function renderGraph(args) {
     });
 
     var legendEl = document.getElementById('legend');
+    legendEl.style.background = theme.panel;
+    legendEl.style.color = theme.text;
     if (nodeLegend || edgeLegend) {
         legendEl.innerHTML = (nodeLegend ? '<div class="row">' + nodeLegend + '</div>' : '') +
                              (edgeLegend ? '<div class="row">' + edgeLegend + '</div>' : '');

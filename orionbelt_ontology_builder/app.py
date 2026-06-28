@@ -5450,11 +5450,30 @@ def render_visualization():
                 "graph_viewer", path=_component_path
             )
 
+            # Theme the graph (canvas + legend) to match the app, so it isn't a
+            # white box in dark mode. Standard Streamlit dark/light colours are
+            # used, derived from the active theme type (issue #62).
+            _gv_dark = False
+            try:
+                _gv_dark = st.context.theme.get("type") == "dark"
+            except Exception:
+                pass
+            _gv_theme = (
+                {"bg": "#0e1117", "panel": "#262730", "text": "#fafafa"}
+                if _gv_dark
+                else {
+                    "bg": "#ffffff",
+                    "panel": "rgba(255,255,255,0.92)",
+                    "text": "#333333",
+                }
+            )
+
             selection = _graph_component(
                 nodes=gdata["nodes"],
                 edges=gdata["edges"],
                 options=gdata["options"],
                 height=height,
+                theme=_gv_theme,
                 seq=st.session_state.viz_render_seq,
                 key="graph_viewer",
                 default=None,
