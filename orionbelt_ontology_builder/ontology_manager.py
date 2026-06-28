@@ -551,6 +551,9 @@ class OntologyManager:
     def delete_class(self, name: str):
         """Delete a class and all its references."""
         class_uri = self._uri(name)
+        # Remove restrictions this class owns or that point at it as a value, so
+        # reused-property links (link_classes) don't leave orphan blank nodes.
+        self._purge_restrictions_referencing(class_uri)
         # Remove all triples where this class is subject or object
         self.graph.remove((class_uri, None, None))
         self.graph.remove((None, None, class_uri))
@@ -988,9 +991,38 @@ class OntologyManager:
 
         return True
 
+    def _purge_restrictions_referencing(self, node: Node) -> None:
+        """Remove ``owl:Restriction`` blank nodes that reference ``node``.
+
+        A restriction is a blank node carrying ``owl:onProperty`` plus a
+        constraint (``someValuesFrom``/``allValuesFrom``/``hasValue``/cardinality)
+        and is attached to its owning class via ``rdfs:subClassOf``. When the
+        property, the owning class, or a class used as the restriction's value is
+        deleted, the leftover restriction is malformed or orphaned. This removes
+        each such restriction whole, along with any ``subClassOf`` links to it,
+        so deletes never leave a dangling restriction behind (e.g. the reused
+        property links created by :meth:`link_classes`).
+        """
+        targets = set()
+        # Restrictions that mention `node` as a value: onProperty (property),
+        # someValuesFrom/allValuesFrom/hasValue/onClass (a class value).
+        for r in self.graph.subjects(None, node):
+            if isinstance(r, BNode) and (r, RDF.type, OWL.Restriction) in self.graph:
+                targets.add(r)
+        # Restrictions owned by `node` (node rdfs:subClassOf [ a owl:Restriction ]).
+        for r in self.graph.objects(node, RDFS.subClassOf):
+            if isinstance(r, BNode) and (r, RDF.type, OWL.Restriction) in self.graph:
+                targets.add(r)
+        for r in targets:
+            self.graph.remove((None, RDFS.subClassOf, r))
+            self.graph.remove((r, None, None))
+
     def delete_property(self, name: str):
         """Delete a property and all its references."""
         prop_uri = self._uri(name)
+        # Drop reused-property restrictions (link_classes) before the blanket
+        # removal, while their onProperty triple still points at this property.
+        self._purge_restrictions_referencing(prop_uri)
         self.graph.remove((prop_uri, None, None))
         self.graph.remove((None, None, prop_uri))
         self.graph.remove((None, prop_uri, None))
@@ -1356,10 +1388,17 @@ class OntologyManager:
 
             rest_info: Dict[str, Any] = {
                 "property": self._local_name(prop),
+                # Full URIs alongside the display-friendly local names so callers
+                # can delete a restriction whose property/class live in an
+                # external namespace (local names would resolve to the wrong URI).
+                "property_uri": str(prop),
                 "type": None,
                 "value": None,
+                "value_uri": None,
                 "on_class": None,
+                "on_class_uri": None,
                 "applied_to": [],
+                "applied_to_uris": [],
             }
 
             # Determine restriction type
@@ -1369,6 +1408,7 @@ class OntologyManager:
                     rest_info["type"] = rtype
                     if isinstance(val, URIRef):
                         rest_info["value"] = self._local_name(val)
+                        rest_info["value_uri"] = str(val)
                     else:
                         rest_info["value"] = str(val)
                     break
@@ -1376,11 +1416,13 @@ class OntologyManager:
             on_class = self.graph.value(restriction, OWL.onClass)
             if on_class:
                 rest_info["on_class"] = self._local_name(on_class)
+                rest_info["on_class_uri"] = str(on_class)
 
             # Find classes this restriction applies to
             for cls in self.graph.subjects(RDFS.subClassOf, restriction):
                 if isinstance(cls, URIRef):
                     rest_info["applied_to"].append(self._local_name(cls))
+                    rest_info["applied_to_uris"].append(str(cls))
 
             if class_name is None or class_name in rest_info["applied_to"]:
                 restrictions.append(rest_info)

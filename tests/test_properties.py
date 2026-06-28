@@ -145,3 +145,97 @@ def test_link_classes_round_trips_both_pairs():
     }
     assert pairs == {("A", "B"), ("C", "D")}
     assert reloaded.get_statistics()["object_properties"] == 1
+
+
+def _restriction_bnode_count(om):
+    """Number of owl:Restriction nodes left in the graph."""
+    from rdflib import OWL, RDF
+
+    return len(list(om.graph.subjects(RDF.type, OWL.Restriction)))
+
+
+def test_delete_reused_property_removes_its_restrictions():
+    """Deleting a reused property must not leave dangling restrictions (#58)."""
+    from ontology_manager import OntologyManager
+
+    om = OntologyManager()
+    for c in ("A", "B", "C", "D"):
+        om.add_class(c)
+    om.add_object_property("relatedTo")
+    om.link_classes("A", "relatedTo", "B")
+    om.link_classes("C", "relatedTo", "D")
+    assert _restriction_bnode_count(om) == 2
+
+    om.delete_property("relatedTo")
+
+    assert _restriction_bnode_count(om) == 0
+    assert om.get_restrictions() == []
+    # No orphan subClassOf-to-blank-node left on the source classes.
+    ttl = om.export_to_string(format="turtle")
+    assert "Restriction" not in ttl
+
+
+def test_delete_source_class_removes_its_reused_link():
+    from ontology_manager import OntologyManager
+
+    om = OntologyManager()
+    for c in ("A", "B"):
+        om.add_class(c)
+    om.add_object_property("relatedTo")
+    om.link_classes("A", "relatedTo", "B")
+
+    om.delete_class("A")
+
+    assert _restriction_bnode_count(om) == 0
+    assert om.get_restrictions() == []
+
+
+def test_delete_target_class_removes_reused_link():
+    from ontology_manager import OntologyManager
+
+    om = OntologyManager()
+    for c in ("A", "B"):
+        om.add_class(c)
+    om.add_object_property("relatedTo")
+    om.link_classes("A", "relatedTo", "B")
+
+    om.delete_class("B")
+
+    # The restriction pointed at B as its value; it is malformed without B, so
+    # it must be removed whole rather than left on A.
+    assert _restriction_bnode_count(om) == 0
+    assert om.get_restrictions() == []
+
+
+def test_get_restrictions_exposes_uris_and_delete_round_trips_external_ns():
+    """Restrictions on external-namespace props/classes delete via their URIs."""
+    from ontology_manager import OntologyManager
+
+    om = OntologyManager()
+    ttl = """
+    @prefix : <http://example.org/o#> .
+    @prefix ex: <http://other.example/vocab#> .
+    @prefix owl: <http://www.w3.org/2002/07/owl#> .
+    @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+    ex:Foo a owl:Class . ex:Bar a owl:Class .
+    ex:relatedTo a owl:ObjectProperty .
+    ex:Foo rdfs:subClassOf [ a owl:Restriction ;
+        owl:onProperty ex:relatedTo ; owl:allValuesFrom ex:Bar ] .
+    """
+    om.load_from_string(ttl, format="turtle")
+
+    rest = om.get_restrictions()[0]
+    assert rest["property_uri"] == "http://other.example/vocab#relatedTo"
+    assert rest["applied_to_uris"] == ["http://other.example/vocab#Foo"]
+    assert rest["value_uri"] == "http://other.example/vocab#Bar"
+
+    # Deleting by local name would resolve to the wrong (base) namespace and fail.
+    assert om.delete_restriction("Foo", "relatedTo", "allValuesFrom") is False
+    # Deleting by full URI succeeds.
+    assert (
+        om.delete_restriction(
+            rest["applied_to_uris"][0], rest["property_uri"], "allValuesFrom"
+        )
+        is True
+    )
+    assert om.get_restrictions() == []

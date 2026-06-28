@@ -2384,12 +2384,24 @@ def render_restrictions():
 
                     if rest["applied_to"]:
                         if st.button("Delete", key=f"del_rest_{i}"):
-                            ont.delete_restriction(
-                                rest["applied_to"][0], rest["property"], rest["type"]
+                            # Use full URIs so restrictions on external/imported
+                            # properties or classes delete correctly.
+                            applied_uri = (
+                                rest.get("applied_to_uris") or rest["applied_to"]
                             )
-                            save_checkpoint("Delete restriction")
-                            show_message("Restriction deleted!", "success")
-                            st.rerun()
+                            removed = ont.delete_restriction(
+                                applied_uri[0],
+                                rest.get("property_uri") or rest["property"],
+                                rest["type"],
+                            )
+                            if removed:
+                                save_checkpoint("Delete restriction")
+                                show_message("Restriction deleted!", "success")
+                                st.rerun()
+                            else:
+                                show_message(
+                                    "Could not delete this restriction.", "error"
+                                )
 
     if _rest_tab == "Add Restriction":
         st.subheader("Add Restriction")
@@ -5035,6 +5047,35 @@ def render_visualization():
                             arrows="to",
                             ntype="Object Property",
                             ename=prop_node_id,
+                        )
+
+            # Add reused-property links (link_classes) as edges. These live as
+            # someValuesFrom/allValuesFrom restrictions on the source class, so
+            # they are not covered by the global domain/range edges above. Drawn
+            # dashed to distinguish a per-class link from a global axiom.
+            if show_properties and show_classes:
+                for rest in ont.get_restrictions():
+                    if rest["type"] not in ("someValuesFrom", "allValuesFrom"):
+                        continue
+                    value_uri = rest.get("value_uri")
+                    if not value_uri or value_uri not in displayed_class_uris:
+                        continue
+                    for src_uri in rest.get("applied_to_uris", []):
+                        if src_uri not in displayed_class_uris:
+                            continue
+                        net.add_edge(
+                            _uid(src_uri),
+                            _uid(value_uri),
+                            label=rest["property"],
+                            title=(
+                                f"Object Property: {rest['property']}"
+                                f"\nRestriction: {rest['type']}"
+                            ),
+                            color="#2196F3",
+                            arrows="to",
+                            dashes=True,
+                            ntype="Object Property",
+                            ename=_uid(rest["property_uri"]),
                         )
 
             # Add data properties (connected to displayed classes, or standalone if no domain)
