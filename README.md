@@ -111,7 +111,7 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 
 ### Visualization
 
-Interactive vis-network graph with class filtering, configurable node limits, click-to-navigate into the editor, hierarchy tree view, and statistics charts.
+Interactive vis-network graph with class filtering, configurable node limits, click-to-navigate into the editor, Ctrl/Cmd-click a node to focus (center and zoom) on it, hierarchy tree view, and statistics charts.
 
 ### Safety
 

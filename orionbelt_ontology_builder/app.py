@@ -5489,7 +5489,10 @@ def render_visualization():
                 prefix = "Edge: " if selection.get("isEdge") else ""
                 sel_html = f"<b>{prefix}{selection.get('label', '')}</b> — {title_text}"
             else:
-                sel_html = "Click a node or edge to see details"
+                sel_html = (
+                    "Click a node or edge to see details · "
+                    "Ctrl/Cmd-click a node to focus on it"
+                )
 
             # Inject CSS to remove gap between status bar columns
             st.markdown(

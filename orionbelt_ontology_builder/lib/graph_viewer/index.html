@@ -163,6 +163,19 @@ function renderGraph(args) {
     network.on('deselectEdge', function() {
         sendToStreamlit("streamlit:setComponentValue", {value: {selected: false}});
     });
+
+    // Ctrl/Cmd-click a node to focus (center + zoom) on it — handy for
+    // exploring without typing the name into the class filter (issue #56).
+    network.on('click', function(params) {
+        if (!params.nodes.length) return;
+        var ev = params.event && params.event.srcEvent;
+        if (!ev || !(ev.ctrlKey || ev.metaKey)) return;
+        network.focus(params.nodes[0], {
+            scale: 1.6,
+            animation: { duration: 400, easingFunction: 'easeInOutQuad' }
+        });
+        network.selectNodes([params.nodes[0]]);
+    });
 }
 
 window.addEventListener("message", function(event) {
