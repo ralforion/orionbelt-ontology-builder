@@ -23,7 +23,7 @@ def test_entry_point_registered():
     assert eps[0].value == "orionbelt_ontology_builder.desktop:run"
 
 
-def test_run_invokes_start_desktop_app(monkeypatch):
+def test_run_invokes_start_desktop_app(monkeypatch, tmp_path):
     """``run()`` should open the in-package entry script in a native window."""
     captured = {}
 
@@ -34,6 +34,8 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     fake_module.start_desktop_app = _fake_start_desktop_app
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
 
+    # Keep the persistent-storage setup off the real home directory.
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
     monkeypatch.delenv(ENV_FLAG, raising=False)
 
     desktop.run()
@@ -45,6 +47,47 @@ def test_run_invokes_start_desktop_app(monkeypatch):
     # Brand colour passed as an explicit Streamlit option (not via env) so it
     # applies in the subprocess regardless of CWD.
     assert captured["options"]["theme.primaryColor"] == BRAND_PRIMARY_COLOR
+
+
+def test_run_enables_persistent_webview_storage(monkeypatch, tmp_path):
+    """The launcher should make pywebview persist localStorage across launches.
+
+    streamlit_desktop_app calls ``webview.start()`` with no arguments, which
+    defaults to private mode and wipes the saved Streamlit theme on close
+    (issue #70). ``run()`` should inject a persistent ``storage_path`` and
+    disable private mode, then restore the original ``webview.start``.
+    """
+    captured = {}
+
+    fake_webview = types.ModuleType("webview")
+
+    def _record_start(*args, **kwargs):
+        captured.update(kwargs)
+
+    fake_webview.start = _record_start
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    fake_sda = types.ModuleType("streamlit_desktop_app")
+
+    def _start_desktop_app(**kwargs):
+        # The real library starts pywebview with no storage arguments.
+        import webview
+
+        webview.start()
+
+    fake_sda.start_desktop_app = _start_desktop_app
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_sda)
+
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
+    desktop.run()
+
+    assert captured["private_mode"] is False
+    assert captured["storage_path"] == str(tmp_path / "webview")
+    assert (tmp_path / "webview").is_dir()
+    # The wrapper must not leak: the original start is restored afterwards.
+    assert fake_webview.start is _record_start
 
 
 def test_run_without_dependency_exits_cleanly(monkeypatch):
