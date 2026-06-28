@@ -83,8 +83,8 @@ def _set_state(st, *, mc, recovery=None, linked=None, settled=True):
     st.session_state["_ont_mutation_count"] = mc
     st.session_state["_recovery_saved_rev"] = recovery
     st.session_state["_linked_saved_rev"] = linked
-    st.session_state["_disk_last_seen_rev"] = mc  # avoid re-stamping
-    st.session_state["_disk_last_mutation_at"] = 0.0 if settled else time.time()
+    st.session_state["_autosave_seen_rev"] = mc  # avoid re-stamping
+    st.session_state["_autosave_mutated_at"] = 0.0 if settled else time.time()
 
 
 # ---- format detection / destination serialization ------------------------
@@ -136,7 +136,7 @@ def test_debounce_skips_then_flushes(fake_st, monkeypatch):
     app._persist_autosave_to_disk()
     assert calls == []  # dirty but not settled -> debounced
 
-    fake_st.session_state["_disk_last_mutation_at"] = 0.0  # edits settle
+    fake_st.session_state["_autosave_mutated_at"] = 0.0  # edits settle
     app._persist_autosave_to_disk()
     assert any("recovery" in path for path, _ in calls)
     assert fake_st.session_state["_recovery_saved_rev"] == 1
@@ -146,12 +146,12 @@ def test_force_flush_bypasses_debounce(fake_st, monkeypatch):
     om = _populated()
     fake_st.session_state.ontology = om
     _set_state(fake_st, mc=1, recovery=None, settled=False)
-    fake_st.session_state["_force_disk_flush"] = True
+    fake_st.session_state["_force_autosave_flush"] = True
     calls = _spy_save(monkeypatch, om)
 
     app._persist_autosave_to_disk()
     assert calls  # saved despite not settled
-    assert not fake_st.session_state.get("_force_disk_flush")  # consumed
+    assert not fake_st.session_state.get("_force_autosave_flush")  # consumed
 
 
 # ---- separate recovery/linked state + retry ------------------------------
@@ -180,7 +180,7 @@ def test_linked_failure_neither_suppresses_recovery_nor_blocks_retry(
     assert fake_st.session_state.get("_linked_saved_rev") is None  # not recorded
 
     # Same revision (no new edit): recovery is deduped, linked is retried.
-    fake_st.session_state["_disk_last_mutation_at"] = 0.0
+    fake_st.session_state["_autosave_mutated_at"] = 0.0
     calls = []
     monkeypatch.setattr(
         type(om),
@@ -196,7 +196,7 @@ def test_blocked_persist_writes_nothing(fake_st, monkeypatch):
     fake_st.session_state.ontology = om
     _set_state(fake_st, mc=1, recovery=None, settled=True)
     fake_st.session_state["_disk_persist_blocked"] = True
-    fake_st.session_state["_force_disk_flush"] = True
+    fake_st.session_state["_force_autosave_flush"] = True
     calls = _spy_save(monkeypatch, om)
     app._persist_autosave_to_disk()
     assert calls == []
@@ -216,7 +216,7 @@ def test_restore_corrupt_recovery_blocks_persist(fake_st):
     # Even a forced flush must not overwrite the file we couldn't load.
     before = local_store.read_text(local_store.recovery_file())
     fake_st.session_state.ontology = _populated()
-    fake_st.session_state["_force_disk_flush"] = True
+    fake_st.session_state["_force_autosave_flush"] = True
     _set_state(fake_st, mc=1, recovery=None, settled=True)
     fake_st.session_state["_disk_persist_blocked"] = True
     app._persist_autosave_to_disk()
@@ -249,9 +249,79 @@ def test_link_load_does_not_overwrite_existing_file(fake_st, tmp_path):
     assert app._load_linked_file(target) is True
     # Persist pass: linked is already at the current revision, so it isn't
     # rewritten with the (now non-empty, but freshly loaded) graph anyway.
-    fake_st.session_state["_disk_last_mutation_at"] = 0.0
+    fake_st.session_state["_autosave_mutated_at"] = 0.0
     app._persist_autosave_to_disk()
 
     reloaded = OntologyManager()
     reloaded.load_from_file(str(target), "turtle")
     assert {c["name"] for c in reloaded.get_classes()} == {"A", "B"}
+
+
+# ---- browser localStorage backend uses the same gate ---------------------
+
+
+class _FakeLS:
+    def __init__(self):
+        self.items = {}
+
+    def setItem(self, k, v, key=None):
+        self.items[k] = v
+
+
+def _use_fake_ls(monkeypatch):
+    ls = _FakeLS()
+    monkeypatch.setattr(app, "_get_local_storage", lambda: ls)
+    return ls
+
+
+def test_localstorage_no_serialize_when_not_dirty(fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch)
+    om = _populated()
+    fake_st.session_state.ontology = om
+    _set_state(fake_st, mc=2, settled=True)
+    fake_st.session_state["_ls_saved_rev"] = 2  # already saved
+
+    calls = []
+    monkeypatch.setattr(
+        type(om),
+        "export_to_string",
+        lambda self, format="turtle": calls.append(1) or "",
+    )
+    app._persist_autosave_to_localstorage()
+    assert calls == []  # not dirty -> never serialized
+    assert ls.items == {}
+
+
+def test_localstorage_oversized_disables_until_mutation(fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch)
+    monkeypatch.setattr(app, "AUTOSAVE_MAX_BYTES", 5)  # force "too big"
+    om = _populated()
+    fake_st.session_state.ontology = om
+    _set_state(fake_st, mc=1, settled=True)
+
+    serialized = []
+    real_export = type(om).export_to_string
+    monkeypatch.setattr(
+        type(om),
+        "export_to_string",
+        lambda self, format="turtle": serialized.append(1)
+        or real_export(self, format=format),
+    )
+
+    app._persist_autosave_to_localstorage()  # serializes once, finds it too big
+    assert fake_st.session_state["_ls_oversized_rev"] == 1
+    assert ls.items == {}
+
+    app._persist_autosave_to_localstorage()  # same revision -> no re-serialize
+    assert len(serialized) == 1
+
+
+def test_localstorage_writes_when_dirty_and_settled(fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch)
+    om = _populated()
+    fake_st.session_state.ontology = om
+    _set_state(fake_st, mc=1, settled=True)
+
+    app._persist_autosave_to_localstorage()
+    assert app.AUTOSAVE_KEY in ls.items  # written
+    assert fake_st.session_state["_ls_saved_rev"] == 1

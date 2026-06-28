@@ -199,7 +199,9 @@ that write completes, so a crash can lose at most the last second or two of
 edits. If a linked or recovery file can't be read or parsed on startup, disk
 autosave is paused (with a sidebar notice) so the unreadable file is never
 overwritten. The hosted demo on Streamlit Cloud has no local filesystem, so it
-keeps using per-browser autosave instead.
+keeps using per-browser autosave instead — which shares the same dirty/debounced
+scheduling and disables itself (until the graph shrinks) when an ontology exceeds
+the browser storage quota.
 
 ### Run with Docker
 
