@@ -86,7 +86,7 @@ def test_run_reapplies_saved_theme_base(monkeypatch):
     import streamlit.web
 
     monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
-    monkeypatch.setattr(cli, "get_theme_base", lambda: "dark")
+    monkeypatch.setattr(cli, "resolved_startup_base", lambda: "dark")
     monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
     monkeypatch.setattr(sys, "exit", lambda code=0: None)
 
@@ -106,7 +106,7 @@ def test_run_omits_theme_base_when_unset(monkeypatch):
     import streamlit.web
 
     monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
-    monkeypatch.setattr(cli, "get_theme_base", lambda: None)
+    monkeypatch.setattr(cli, "resolved_startup_base", lambda: None)
     monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
     monkeypatch.setattr(sys, "exit", lambda code=0: None)
 

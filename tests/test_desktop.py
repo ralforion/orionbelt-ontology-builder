@@ -174,7 +174,7 @@ def test_run_reapplies_saved_theme_base(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
 
     monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(desktop, "get_theme_base", lambda: "dark")
+    monkeypatch.setattr(desktop, "resolved_startup_base", lambda: "dark")
     monkeypatch.delenv(ENV_FLAG, raising=False)
 
     desktop.run()
@@ -194,7 +194,7 @@ def test_run_omits_theme_base_when_unset(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
 
     monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(desktop, "get_theme_base", lambda: None)
+    monkeypatch.setattr(desktop, "resolved_startup_base", lambda: None)
     monkeypatch.delenv(ENV_FLAG, raising=False)
 
     desktop.run()

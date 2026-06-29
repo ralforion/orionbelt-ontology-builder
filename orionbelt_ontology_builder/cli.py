@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, get_theme_base
+from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, resolved_startup_base
 
 
 def run() -> None:
@@ -31,12 +31,12 @@ def run() -> None:
     # of CWD (config.toml is only found from the repo root) — otherwise the
     # console/desktop runs fall back to Streamlit's default red. Placed before
     # the user's args so an explicit --theme.primaryColor still wins.
-    # Re-apply the user's saved light/dark theme so the app opens the way they
-    # left it (issue #70). Placed before the user's args so an explicit
+    # Apply the user's saved startup theme so the app opens the way they left it
+    # (issues #70, #78). Placed before the user's args so an explicit
     # --theme.base still wins.
     entry = Path(__file__).parent / "streamlit_entry.py"
     theme_args = [f"--theme.primaryColor={BRAND_PRIMARY_COLOR}"]
-    saved_base = get_theme_base()
+    saved_base = resolved_startup_base()
     if saved_base:
         theme_args.append(f"--theme.base={saved_base}")
     sys.argv = [

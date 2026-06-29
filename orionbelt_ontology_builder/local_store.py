@@ -18,7 +18,9 @@ Two disk-backed mechanisms live on top of these helpers (wired up in
   (:func:`get_linked_path` / :func:`set_linked_path`). Pointing it at a synced
   folder (Nextcloud, Dropbox, ...) gives fully automatic off-machine backups.
 
-No third-party dependencies: only the standard library is used.
+Standard library only, except :func:`resolved_startup_base`, which optionally
+imports ``darkdetect`` (shipped with the ``desktop`` extra) to read the OS
+appearance for the ``system`` theme mode, degrading gracefully when it is absent.
 """
 
 import json
@@ -121,25 +123,61 @@ def save_config(config: dict) -> None:
     atomic_write(config_file(), json.dumps(config, indent=2))
 
 
-def get_theme_base() -> str | None:
-    """Return the saved light/dark theme preference, or ``None`` if unset.
+#: Valid startup theme modes. ``system`` follows the OS appearance; the others
+#: pin a fixed theme.
+THEME_MODES = ("system", "light", "dark")
 
-    Persisted server-side (desktop / local mode only) so the launcher can
-    re-apply it on the next launch; the cloud keeps the choice in the browser's
-    localStorage instead (issue #70).
+
+def get_theme_mode() -> str:
+    """Return the saved startup theme mode (``system`` / ``light`` / ``dark``).
+
+    Persisted server-side (desktop / local mode only) so the launcher can apply
+    it on the next launch; the cloud keeps the choice in the browser's
+    localStorage instead (issues #70, #78). Defaults to ``system``; migrates the
+    older ``theme_base`` (light/dark) preference when present.
     """
-    base = load_config().get("theme_base")
-    return base if base in ("light", "dark") else None
-
-
-def set_theme_base(base: str | None) -> None:
-    """Save (or clear, when ``base`` is not light/dark) the theme preference."""
     config = load_config()
-    if base in ("light", "dark"):
-        config["theme_base"] = base
+    mode = config.get("theme_mode")
+    if mode in THEME_MODES:
+        return mode
+    legacy = config.get("theme_base")  # migrate the 1.10.1 light/dark preference
+    if legacy in ("light", "dark"):
+        return legacy
+    return "system"
+
+
+def set_theme_mode(mode: str | None) -> None:
+    """Save the startup theme mode; anything invalid clears it (back to system)."""
+    config = load_config()
+    if mode in THEME_MODES:
+        config["theme_mode"] = mode
     else:
-        config.pop("theme_base", None)
+        config.pop("theme_mode", None)
+    config.pop("theme_base", None)  # superseded by theme_mode
     save_config(config)
+
+
+def resolved_startup_base() -> str | None:
+    """Resolve the saved mode to a Streamlit ``theme.base`` (``light``/``dark``).
+
+    Returns ``None`` when there is nothing to force: an unresolved ``system``
+    mode (e.g. ``darkdetect`` missing), so the caller omits ``--theme.base`` and
+    lets the browser's own system preference apply.
+    """
+    mode = get_theme_mode()
+    if mode in ("light", "dark"):
+        return mode
+    # system: read the OS appearance directly (the embedded webview can't be
+    # relied on to report it). darkdetect ships with the desktop extra.
+    try:
+        import darkdetect
+
+        detected = darkdetect.theme()  # "Dark" / "Light" / None
+    except Exception:
+        return None
+    if isinstance(detected, str) and detected.lower() in ("light", "dark"):
+        return detected.lower()
+    return None
 
 
 def get_linked_path() -> Path | None:

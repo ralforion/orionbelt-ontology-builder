@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-ontology-builder"
-version = "1.10.1"
+version = "1.11.0"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
 license = {text = "BSL-1.1"}
@@ -43,6 +43,10 @@ desktop = [
     # alone is not enough; pulling pywebview's own pyside6 extra installs both
     # qtpy and PySide6 (Qt + QtWebEngine), the combination it expects.
     "pywebview[pyside6]; sys_platform != 'darwin'",
+    # Detect the OS light/dark appearance for the "follow system" theme mode.
+    # The embedded webview does not report the system colour scheme reliably, so
+    # we read it from the OS directly.
+    "darkdetect>=0.8.0",
 ]
 # Explicit Qt backend, identical to `desktop`. PySide6 is the LGPL Qt for
 # Python; we deliberately use pywebview's `pyside6` extra rather than its `qt`
@@ -50,6 +54,7 @@ desktop = [
 qt = [
     "streamlit-desktop-app>=0.3.3",
     "pywebview[pyside6]; sys_platform != 'darwin'",
+    "darkdetect>=0.8.0",
 ]
 # GTK backend (Linux only; macOS uses Cocoa and Windows uses Qt/EdgeChromium).
 # pywebview[gtk] installs PyGObject, but a working GTK backend ALSO needs system
@@ -58,6 +63,7 @@ qt = [
 gtk = [
     "streamlit-desktop-app>=0.3.3",
     "pywebview[gtk]; sys_platform == 'linux'",
+    "darkdetect>=0.8.0",
 ]
 dev = [
     "pytest>=7.0",

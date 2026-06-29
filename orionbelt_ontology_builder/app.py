@@ -14,7 +14,7 @@ from pathlib import Path as _Path
 from . import local_store
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.10.1"
+APP_VERSION = "1.11.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -6284,24 +6284,30 @@ def main():
     except Exception:
         pass
     # st.context.theme is stale on the first render of a session — it reports the
-    # default ("light") until the browser tells the server the active theme. So
-    # persist the choice only from the second render on; doing it on the first
-    # render would clobber the saved preference the launcher just applied with a
-    # stale "light" before the user touches anything (issue #70). Disk
-    # persistence is off on the cloud, where the browser keeps the choice itself.
-    if (
-        _theme_type in ("light", "dark")
-        and st.session_state.get("_theme_settled")
-        and local_store.local_persist_enabled()
-        and local_store.get_theme_base() != _theme_type
-    ):
-        local_store.set_theme_base(_theme_type)
+    # default ("light") until the browser tells the server the active theme, so
+    # only trust it from the second render on (issues #70, #78).
+    _theme_settled = st.session_state.get("_theme_settled", False)
     st.session_state["_theme_settled"] = True
-    # Choose the logo from the persisted preference in local mode (what the
-    # launcher opened the app with via --theme.base), since st.context.theme lags
-    # on first render and would otherwise flash the light/blue logo in dark mode.
     if local_store.local_persist_enabled():
-        _dark_mode = local_store.get_theme_base() == "dark"
+        _mode = local_store.get_theme_mode()
+        # Keep a pinned light/dark mode in sync with the toolbar Settings menu.
+        # Skip the first (stale) render, and skip "system" mode, where the
+        # resolved value is the OS appearance rather than a deliberate choice.
+        if (
+            _theme_settled
+            and _mode != "system"
+            and _theme_type in ("light", "dark")
+            and _theme_type != _mode
+        ):
+            local_store.set_theme_mode(_theme_type)
+            _mode = _theme_type
+        # Logo: use the live theme once the client reports it; on the first
+        # render fall back to what the launcher opened the app with, so the dark
+        # logo doesn't flash the light/blue variant.
+        if _theme_settled and _theme_type in ("light", "dark"):
+            _dark_mode = _theme_type == "dark"
+        else:
+            _dark_mode = local_store.resolved_startup_base() == "dark"
     else:
         _dark_mode = _theme_type == "dark"
     _logo_file = "ORIONBELT Logo w.png" if _dark_mode else "ORIONBELT_Logo.png"
@@ -6318,6 +6324,24 @@ def main():
         f'<a href="{GITHUB_ISSUES_URL}/new">Report Issue</a></small>',
         unsafe_allow_html=True,
     )
+
+    # Startup theme control (local / desktop launches only). The cloud relies on
+    # Streamlit's own per-browser theme persistence, so this is hidden there.
+    # Streamlit can't switch theme live from Python, so the choice applies on the
+    # next launch (issues #70, #78).
+    if local_store.local_persist_enabled():
+        _mode_labels = {"system": "Follow system", "light": "Light", "dark": "Dark"}
+        _current_mode = local_store.get_theme_mode()
+        _picked_mode = st.sidebar.selectbox(
+            "Startup theme",
+            list(_mode_labels),
+            index=list(_mode_labels).index(_current_mode),
+            format_func=lambda m: _mode_labels[m],
+            help="Applies on the next launch (Streamlit can't switch theme live).",
+        )
+        if _picked_mode != _current_mode:
+            local_store.set_theme_mode(_picked_mode)
+            st.rerun()
 
     pages = {
         "Dashboard": render_dashboard,
