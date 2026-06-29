@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-ontology-builder"
-version = "1.9.3"
+version = "1.10.0"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
 license = {text = "BSL-1.1"}
@@ -43,6 +43,21 @@ desktop = [
     # alone is not enough; pulling pywebview's own pyside6 extra installs both
     # qtpy and PySide6 (Qt + QtWebEngine), the combination it expects.
     "pywebview[pyside6]; sys_platform != 'darwin'",
+]
+# Explicit Qt backend, identical to `desktop`. PySide6 is the LGPL Qt for
+# Python; we deliberately use pywebview's `pyside6` extra rather than its `qt`
+# extra (which would pull a second, conflicting binding, PyQt6).
+qt = [
+    "streamlit-desktop-app>=0.3.3",
+    "pywebview[pyside6]; sys_platform != 'darwin'",
+]
+# GTK backend (Linux only; macOS uses Cocoa and Windows uses Qt/EdgeChromium).
+# pywebview[gtk] installs PyGObject, but a working GTK backend ALSO needs system
+# packages pip cannot provide (gobject-introspection, libgirepository and the
+# WebKit typelib gir1.2-webkit2-4.x). See the README for the apt prerequisites.
+gtk = [
+    "streamlit-desktop-app>=0.3.3",
+    "pywebview[gtk]; sys_platform == 'linux'",
 ]
 dev = [
     "pytest>=7.0",

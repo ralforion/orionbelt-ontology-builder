@@ -1,5 +1,6 @@
 """Tests for the native desktop launcher (``orionbelt-ontology-builder-desktop``)."""
 
+import importlib.util
 import os
 import sys
 import types
@@ -94,6 +95,70 @@ def test_run_enables_persistent_webview_storage(monkeypatch, tmp_path):
     assert (tmp_path / "webview").is_dir()
     # The wrapper must not leak: the original start is restored afterwards.
     assert fake_webview.start is _record_start
+
+
+def _fake_find_spec(available):
+    """Return a ``find_spec`` stub reporting only ``available`` modules present."""
+
+    def _find_spec(name, *args, **kwargs):
+        return object() if name in available else None
+
+    return _find_spec
+
+
+def test_preferred_gui_prefers_gtk_when_pygobject_present(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("PYWEBVIEW_GUI", raising=False)
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec({"gi", "qtpy"}))
+    assert desktop._preferred_gui() == "gtk"
+
+
+def test_preferred_gui_falls_back_to_qt(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("PYWEBVIEW_GUI", raising=False)
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec({"qtpy"}))
+    assert desktop._preferred_gui() == "qt"
+
+
+def test_preferred_gui_none_without_any_backend(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("PYWEBVIEW_GUI", raising=False)
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec(set()))
+    assert desktop._preferred_gui() is None
+
+
+def test_preferred_gui_respects_user_override(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PYWEBVIEW_GUI", "gtk")
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec({"qtpy"}))
+    assert desktop._preferred_gui() is None
+
+
+def test_preferred_gui_none_on_macos(monkeypatch):
+    """macOS should keep Cocoa as the default rather than forcing Qt/GTK."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv("PYWEBVIEW_GUI", raising=False)
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec({"qtpy"}))
+    assert desktop._preferred_gui() is None
+
+
+def test_run_exports_selected_gui_backend(monkeypatch, tmp_path):
+    """``run()`` should export the chosen backend via PYWEBVIEW_GUI."""
+    fake_module = types.ModuleType("streamlit_desktop_app")
+    fake_module.start_desktop_app = lambda **kwargs: None
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
+
+    fake_webview = types.ModuleType("webview")
+    fake_webview.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(desktop, "_preferred_gui", lambda: "qt")
+    monkeypatch.delenv("PYWEBVIEW_GUI", raising=False)
+
+    desktop.run()
+
+    assert os.environ["PYWEBVIEW_GUI"] == "qt"
 
 
 def test_run_without_dependency_exits_cleanly(monkeypatch):

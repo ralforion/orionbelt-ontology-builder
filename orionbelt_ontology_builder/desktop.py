@@ -11,16 +11,45 @@ so there is no browser tab to manage and no manual start/stop of the server.
     pip install "orionbelt-ontology-builder[desktop]"
     orionbelt-ontology-builder-desktop
 
+The ``desktop`` extra uses the Qt backend (PySide6). ``qt`` is an explicit alias
+for it, and ``gtk`` selects pywebview's GTK backend instead (Linux only). See the
+README for the GTK system-package prerequisites.
+
 This reuses the same in-package Streamlit entry script as the console launcher
 (:mod:`orionbelt_ontology_builder.cli`).
 """
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
 
 from .app import APP_NAME
 from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, data_dir
+
+
+def _preferred_gui() -> str | None:
+    """Pick a pywebview GUI backend deterministically from what is installed.
+
+    On Linux pywebview tries GTK before Qt regardless of which is actually
+    present, logging a noisy ``ImportError`` traceback when only Qt is installed
+    (issue #73). Returning an explicit backend (exported via ``PYWEBVIEW_GUI``)
+    makes the choice match the installed extra and silences that traceback.
+
+    Returns ``None`` when the platform or the user should decide: on macOS, where
+    Cocoa is the right default, or when ``PYWEBVIEW_GUI`` is already set.
+    """
+    if sys.platform == "darwin":
+        return None
+    if os.environ.get("PYWEBVIEW_GUI"):
+        return None
+    # find_spec only checks importability — it does not import the backend (and
+    # so never loads the heavy Qt/GTK shared libraries) as a side effect.
+    if importlib.util.find_spec("gi") is not None:
+        return "gtk"
+    if importlib.util.find_spec("qtpy") is not None:
+        return "qt"
+    return None
 
 
 def run() -> None:
@@ -42,6 +71,12 @@ def run() -> None:
     # Running locally with full filesystem access — opt into the disk-backed
     # autosave / linked-file persistence (off by default on the cloud).
     os.environ[ENV_FLAG] = "1"
+
+    # Force pywebview onto the installed backend so it doesn't try (and noisily
+    # fail) GTK before Qt on Linux (issue #73).
+    gui = _preferred_gui()
+    if gui:
+        os.environ["PYWEBVIEW_GUI"] = gui
 
     # streamlit_desktop_app calls ``webview.start()`` with no arguments, so
     # pywebview runs in its default private mode and discards cookies /
