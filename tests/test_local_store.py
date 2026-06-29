@@ -101,3 +101,33 @@ def test_get_linked_path_expands_user(home, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     local_store.set_linked_path("~/backup.ttl")
     assert local_store.get_linked_path() == home / "backup.ttl"
+
+
+def test_theme_base_set_get_clear(home):
+    assert local_store.get_theme_base() is None
+
+    local_store.set_theme_base("dark")
+    assert local_store.get_theme_base() == "dark"
+
+    local_store.set_theme_base("light")
+    assert local_store.get_theme_base() == "light"
+
+    local_store.set_theme_base(None)
+    assert local_store.get_theme_base() is None
+
+
+@pytest.mark.parametrize("value", ["", "Dark", "blue", "system", None])
+def test_theme_base_ignores_invalid_values(home, value):
+    local_store.save_config({"theme_base": "dark"})
+    local_store.set_theme_base(value)
+    # Anything that isn't light/dark clears the preference rather than storing it.
+    assert local_store.get_theme_base() is None
+    assert "theme_base" not in local_store.load_config()
+
+
+def test_set_theme_base_preserves_other_config(home):
+    local_store.set_linked_path("/x.ttl")
+    local_store.set_theme_base("dark")
+    config = local_store.load_config()
+    assert config["linked_path"] == "/x.ttl"
+    assert config["theme_base"] == "dark"

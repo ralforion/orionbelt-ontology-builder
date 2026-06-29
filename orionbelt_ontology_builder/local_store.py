@@ -121,6 +121,27 @@ def save_config(config: dict) -> None:
     atomic_write(config_file(), json.dumps(config, indent=2))
 
 
+def get_theme_base() -> str | None:
+    """Return the saved light/dark theme preference, or ``None`` if unset.
+
+    Persisted server-side (desktop / local mode only) so the launcher can
+    re-apply it on the next launch; the cloud keeps the choice in the browser's
+    localStorage instead (issue #70).
+    """
+    base = load_config().get("theme_base")
+    return base if base in ("light", "dark") else None
+
+
+def set_theme_base(base: str | None) -> None:
+    """Save (or clear, when ``base`` is not light/dark) the theme preference."""
+    config = load_config()
+    if base in ("light", "dark"):
+        config["theme_base"] = base
+    else:
+        config.pop("theme_base", None)
+    save_config(config)
+
+
 def get_linked_path() -> Path | None:
     """Return the user's linked working-file path, or ``None`` if unset."""
     p = load_config().get("linked_path")

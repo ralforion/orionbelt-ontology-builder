@@ -72,3 +72,44 @@ def test_run_opts_into_persistence_and_brand_theme(monkeypatch):
     assert os.environ[ENV_FLAG] == "1"
     # Brand colour passed as an explicit flag so config.toml isn't needed.
     assert f"--theme.primaryColor={BRAND_PRIMARY_COLOR}" in captured["argv"]
+
+
+def test_run_reapplies_saved_theme_base(monkeypatch):
+    """A saved light/dark preference is forwarded as --theme.base (issue #70)."""
+    captured = {}
+
+    class _FakeStcli:
+        @staticmethod
+        def main():
+            captured["argv"] = list(sys.argv)
+
+    import streamlit.web
+
+    monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
+    monkeypatch.setattr(cli, "get_theme_base", lambda: "dark")
+    monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
+    monkeypatch.setattr(sys, "exit", lambda code=0: None)
+
+    cli.run()
+
+    assert "--theme.base=dark" in captured["argv"]
+
+
+def test_run_omits_theme_base_when_unset(monkeypatch):
+    captured = {}
+
+    class _FakeStcli:
+        @staticmethod
+        def main():
+            captured["argv"] = list(sys.argv)
+
+    import streamlit.web
+
+    monkeypatch.setattr(streamlit.web, "cli", _FakeStcli, raising=False)
+    monkeypatch.setattr(cli, "get_theme_base", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["orionbelt-ontology-builder"])
+    monkeypatch.setattr(sys, "exit", lambda code=0: None)
+
+    cli.run()
+
+    assert not any(a.startswith("--theme.base") for a in captured["argv"])

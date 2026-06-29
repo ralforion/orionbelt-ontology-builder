@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 from .app import APP_NAME
-from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, data_dir
+from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, data_dir, get_theme_base
 
 
 def _preferred_gui() -> str | None:
@@ -99,13 +99,20 @@ def run() -> None:
     # Pass the brand colour as an explicit Streamlit option so it applies
     # regardless of CWD (config.toml is only found from the repo root) and
     # without relying on env inheritance into the Streamlit subprocess.
+    # Re-apply the saved light/dark theme so the app opens the way it was left
+    # (issue #70).
+    options = {"theme.primaryColor": BRAND_PRIMARY_COLOR}
+    saved_base = get_theme_base()
+    if saved_base:
+        options["theme.base"] = saved_base
+
     entry = Path(__file__).parent / "streamlit_entry.py"
     webview.start = _start_with_persistent_storage
     try:
         start_desktop_app(
             script_path=str(entry),
             title=APP_NAME,
-            options={"theme.primaryColor": BRAND_PRIMARY_COLOR},
+            options=options,
             width=1280,
             height=800,
         )

@@ -161,6 +161,47 @@ def test_run_exports_selected_gui_backend(monkeypatch, tmp_path):
     assert os.environ["PYWEBVIEW_GUI"] == "qt"
 
 
+def test_run_reapplies_saved_theme_base(monkeypatch, tmp_path):
+    """A saved light/dark preference is passed to start_desktop_app (issue #70)."""
+    captured = {}
+
+    fake_module = types.ModuleType("streamlit_desktop_app")
+    fake_module.start_desktop_app = lambda **kwargs: captured.update(kwargs)
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
+
+    fake_webview = types.ModuleType("webview")
+    fake_webview.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(desktop, "get_theme_base", lambda: "dark")
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
+    desktop.run()
+
+    assert captured["options"]["theme.base"] == "dark"
+
+
+def test_run_omits_theme_base_when_unset(monkeypatch, tmp_path):
+    captured = {}
+
+    fake_module = types.ModuleType("streamlit_desktop_app")
+    fake_module.start_desktop_app = lambda **kwargs: captured.update(kwargs)
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
+
+    fake_webview = types.ModuleType("webview")
+    fake_webview.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(desktop, "get_theme_base", lambda: None)
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
+    desktop.run()
+
+    assert "theme.base" not in captured["options"]
+
+
 def test_run_without_dependency_exits_cleanly(monkeypatch):
     """Missing the optional ``desktop`` extra should exit non-zero, not crash."""
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", None)
