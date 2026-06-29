@@ -7,7 +7,7 @@
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralforion/orionbelt-ontology-builder?style=social)](https://github.com/ralforion/orionbelt-ontology-builder)
-[![Version 1.9.3](https://img.shields.io/badge/version-1.9.3-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
+[![Version 1.10.0](https://img.shields.io/badge/version-1.10.0-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-ontology-builder/blob/main/LICENSE)
 
@@ -177,6 +177,26 @@ not needed there).
 The desktop window also remembers your Streamlit settings (such as the chosen
 theme) between launches.
 
+#### Choosing a rendering backend
+
+The `desktop` extra uses the Qt backend, which works out of the box. On Linux you
+can use GTK instead with the `gtk` extra (`qt` is an explicit alias for the Qt
+default):
+
+```bash
+pip install "orionbelt-ontology-builder[gtk]"
+```
+
+GTK needs system packages that pip cannot install. On Debian/Ubuntu:
+
+```bash
+sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
+    libgirepository1.0-dev
+```
+
+The launcher auto-selects whichever backend is installed; set `PYWEBVIEW_GUI=qt`
+or `PYWEBVIEW_GUI=gtk` to override.
+
 This is fully opt-in: the plain install and the `orionbelt-ontology-builder`
 command above are unchanged.
 
@@ -221,7 +241,7 @@ A prebuilt image is published to Docker Hub. No local Python setup required:
 docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 ```
 
-Then open http://localhost:8501. Use `:1.9.3` to pin a specific version instead of `latest`.
+Then open http://localhost:8501. Use `:1.10.0` to pin a specific version instead of `latest`.
 
 To build the image yourself from a checkout:
 
