@@ -174,10 +174,10 @@ On Linux and Windows the extra also installs PySide6 and qtpy to give pywebview 
 native Qt rendering backend (macOS uses the system WebKit backend, so they are
 not needed there).
 
-The desktop window also remembers your theme between launches. A **Startup
-theme** control in the sidebar lets you choose **Follow system** (match the OS
-light/dark appearance), **Light**, or **Dark**; the choice applies on the next
-launch (Streamlit can't switch theme live).
+The desktop window follows your OS light/dark appearance by default. Once you
+pick a specific theme in the toolbar's Settings menu, that choice is remembered
+across launches. To go back to following the system, clear the stored setting
+(delete `theme_base` from `~/.orionbelt_ontology_builder/config.json`).
 
 #### Choosing a rendering backend
 

@@ -123,52 +123,36 @@ def save_config(config: dict) -> None:
     atomic_write(config_file(), json.dumps(config, indent=2))
 
 
-#: Valid startup theme modes. ``system`` follows the OS appearance; the others
-#: pin a fixed theme.
-THEME_MODES = ("system", "light", "dark")
+def get_theme_base() -> str | None:
+    """Return the pinned light/dark theme, or ``None`` to follow the OS.
 
-
-def get_theme_mode() -> str:
-    """Return the saved startup theme mode (``system`` / ``light`` / ``dark``).
-
-    Persisted server-side (desktop / local mode only) so the launcher can apply
-    it on the next launch; the cloud keeps the choice in the browser's
-    localStorage instead (issues #70, #78). Defaults to ``system``; migrates the
-    older ``theme_base`` (light/dark) preference when present.
+    A pin is only stored once the user actually changes the theme away from the
+    OS appearance (issues #70, #78); otherwise the app follows the system. Saved
+    server-side (desktop / local mode only); the cloud keeps the choice in the
+    browser's localStorage instead.
     """
-    config = load_config()
-    mode = config.get("theme_mode")
-    if mode in THEME_MODES:
-        return mode
-    legacy = config.get("theme_base")  # migrate the 1.10.1 light/dark preference
-    if legacy in ("light", "dark"):
-        return legacy
-    return "system"
+    base = load_config().get("theme_base")
+    return base if base in ("light", "dark") else None
 
 
-def set_theme_mode(mode: str | None) -> None:
-    """Save the startup theme mode; anything invalid clears it (back to system)."""
+def set_theme_base(base: str | None) -> None:
+    """Pin a light/dark theme, or clear the pin (back to following the OS)."""
     config = load_config()
-    if mode in THEME_MODES:
-        config["theme_mode"] = mode
+    if base in ("light", "dark"):
+        config["theme_base"] = base
     else:
-        config.pop("theme_mode", None)
-    config.pop("theme_base", None)  # superseded by theme_mode
+        config.pop("theme_base", None)
     save_config(config)
 
 
-def resolved_startup_base() -> str | None:
-    """Resolve the saved mode to a Streamlit ``theme.base`` (``light``/``dark``).
+def detect_system_base() -> str | None:
+    """Read the OS light/dark appearance, or ``None`` if it can't be determined.
 
-    Returns ``None`` when there is nothing to force: an unresolved ``system``
-    mode (e.g. ``darkdetect`` missing), so the caller omits ``--theme.base`` and
-    lets the browser's own system preference apply.
+    Reads the OS directly via ``darkdetect`` (shipped with the desktop extra),
+    since the embedded webview can't be relied on to report the system colour
+    scheme. Returns ``None`` when ``darkdetect`` is absent or undecided, so the
+    caller can let the browser's own system preference apply.
     """
-    mode = get_theme_mode()
-    if mode in ("light", "dark"):
-        return mode
-    # system: read the OS appearance directly (the embedded webview can't be
-    # relied on to report it). darkdetect ships with the desktop extra.
     try:
         import darkdetect
 
@@ -178,6 +162,11 @@ def resolved_startup_base() -> str | None:
     if isinstance(detected, str) and detected.lower() in ("light", "dark"):
         return detected.lower()
     return None
+
+
+def resolved_startup_base() -> str | None:
+    """Theme to open with: the pin if set, else the detected OS appearance."""
+    return get_theme_base() or detect_system_base()
 
 
 def get_linked_path() -> Path | None:

@@ -6289,25 +6289,32 @@ def main():
     _theme_settled = st.session_state.get("_theme_settled", False)
     st.session_state["_theme_settled"] = True
     if local_store.local_persist_enabled():
-        _mode = local_store.get_theme_mode()
-        # Keep a pinned light/dark mode in sync with the toolbar Settings menu.
-        # Skip the first (stale) render, and skip "system" mode, where the
-        # resolved value is the OS appearance rather than a deliberate choice.
-        if (
-            _theme_settled
-            and _mode != "system"
-            and _theme_type in ("light", "dark")
-            and _theme_type != _mode
-        ):
-            local_store.set_theme_mode(_theme_type)
-            _mode = _theme_type
+        # Detect the OS appearance once per session (cached) — calling darkdetect
+        # every render shells out to the OS and made the UI lag.
+        if "_system_base" not in st.session_state:
+            st.session_state["_system_base"] = local_store.detect_system_base()
+        _system_base = st.session_state["_system_base"]
+        _pinned = local_store.get_theme_base()
+        # Persist a pin only when the user actually changes the theme: while
+        # following the OS (no pin), store only a deviation from the OS theme; a
+        # match is left unstored so it keeps following the system. Once pinned,
+        # keep it in sync with the toolbar Settings menu. To return to "follow
+        # system", clear the saved setting. Skip the stale first render.
+        if _theme_settled and _theme_type in ("light", "dark"):
+            if _pinned is None:
+                if _system_base in ("light", "dark") and _theme_type != _system_base:
+                    local_store.set_theme_base(_theme_type)
+                    _pinned = _theme_type
+            elif _theme_type != _pinned:
+                local_store.set_theme_base(_theme_type)
+                _pinned = _theme_type
         # Logo: use the live theme once the client reports it; on the first
-        # render fall back to what the launcher opened the app with, so the dark
-        # logo doesn't flash the light/blue variant.
+        # render fall back to what the launcher opened the app with (pin, else
+        # detected OS), so the dark logo doesn't flash the light/blue variant.
         if _theme_settled and _theme_type in ("light", "dark"):
             _dark_mode = _theme_type == "dark"
         else:
-            _dark_mode = local_store.resolved_startup_base() == "dark"
+            _dark_mode = (_pinned or _system_base) == "dark"
     else:
         _dark_mode = _theme_type == "dark"
     _logo_file = "ORIONBELT Logo w.png" if _dark_mode else "ORIONBELT_Logo.png"
@@ -6324,24 +6331,6 @@ def main():
         f'<a href="{GITHUB_ISSUES_URL}/new">Report Issue</a></small>',
         unsafe_allow_html=True,
     )
-
-    # Startup theme control (local / desktop launches only). The cloud relies on
-    # Streamlit's own per-browser theme persistence, so this is hidden there.
-    # Streamlit can't switch theme live from Python, so the choice applies on the
-    # next launch (issues #70, #78).
-    if local_store.local_persist_enabled():
-        _mode_labels = {"system": "Follow system", "light": "Light", "dark": "Dark"}
-        _current_mode = local_store.get_theme_mode()
-        _picked_mode = st.sidebar.selectbox(
-            "Startup theme",
-            list(_mode_labels),
-            index=list(_mode_labels).index(_current_mode),
-            format_func=lambda m: _mode_labels[m],
-            help="Applies on the next launch (Streamlit can't switch theme live).",
-        )
-        if _picked_mode != _current_mode:
-            local_store.set_theme_mode(_picked_mode)
-            st.rerun()
 
     pages = {
         "Dashboard": render_dashboard,
