@@ -6278,11 +6278,9 @@ def main():
     # Use the white logo in dark mode so it stays legible (the colour logo is
     # dark on transparent). st.context.theme reflects the active theme on recent
     # Streamlit; older versions fall back to the colour logo.
-    _dark_mode = False
     _theme_type = None
     try:
         _theme_type = st.context.theme.type
-        _dark_mode = _theme_type == "dark"
     except Exception:
         pass
     # Persist the active light/dark theme so the desktop launcher can re-apply it
@@ -6291,6 +6289,14 @@ def main():
     if _theme_type in ("light", "dark") and local_store.local_persist_enabled():
         if local_store.get_theme_base() != _theme_type:
             local_store.set_theme_base(_theme_type)
+    # st.context.theme lags on the very first render, so the logo would flash the
+    # light (blue) variant even when the launcher opened the app in dark. Fall
+    # back to the persisted preference (which set --theme.base) to pick the right
+    # logo immediately (issue #70).
+    _effective_type = _theme_type
+    if _effective_type not in ("light", "dark") and local_store.local_persist_enabled():
+        _effective_type = local_store.get_theme_base()
+    _dark_mode = _effective_type == "dark"
     _logo_file = "ORIONBELT Logo w.png" if _dark_mode else "ORIONBELT_Logo.png"
     _logo_path = _Path(__file__).parent / "assets" / _logo_file
     st.sidebar.image(str(_logo_path), width=200)
