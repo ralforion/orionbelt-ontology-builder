@@ -14,7 +14,7 @@ from pathlib import Path as _Path
 from . import local_store
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -6166,7 +6166,7 @@ def render_visualization():
             )
 
             if show_view:
-                col_info, col_btn = st.columns([20, 1])
+                col_info, col_btn = st.columns([7, 2])
                 with col_info:
                     st.markdown(
                         f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:6px 12px;'
@@ -6177,15 +6177,37 @@ def render_visualization():
                         unsafe_allow_html=True,
                     )
                 with col_btn:
+                    # For classes we can land directly in the editor with the
+                    # entity preselected (no scrolling): switch to the
+                    # Edit/Delete tab and set its selectbox. Other types keep the
+                    # existing inline-view jump for now (issue #80).
+                    _btn_label = "Open full editor" if ntype == "Class" else "View"
                     if st.button(
-                        "View", key="graph_view_btn", use_container_width=True
+                        _btn_label, key="graph_view_btn", use_container_width=True
                     ):
                         page = _type_to_page[ntype]
-                        vk = _view_key_map[ntype](ename)
                         st.session_state.search_navigate_to = page
-                        st.session_state[vk] = True
-                        if ntype == "SKOS Concept":
-                            st.session_state["_skos_navigate_to_concept"] = True
+                        _jumped = False
+                        if ntype == "Class":
+                            _target = next(
+                                (c for c in classes if _uid(c["uri"]) == ename), None
+                            )
+                            if _target:
+                                _, _lookup = build_class_options(classes)
+                                _disp = {v: k for k, v in _lookup.items()}.get(
+                                    _target["uri"]
+                                )
+                                if _disp:
+                                    st.session_state["cls_active_tab"] = (
+                                        "Edit/Delete Class"
+                                    )
+                                    st.session_state["edit_class_select"] = _disp
+                                    _jumped = True
+                        if not _jumped:
+                            vk = _view_key_map[ntype](ename)
+                            st.session_state[vk] = True
+                            if ntype == "SKOS Concept":
+                                st.session_state["_skos_navigate_to_concept"] = True
                         st.rerun()
             else:
                 st.markdown(
