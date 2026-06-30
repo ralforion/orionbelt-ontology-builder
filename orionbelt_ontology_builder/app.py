@@ -5074,6 +5074,7 @@ def render_visualization():
             "graph_height": 670,
             "node_spacing": 150,
             "fit": True,
+            "details_panel": True,
             "highlight_issues": False,
             "focus_mode": False,
             "focus_depth": 1,
@@ -6071,17 +6072,32 @@ def render_visualization():
                 }
             )
 
-            selection = _graph_component(
-                nodes=gdata["nodes"],
-                edges=gdata["edges"],
-                options=gdata["options"],
-                height=height,
-                autofit=fit,
-                theme=_gv_theme,
-                seq=st.session_state.viz_render_seq,
-                key="graph_viewer",
-                default=None,
+            _panel_on = st.checkbox(
+                "Details panel",
+                key="viz_details_panel",
+                on_change=_viz_sync,
+                args=("_viz_cfg_details_panel", "viz_details_panel"),
+                help="Show a side panel with details and quick actions for the "
+                "selected node.",
             )
+            if _panel_on:
+                _col_graph, _col_panel = st.columns([4, 1])
+            else:
+                _col_panel = None
+                _col_graph = st.container()
+
+            with _col_graph:
+                selection = _graph_component(
+                    nodes=gdata["nodes"],
+                    edges=gdata["edges"],
+                    options=gdata["options"],
+                    height=height,
+                    autofit=fit,
+                    theme=_gv_theme,
+                    seq=st.session_state.viz_render_seq,
+                    key="graph_viewer",
+                    default=None,
+                )
 
             # Ctrl/Cmd-click in the graph requests focusing on a node: add it to
             # the "Focus on one node" seeds and enable focus mode (issue #56). The
@@ -6126,7 +6142,7 @@ def render_visualization():
                 "SKOS Concept": lambda n: f"view_skos_{str(abs(hash(n)))[:8]}",
             }
 
-            # Status bar with View button
+            # Selection details, shared by the side panel and the status bar.
             has_selection = (
                 selection and isinstance(selection, dict) and selection.get("selected")
             )
@@ -6134,19 +6150,76 @@ def render_visualization():
             ename = selection.get("ename") if has_selection else None
             show_view = has_selection and ntype and ename and ntype in _type_to_page
 
-            if has_selection:
-                title_text = (selection.get("title") or "").replace("\n", " | ")
-                prefix = "Edge: " if selection.get("isEdge") else ""
-                sel_html = f"<b>{prefix}{selection.get('label', '')}</b> — {title_text}"
-            else:
-                sel_html = (
-                    "Click a node or edge to see details · "
-                    "Ctrl/Cmd-click a node to focus on it"
-                )
+            def _open_full_editor(_ntype, _ename):
+                """Open the entity in its editor. Classes land directly in the
+                Edit/Delete tab with the entity preselected (no scrolling); other
+                types fall back to the inline-view jump for now (issue #80)."""
+                st.session_state.search_navigate_to = _type_to_page[_ntype]
+                if _ntype == "Class":
+                    _target = next(
+                        (c for c in classes if _uid(c["uri"]) == _ename), None
+                    )
+                    if _target:
+                        _, _lookup = build_class_options(classes)
+                        _disp = {v: k for k, v in _lookup.items()}.get(_target["uri"])
+                        if _disp:
+                            st.session_state["cls_active_tab"] = "Edit/Delete Class"
+                            st.session_state["edit_class_select"] = _disp
+                            st.rerun()
+                vk = _view_key_map[_ntype](_ename)
+                st.session_state[vk] = True
+                if _ntype == "SKOS Concept":
+                    st.session_state["_skos_navigate_to_concept"] = True
+                st.rerun()
 
-            # Inject CSS to remove gap between status bar columns
-            st.markdown(
-                """<style>
+            if _panel_on:
+                with _col_panel:
+                    st.markdown("##### Details")
+                    if not has_selection:
+                        st.caption(
+                            "Click a node to see details. Ctrl/Cmd-click focuses on it."
+                        )
+                    else:
+                        st.markdown(f"**{selection.get('label', '')}**")
+                        st.caption(
+                            "Edge" if selection.get("isEdge") else (ntype or "Node")
+                        )
+                        for _line in (selection.get("title") or "").split("\n"):
+                            if _line.strip():
+                                st.write(_line.strip())
+                        # IRI with Streamlit's built-in copy button (classes only
+                        # for now, where we can resolve the URI from the node id).
+                        if ntype == "Class" and ename:
+                            _t = next(
+                                (c for c in classes if _uid(c["uri"]) == ename), None
+                            )
+                            if _t:
+                                st.caption("IRI")
+                                st.code(_t["uri"], language=None)
+                        if show_view:
+                            if st.button(
+                                "Open full editor" if ntype == "Class" else "Open",
+                                key="panel_open_editor",
+                                use_container_width=True,
+                            ):
+                                _open_full_editor(ntype, ename)
+            else:
+                # Status bar under the graph (shown when the panel is hidden).
+                if has_selection:
+                    title_text = (selection.get("title") or "").replace("\n", " | ")
+                    prefix = "Edge: " if selection.get("isEdge") else ""
+                    sel_html = (
+                        f"<b>{prefix}{selection.get('label', '')}</b> — {title_text}"
+                    )
+                else:
+                    sel_html = (
+                        "Click a node or edge to see details · "
+                        "Ctrl/Cmd-click a node to focus on it"
+                    )
+
+                # Inject CSS to remove gap between status bar columns
+                st.markdown(
+                    """<style>
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) { gap: 0 !important; }
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) [data-testid="stBaseButton-secondary"] button,
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) button[kind] ,
@@ -6164,62 +6237,35 @@ def render_visualization():
                 background: #388E3C !important;
             }
             </style>""",
-                unsafe_allow_html=True,
-            )
+                    unsafe_allow_html=True,
+                )
 
-            if show_view:
-                col_info, col_btn = st.columns([7, 2])
-                with col_info:
+                if show_view:
+                    col_info, col_btn = st.columns([7, 2])
+                    with col_info:
+                        st.markdown(
+                            f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:6px 12px;'
+                            f"border-radius:4px 0 0 4px;font-size:14px;display:flex;align-items:center;gap:8px;"
+                            f'height:36px;">'
+                            f'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sel_html}</span>'
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with col_btn:
+                        _btn_label = "Open full editor" if ntype == "Class" else "View"
+                        if st.button(
+                            _btn_label, key="graph_view_btn", use_container_width=True
+                        ):
+                            _open_full_editor(ntype, ename)
+                else:
                     st.markdown(
                         f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:6px 12px;'
-                        f"border-radius:4px 0 0 4px;font-size:14px;display:flex;align-items:center;gap:8px;"
+                        f"border-radius:4px;font-size:14px;display:flex;align-items:center;gap:8px;"
                         f'height:36px;">'
                         f'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sel_html}</span>'
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                with col_btn:
-                    # For classes we can land directly in the editor with the
-                    # entity preselected (no scrolling): switch to the
-                    # Edit/Delete tab and set its selectbox. Other types keep the
-                    # existing inline-view jump for now (issue #80).
-                    _btn_label = "Open full editor" if ntype == "Class" else "View"
-                    if st.button(
-                        _btn_label, key="graph_view_btn", use_container_width=True
-                    ):
-                        page = _type_to_page[ntype]
-                        st.session_state.search_navigate_to = page
-                        _jumped = False
-                        if ntype == "Class":
-                            _target = next(
-                                (c for c in classes if _uid(c["uri"]) == ename), None
-                            )
-                            if _target:
-                                _, _lookup = build_class_options(classes)
-                                _disp = {v: k for k, v in _lookup.items()}.get(
-                                    _target["uri"]
-                                )
-                                if _disp:
-                                    st.session_state["cls_active_tab"] = (
-                                        "Edit/Delete Class"
-                                    )
-                                    st.session_state["edit_class_select"] = _disp
-                                    _jumped = True
-                        if not _jumped:
-                            vk = _view_key_map[ntype](ename)
-                            st.session_state[vk] = True
-                            if ntype == "SKOS Concept":
-                                st.session_state["_skos_navigate_to_concept"] = True
-                        st.rerun()
-            else:
-                st.markdown(
-                    f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:6px 12px;'
-                    f"border-radius:4px;font-size:14px;display:flex;align-items:center;gap:8px;"
-                    f'height:36px;">'
-                    f'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sel_html}</span>'
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
 
     if _viz_tab == "Class Hierarchy":
         st.subheader("Class Hierarchy (Text)")
