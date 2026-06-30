@@ -121,6 +121,12 @@ function renderGraph(args) {
     options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50 };
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
     document.getElementById('download-btn').style.display = 'flex';
+    // Restore the selection after a re-mount (e.g. the panel toggled), so the
+    // node stays highlighted. selectNodes() does not fire selectNode, so this
+    // does not loop back to Streamlit.
+    if (args.selected_node !== null && args.selected_node !== undefined) {
+        try { network.selectNodes([args.selected_node]); } catch (e) {}
+    }
     // After batch, let live physics run briefly for a short settle animation, then freeze.
     network.once('stabilizationIterationsDone', function() {
         setTimeout(function() { network.setOptions({ physics: { enabled: false } }); }, 500);
@@ -196,7 +202,7 @@ function renderGraph(args) {
     network.on('selectNode', function(params) {
         var nd = nodes.get(params.nodes[0]);
         sendToStreamlit("streamlit:setComponentValue", {
-            value: {ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, title: nd.title || '', selected: true}
+            value: {nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, title: nd.title || '', selected: true}
         });
     });
     network.on('selectEdge', function(params) {

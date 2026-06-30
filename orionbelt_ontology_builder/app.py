@@ -5079,7 +5079,7 @@ def render_visualization():
             "graph_height": 670,
             "node_spacing": 150,
             "fit": True,
-            "details_panel": True,
+            "details_panel": False,
             "highlight_issues": False,
             "focus_mode": False,
             "focus_depth": 1,
@@ -6077,18 +6077,30 @@ def render_visualization():
                 }
             )
 
+            # Last selection persisted across reruns (the graph component
+            # re-mounts when the panel toggles, which would otherwise drop it).
+            _prev_sel = st.session_state.get("_viz_last_selection")
+            _prev_has_sel = isinstance(_prev_sel, dict) and _prev_sel.get("selected")
+
             _panel_on = bool(st.session_state.get("_viz_cfg_details_panel", True))
             if _panel_on:
                 _col_graph, _col_panel = st.columns([3, 1])
                 _col_toggle = None
             else:
                 # Collapsed: a thin reopen toggle on the right edge, IDE-style.
+                # It turns primary (coloured) when a node is selected, since the
+                # toggle is otherwise easy to miss.
                 _col_graph, _col_toggle = st.columns([30, 1])
                 _col_panel = None
 
             if _col_toggle is not None:
                 with _col_toggle:
-                    if st.button("‹", key="viz_show_panel", help="Show details panel"):
+                    if st.button(
+                        "‹",
+                        key="viz_show_panel",
+                        help="Show details panel",
+                        type="primary" if _prev_has_sel else "secondary",
+                    ):
                         st.session_state["_viz_cfg_details_panel"] = True
                         st.rerun()
 
@@ -6100,6 +6112,7 @@ def render_visualization():
                     height=height,
                     autofit=fit,
                     theme=_gv_theme,
+                    selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
                     seq=st.session_state.viz_render_seq,
                     key="graph_viewer",
                     default=None,
@@ -6148,12 +6161,20 @@ def render_visualization():
                 "SKOS Concept": lambda n: f"view_skos_{str(abs(hash(n)))[:8]}",
             }
 
+            # Persist the selection so it survives the component re-mount that
+            # happens when the panel toggles (otherwise the panel would blank).
+            # A re-mount returns None (not a dict), which we ignore; only an
+            # explicit select/deselect updates the stored value.
+            if isinstance(selection, dict) and "selected" in selection:
+                st.session_state["_viz_last_selection"] = (
+                    selection if selection.get("selected") else None
+                )
+            _sel = st.session_state.get("_viz_last_selection")
+
             # Selection details, shared by the side panel and the status bar.
-            has_selection = (
-                selection and isinstance(selection, dict) and selection.get("selected")
-            )
-            ntype = selection.get("ntype") if has_selection else None
-            ename = selection.get("ename") if has_selection else None
+            has_selection = isinstance(_sel, dict) and _sel.get("selected")
+            ntype = _sel.get("ntype") if has_selection else None
+            ename = _sel.get("ename") if has_selection else None
             show_view = has_selection and ntype and ename and ntype in _type_to_page
 
             def _open_full_editor(_ntype, _ename):
@@ -6193,10 +6214,8 @@ def render_visualization():
                             "Click a node to see details. Ctrl/Cmd-click focuses on it."
                         )
                     else:
-                        st.markdown(f"**{selection.get('label', '')}**")
-                        st.caption(
-                            "Edge" if selection.get("isEdge") else (ntype or "Node")
-                        )
+                        st.markdown(f"**{_sel.get('label', '')}**")
+                        st.caption("Edge" if _sel.get("isEdge") else (ntype or "Node"))
                         # Resolve the selected class (node id == _uid(uri)) so it
                         # can be edited inline without leaving the graph (issue #80).
                         _cls_sel = (
@@ -6240,7 +6259,7 @@ def render_visualization():
                             st.caption("IRI")
                             st.code(_cls_sel["uri"], language=None)
                         else:
-                            for _line in (selection.get("title") or "").split("\n"):
+                            for _line in (_sel.get("title") or "").split("\n"):
                                 if _line.strip():
                                     st.write(_line.strip())
                         if show_view:
@@ -6253,11 +6272,9 @@ def render_visualization():
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
-                    title_text = (selection.get("title") or "").replace("\n", " | ")
-                    prefix = "Edge: " if selection.get("isEdge") else ""
-                    sel_html = (
-                        f"<b>{prefix}{selection.get('label', '')}</b> — {title_text}"
-                    )
+                    title_text = (_sel.get("title") or "").replace("\n", " | ")
+                    prefix = "Edge: " if _sel.get("isEdge") else ""
+                    sel_html = f"<b>{prefix}{_sel.get('label', '')}</b> — {title_text}"
                 else:
                     sel_html = (
                         "Click a node or edge to see details · "
