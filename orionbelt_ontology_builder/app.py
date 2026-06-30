@@ -6078,19 +6078,19 @@ def render_visualization():
             )
 
             _panel_on = bool(st.session_state.get("_viz_cfg_details_panel", True))
-            if not _panel_on:
-                if st.button(
-                    "▸ Show details panel",
-                    key="viz_show_panel",
-                    help="Show the details / edit side panel.",
-                ):
-                    st.session_state["_viz_cfg_details_panel"] = True
-                    st.rerun()
             if _panel_on:
                 _col_graph, _col_panel = st.columns([3, 1])
+                _col_toggle = None
             else:
+                # Collapsed: a thin reopen toggle on the right edge, IDE-style.
+                _col_graph, _col_toggle = st.columns([30, 1])
                 _col_panel = None
-                _col_graph = st.container()
+
+            if _col_toggle is not None:
+                with _col_toggle:
+                    if st.button("‹", key="viz_show_panel", help="Show details panel"):
+                        st.session_state["_viz_cfg_details_panel"] = True
+                        st.rerun()
 
             with _col_graph:
                 selection = _graph_component(
@@ -6185,7 +6185,7 @@ def render_visualization():
                     with _h1:
                         st.markdown("##### Details")
                     with _h2:
-                        if st.button("✕", key="viz_hide_panel", help="Hide panel"):
+                        if st.button("›", key="viz_hide_panel", help="Hide panel"):
                             st.session_state["_viz_cfg_details_panel"] = False
                             st.rerun()
                     if not has_selection:
