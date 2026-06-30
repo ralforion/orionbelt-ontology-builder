@@ -1108,8 +1108,12 @@ def _render_panel_entity_editor(
     (edges, unresolved) it falls back to the tooltip text. Returns the entity
     dict or None.
     """
+    # Object properties are drawn as edges (so selecting one is a selectEdge with
+    # isEdge=True), but they're still editable — resolve by type, not by node vs
+    # edge. Structural edges (subClassOf, type, ...) have no entry in the pool and
+    # fall through to the read-only tooltip.
     entity = None
-    if ename and not sel.get("isEdge"):
+    if ename:
         pool = {
             "Class": classes,
             "Object Property": object_props,
