@@ -14,7 +14,7 @@ from pathlib import Path as _Path
 from . import local_store
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.14.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
