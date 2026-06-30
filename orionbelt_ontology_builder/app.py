@@ -1018,6 +1018,32 @@ def build_class_options(classes: list, include_none: bool = False) -> tuple:
     return options, lookup
 
 
+def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_parent):
+    """Apply a class edit (rename + label/comment/parent). Returns True on success.
+
+    Shared by the Edit/Delete form and the Visualization side panel. Renames
+    first so the remaining updates target the renamed class; shows an error and
+    returns False if the new name collides. The caller is responsible for the
+    undo checkpoint and rerun.
+    """
+    current_ref = class_info["uri"]
+    if new_name and new_name != class_info["name"]:
+        if ont.rename_class(class_info["uri"], new_name):
+            current_ref = new_name
+        else:
+            show_message(f"Cannot rename: '{new_name}' already exists!", "error")
+            return False
+    if class_info["parents"] and new_parent != class_info["parents"][0]:
+        ont.update_class(current_ref, remove_parent=class_info["parents"][0])
+    ont.update_class(
+        current_ref,
+        new_label=new_label,
+        new_comment=new_comment,
+        new_parent=new_parent if new_parent != "None" else None,
+    )
+    return True
+
+
 def render_dashboard():
     """Render the dashboard/overview page."""
     st.header("Dashboard")
@@ -1490,40 +1516,19 @@ def render_classes():
                         )
 
                     if update_btn:
-                        # Rename first (updates all references) so the rest of
-                        # the update targets the renamed class.
-                        current_ref = class_info["uri"]
-                        if new_name and new_name != class_info["name"]:
-                            if ont.rename_class(class_info["uri"], new_name):
-                                current_ref = new_name
-                            else:
-                                show_message(
-                                    f"Cannot rename: '{new_name}' already exists!",
-                                    "error",
-                                )
-                                st.rerun()
-
-                        # Remove old parent if changed
-                        if (
-                            class_info["parents"]
-                            and new_parent != class_info["parents"][0]
+                        if _apply_class_edit(
+                            ont,
+                            class_info,
+                            new_name,
+                            new_label,
+                            new_comment,
+                            new_parent,
                         ):
-                            ont.update_class(
-                                current_ref,
-                                remove_parent=class_info["parents"][0],
+                            save_checkpoint("Update class")
+                            show_message(
+                                f"Class '{new_name or selected_display}' updated!",
+                                "success",
                             )
-
-                        ont.update_class(
-                            current_ref,
-                            new_label=new_label,
-                            new_comment=new_comment,
-                            new_parent=new_parent if new_parent != "None" else None,
-                        )
-                        save_checkpoint("Update class")
-                        show_message(
-                            f"Class '{new_name or selected_display}' updated!",
-                            "success",
-                        )
                         st.rerun()
 
                     if delete_btn:
@@ -6072,16 +6077,17 @@ def render_visualization():
                 }
             )
 
-            _panel_on = st.checkbox(
-                "Details panel",
-                key="viz_details_panel",
-                on_change=_viz_sync,
-                args=("_viz_cfg_details_panel", "viz_details_panel"),
-                help="Show a side panel with details and quick actions for the "
-                "selected node.",
-            )
+            _panel_on = bool(st.session_state.get("_viz_cfg_details_panel", True))
+            if not _panel_on:
+                if st.button(
+                    "▸ Show details panel",
+                    key="viz_show_panel",
+                    help="Show the details / edit side panel.",
+                ):
+                    st.session_state["_viz_cfg_details_panel"] = True
+                    st.rerun()
             if _panel_on:
-                _col_graph, _col_panel = st.columns([4, 1])
+                _col_graph, _col_panel = st.columns([3, 1])
             else:
                 _col_panel = None
                 _col_graph = st.container()
@@ -6154,6 +6160,7 @@ def render_visualization():
                 """Open the entity in its editor. Classes land directly in the
                 Edit/Delete tab with the entity preselected (no scrolling); other
                 types fall back to the inline-view jump for now (issue #80)."""
+                st.session_state["_back_to_viz"] = True
                 st.session_state.search_navigate_to = _type_to_page[_ntype]
                 if _ntype == "Class":
                     _target = next(
@@ -6174,7 +6181,13 @@ def render_visualization():
 
             if _panel_on:
                 with _col_panel:
-                    st.markdown("##### Details")
+                    _h1, _h2 = st.columns([3, 1])
+                    with _h1:
+                        st.markdown("##### Details")
+                    with _h2:
+                        if st.button("✕", key="viz_hide_panel", help="Hide panel"):
+                            st.session_state["_viz_cfg_details_panel"] = False
+                            st.rerun()
                     if not has_selection:
                         st.caption(
                             "Click a node to see details. Ctrl/Cmd-click focuses on it."
@@ -6184,18 +6197,52 @@ def render_visualization():
                         st.caption(
                             "Edge" if selection.get("isEdge") else (ntype or "Node")
                         )
-                        for _line in (selection.get("title") or "").split("\n"):
-                            if _line.strip():
-                                st.write(_line.strip())
-                        # IRI with Streamlit's built-in copy button (classes only
-                        # for now, where we can resolve the URI from the node id).
-                        if ntype == "Class" and ename:
-                            _t = next(
-                                (c for c in classes if _uid(c["uri"]) == ename), None
-                            )
-                            if _t:
-                                st.caption("IRI")
-                                st.code(_t["uri"], language=None)
+                        # Resolve the selected class (node id == _uid(uri)) so it
+                        # can be edited inline without leaving the graph (issue #80).
+                        _cls_sel = (
+                            next((c for c in classes if _uid(c["uri"]) == ename), None)
+                            if ntype == "Class" and ename
+                            else None
+                        )
+                        if _cls_sel is not None:
+                            with st.form("panel_edit_class"):
+                                _pn = st.text_input("Name", value=_cls_sel["name"])
+                                _pl = st.text_input("Label", value=_cls_sel["label"])
+                                _pc = st.text_area("Comment", value=_cls_sel["comment"])
+                                _others = [
+                                    c["name"]
+                                    for c in classes
+                                    if c["name"] != _cls_sel["name"]
+                                ]
+                                _cur = (
+                                    _cls_sel["parents"][0]
+                                    if _cls_sel["parents"]
+                                    else "None"
+                                )
+                                _pp = st.selectbox(
+                                    "Parent",
+                                    ["None"] + _others,
+                                    index=(
+                                        _others.index(_cur) + 1
+                                        if _cur in _others
+                                        else 0
+                                    ),
+                                )
+                                if st.form_submit_button(
+                                    "Save", use_container_width=True
+                                ):
+                                    if _apply_class_edit(
+                                        ont, _cls_sel, _pn, _pl, _pc, _pp
+                                    ):
+                                        save_checkpoint("Update class")
+                                        show_message("Class updated!", "success")
+                                    st.rerun()
+                            st.caption("IRI")
+                            st.code(_cls_sel["uri"], language=None)
+                        else:
+                            for _line in (selection.get("title") or "").split("\n"):
+                                if _line.strip():
+                                    st.write(_line.strip())
                         if show_view:
                             if st.button(
                                 "Open full editor" if ntype == "Class" else "Open",
@@ -6582,6 +6629,16 @@ def main():
             f'<a href="{ont_uri}" target="_blank" style="color:gray">{ont_uri}</a></p>',
             unsafe_allow_html=True,
         )
+
+    # "Back to graph" affordance after jumping to an editor from the
+    # Visualization panel / status bar (issue #80).
+    if selection == "Visualization":
+        st.session_state.pop("_back_to_viz", None)
+    elif st.session_state.get("_back_to_viz"):
+        if st.button("← Back to graph", key="back_to_viz"):
+            st.session_state.pop("_back_to_viz", None)
+            st.session_state.search_navigate_to = "Visualization"
+            st.rerun()
 
     # Render selected page
     try:
