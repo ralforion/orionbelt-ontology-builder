@@ -43,6 +43,32 @@ function sendToStreamlit(type, data) {
 var visLoaded = false;
 var pendingArgs = null;
 var network = null;
+var autofitOn = false;
+
+// When "Fit to window" is on, fill the available window height instead of using
+// the fixed Graph Height. Reads the parent window's height and this iframe's
+// position in it (same-origin), reserving room for the status bar below.
+function autofitHeight() {
+    try {
+        var fe = window.frameElement;
+        var top = fe ? fe.getBoundingClientRect().top : 0;
+        var avail = window.parent.innerHeight - top - 90;
+        return Math.max(Math.round(avail), 300);
+    } catch (e) {
+        return null;  // cross-origin or unavailable: fall back to fixed height
+    }
+}
+
+function applyHeight(h) {
+    document.getElementById('graph').style.height = h + 'px';
+    sendToStreamlit("streamlit:setFrameHeight", {height: h});
+}
+
+window.addEventListener('resize', function() {
+    if (!autofitOn || !network) return;
+    var h = autofitHeight();
+    if (h) { applyHeight(h); network.redraw(); }
+});
 
 function downloadGraph() {
     if (!network) return;
@@ -55,7 +81,12 @@ function downloadGraph() {
 
 function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
+    autofitOn = !!args.autofit;
     var height = args.height || 600;
+    if (autofitOn) {
+        var af = autofitHeight();
+        if (af) height = af;
+    }
     var el = document.getElementById('graph');
     el.style.height = height + 'px';
     sendToStreamlit("streamlit:setFrameHeight", {height: height});

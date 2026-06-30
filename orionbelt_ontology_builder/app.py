@@ -5073,7 +5073,7 @@ def render_visualization():
             "show_triples": False,
             "graph_height": 670,
             "node_spacing": 150,
-            "maximize": False,
+            "fit": True,
             "highlight_issues": False,
             "focus_mode": False,
             "focus_depth": 1,
@@ -5184,7 +5184,7 @@ def render_visualization():
                     help="Show all RDF triples for visible nodes",
                 )
 
-        # Row 2: sliders + maximize + highlight issues + render button
+        # Row 2: sliders + fit-to-window + highlight issues + render button
         col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
         with col1:
             height = st.slider(
@@ -5195,6 +5195,8 @@ def render_visualization():
                 key="viz_graph_height",
                 on_change=_viz_sync,
                 args=("_viz_cfg_graph_height", "viz_graph_height"),
+                disabled=st.session_state.get("_viz_cfg_fit", True),
+                help="Used when 'Fit to window' is off.",
             )
         with col2:
             node_spacing = st.slider(
@@ -5207,15 +5209,14 @@ def render_visualization():
                 args=("_viz_cfg_node_spacing", "viz_node_spacing"),
             )
         with col3:
-            maximize = st.checkbox(
-                "Maximize",
-                help="Expand graph to full height",
-                key="viz_maximize",
+            fit = st.checkbox(
+                "Fit to window",
+                help="Resize the graph to fill the window height. "
+                "Turn off to use the Graph Height slider.",
+                key="viz_fit",
                 on_change=_viz_sync,
-                args=("_viz_cfg_maximize", "viz_maximize"),
+                args=("_viz_cfg_fit", "viz_fit"),
             )
-            if maximize:
-                height = 1200
         with col4:
             highlight_issues = st.checkbox(
                 "Highlight Issues",
@@ -6075,6 +6076,7 @@ def render_visualization():
                 edges=gdata["edges"],
                 options=gdata["options"],
                 height=height,
+                autofit=fit,
                 theme=_gv_theme,
                 seq=st.session_state.viz_render_seq,
                 key="graph_viewer",
