@@ -1225,6 +1225,34 @@ def _render_panel_entity_editor(
     return entity
 
 
+def _download_or_save(label, data, file_name, mime="text/plain", key=None):
+    """Offer a file to the user, working in both the web and desktop apps.
+
+    The web shows a normal download button. The desktop / local app's embedded
+    webview can't perform browser downloads (#86), so there we instead show a
+    Save-to-disk control (path input defaulting to Downloads) that writes the
+    file directly. The dead download button is not shown on the desktop.
+    """
+    _k = key or file_name
+    if not local_store.local_persist_enabled():
+        st.download_button(
+            label=label, data=data, file_name=file_name, mime=mime, key=f"dl_{_k}"
+        )
+        return
+    path = st.text_input(
+        "Save to file",
+        value=str(_Path.home() / "Downloads" / file_name),
+        key=f"savepath_{_k}",
+    )
+    save_label = label.replace("Download", "Save") if "Download" in label else label
+    if st.button(f"💾 {save_label}", key=f"savebtn_{_k}"):
+        try:
+            local_store.atomic_write(_Path(path).expanduser(), data)
+            show_message(f"Saved to {path}", "success")
+        except OSError as e:
+            show_message(f"Could not save: {e}", "error")
+
+
 def render_dashboard():
     """Render the dashboard/overview page."""
     st.header("Dashboard")
@@ -4523,11 +4551,12 @@ def render_import_export():
 
             # Change report download
             report = ont.format_diff_report(diff, report_format="markdown")
-            st.download_button(
+            _download_or_save(
                 "Download Change Report",
-                data=report,
-                file_name="change_report.md",
+                report,
+                "change_report.md",
                 mime="text/markdown",
+                key="change_report",
             )
 
     if _ie_tab == "Export":
@@ -4571,31 +4600,12 @@ def render_import_export():
         if content is not None:
             ext = st.session_state.get("_export_ext", ext)
             st.text_area("Exported Content", value=content, height=400)
-            st.download_button(
-                label=f"Download .{ext} file",
-                data=content,
-                file_name=f"ontology.{ext}",
-                mime="text/plain",
+            _download_or_save(
+                f"Download .{ext} file",
+                content,
+                f"ontology.{ext}",
+                key="export",
             )
-            # The desktop webview can't perform browser downloads, so offer a
-            # direct save to disk (defaulting to Downloads) in local mode (#86).
-            if local_store.local_persist_enabled():
-                _default_path = str(_Path.home() / "Downloads" / f"ontology.{ext}")
-                _save_path = st.text_input(
-                    "Or save to a file",
-                    value=_default_path,
-                    key="export_save_path",
-                    help="Desktop download isn't supported by the embedded "
-                    "browser; save directly to a path instead.",
-                )
-                if st.button("Save to disk"):
-                    try:
-                        local_store.atomic_write(
-                            _Path(_save_path).expanduser(), content
-                        )
-                        show_message(f"Saved to {_save_path}", "success")
-                    except OSError as e:
-                        show_message(f"Could not save: {e}", "error")
 
     if _ie_tab == "New Ontology":
         st.subheader("Create New Ontology")
