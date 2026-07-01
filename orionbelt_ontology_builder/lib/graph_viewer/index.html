@@ -44,6 +44,7 @@ var visLoaded = false;
 var pendingArgs = null;
 var network = null;
 var autofitOn = false;
+var webDownload = true;  // browser download works on the web; on desktop we save via Python
 var lastSeq = null;
 var lastNodes = null;
 var lastEdges = null;
@@ -96,15 +97,22 @@ window.addEventListener('resize', function() {
 function downloadGraph() {
     if (!network) return;
     var canvas = network.canvas.frame.canvas;
-    var a = document.createElement('a');
-    a.download = 'ontology-graph.png';
-    a.href = canvas.toDataURL('image/png');
-    a.click();
+    var dataUrl = canvas.toDataURL('image/png');
+    if (webDownload) {
+        var a = document.createElement('a');
+        a.download = 'ontology-graph.png';
+        a.href = dataUrl;
+        a.click();
+    } else {
+        // Desktop webview can't download; hand the PNG to Python to save to disk.
+        sendToStreamlit('streamlit:setComponentValue', {value: {pngData: dataUrl, reqId: Date.now()}});
+    }
 }
 
 function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
     autofitOn = !!args.autofit;
+    webDownload = args.web_download !== false;
 
     // Rebuild only when the graph data actually changes: the render seq (Render
     // button) or the node/edge set (filters, focus). A selection click is a

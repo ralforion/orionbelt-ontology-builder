@@ -14,7 +14,7 @@ from pathlib import Path as _Path
 from . import local_store
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.15.0"
+APP_VERSION = "1.15.1"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1223,6 +1223,36 @@ def _render_panel_entity_editor(
     st.caption("IRI")
     st.code(entity["uri"], language=None)
     return entity
+
+
+def _download_or_save(label, data, file_name, mime="text/plain", key=None):
+    """Offer a file to the user, working in both the web and desktop apps.
+
+    The web shows a normal download button. The desktop / local app's embedded
+    webview can't perform browser downloads (#86), so there we instead show a
+    Save-to-disk control (path input defaulting to Downloads) that writes the
+    file directly. The dead download button is not shown on the desktop.
+    """
+    _k = key or file_name
+    if not local_store.local_persist_enabled():
+        st.download_button(
+            label=label, data=data, file_name=file_name, mime=mime, key=f"dl_{_k}"
+        )
+        return
+    path = st.text_input(
+        "Save to file",
+        value=str(_Path.home() / "Downloads" / file_name),
+        key=f"savepath_{_k}",
+    )
+    save_label = label.replace("Download", "Save") if "Download" in label else label
+    if st.button(f"💾 {save_label}", key=f"savebtn_{_k}"):
+        try:
+            local_store.atomic_write(_Path(path).expanduser(), data)
+            # Use a toast (floating popup) rather than an inline banner, which can
+            # render below the fold where it isn't visible.
+            st.toast(f"Saved to {path}", icon="💾")
+        except OSError as e:
+            st.toast(f"Could not save: {e}", icon="⚠️")
 
 
 def render_dashboard():
@@ -4523,11 +4553,12 @@ def render_import_export():
 
             # Change report download
             report = ont.format_diff_report(diff, report_format="markdown")
-            st.download_button(
+            _download_or_save(
                 "Download Change Report",
-                data=report,
-                file_name="change_report.md",
+                report,
+                "change_report.md",
                 mime="text/markdown",
+                key="change_report",
             )
 
     if _ie_tab == "Export":
@@ -4571,31 +4602,12 @@ def render_import_export():
         if content is not None:
             ext = st.session_state.get("_export_ext", ext)
             st.text_area("Exported Content", value=content, height=400)
-            st.download_button(
-                label=f"Download .{ext} file",
-                data=content,
-                file_name=f"ontology.{ext}",
-                mime="text/plain",
+            _download_or_save(
+                f"Download .{ext} file",
+                content,
+                f"ontology.{ext}",
+                key="export",
             )
-            # The desktop webview can't perform browser downloads, so offer a
-            # direct save to disk (defaulting to Downloads) in local mode (#86).
-            if local_store.local_persist_enabled():
-                _default_path = str(_Path.home() / "Downloads" / f"ontology.{ext}")
-                _save_path = st.text_input(
-                    "Or save to a file",
-                    value=_default_path,
-                    key="export_save_path",
-                    help="Desktop download isn't supported by the embedded "
-                    "browser; save directly to a path instead.",
-                )
-                if st.button("Save to disk"):
-                    try:
-                        local_store.atomic_write(
-                            _Path(_save_path).expanduser(), content
-                        )
-                        show_message(f"Saved to {_save_path}", "success")
-                    except OSError as e:
-                        show_message(f"Could not save: {e}", "error")
 
     if _ie_tab == "New Ontology":
         st.subheader("Create New Ontology")
@@ -6345,10 +6357,31 @@ def render_visualization():
                     autofit=fit,
                     theme=_gv_theme,
                     selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
+                    # On desktop the webview can't download; the component sends
+                    # the PNG back for us to save instead (#86).
+                    web_download=not local_store.local_persist_enabled(),
                     seq=st.session_state.viz_render_seq,
                     key="graph_viewer",
                     default=None,
                 )
+
+            # Desktop "Download PNG": the component hands us the image data URL to
+            # save to disk (the webview can't download). Guard by reqId so it's
+            # written once.
+            if isinstance(selection, dict) and selection.get("pngData"):
+                _png_req = selection.get("reqId")
+                if _png_req and _png_req != st.session_state.get("_viz_last_png_req"):
+                    st.session_state["_viz_last_png_req"] = _png_req
+                    try:
+                        import base64
+
+                        _b64 = selection["pngData"].split(",", 1)[-1]
+                        _png_path = _Path.home() / "Downloads" / "ontology-graph.png"
+                        _png_path.parent.mkdir(parents=True, exist_ok=True)
+                        _png_path.write_bytes(base64.b64decode(_b64))
+                        st.toast(f"Saved graph image to {_png_path}", icon="💾")
+                    except (OSError, ValueError) as e:
+                        st.toast(f"Could not save image: {e}", icon="⚠️")
 
             # Ctrl/Cmd-click in the graph requests focusing on a node: add it to
             # the "Focus on one node" seeds and enable focus mode (issue #56). The
