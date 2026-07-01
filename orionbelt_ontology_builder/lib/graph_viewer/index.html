@@ -45,6 +45,8 @@ var pendingArgs = null;
 var network = null;
 var autofitOn = false;
 var lastSeq = null;
+var lastNodes = null;
+var lastEdges = null;
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
@@ -104,22 +106,22 @@ function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
     autofitOn = !!args.autofit;
 
-    // Only rebuild the graph when the data (seq) changes. A selection click (or
-    // the first-render theme settling) is a same-data re-render; rebuilding then
-    // would reset the user's zoom/pan. So keep the existing network and its
-    // viewport, and just update the theme, selection and height.
-    if (network && args.seq === lastSeq) {
+    // Rebuild only when the graph data actually changes: the render seq (Render
+    // button) or the node/edge set (filters, focus). A selection click is a
+    // same-data re-render — rebuilding would reset zoom/pan, and re-applying the
+    // selection here would fight the click (selected_node lags one rerun behind,
+    // causing a snap-back to the previous node). So on a same-data re-render just
+    // refresh theme and height; leave the network, its viewport and its
+    // selection exactly as the user left them.
+    if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
         applyTheme(args.theme);
-        if (args.selected_node !== null && args.selected_node !== undefined) {
-            try { network.selectNodes([args.selected_node]); } catch (e) {}
-        } else {
-            try { network.unselectAll(); } catch (e) {}
-        }
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
         if (hh) applyHeight(hh);
         return;
     }
     lastSeq = args.seq;
+    lastNodes = args.nodes;
+    lastEdges = args.edges;
 
     var height = args.height || 600;
     if (autofitOn) {
@@ -164,10 +166,13 @@ function renderGraph(args) {
         return h;
     }
     var nodeHash = _hash(nodeArr.map(function(n) { return n.id; }).sort().join('|'));
-    var savedPos = null;
+    var savedPos = null, savedView = null;
     try {
         var _raw = JSON.parse(localStorage.getItem('viz_pos') || 'null');
-        if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash) savedPos = _raw.pos;
+        if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash) {
+            savedPos = _raw.pos;
+            savedView = _raw.view || null;  // {scale, position}
+        }
     } catch (e) {}
 
     var usedSaved = false;
@@ -188,26 +193,35 @@ function renderGraph(args) {
     var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
     document.getElementById('download-btn').style.display = 'flex';
-    // Restore the selection after a re-mount (e.g. the panel toggled), so the
-    // node stays highlighted. selectNodes() does not fire selectNode, so this
-    // does not loop back to Streamlit.
+    // Restore selection + viewport after a genuine re-mount (e.g. the panel
+    // toggled), so the node stays highlighted and the zoom/pan don't reset —
+    // making the rebuild invisible. selectNodes() does not fire selectNode, so
+    // this doesn't loop back to Streamlit.
     if (args.selected_node !== null && args.selected_node !== undefined) {
         try { network.selectNodes([args.selected_node]); } catch (e) {}
     }
-    // Cache the layout so re-mounts (e.g. toggling the panel) restore it
-    // instantly. Save after the settle animation has frozen — not on
-    // stabilizationIterationsDone, which fires ~500ms before the freeze while
-    // nodes are still moving — and after any user drag, so the cached positions
-    // match what's on screen (Codex review #84).
+    if (usedSaved && savedView) {
+        try { network.moveTo({scale: savedView.scale, position: savedView.position}); } catch (e) {}
+    }
+    // Cache the layout AND viewport so re-mounts restore both instantly. Save
+    // after the settle animation has frozen (not on stabilizationIterationsDone,
+    // which fires ~500ms before the freeze while nodes still move), and after any
+    // user drag/zoom, so the cache matches what's on screen (Codex review #84).
     function savePositions() {
         try {
-            localStorage.setItem(
-                'viz_pos',
-                JSON.stringify({seq: args.seq, hash: nodeHash, pos: network.getPositions()})
-            );
+            localStorage.setItem('viz_pos', JSON.stringify({
+                seq: args.seq, hash: nodeHash, pos: network.getPositions(),
+                view: {scale: network.getScale(), position: network.getViewPosition()}
+            }));
         } catch (e) {}
     }
-    network.on('dragEnd', savePositions);
+    var saveTimer = null;
+    function scheduleSave() {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(savePositions, 400);
+    }
+    network.on('dragEnd', scheduleSave);
+    network.on('zoom', scheduleSave);
     if (!usedSaved) {
         network.once('stabilizationIterationsDone', function() {
             setTimeout(function() {
