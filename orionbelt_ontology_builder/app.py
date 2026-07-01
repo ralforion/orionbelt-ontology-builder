@@ -6355,10 +6355,31 @@ def render_visualization():
                     autofit=fit,
                     theme=_gv_theme,
                     selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
+                    # On desktop the webview can't download; the component sends
+                    # the PNG back for us to save instead (#86).
+                    web_download=not local_store.local_persist_enabled(),
                     seq=st.session_state.viz_render_seq,
                     key="graph_viewer",
                     default=None,
                 )
+
+            # Desktop "Download PNG": the component hands us the image data URL to
+            # save to disk (the webview can't download). Guard by reqId so it's
+            # written once.
+            if isinstance(selection, dict) and selection.get("pngData"):
+                _png_req = selection.get("reqId")
+                if _png_req and _png_req != st.session_state.get("_viz_last_png_req"):
+                    st.session_state["_viz_last_png_req"] = _png_req
+                    try:
+                        import base64
+
+                        _b64 = selection["pngData"].split(",", 1)[-1]
+                        _png_path = _Path.home() / "Downloads" / "ontology-graph.png"
+                        _png_path.parent.mkdir(parents=True, exist_ok=True)
+                        _png_path.write_bytes(base64.b64decode(_b64))
+                        st.toast(f"Saved graph image to {_png_path}", icon="💾")
+                    except (OSError, ValueError) as e:
+                        st.toast(f"Could not save image: {e}", icon="⚠️")
 
             # Ctrl/Cmd-click in the graph requests focusing on a node: add it to
             # the "Focus on one node" seeds and enable focus mode (issue #56). The
