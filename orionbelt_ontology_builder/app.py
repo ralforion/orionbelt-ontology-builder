@@ -14,7 +14,7 @@ from pathlib import Path as _Path
 from . import local_store
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.14.0"
+APP_VERSION = "1.15.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -4554,20 +4554,48 @@ def render_import_export():
             "json-ld": "jsonld",
         }
 
+        ext = file_extensions[format_]
         if st.button("Generate Export"):
             try:
-                content = ont.export_to_string(format=format_)
-                st.text_area("Exported Content", value=content, height=400)
-
-                ext = file_extensions[format_]
-                st.download_button(
-                    label=f"Download .{ext} file",
-                    data=content,
-                    file_name=f"ontology.{ext}",
-                    mime="text/plain",
+                st.session_state["_export_content"] = ont.export_to_string(
+                    format=format_
                 )
+                st.session_state["_export_ext"] = ext
             except Exception as e:
+                st.session_state.pop("_export_content", None)
                 show_message(f"Error exporting ontology: {str(e)}", "error")
+
+        # Kept in session_state so the save/download controls (which each cause a
+        # rerun) still have the generated content.
+        content = st.session_state.get("_export_content")
+        if content is not None:
+            ext = st.session_state.get("_export_ext", ext)
+            st.text_area("Exported Content", value=content, height=400)
+            st.download_button(
+                label=f"Download .{ext} file",
+                data=content,
+                file_name=f"ontology.{ext}",
+                mime="text/plain",
+            )
+            # The desktop webview can't perform browser downloads, so offer a
+            # direct save to disk (defaulting to Downloads) in local mode (#86).
+            if local_store.local_persist_enabled():
+                _default_path = str(_Path.home() / "Downloads" / f"ontology.{ext}")
+                _save_path = st.text_input(
+                    "Or save to a file",
+                    value=_default_path,
+                    key="export_save_path",
+                    help="Desktop download isn't supported by the embedded "
+                    "browser; save directly to a path instead.",
+                )
+                if st.button("Save to disk"):
+                    try:
+                        local_store.atomic_write(
+                            _Path(_save_path).expanduser(), content
+                        )
+                        show_message(f"Saved to {_save_path}", "success")
+                    except OSError as e:
+                        show_message(f"Could not save: {e}", "error")
 
     if _ie_tab == "New Ontology":
         st.subheader("Create New Ontology")
