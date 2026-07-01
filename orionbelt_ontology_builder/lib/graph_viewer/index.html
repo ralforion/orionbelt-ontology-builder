@@ -194,17 +194,26 @@ function renderGraph(args) {
     if (args.selected_node !== null && args.selected_node !== undefined) {
         try { network.selectNodes([args.selected_node]); } catch (e) {}
     }
-    // After batch, freeze physics and cache the positions for instant re-mounts.
-    // Skipped when we already rendered from a saved layout.
+    // Cache the layout so re-mounts (e.g. toggling the panel) restore it
+    // instantly. Save after the settle animation has frozen — not on
+    // stabilizationIterationsDone, which fires ~500ms before the freeze while
+    // nodes are still moving — and after any user drag, so the cached positions
+    // match what's on screen (Codex review #84).
+    function savePositions() {
+        try {
+            localStorage.setItem(
+                'viz_pos',
+                JSON.stringify({seq: args.seq, hash: nodeHash, pos: network.getPositions()})
+            );
+        } catch (e) {}
+    }
+    network.on('dragEnd', savePositions);
     if (!usedSaved) {
         network.once('stabilizationIterationsDone', function() {
-            try {
-                localStorage.setItem(
-                    'viz_pos',
-                    JSON.stringify({seq: args.seq, hash: nodeHash, pos: network.getPositions()})
-                );
-            } catch (e) {}
-            setTimeout(function() { network.setOptions({ physics: { enabled: false } }); }, 500);
+            setTimeout(function() {
+                network.setOptions({ physics: { enabled: false } });
+                savePositions();
+            }, 500);
         });
     }
 
