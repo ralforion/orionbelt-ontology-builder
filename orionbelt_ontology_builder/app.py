@@ -1044,6 +1044,187 @@ def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_par
     return True
 
 
+def _apply_property_edit(
+    ont, prop, new_name, new_label, new_comment, new_domain, new_range
+):
+    """Apply a property edit (rename + label/comment/domain/range).
+
+    Returns True on success, False (with an error message) on a rename clash.
+    Shared by the property edit forms and the Visualization side panel. The
+    caller handles the undo checkpoint and rerun. ``new_domain``/``new_range``
+    are passed straight to ``update_property`` (a class URI, a datatype name, or
+    "" to clear).
+    """
+    current_ref = prop["uri"]
+    if new_name and new_name != prop["name"]:
+        if ont.rename_property(prop["uri"], new_name):
+            current_ref = new_name
+        else:
+            show_message(f"Cannot rename: '{new_name}' already exists!", "error")
+            return False
+    ont.update_property(
+        current_ref,
+        new_label=new_label,
+        new_comment=new_comment,
+        new_domain=new_domain,
+        new_range=new_range,
+    )
+    return True
+
+
+def _apply_individual_edit(
+    ont, ind, new_name, new_label, new_comment, add_class, remove_class
+):
+    """Apply an individual edit (rename + label/comment/class membership).
+
+    Returns True on success, False (with an error message) on a rename clash.
+    Shared by the individual edit form and the Visualization side panel.
+    """
+    current_ref = ind["uri"]
+    if new_name and new_name != ind["name"]:
+        if ont.rename_individual(ind["uri"], new_name):
+            current_ref = new_name
+        else:
+            show_message(f"Cannot rename: '{new_name}' already exists!", "error")
+            return False
+    ont.update_individual(
+        current_ref,
+        new_label=new_label,
+        new_comment=new_comment,
+        add_class=add_class if add_class and add_class != "None" else None,
+        remove_class=remove_class if remove_class and remove_class != "None" else None,
+    )
+    return True
+
+
+def _render_panel_entity_editor(
+    ont, ntype, ename, sel, classes, object_props, data_props, individuals
+):
+    """Render the inline editor (or read-only details) for the selected graph
+    node in the Visualization side panel (issue #80).
+
+    Resolves the entity from its node id (``_uid(uri)``) and shows a compact edit
+    form for classes, object/data properties and individuals; for anything else
+    (edges, unresolved) it falls back to the tooltip text. Returns the entity
+    dict or None.
+    """
+    # Object properties are drawn as edges (so selecting one is a selectEdge with
+    # isEdge=True), but they're still editable — resolve by type, not by node vs
+    # edge. Structural edges (subClassOf, type, ...) have no entry in the pool and
+    # fall through to the read-only tooltip.
+    entity = None
+    if ename:
+        pool = {
+            "Class": classes,
+            "Object Property": object_props,
+            "Data Property": data_props,
+            "Individual": individuals,
+        }.get(ntype)
+        if pool:
+            entity = next((e for e in pool if _uid(e["uri"]) == ename), None)
+
+    if entity is None:
+        for line in (sel.get("title") or "").split("\n"):
+            if line.strip():
+                st.write(line.strip())
+        return None
+
+    if ntype == "Class":
+        with st.form("panel_edit_class"):
+            name = st.text_input("Name", value=entity["name"])
+            label = st.text_input("Label", value=entity["label"])
+            comment = st.text_area("Comment", value=entity["comment"])
+            others = [c["name"] for c in classes if c["name"] != entity["name"]]
+            cur = entity["parents"][0] if entity["parents"] else "None"
+            parent = st.selectbox(
+                "Parent",
+                ["None"] + others,
+                index=others.index(cur) + 1 if cur in others else 0,
+            )
+            if st.form_submit_button("Save", use_container_width=True):
+                if _apply_class_edit(ont, entity, name, label, comment, parent):
+                    save_checkpoint("Update class")
+                    show_message("Class updated!", "success")
+                st.rerun()
+    elif ntype in ("Object Property", "Data Property"):
+        with st.form("panel_edit_prop"):
+            name = st.text_input("Name", value=entity["name"])
+            label = st.text_input("Label", value=entity["label"])
+            comment = st.text_area("Comment", value=entity["comment"])
+            cls_opts, cls_lookup = build_class_options(classes, include_none=True)
+            cur_dom = next(
+                (d for d, u in cls_lookup.items() if u == entity.get("domain_uri", "")),
+                "None",
+            )
+            dom = st.selectbox(
+                "Domain",
+                cls_opts,
+                index=cls_opts.index(cur_dom) if cur_dom in cls_opts else 0,
+            )
+            if ntype == "Object Property":
+                cur_rng = next(
+                    (
+                        d
+                        for d, u in cls_lookup.items()
+                        if u == entity.get("range_uri", "")
+                    ),
+                    "None",
+                )
+                rng = st.selectbox(
+                    "Range",
+                    cls_opts,
+                    index=cls_opts.index(cur_rng) if cur_rng in cls_opts else 0,
+                )
+                # Only apply when changed, so a range/domain that can't be shown
+                # in the dropdown (e.g. a class outside this ontology) isn't
+                # cleared on save; None tells update_property to leave it as-is.
+                new_range = (cls_lookup.get(rng) or "") if rng != cur_rng else None
+            else:
+                dts = list(get_ontology_manager_class().XSD_DATATYPES.keys())
+                # The selectbox shows the first datatype when the current range
+                # isn't a known one; compare against that shown default so an
+                # unknown range isn't silently rewritten on save.
+                default_rng = (
+                    entity["range"]
+                    if entity["range"] in dts
+                    else (dts[0] if dts else None)
+                )
+                rng = st.selectbox(
+                    "Range (datatype)",
+                    dts,
+                    index=dts.index(default_rng) if default_rng in dts else 0,
+                )
+                new_range = rng if rng != default_rng else None
+            new_domain = (cls_lookup.get(dom) or "") if dom != cur_dom else None
+            if st.form_submit_button("Save", use_container_width=True):
+                if _apply_property_edit(
+                    ont, entity, name, label, comment, new_domain, new_range
+                ):
+                    save_checkpoint("Update property")
+                    show_message("Property updated!", "success")
+                st.rerun()
+    elif ntype == "Individual":
+        with st.form("panel_edit_ind"):
+            name = st.text_input("Name", value=entity["name"])
+            label = st.text_input("Label", value=entity["label"])
+            comment = st.text_area("Comment", value=entity["comment"])
+            cur_classes = entity["classes"]
+            avail = [c["name"] for c in classes if c["name"] not in cur_classes]
+            add_cls = st.selectbox("Add to class", ["None"] + avail)
+            rem_cls = st.selectbox("Remove from class", ["None"] + cur_classes)
+            if st.form_submit_button("Save", use_container_width=True):
+                if _apply_individual_edit(
+                    ont, entity, name, label, comment, add_cls, rem_cls
+                ):
+                    save_checkpoint("Update individual")
+                    show_message("Individual updated!", "success")
+                st.rerun()
+
+    st.caption("IRI")
+    st.code(entity["uri"], language=None)
+    return entity
+
+
 def render_dashboard():
     """Render the dashboard/overview page."""
     st.header("Dashboard")
@@ -6233,52 +6414,16 @@ def render_visualization():
                     else:
                         st.markdown(f"**{_sel.get('label', '')}**")
                         st.caption("Edge" if _sel.get("isEdge") else (ntype or "Node"))
-                        # Resolve the selected class (node id == _uid(uri)) so it
-                        # can be edited inline without leaving the graph (issue #80).
-                        _cls_sel = (
-                            next((c for c in classes if _uid(c["uri"]) == ename), None)
-                            if ntype == "Class" and ename
-                            else None
+                        _render_panel_entity_editor(
+                            ont,
+                            ntype,
+                            ename,
+                            _sel,
+                            classes,
+                            object_props,
+                            data_props,
+                            individuals,
                         )
-                        if _cls_sel is not None:
-                            with st.form("panel_edit_class"):
-                                _pn = st.text_input("Name", value=_cls_sel["name"])
-                                _pl = st.text_input("Label", value=_cls_sel["label"])
-                                _pc = st.text_area("Comment", value=_cls_sel["comment"])
-                                _others = [
-                                    c["name"]
-                                    for c in classes
-                                    if c["name"] != _cls_sel["name"]
-                                ]
-                                _cur = (
-                                    _cls_sel["parents"][0]
-                                    if _cls_sel["parents"]
-                                    else "None"
-                                )
-                                _pp = st.selectbox(
-                                    "Parent",
-                                    ["None"] + _others,
-                                    index=(
-                                        _others.index(_cur) + 1
-                                        if _cur in _others
-                                        else 0
-                                    ),
-                                )
-                                if st.form_submit_button(
-                                    "Save", use_container_width=True
-                                ):
-                                    if _apply_class_edit(
-                                        ont, _cls_sel, _pn, _pl, _pc, _pp
-                                    ):
-                                        save_checkpoint("Update class")
-                                        show_message("Class updated!", "success")
-                                    st.rerun()
-                            st.caption("IRI")
-                            st.code(_cls_sel["uri"], language=None)
-                        else:
-                            for _line in (_sel.get("title") or "").split("\n"):
-                                if _line.strip():
-                                    st.write(_line.strip())
                         if show_view:
                             if st.button(
                                 "Open full editor" if ntype == "Class" else "Open",
