@@ -1248,9 +1248,11 @@ def _download_or_save(label, data, file_name, mime="text/plain", key=None):
     if st.button(f"💾 {save_label}", key=f"savebtn_{_k}"):
         try:
             local_store.atomic_write(_Path(path).expanduser(), data)
-            show_message(f"Saved to {path}", "success")
+            # Use a toast (floating popup) rather than an inline banner, which can
+            # render below the fold where it isn't visible.
+            st.toast(f"Saved to {path}", icon="💾")
         except OSError as e:
-            show_message(f"Could not save: {e}", "error")
+            st.toast(f"Could not save: {e}", icon="⚠️")
 
 
 def render_dashboard():
