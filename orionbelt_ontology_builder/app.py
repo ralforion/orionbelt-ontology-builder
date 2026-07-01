@@ -1175,25 +1175,30 @@ def _render_panel_entity_editor(
                     cls_opts,
                     index=cls_opts.index(cur_rng) if cur_rng in cls_opts else 0,
                 )
-                new_range = cls_lookup.get(rng) or ""
+                # Only apply when changed, so a range/domain that can't be shown
+                # in the dropdown (e.g. a class outside this ontology) isn't
+                # cleared on save; None tells update_property to leave it as-is.
+                new_range = (cls_lookup.get(rng) or "") if rng != cur_rng else None
             else:
                 dts = list(get_ontology_manager_class().XSD_DATATYPES.keys())
-                cur_rng = entity["range"] if entity["range"] in dts else None
+                # The selectbox shows the first datatype when the current range
+                # isn't a known one; compare against that shown default so an
+                # unknown range isn't silently rewritten on save.
+                default_rng = (
+                    entity["range"]
+                    if entity["range"] in dts
+                    else (dts[0] if dts else None)
+                )
                 rng = st.selectbox(
                     "Range (datatype)",
                     dts,
-                    index=dts.index(cur_rng) if cur_rng in dts else 0,
+                    index=dts.index(default_rng) if default_rng in dts else 0,
                 )
-                new_range = rng
+                new_range = rng if rng != default_rng else None
+            new_domain = (cls_lookup.get(dom) or "") if dom != cur_dom else None
             if st.form_submit_button("Save", use_container_width=True):
                 if _apply_property_edit(
-                    ont,
-                    entity,
-                    name,
-                    label,
-                    comment,
-                    cls_lookup.get(dom) or "",
-                    new_range,
+                    ont, entity, name, label, comment, new_domain, new_range
                 ):
                     save_checkpoint("Update property")
                     show_message("Property updated!", "success")
