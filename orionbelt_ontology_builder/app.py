@@ -6055,8 +6055,21 @@ def render_visualization():
             _component_path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)), "lib", "graph_viewer"
             )
+            # Version the component name by a hash of its source, so any change to
+            # index.html serves under a fresh URL and browsers / the desktop
+            # webview can't run a stale cached copy (the webview's cache persists
+            # across launches via the storage_path added for #70).
+            import hashlib as _hashlib
+
+            try:
+                _gv_src = open(
+                    _os.path.join(_component_path, "index.html"), encoding="utf-8"
+                ).read()
+                _gv_ver = _hashlib.md5(_gv_src.encode("utf-8")).hexdigest()[:8]
+            except OSError:
+                _gv_ver = "0"
             _graph_component = st.components.v1.declare_component(
-                "graph_viewer", path=_component_path
+                f"graph_viewer_{_gv_ver}", path=_component_path
             )
 
             # Theme the graph (canvas + legend) to match the app, so it isn't a
@@ -6077,8 +6090,18 @@ def render_visualization():
                 }
             )
 
-            # Last selection persisted across reruns (the graph component
-            # re-mounts when the panel toggles, which would otherwise drop it).
+            # Track the selection across reruns so a component re-mount (panel
+            # toggle, or a re-mount right after a click) can restore the right
+            # node. Seed from the component's *current* value first: a click sets
+            # it before the rerun, so this reflects the just-clicked node with no
+            # one-rerun lag (which previously caused a first-click node to
+            # deactivate after a re-mount). Fall back to the last persisted value
+            # when the component returned nothing (a fresh re-mount).
+            _live_sel = st.session_state.get("graph_viewer")
+            if isinstance(_live_sel, dict) and "selected" in _live_sel:
+                st.session_state["_viz_last_selection"] = (
+                    _live_sel if _live_sel.get("selected") else None
+                )
             _prev_sel = st.session_state.get("_viz_last_selection")
             _prev_has_sel = isinstance(_prev_sel, dict) and _prev_sel.get("selected")
 
@@ -6161,14 +6184,8 @@ def render_visualization():
                 "SKOS Concept": lambda n: f"view_skos_{str(abs(hash(n)))[:8]}",
             }
 
-            # Persist the selection so it survives the component re-mount that
-            # happens when the panel toggles (otherwise the panel would blank).
-            # A re-mount returns None (not a dict), which we ignore; only an
-            # explicit select/deselect updates the stored value.
-            if isinstance(selection, dict) and "selected" in selection:
-                st.session_state["_viz_last_selection"] = (
-                    selection if selection.get("selected") else None
-                )
+            # The selection was already captured (from the component's current
+            # value) before the component call above, so just read it here.
             _sel = st.session_state.get("_viz_last_selection")
 
             # Selection details, shared by the side panel and the status bar.

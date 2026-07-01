@@ -44,6 +44,9 @@ var visLoaded = false;
 var pendingArgs = null;
 var network = null;
 var autofitOn = false;
+var lastSeq = null;
+var lastNodes = null;
+var lastEdges = null;
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
@@ -64,6 +67,26 @@ function applyHeight(h) {
     sendToStreamlit("streamlit:setFrameHeight", {height: h});
 }
 
+// Apply theme colours without rebuilding the graph, so a theme change (or the
+// first-render theme settling) doesn't reset the user's zoom/pan. Node colours
+// encode type, not theme, so only the background, overlays and edge labels change.
+function applyTheme(theme) {
+    theme = theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
+    document.documentElement.style.background = theme.bg;
+    document.body.style.background = theme.bg;
+    var dlBtn = document.getElementById('download-btn');
+    if (dlBtn) {
+        dlBtn.style.background = theme.panel;
+        var dlSvg = dlBtn.querySelector('svg');
+        if (dlSvg) dlSvg.style.fill = theme.text;
+    }
+    var legendEl = document.getElementById('legend');
+    if (legendEl) { legendEl.style.background = theme.panel; legendEl.style.color = theme.text; }
+    if (network) {
+        network.setOptions({edges: {font: {color: theme.text, strokeColor: theme.bg, strokeWidth: 4}}});
+    }
+}
+
 window.addEventListener('resize', function() {
     if (!autofitOn || !network) return;
     var h = autofitHeight();
@@ -82,6 +105,24 @@ function downloadGraph() {
 function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
     autofitOn = !!args.autofit;
+
+    // Rebuild only when the graph data actually changes: the render seq (Render
+    // button) or the node/edge set (filters, focus). A selection click is a
+    // same-data re-render — rebuilding would reset zoom/pan, and re-applying the
+    // selection here would fight the click (selected_node lags one rerun behind,
+    // causing a snap-back to the previous node). So on a same-data re-render just
+    // refresh theme and height; leave the network, its viewport and its
+    // selection exactly as the user left them.
+    if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
+        applyTheme(args.theme);
+        var hh = autofitOn ? autofitHeight() : (args.height || 600);
+        if (hh) applyHeight(hh);
+        return;
+    }
+    lastSeq = args.seq;
+    lastNodes = args.nodes;
+    lastEdges = args.edges;
+
     var height = args.height || 600;
     if (autofitOn) {
         var af = autofitHeight();
@@ -101,7 +142,7 @@ function renderGraph(args) {
     var dlSvg = dlBtn.querySelector('svg');
     if (dlSvg) dlSvg.style.fill = theme.text;
 
-    var nodes = new vis.DataSet(JSON.parse(args.nodes));
+    var nodeArr = JSON.parse(args.nodes);
     var edges = new vis.DataSet(JSON.parse(args.edges));
     var options = JSON.parse(args.options);
     // Theme edge labels: light text with a background-coloured halo (not a hard
@@ -111,26 +152,84 @@ function renderGraph(args) {
     options.edges.font = Object.assign({}, options.edges.font, {
         color: theme.text, strokeColor: theme.bg, strokeWidth: 4
     });
-    // Batch stabilization: compute layout before first render, then freeze.
-    // Scale iterations with node count for quality vs speed balance.
-    var nCount = JSON.parse(args.nodes).length;
-    var iters = Math.min(Math.max(nCount * 3, 150), 500);
+    var nCount = nodeArr.length;
     options.physics = options.physics || {};
-    // Batch-stabilize most of the layout, then let it jiggle briefly for visual feedback.
-    var batchIters = Math.max(iters - 40, 80);
-    options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50 };
+
+    // Cache the computed layout so a re-mount (e.g. toggling the side panel)
+    // restores node positions instantly instead of re-running physics and
+    // flickering. Keyed by the render seq + node set, so clicking Render still
+    // recomputes a fresh layout. Stored in localStorage, shared across the
+    // component's iframe instances within the session.
+    function _hash(s) {
+        var h = 0;
+        for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
+        return h;
+    }
+    var nodeHash = _hash(nodeArr.map(function(n) { return n.id; }).sort().join('|'));
+    var savedPos = null, savedView = null;
+    try {
+        var _raw = JSON.parse(localStorage.getItem('viz_pos') || 'null');
+        if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash) {
+            savedPos = _raw.pos;
+            savedView = _raw.view || null;  // {scale, position}
+        }
+    } catch (e) {}
+
+    var usedSaved = false;
+    if (savedPos) {
+        // Render at saved positions with physics off — no stabilization, no flicker.
+        nodeArr.forEach(function(n) {
+            if (savedPos[n.id]) { n.x = savedPos[n.id].x; n.y = savedPos[n.id].y; }
+        });
+        options.physics.enabled = false;
+        usedSaved = true;
+    } else {
+        // Batch-stabilize most of the layout, then freeze. Scale iterations with
+        // node count for a quality vs speed balance.
+        var iters = Math.min(Math.max(nCount * 3, 150), 500);
+        var batchIters = Math.max(iters - 40, 80);
+        options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50 };
+    }
+    var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
     document.getElementById('download-btn').style.display = 'flex';
-    // Restore the selection after a re-mount (e.g. the panel toggled), so the
-    // node stays highlighted. selectNodes() does not fire selectNode, so this
-    // does not loop back to Streamlit.
+    // Restore selection + viewport after a genuine re-mount (e.g. the panel
+    // toggled), so the node stays highlighted and the zoom/pan don't reset —
+    // making the rebuild invisible. selectNodes() does not fire selectNode, so
+    // this doesn't loop back to Streamlit.
     if (args.selected_node !== null && args.selected_node !== undefined) {
         try { network.selectNodes([args.selected_node]); } catch (e) {}
     }
-    // After batch, let live physics run briefly for a short settle animation, then freeze.
-    network.once('stabilizationIterationsDone', function() {
-        setTimeout(function() { network.setOptions({ physics: { enabled: false } }); }, 500);
-    });
+    if (usedSaved && savedView) {
+        try { network.moveTo({scale: savedView.scale, position: savedView.position}); } catch (e) {}
+    }
+    // Cache the layout AND viewport so re-mounts restore both instantly. Save
+    // after the settle animation has frozen (not on stabilizationIterationsDone,
+    // which fires ~500ms before the freeze while nodes still move), and after any
+    // user drag/zoom, so the cache matches what's on screen (Codex review #84).
+    function savePositions() {
+        try {
+            localStorage.setItem('viz_pos', JSON.stringify({
+                seq: args.seq, hash: nodeHash, pos: network.getPositions(),
+                view: {scale: network.getScale(), position: network.getViewPosition()}
+            }));
+        } catch (e) {}
+    }
+    var saveTimer = null;
+    function scheduleSave() {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(savePositions, 400);
+    }
+    network.on('dragEnd', scheduleSave);
+    network.on('zoom', scheduleSave);
+    if (!usedSaved) {
+        network.once('stabilizationIterationsDone', function() {
+            setTimeout(function() {
+                network.setOptions({ physics: { enabled: false } });
+                savePositions();
+            }, 500);
+        });
+    }
 
     // Build dynamic legend from actual nodes and edges
     var nodeColors = {};
