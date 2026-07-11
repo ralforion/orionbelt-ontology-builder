@@ -643,33 +643,62 @@ class OntologyManager:
 
     @staticmethod
     def parse_bulk_text(
-        text: str, columns: Optional[List[str]] = None
+        text: str,
+        columns: Optional[List[str]] = None,
+        default_columns: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Parse multi-line text into list of dicts.
 
         Supports:
         - Simple mode: one name per line (returns dicts with 'name' key)
-        - CSV mode: comma-separated values with column headers
+        - CSV mode: delimiter-separated values, with or without a header row
 
-        If columns are provided, each line is split by comma and mapped to columns.
-        If columns are not provided but the first line looks like a header
-        (contains 'name'), it's used as columns.
+        Delimiter detection: the delimiter is taken from the first line that
+        contains one, choosing whichever of ';' / ',' occurs more often on that
+        line (ties and no-delimiter default to ','). Deciding from a single line
+        by frequency means a lone ';' inside a comma CSV label (or a ',' inside a
+        semicolon-delimited value) does not flip the delimiter for the whole
+        input. Semicolons are handy when labels themselves contain commas.
+
+        If ``columns`` is provided, each line is split and mapped to those columns.
+        Otherwise, if the first line looks like a header (contains 'name'), it is
+        used as the columns. If there is no header but a line contains the
+        delimiter and ``default_columns`` is provided, the values are mapped
+        positionally onto ``default_columns``. Failing all of that, each line is
+        treated as a single name.
         """
         lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
         if not lines:
             return []
 
+        # Determine the delimiter from the first line that contains one. Picking
+        # whichever separator is more frequent on that single line keeps a stray
+        # ';' inside a comma CSV (or ',' inside a semicolon CSV) from flipping it.
+        delimiter = ","
+        for line in lines:
+            if ";" in line or "," in line:
+                delimiter = ";" if line.count(";") > line.count(",") else ","
+                break
+
         # Auto-detect CSV header
-        if columns is None and "," in lines[0]:
-            header = [c.strip().lower() for c in lines[0].split(",")]
+        if columns is None and delimiter in lines[0]:
+            header = [c.strip().lower() for c in lines[0].split(delimiter)]
             if "name" in header:
                 columns = header
                 lines = lines[1:]
 
+        # Header-optional: delimiter present in the data but no header row.
+        if (
+            columns is None
+            and default_columns
+            and any(delimiter in line for line in lines)
+        ):
+            columns = default_columns
+
         if columns:
             result = []
             for line in lines:
-                parts = [p.strip() for p in line.split(",")]
+                parts = [p.strip() for p in line.split(delimiter)]
                 entry = {}
                 for i, col in enumerate(columns):
                     entry[col] = parts[i] if i < len(parts) else ""

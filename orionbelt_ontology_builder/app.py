@@ -1780,16 +1780,19 @@ def render_classes():
         if bulk_op == "Add":
             st.subheader("Bulk Add Classes")
             st.caption(
-                "Enter one class name per line, or use CSV format: Name, Label, Parent"
+                "Enter one class name per line, or use CSV format: Name, Label, "
+                "Parent. Use ';' as the separator when a label contains commas."
             )
             bulk_text = st.text_area(
                 "Class entries",
                 height=200,
                 key="bulk_classes_text",
-                placeholder="Dog\nCat\nBird\n\nor CSV:\nName, Label, Parent\nDog, A Dog, Animal\nCat, A Cat, Animal",
+                placeholder="Dog\nCat\nBird\n\nor CSV:\nDog, A Dog, Animal\nCat, A Cat, Animal",
             )
             if bulk_text:
-                entries = ont.parse_bulk_text(bulk_text)
+                entries = ont.parse_bulk_text(
+                    bulk_text, default_columns=["name", "label", "parent"]
+                )
                 if entries:
                     st.dataframe(pd.DataFrame(entries), width="stretch")
                     if st.button(
@@ -2525,16 +2528,20 @@ def render_properties():
                 key="bulk_prop_type",
             )
             st.caption(
-                "Enter one property per line, or CSV: Name, Domain, Range, Label"
+                "Enter one property per line, or CSV: Name, Domain, Range, Label. "
+                "Use ';' as the separator when a label contains commas."
             )
             bulk_text = st.text_area(
                 "Property entries",
                 height=200,
                 key="bulk_props_text",
-                placeholder="hasFriend\nhasEnemy\n\nor CSV:\nName, Domain, Range, Label\nhasFriend, Person, Person, has friend",
+                placeholder="hasFriend\nhasEnemy\n\nor CSV:\nhasFriend, Person, Person, has friend",
             )
             if bulk_text:
-                entries = ont.parse_bulk_text(bulk_text)
+                entries = ont.parse_bulk_text(
+                    bulk_text,
+                    default_columns=["name", "domain", "range", "label"],
+                )
                 if entries:
                     st.dataframe(pd.DataFrame(entries), width="stretch")
                     ptype = "object" if prop_type == "Object Property" else "data"
@@ -2922,16 +2929,19 @@ def render_individuals():
         if bulk_op == "Add":
             st.subheader("Bulk Add Individuals")
             st.caption(
-                "Enter one individual per line (Name, Class) or CSV: Name, Class, Label"
+                "Enter one individual per line as CSV: Name, Class, Label. "
+                "Use ';' as the separator when a label contains commas."
             )
             bulk_text = st.text_area(
                 "Individual entries",
                 height=200,
                 key="bulk_individuals_text",
-                placeholder="Name, Class, Label\nalice, Person, Alice\nbob, Person, Bob",
+                placeholder="alice, Person, Alice\nbob, Person, Bob",
             )
             if bulk_text:
-                entries = ont.parse_bulk_text(bulk_text)
+                entries = ont.parse_bulk_text(
+                    bulk_text, default_columns=["name", "class", "label"]
+                )
                 if entries:
                     st.dataframe(pd.DataFrame(entries), width="stretch")
                     if st.button(

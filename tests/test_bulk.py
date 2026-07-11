@@ -51,6 +51,76 @@ class TestParseBulkText:
         assert OntologyManager.parse_bulk_text("") == []
         assert OntologyManager.parse_bulk_text("  \n  ") == []
 
+    def test_header_optional_comma(self):
+        # Issue #91: a data line with commas but no header row should still
+        # be parsed positionally when default_columns are supplied.
+        text = "Dog, A Dog, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [{"name": "Dog", "label": "A Dog", "parent": "Animal"}]
+
+    def test_header_optional_semicolon(self):
+        text = "Dog; A Dog; Animal\nCat; A Cat; Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A Dog", "parent": "Animal"},
+            {"name": "Cat", "label": "A Cat", "parent": "Animal"},
+        ]
+
+    def test_semicolon_preserves_comma_in_label(self):
+        # Semicolon delimiter lets a label legitimately contain a comma.
+        text = "Dog; A Dog, the domestic one; Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A Dog, the domestic one", "parent": "Animal"}
+        ]
+
+    def test_semicolon_header(self):
+        text = "Name; Label; Parent\nDog; A Dog; Animal"
+        result = OntologyManager.parse_bulk_text(text)
+        assert result == [{"name": "Dog", "label": "A Dog", "parent": "Animal"}]
+
+    def test_simple_mode_without_default_columns(self):
+        # Without default_columns and no header, a comma line stays a single name
+        # (preserves the documented simple-mode behavior).
+        text = "Dog, A Dog, Animal"
+        result = OntologyManager.parse_bulk_text(text)
+        assert result == [{"name": "Dog, A Dog, Animal"}]
+
+    def test_header_takes_precedence_over_default_columns(self):
+        text = "Name, Parent\nDog, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [{"name": "Dog", "parent": "Animal"}]
+
+    def test_semicolon_in_label_does_not_flip_comma_csv(self):
+        # A comma CSV (header uses commas) must stay comma-delimited even when a
+        # later row's label contains a semicolon.
+        text = "Name, Label, Parent\nDog, A dog; domestic, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A dog; domestic", "parent": "Animal"}
+        ]
+
+    def test_semicolon_in_label_header_less_comma_csv(self):
+        # Same protection without a header row: commas outnumber the lone ';',
+        # so the line stays comma-delimited.
+        text = "Dog, A dog; domestic, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A dog; domestic", "parent": "Animal"}
+        ]
+
 
 class TestBulkAddClasses:
     def test_add_multiple(self, om):
