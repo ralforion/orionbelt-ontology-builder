@@ -653,8 +653,12 @@ class OntologyManager:
         - Simple mode: one name per line (returns dicts with 'name' key)
         - CSV mode: delimiter-separated values, with or without a header row
 
-        Delimiter detection: if any line contains a semicolon, ';' is used as
-        the delimiter (handy when labels contain commas); otherwise ',' is used.
+        Delimiter detection: the delimiter is taken from the first line that
+        contains one, choosing whichever of ';' / ',' occurs more often on that
+        line (ties and no-delimiter default to ','). Deciding from a single line
+        by frequency means a lone ';' inside a comma CSV label (or a ',' inside a
+        semicolon-delimited value) does not flip the delimiter for the whole
+        input. Semicolons are handy when labels themselves contain commas.
 
         If ``columns`` is provided, each line is split and mapped to those columns.
         Otherwise, if the first line looks like a header (contains 'name'), it is
@@ -667,8 +671,14 @@ class OntologyManager:
         if not lines:
             return []
 
-        # Detect delimiter: prefer ';' when present anywhere, else ','.
-        delimiter = ";" if any(";" in line for line in lines) else ","
+        # Determine the delimiter from the first line that contains one. Picking
+        # whichever separator is more frequent on that single line keeps a stray
+        # ';' inside a comma CSV (or ',' inside a semicolon CSV) from flipping it.
+        delimiter = ","
+        for line in lines:
+            if ";" in line or "," in line:
+                delimiter = ";" if line.count(";") > line.count(",") else ","
+                break
 
         # Auto-detect CSV header
         if columns is None and delimiter in lines[0]:

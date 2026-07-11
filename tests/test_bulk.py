@@ -99,6 +99,28 @@ class TestParseBulkText:
         )
         assert result == [{"name": "Dog", "parent": "Animal"}]
 
+    def test_semicolon_in_label_does_not_flip_comma_csv(self):
+        # A comma CSV (header uses commas) must stay comma-delimited even when a
+        # later row's label contains a semicolon.
+        text = "Name, Label, Parent\nDog, A dog; domestic, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A dog; domestic", "parent": "Animal"}
+        ]
+
+    def test_semicolon_in_label_header_less_comma_csv(self):
+        # Same protection without a header row: commas outnumber the lone ';',
+        # so the line stays comma-delimited.
+        text = "Dog, A dog; domestic, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A dog; domestic", "parent": "Animal"}
+        ]
+
 
 class TestBulkAddClasses:
     def test_add_multiple(self, om):
