@@ -107,6 +107,25 @@ class TestRenamePreservesNamespace:
         uris = {c["uri"] for c in om.get_classes()}
         assert "http://test.org/ont#Hound" in uris
 
+    def test_move_class_between_namespaces_keeps_references(self):
+        # Moving a class = renaming it to a full URI in another namespace; every
+        # reference (subclass links, instance typing) must follow.
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Animal")
+        om.add_class("Dog", parent="Animal", namespace=OTHER)
+        om.add_individual("rex", OTHER + "Dog")
+        # Move OTHER#Dog to the base namespace.
+        assert om.rename_class(OTHER + "Dog", "http://test.org/ont#Dog") is True
+
+        classes = {c["uri"]: c for c in om.get_classes()}
+        assert "http://test.org/ont#Dog" in classes
+        assert OTHER + "Dog" not in classes
+        # Subclass link preserved (by local name and by URI).
+        assert "Animal" in classes["http://test.org/ont#Dog"]["parents"]
+        # Instance typing preserved.
+        rex = next(i for i in om.get_individuals() if i["name"] == "rex")
+        assert "http://test.org/ont#Dog" in rex.get("class_uris", [])
+
 
 class TestCreatableNamespaces:
     def test_base_namespace_is_first(self):

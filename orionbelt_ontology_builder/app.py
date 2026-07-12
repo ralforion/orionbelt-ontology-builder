@@ -1055,32 +1055,53 @@ def _renamed_ref(ont, old_uri, new_name):
     return str(ont._uri(new_name, ont._namespace_of(old_uri)))
 
 
-def _namespace_display(ont, uri):
-    """Human-readable namespace label for ``uri``: '(default) <base>' for the
-    base namespace, 'prefix: <ns>' when a prefix is bound, else the bare
-    namespace URI. Shown read-only on edit forms so the user can see which
-    namespace an entity lives in (renaming keeps it there)."""
+def _namespace_option_index(ont, ns_options, ns_lookup, uri):
+    """Index of the :func:`build_namespace_options` entry matching ``uri``'s
+    current namespace, so an edit form pre-selects where the resource already
+    lives. Falls back to 0 (the default/base namespace)."""
     ns = ont._namespace_of(uri)
-    if ns == ont.base_uri:
-        return f"(default) {ns}"
-    prefix = _prefix_for_uri(ns)
-    return f"{prefix}: {ns}" if prefix else ns
+    current = None if ns == ont.base_uri else ns
+    for i, opt in enumerate(ns_options):
+        if ns_lookup.get(opt) == current:
+            return i
+    return 0
 
 
-def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_parent):
+_KEEP_NAMESPACE = object()  # sentinel: leave a resource in its current namespace
+
+
+def _apply_class_edit(
+    ont,
+    class_info,
+    new_name,
+    new_label,
+    new_comment,
+    new_parent,
+    new_namespace=_KEEP_NAMESPACE,
+):
     """Apply a class edit (rename + label/comment/parent). Returns True on success.
 
-    Shared by the Edit/Delete form and the Visualization side panel. Renames
-    first so the remaining updates target the renamed class; shows an error and
-    returns False if the new name collides. The caller is responsible for the
-    undo checkpoint and rerun.
+    Shared by the Edit/Delete form and the Visualization side panel. A change to
+    the local name and/or ``new_namespace`` is applied as a single rename to the
+    new full URI (every reference is re-pointed, so no links are lost); the
+    remaining updates then target the class at its new URI. ``new_namespace`` is
+    ``None`` for the base namespace, a namespace URI string, or the
+    ``_KEEP_NAMESPACE`` sentinel to leave the class where it is (used by callers
+    without a namespace selector). Shows an error and returns False if the target
+    URI is already taken. The caller owns the undo checkpoint and rerun.
     """
     current_ref = class_info["uri"]
-    if new_name and new_name != class_info["name"]:
-        if ont.rename_class(class_info["uri"], new_name):
-            current_ref = _renamed_ref(ont, class_info["uri"], new_name)
+    target_ns = (
+        ont._namespace_of(class_info["uri"])
+        if new_namespace is _KEEP_NAMESPACE
+        else new_namespace
+    )
+    target_uri = str(ont._uri(new_name or class_info["name"], target_ns))
+    if target_uri != class_info["uri"]:
+        if ont.rename_class(class_info["uri"], target_uri):
+            current_ref = target_uri
         else:
-            show_message(f"Cannot rename: '{new_name}' already exists!", "error")
+            show_message(f"Cannot move/rename: '{target_uri}' already exists!", "error")
             return False
     if class_info["parents"] and new_parent != class_info["parents"][0]:
         ont.update_class(current_ref, remove_parent=class_info["parents"][0])
@@ -1761,9 +1782,18 @@ def render_classes():
                         help="Renaming updates every reference to this class — "
                         "no links are lost, unlike delete-and-recreate.",
                     )
-                    st.caption(
-                        f"Namespace: {_namespace_display(ont, class_info['uri'])}"
+                    ns_options, ns_lookup = build_namespace_options(ont)
+                    ns_index = _namespace_option_index(
+                        ont, ns_options, ns_lookup, class_info["uri"]
                     )
+                    new_ns_display = st.selectbox(
+                        "Namespace",
+                        options=ns_options,
+                        index=ns_index,
+                        help="Moving to another namespace re-points every "
+                        "reference to this class.",
+                    )
+                    new_namespace = ns_lookup.get(new_ns_display)
                     new_label = st.text_input("Label", value=class_info["label"])
                     new_comment = st.text_area("Comment", value=class_info["comment"])
 
@@ -1799,6 +1829,7 @@ def render_classes():
                             new_label,
                             new_comment,
                             new_parent,
+                            new_namespace=new_namespace,
                         ):
                             save_checkpoint("Update class")
                             show_message(
