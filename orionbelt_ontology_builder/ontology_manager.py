@@ -3,6 +3,7 @@ OntologyManager - Core class for managing OWL ontologies using rdflib.
 """
 
 import os
+import re
 import tempfile
 from pathlib import Path
 from rdflib import Graph, Namespace, URIRef, Literal, BNode
@@ -346,6 +347,57 @@ class OntologyManager:
             return URIRef(namespace + local_name)
         return self.namespace[local_name]
 
+    # A valid local name is an NCName relaxed to also allow a leading digit:
+    # a word character (Unicode letter/digit/underscore) followed by any of
+    # word chars, '.' or '-'. This blocks the characters that corrupt a URI or
+    # the app — spaces, '/', '#', ':' and stray punctuation — while still
+    # allowing Unicode letters, digits, dots and hyphens (e.g. 'my-class.v2').
+    _LOCAL_NAME_RE = re.compile(r"^\w[\w.\-]*$", re.UNICODE)
+
+    # Characters that make a full IRI unserializable in Turtle/N3 (mirrors
+    # rdflib's own check); whitespace is handled separately via str.isspace().
+    _INVALID_URI_CHARS = frozenset('<>"{}|\\^`')
+
+    @classmethod
+    def invalid_name_reason(cls, name: str) -> Optional[str]:
+        """Return a human-readable reason ``name`` is not a valid entity name,
+        or ``None`` if it is valid.
+
+        The name is validated verbatim (no stripping), so leading/trailing
+        whitespace is rejected — the string is used as-is to build the URI. A
+        full ``http(s)`` URI is accepted as an explicit identifier as long as it
+        contains no whitespace or characters that break serialization. Otherwise
+        the name must be a valid local name (see :attr:`_LOCAL_NAME_RE`).
+        """
+        if name is None or not name.strip():
+            return "Name cannot be empty."
+        if name.startswith("http://") or name.startswith("https://"):
+            if any(c.isspace() or c in cls._INVALID_URI_CHARS for c in name):
+                return (
+                    "A full URI cannot contain spaces or any of the characters "
+                    '< > " { } | \\ ^ `.'
+                )
+            return None
+        if any(c.isspace() for c in name):
+            return (
+                "Names cannot contain spaces. Put the readable name in the "
+                "Label field and use a name like 'MyClass' or 'my-class' here."
+            )
+        if not cls._LOCAL_NAME_RE.match(name):
+            return (
+                "Names may contain only letters, digits, '_', '-' and '.', and "
+                "cannot start with '-' or '.'. Characters like '/', '#', ':' or "
+                "spaces would produce an invalid URI. Put punctuation or spaces "
+                "in the Label instead."
+            )
+        return None
+
+    def _require_valid_name(self, name: str) -> None:
+        """Raise ``ValueError`` if ``name`` is not a valid entity name."""
+        reason = self.invalid_name_reason(name)
+        if reason:
+            raise ValueError(reason)
+
     def _local_name(self, uri: Node) -> str:
         """Extract local name from a URI."""
         uri_str = str(uri)
@@ -420,6 +472,9 @@ class OntologyManager:
         ``namespace`` places the class in a specific namespace (any bound
         prefix); when omitted the base namespace is used.
         """
+        self._require_valid_name(name)
+        if parent:
+            self._require_valid_name(parent)
         class_uri = self._uri(name, namespace)
         self.graph.add((class_uri, RDF.type, OWL.Class))
 
@@ -443,6 +498,8 @@ class OntologyManager:
         remove_parent: Optional[str] = None,
     ):
         """Update an existing class."""
+        if new_parent:
+            self._require_valid_name(new_parent)
         class_uri = self._uri(name)
 
         if new_label is not None:
@@ -486,6 +543,7 @@ class OntologyManager:
         """
         if old_name == new_name:
             return True
+        self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name, self._namespace_of(old_uri))
@@ -1040,6 +1098,10 @@ class OntologyManager:
         ``namespace`` places the property in a specific namespace (any bound
         prefix); when omitted the base namespace is used.
         """
+        self._require_valid_name(name)
+        for ref in (domain, range_, inverse_of):
+            if ref:
+                self._require_valid_name(ref)
         prop_uri = self._uri(name, namespace)
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
 
@@ -1087,6 +1149,9 @@ class OntologyManager:
         ``namespace`` places the property in a specific namespace (any bound
         prefix); when omitted the base namespace is used.
         """
+        self._require_valid_name(name)
+        if domain:
+            self._require_valid_name(domain)
         prop_uri = self._uri(name, namespace)
         self.graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
 
@@ -1113,6 +1178,12 @@ class OntologyManager:
         new_range: Optional[str] = None,
     ):
         """Update an existing property."""
+        if new_domain:
+            self._require_valid_name(new_domain)
+        # new_range may be a datatype (looked up below) or a class URI; only the
+        # class case reaches _uri() and needs validating.
+        if new_range and new_range not in self.XSD_DATATYPES:
+            self._require_valid_name(new_range)
         prop_uri = self._uri(name)
 
         if new_label is not None:
@@ -1149,6 +1220,7 @@ class OntologyManager:
         """
         if old_name == new_name:
             return True
+        self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name, self._namespace_of(old_uri))
@@ -1347,6 +1419,8 @@ class OntologyManager:
         resolved independently, so an individual can live in a different
         namespace than its type.
         """
+        self._require_valid_name(name)
+        self._require_valid_name(class_name)
         ind_uri = self._uri(name, namespace)
         class_uri = self._uri(class_name)
 
@@ -1386,6 +1460,8 @@ class OntologyManager:
         remove_class: Optional[str] = None,
     ):
         """Update an existing individual."""
+        if add_class:
+            self._require_valid_name(add_class)
         ind_uri = self._uri(name)
 
         if new_label is not None:
@@ -1412,6 +1488,7 @@ class OntologyManager:
         """
         if old_name == new_name:
             return True
+        self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name, self._namespace_of(old_uri))
@@ -1903,6 +1980,7 @@ class OntologyManager:
         self, name: str, label: Optional[str] = None, comment: Optional[str] = None
     ) -> URIRef:
         """Add a new SKOS ConceptScheme."""
+        self._require_valid_name(name)
         scheme_uri = self._uri(name)
         self.graph.add((scheme_uri, RDF.type, SKOS.ConceptScheme))
         if label:
@@ -1962,6 +2040,7 @@ class OntologyManager:
         """
         if old_name == new_name:
             return True
+        self._require_valid_name(new_name)
 
         # Resolve the actual scheme URI from the graph (mirrors update/delete).
         old_uri = self._uri(old_name)
@@ -2009,6 +2088,10 @@ class OntologyManager:
         lang: Optional[str] = None,
     ) -> URIRef:
         """Add a SKOS Concept with optional scheme/broader links."""
+        self._require_valid_name(name)
+        for ref in (scheme, broader):
+            if ref:
+                self._require_valid_name(ref)
         concept_uri = self._uri(name)
         self.graph.add((concept_uri, RDF.type, SKOS.Concept))
 
@@ -2116,6 +2199,10 @@ class OntologyManager:
         remove_scheme: Optional[str] = None,
     ):
         """Update a SKOS Concept's properties."""
+        if new_broader is not _UNSET and new_broader:
+            self._require_valid_name(new_broader)
+        if add_scheme:
+            self._require_valid_name(add_scheme)
         uri = self._uri(name)
 
         if new_pref_label is not _UNSET:
@@ -2153,6 +2240,7 @@ class OntologyManager:
         """
         if old_name == new_name:
             return True
+        self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
         new_uri = self._uri(new_name, self._namespace_of(old_uri))
