@@ -121,6 +121,27 @@ class TestParseBulkText:
             {"name": "Dog", "label": "A dog; domestic", "parent": "Animal"}
         ]
 
+    def test_semicolon_delimiter_with_multiple_commas_in_label(self):
+        # Review finding 4: a semicolon row whose label has several commas must
+        # still be read as semicolon-delimited (both split to 3 fields, so the
+        # column-count heuristic favours the semicolon escape hatch).
+        text = "Dog; A, friendly, domestic dog; Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [
+            {"name": "Dog", "label": "A, friendly, domestic dog", "parent": "Animal"}
+        ]
+
+    def test_column_count_disambiguates_comma_csv(self):
+        # Comma split matches the expected 3 columns; semicolon in the label does
+        # not, so comma stays the delimiter.
+        text = "Dog, A; B; C, Animal"
+        result = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert result == [{"name": "Dog", "label": "A; B; C", "parent": "Animal"}]
+
 
 class TestBulkAddClasses:
     def test_add_multiple(self, om):
@@ -151,6 +172,30 @@ class TestBulkAddClasses:
         result = om.bulk_add_classes(entries)
         assert len(result["errors"]) == 1
         assert result["created"] == ["Valid"]
+
+    def test_same_local_name_other_namespace_not_skipped(self):
+        # Review finding 3: a base-namespace entry must not be skipped just
+        # because the local name exists in another namespace.
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Dog", namespace="http://other.example/ns#")
+        result = om.bulk_add_classes([{"name": "Dog"}])
+        assert result["created"] == ["Dog"]
+        assert result["skipped"] == []
+        assert "http://test.org/ont#Dog" in {c["uri"] for c in om.get_classes()}
+
+    def test_namespace_column_creates_in_namespace(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        entries = [{"name": "Dog", "namespace": "http://other.example/ns#"}]
+        result = om.bulk_add_classes(entries)
+        assert result["created"] == ["Dog"]
+        assert "http://other.example/ns#Dog" in {c["uri"] for c in om.get_classes()}
+
+    def test_duplicate_full_uri_still_skipped(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Dog")
+        result = om.bulk_add_classes([{"name": "Dog"}])
+        assert result["skipped"] == ["Dog"]
+        assert result["created"] == []
 
 
 class TestBulkAddProperties:
