@@ -215,9 +215,18 @@ def _configure_page() -> None:
         logger.info(f"{APP_NAME} v{APP_VERSION}")
 
 
-@st.cache_resource
 def get_ontology_manager_class():
-    """Lazy load the OntologyManager class."""
+    """Lazy load the OntologyManager class.
+
+    Not cached with ``st.cache_resource``: that would pin the class object
+    captured at first import for the life of the server process. Streamlit
+    Community Cloud reruns the script on a git push without always restarting
+    the process, so a cached class survived across deploys and new instances
+    were built from the *old* class definition, missing methods added in the
+    new code (e.g. ``get_creatable_namespaces``) and raising ``AttributeError``
+    until the app was rebooted. The import below is already cached by Python's
+    module system, so re-importing each call is cheap and always current.
+    """
     from .ontology_manager import OntologyManager
 
     return OntologyManager
@@ -486,10 +495,13 @@ def maybe_restore_autosave():
     )
     # localStorage already holds this content at the new revision.
     st.session_state["_ls_saved_rev"] = _current_mutation_count()
-    # init_session_state parks empty sessions on Import/Export; with content
-    # restored, the Dashboard is the more useful landing page.
-    if st.session_state.get("nav_radio") == "Import / Export":
-        st.session_state["nav_radio"] = "Dashboard"
+    # Deliberately do NOT redirect navigation here. The browser localStorage
+    # component delivers the saved data on an arbitrary later rerun — usually the
+    # first one the user triggers (e.g. clicking a tab). Forcing nav to Dashboard
+    # then hijacked that interaction and yanked the user off the page they were
+    # on. Leaving nav untouched keeps the restore silent apart from the toast;
+    # the user stays wherever they are. (The synchronous disk-restore path can
+    # still land on Dashboard safely because it resolves before any interaction.)
     st.toast("Restored your previous session from this browser's autosave.", icon="💾")
 
 
@@ -1578,10 +1590,16 @@ def render_classes():
     classes = ont.get_classes()
     class_names = [c["name"] for c in classes]
 
+    # Seed the selection in session_state rather than passing ``default=``:
+    # graph-view "Open editor" pre-sets this key (see _open_full_editor) before
+    # the widget renders, and Streamlit warns when a keyed widget gets both a
+    # ``default`` and a session-state value. Seeding only when unset keeps that
+    # programmatic selection intact and silences the warning.
+    if "cls_active_tab" not in st.session_state:
+        st.session_state["cls_active_tab"] = "View Classes"
     _cls_tab = st.segmented_control(
         "Section",
         ["View Classes", "Add Class", "Edit/Delete Class", "Bulk Operations"],
-        default="View Classes",
         key="cls_active_tab",
         label_visibility="collapsed",
     )
