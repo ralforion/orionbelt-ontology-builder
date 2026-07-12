@@ -63,6 +63,51 @@ def test_full_uri_overrides_namespace_argument():
     assert str(uri) == "http://verbatim.example/Thing"
 
 
+class TestRenamePreservesNamespace:
+    def test_rename_class_keeps_namespace(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Thing", namespace=OTHER, label="a thing")
+        assert om.rename_class(OTHER + "Thing", "Thing2") is True
+        uris = {c["uri"]: c for c in om.get_classes()}
+        assert OTHER + "Thing2" in uris
+        assert OTHER + "Thing" not in uris
+        # Base namespace must not have swallowed it.
+        assert "http://test.org/ont#Thing2" not in uris
+        # The label survives the rename (post-rename update targets the new URI).
+        assert uris[OTHER + "Thing2"]["label"] == "a thing"
+
+    def test_rename_property_keeps_namespace(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_object_property("knows", namespace=OTHER)
+        assert om.rename_property(OTHER + "knows", "knowsWell") is True
+        uris = {p["uri"] for p in om.get_object_properties()}
+        assert OTHER + "knowsWell" in uris
+        assert "http://test.org/ont#knowsWell" not in uris
+
+    def test_rename_individual_keeps_namespace(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Person")
+        om.add_individual("alice", "Person", namespace=OTHER)
+        assert om.rename_individual(OTHER + "alice", "alice2") is True
+        uris = {i["uri"] for i in om.get_individuals()}
+        assert OTHER + "alice2" in uris
+        assert "http://test.org/ont#alice2" not in uris
+
+    def test_rename_to_full_uri_still_overrides(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Thing", namespace=OTHER)
+        assert om.rename_class(OTHER + "Thing", "http://third.example/X") is True
+        uris = {c["uri"] for c in om.get_classes()}
+        assert "http://third.example/X" in uris
+
+    def test_base_namespace_rename_unchanged(self):
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Dog")
+        assert om.rename_class("Dog", "Hound") is True
+        uris = {c["uri"] for c in om.get_classes()}
+        assert "http://test.org/ont#Hound" in uris
+
+
 class TestCreatableNamespaces:
     def test_base_namespace_is_first(self):
         om = OntologyManager(base_uri="http://test.org/ont#")
@@ -98,3 +143,22 @@ class TestCreatableNamespaces:
         nss = om.get_creatable_namespaces()
         assert "http://www.w3.org/2002/07/owl#" not in nss
         assert "http://www.w3.org/1999/02/22-rdf-syntax-ns#" not in nss
+
+    def test_reflects_graph_after_load(self):
+        # Derived from the live graph, so a prefix bound before a load must not
+        # linger once the loaded ontology no longer declares it (issue #87
+        # review, finding 2).
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_prefix("ex", OTHER)
+        assert OTHER in om.get_creatable_namespaces()
+
+        ttl = (
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+            "@prefix ex2: <http://second.example/ns#> .\n"
+            "ex2:Foo a owl:Class .\n"
+            "<http://loaded.example/ont> a owl:Ontology .\n"
+        )
+        om.load_from_string(ttl)
+        nss = om.get_creatable_namespaces()
+        assert OTHER not in nss
+        assert "http://second.example/ns#" in nss

@@ -1048,6 +1048,25 @@ def build_namespace_options(ont) -> tuple:
     return options, lookup
 
 
+def _renamed_ref(ont, old_uri, new_name):
+    """Full URI a rename produces for ``new_name``, preserving ``old_uri``'s
+    namespace (mirrors the engine's rename logic). Used so post-rename updates
+    target the resource in its own namespace rather than the base namespace."""
+    return str(ont._uri(new_name, ont._namespace_of(old_uri)))
+
+
+def _namespace_display(ont, uri):
+    """Human-readable namespace label for ``uri``: '(default) <base>' for the
+    base namespace, 'prefix: <ns>' when a prefix is bound, else the bare
+    namespace URI. Shown read-only on edit forms so the user can see which
+    namespace an entity lives in (renaming keeps it there)."""
+    ns = ont._namespace_of(uri)
+    if ns == ont.base_uri:
+        return f"(default) {ns}"
+    prefix = _prefix_for_uri(ns)
+    return f"{prefix}: {ns}" if prefix else ns
+
+
 def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_parent):
     """Apply a class edit (rename + label/comment/parent). Returns True on success.
 
@@ -1059,7 +1078,7 @@ def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_par
     current_ref = class_info["uri"]
     if new_name and new_name != class_info["name"]:
         if ont.rename_class(class_info["uri"], new_name):
-            current_ref = new_name
+            current_ref = _renamed_ref(ont, class_info["uri"], new_name)
         else:
             show_message(f"Cannot rename: '{new_name}' already exists!", "error")
             return False
@@ -1088,7 +1107,7 @@ def _apply_property_edit(
     current_ref = prop["uri"]
     if new_name and new_name != prop["name"]:
         if ont.rename_property(prop["uri"], new_name):
-            current_ref = new_name
+            current_ref = _renamed_ref(ont, prop["uri"], new_name)
         else:
             show_message(f"Cannot rename: '{new_name}' already exists!", "error")
             return False
@@ -1113,7 +1132,7 @@ def _apply_individual_edit(
     current_ref = ind["uri"]
     if new_name and new_name != ind["name"]:
         if ont.rename_individual(ind["uri"], new_name):
-            current_ref = new_name
+            current_ref = _renamed_ref(ont, ind["uri"], new_name)
         else:
             show_message(f"Cannot rename: '{new_name}' already exists!", "error")
             return False
@@ -1741,6 +1760,9 @@ def render_classes():
                         value=class_info["name"],
                         help="Renaming updates every reference to this class — "
                         "no links are lost, unlike delete-and-recreate.",
+                    )
+                    st.caption(
+                        f"Namespace: {_namespace_display(ont, class_info['uri'])}"
                     )
                     new_label = st.text_input("Label", value=class_info["label"])
                     new_comment = st.text_area("Comment", value=class_info["comment"])
