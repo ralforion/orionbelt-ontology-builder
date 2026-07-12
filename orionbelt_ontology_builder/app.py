@@ -1018,6 +1018,36 @@ def build_class_options(classes: list, include_none: bool = False) -> tuple:
     return options, lookup
 
 
+def build_namespace_options(ont) -> tuple:
+    """Build namespace dropdown options for creating an entity in a chosen
+    namespace.
+
+    Offers the base (default) namespace first, then any namespace already used
+    by an entity or explicitly bound by the user (see
+    :meth:`OntologyManager.get_creatable_namespaces`). Each option is labelled
+    with its bound prefix when one exists.
+
+    Returns:
+        tuple: (display_options, namespace_lookup). The lookup maps each display
+        string to a namespace URI, or ``None`` for the default (base) namespace
+        so callers can pass it straight to ``add_*(namespace=...)``.
+    """
+    options = []
+    lookup = {}
+
+    for i, ns in enumerate(ont.get_creatable_namespaces()):
+        if i == 0:
+            display = f"(default) {ns}"
+            lookup[display] = None
+        else:
+            prefix = _prefix_for_uri(ns)
+            display = f"{prefix}: {ns}" if prefix else ns
+            lookup[display] = ns
+        options.append(display)
+
+    return options, lookup
+
+
 def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_parent):
     """Apply a class edit (rename + label/comment/parent). Returns True on success.
 
@@ -1653,16 +1683,29 @@ def render_classes():
                 options=parent_options,
                 help="Select a parent class for hierarchy",
             )
+            ns_options, ns_lookup = build_namespace_options(ont)
+            ns_display = st.selectbox(
+                "Namespace",
+                options=ns_options,
+                help="Namespace the class is created in (default is the base URI)",
+            )
 
             submitted = st.form_submit_button("Add Class")
             if submitted:
+                ns_val = ns_lookup.get(ns_display)
                 if not name:
                     show_message("Class name is required!", "error")
-                elif name in [c["name"] for c in classes]:
+                elif str(ont._uri(name, ns_val)) in {c["uri"] for c in classes}:
                     show_message(f"Class '{name}' already exists!", "error")
                 else:
                     parent_val = parent_lookup.get(parent_display)
-                    ont.add_class(name, parent=parent_val, label=label, comment=comment)
+                    ont.add_class(
+                        name,
+                        parent=parent_val,
+                        label=label,
+                        comment=comment,
+                        namespace=ns_val,
+                    )
                     save_checkpoint("Add class")
                     show_message(f"Class '{name}' added successfully!", "success")
                     st.rerun()
@@ -2444,12 +2487,22 @@ def render_properties():
                     symmetric = st.checkbox("Symmetric")
 
                 inverse_disp = st.selectbox("Inverse Of", options=obj_prop_opts)
+                ns_options, ns_lookup = build_namespace_options(ont)
+                ns_display = st.selectbox(
+                    "Namespace",
+                    options=ns_options,
+                    help="Namespace the property is created in (default is the base URI)",
+                )
 
                 submitted = st.form_submit_button("Add Object Property")
                 if submitted:
+                    ns_val = ns_lookup.get(ns_display)
+                    prop_uris = {p["uri"] for p in object_props} | {
+                        p["uri"] for p in data_props
+                    }
                     if not name:
                         show_message("Property name is required!", "error")
-                    elif name in obj_prop_names or name in data_prop_names:
+                    elif str(ont._uri(name, ns_val)) in prop_uris:
                         show_message(f"Property '{name}' already exists!", "error")
                     else:
                         ont.add_object_property(
@@ -2466,6 +2519,7 @@ def render_properties():
                             reflexive=reflexive,
                             irreflexive=irreflexive,
                             inverse_of=obj_prop_lookup.get(inverse_disp),
+                            namespace=ns_val,
                         )
                         save_checkpoint("Add object property")
                         show_message(f"Object property '{name}' added!", "success")
@@ -2492,12 +2546,23 @@ def render_properties():
                 )
 
             functional = st.checkbox("Functional", key="data_prop_functional")
+            ns_options, ns_lookup = build_namespace_options(ont)
+            ns_display = st.selectbox(
+                "Namespace",
+                options=ns_options,
+                help="Namespace the property is created in (default is the base URI)",
+                key="data_prop_namespace",
+            )
 
             submitted = st.form_submit_button("Add Data Property")
             if submitted:
+                ns_val = ns_lookup.get(ns_display)
+                prop_uris = {p["uri"] for p in object_props} | {
+                    p["uri"] for p in data_props
+                }
                 if not name:
                     show_message("Property name is required!", "error")
-                elif name in obj_prop_names or name in data_prop_names:
+                elif str(ont._uri(name, ns_val)) in prop_uris:
                     show_message(f"Property '{name}' already exists!", "error")
                 else:
                     ont.add_data_property(
@@ -2507,6 +2572,7 @@ def render_properties():
                         label=label,
                         comment=comment,
                         functional=functional,
+                        namespace=ns_val,
                     )
                     save_checkpoint("Add data property")
                     show_message(f"Data property '{name}' added!", "success")
@@ -2853,16 +2919,27 @@ def render_individuals():
                 label = st.text_input("Label")
                 comment = st.text_area("Comment")
                 class_type = st.selectbox("Class Type *", options=class_names)
+                ns_options, ns_lookup = build_namespace_options(ont)
+                ns_display = st.selectbox(
+                    "Namespace",
+                    options=ns_options,
+                    help="Namespace the individual is created in (default is the base URI)",
+                )
 
                 submitted = st.form_submit_button("Add Individual")
                 if submitted:
+                    ns_val = ns_lookup.get(ns_display)
                     if not name:
                         show_message("Individual name is required!", "error")
-                    elif name in ind_names:
+                    elif str(ont._uri(name, ns_val)) in {i["uri"] for i in individuals}:
                         show_message(f"Individual '{name}' already exists!", "error")
                     else:
                         ont.add_individual(
-                            name, class_type, label=label, comment=comment
+                            name,
+                            class_type,
+                            label=label,
+                            comment=comment,
+                            namespace=ns_val,
                         )
                         save_checkpoint("Add individual")
                         show_message(f"Individual '{name}' added!", "success")

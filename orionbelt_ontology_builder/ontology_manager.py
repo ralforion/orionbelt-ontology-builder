@@ -98,6 +98,11 @@ class OntologyManager:
         self.graph.bind("dcterms", DCTERMS)
         self.graph.bind("", self.namespace)
 
+        # Namespaces the user explicitly bound (via add_prefix). Tracked so the
+        # "create in namespace" picker can offer them without also surfacing
+        # rdflib's ~30 auto-bound default prefixes.
+        self._custom_namespaces: Dict[str, str] = {}
+
         # Create ontology declaration
         self.ontology_uri = URIRef(base_uri.rstrip("#").rstrip("/"))
         self.graph.add((self.ontology_uri, RDF.type, OWL.Ontology))
@@ -191,11 +196,13 @@ class OntologyManager:
     def add_prefix(self, prefix: str, namespace: str):
         """Bind a custom prefix to a namespace URI in the graph."""
         self.graph.bind(prefix, Namespace(namespace), override=True)
+        self._custom_namespaces[prefix] = namespace
 
     def remove_prefix(self, prefix: str):
         """Remove a custom prefix binding. Standard prefixes cannot be removed."""
         if prefix in self.STANDARD_PREFIXES:
             raise ValueError(f"Cannot remove standard prefix '{prefix}'")
+        self._custom_namespaces.pop(prefix, None)
         # rdflib NamespaceManager doesn't support unbinding directly.
         # Rebuild the namespace manager by creating a new graph with the same triples.
         keep = [(p, ns) for p, ns in self.graph.namespaces() if p != prefix]
@@ -324,10 +331,18 @@ class OntologyManager:
         # Re-bind the default namespace
         self.graph.bind("", self.namespace)
 
-    def _uri(self, local_name: str) -> URIRef:
-        """Create a URI from a local name."""
+    def _uri(self, local_name: str, namespace: Optional[str] = None) -> URIRef:
+        """Create a URI from a local name.
+
+        A value that is already a full ``http(s)`` URI is returned unchanged.
+        Otherwise the local name is placed in ``namespace`` when one is given
+        (any bound namespace, e.g. a custom prefix), or in the base namespace
+        by default.
+        """
         if local_name.startswith("http://") or local_name.startswith("https://"):
             return URIRef(local_name)
+        if namespace:
+            return URIRef(namespace + local_name)
         return self.namespace[local_name]
 
     def _local_name(self, uri: Node) -> str:
@@ -337,6 +352,38 @@ class OntologyManager:
             return uri_str.split("#")[-1]
         return uri_str.split("/")[-1]
 
+    def _namespace_of(self, uri: Node) -> str:
+        """Return the namespace portion of a URI (everything before the local
+        name), e.g. 'http://ex.org/ns#Dog' -> 'http://ex.org/ns#'."""
+        uri_str = str(uri)
+        local = self._local_name(uri)
+        return uri_str[: len(uri_str) - len(local)]
+
+    def get_creatable_namespaces(self) -> List[str]:
+        """Namespaces offered when creating a new entity, base namespace first.
+
+        Includes the base (default) namespace, every namespace already used by
+        an existing entity (so imported namespaces are offered), and every
+        prefix the user explicitly bound via ``add_prefix``. Pure-syntax
+        namespaces (owl, rdf, rdfs, xsd) and rdflib's auto-bound default
+        prefixes are excluded so the list stays relevant.
+        """
+        result = [self.base_uri]
+        seen = {self.base_uri}
+        syntax_ns = {str(OWL), str(RDF), str(RDFS), str(XSD)}
+
+        extra = set(self._custom_namespaces.values())
+        for etype in self._ENTITY_TYPES:
+            for subject in self.graph.subjects(RDF.type, etype):
+                if isinstance(subject, URIRef):
+                    extra.add(self._namespace_of(subject))
+
+        for ns in sorted(extra):
+            if ns and ns not in seen and ns not in syntax_ns:
+                seen.add(ns)
+                result.append(ns)
+        return result
+
     # ==================== CLASS OPERATIONS ====================
 
     def add_class(
@@ -345,9 +392,14 @@ class OntologyManager:
         parent: Optional[str] = None,
         label: Optional[str] = None,
         comment: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new OWL class."""
-        class_uri = self._uri(name)
+        """Add a new OWL class.
+
+        ``namespace`` places the class in a specific namespace (any bound
+        prefix); when omitted the base namespace is used.
+        """
+        class_uri = self._uri(name, namespace)
         self.graph.add((class_uri, RDF.type, OWL.Class))
 
         if parent:
@@ -916,9 +968,14 @@ class OntologyManager:
         reflexive: bool = False,
         irreflexive: bool = False,
         inverse_of: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new object property."""
-        prop_uri = self._uri(name)
+        """Add a new object property.
+
+        ``namespace`` places the property in a specific namespace (any bound
+        prefix); when omitted the base namespace is used.
+        """
+        prop_uri = self._uri(name, namespace)
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
 
         if domain:
@@ -958,9 +1015,14 @@ class OntologyManager:
         label: Optional[str] = None,
         comment: Optional[str] = None,
         functional: bool = False,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new data property."""
-        prop_uri = self._uri(name)
+        """Add a new data property.
+
+        ``namespace`` places the property in a specific namespace (any bound
+        prefix); when omitted the base namespace is used.
+        """
+        prop_uri = self._uri(name, namespace)
         self.graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
 
         if domain:
@@ -1207,9 +1269,16 @@ class OntologyManager:
         class_name: str,
         label: Optional[str] = None,
         comment: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new individual (instance)."""
-        ind_uri = self._uri(name)
+        """Add a new individual (instance).
+
+        ``namespace`` places the individual in a specific namespace (any bound
+        prefix); when omitted the base namespace is used. The class reference is
+        resolved independently, so an individual can live in a different
+        namespace than its type.
+        """
+        ind_uri = self._uri(name, namespace)
         class_uri = self._uri(class_name)
 
         self.graph.add((ind_uri, RDF.type, OWL.NamedIndividual))
