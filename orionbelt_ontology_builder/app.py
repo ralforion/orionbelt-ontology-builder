@@ -186,16 +186,20 @@ def _configure_page() -> None:
     title is recomputed each run so it also tracks the current ontology. Only
     the first call steers the sidebar, so later runs don't fight a sidebar the
     user has collapsed."""
-    first = "_page_configured" not in st.session_state
-    kwargs = dict(
-        page_title=_page_title(),
-        page_icon=str(_FAVICON) if _FAVICON.exists() else None,
-        layout="wide",
-    )
-    if first:
-        kwargs["initial_sidebar_state"] = "expanded"
+    title = _page_title()
+    page_icon = str(_FAVICON) if _FAVICON.exists() else None
+    if "_page_configured" not in st.session_state:
+        # First run steers the sidebar open; later runs must not, so a title
+        # change doesn't fight a sidebar the user has collapsed.
         st.session_state["_page_configured"] = True
-    st.set_page_config(**kwargs)
+        st.set_page_config(
+            page_title=title,
+            page_icon=page_icon,
+            layout="wide",
+            initial_sidebar_state="expanded",
+        )
+    else:
+        st.set_page_config(page_title=title, page_icon=page_icon, layout="wide")
     st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
     # Force the brand primary on key controls in every theme (Streamlit's preset
     # themes would otherwise revert it to red), then lighten tab/pill accents in
@@ -1059,7 +1063,7 @@ def build_namespace_options(ont) -> tuple:
         so callers can pass it straight to ``add_*(namespace=...)``.
     """
     options = []
-    lookup = {}
+    lookup: dict[str, str | None] = {}
 
     for i, ns in enumerate(ont.get_creatable_namespaces()):
         if i == 0:
