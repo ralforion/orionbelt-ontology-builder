@@ -7,7 +7,7 @@
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralforion/orionbelt-ontology-builder?style=social)](https://github.com/ralforion/orionbelt-ontology-builder)
-[![Version 1.16.0](https://img.shields.io/badge/version-1.16.0-purple.svg)](https://github.com/ralforion/orionbelt-ontology-builder/releases)
+[![PyPI](https://img.shields.io/pypi/v/orionbelt-ontology-builder?logo=pypi&logoColor=white&label=PyPI&color=purple)](https://pypi.org/project/orionbelt-ontology-builder/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-ontology-builder/blob/main/LICENSE)
 
