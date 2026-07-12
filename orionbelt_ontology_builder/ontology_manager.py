@@ -98,6 +98,12 @@ class OntologyManager:
         self.graph.bind("dcterms", DCTERMS)
         self.graph.bind("", self.namespace)
 
+        # Prefixes the user explicitly bound via add_prefix (prefix -> namespace).
+        # Tracked so the creation picker offers them even when the name collides
+        # with one of rdflib's auto-bound defaults (e.g. an explicit 'foaf').
+        # Reset on load/restore so it can never go stale against the graph.
+        self._user_added_prefixes: Dict[str, str] = {}
+
         # Create ontology declaration
         self.ontology_uri = URIRef(base_uri.rstrip("#").rstrip("/"))
         self.graph.add((self.ontology_uri, RDF.type, OWL.Ontology))
@@ -191,11 +197,13 @@ class OntologyManager:
     def add_prefix(self, prefix: str, namespace: str):
         """Bind a custom prefix to a namespace URI in the graph."""
         self.graph.bind(prefix, Namespace(namespace), override=True)
+        self._user_added_prefixes[prefix] = namespace
 
     def remove_prefix(self, prefix: str):
         """Remove a custom prefix binding. Standard prefixes cannot be removed."""
         if prefix in self.STANDARD_PREFIXES:
             raise ValueError(f"Cannot remove standard prefix '{prefix}'")
+        self._user_added_prefixes.pop(prefix, None)
         # rdflib NamespaceManager doesn't support unbinding directly.
         # Rebuild the namespace manager by creating a new graph with the same triples.
         keep = [(p, ns) for p, ns in self.graph.namespaces() if p != prefix]
@@ -362,18 +370,21 @@ class OntologyManager:
         """Namespaces offered when creating a new entity, base namespace first.
 
         Includes the base (default) namespace, every namespace already used by
-        an existing entity (so imported namespaces are offered), and every
-        namespace bound under a user/import prefix. Pure-syntax namespaces (owl,
-        rdf, rdfs, xsd) and rdflib's auto-bound default prefixes are excluded so
-        the list stays relevant. Derived from the live graph, so it reflects the
-        current ontology after an import, undo, or session restore.
+        an existing entity (so imported namespaces are offered), every namespace
+        the user explicitly bound via add_prefix, and any namespace bound under a
+        non-default import prefix. Pure-syntax namespaces (owl, rdf, rdfs, xsd)
+        and rdflib's auto-bound default prefixes are excluded so the list stays
+        relevant. Derived from the live graph plus the (load/restore-reset)
+        record of explicit user prefixes, so it reflects the current ontology.
         """
         result = [self.base_uri]
         seen = {self.base_uri}
         syntax_ns = {str(OWL), str(RDF), str(RDFS), str(XSD)}
 
-        extra = set()
-        # Namespaces bound under a prefix the user or an import introduced
+        # Namespaces the user explicitly bound — offered even when the prefix
+        # name matches one of rdflib's auto-bound defaults (e.g. 'foaf').
+        extra = set(self._user_added_prefixes.values())
+        # Namespaces bound under a prefix an import introduced
         # (i.e. not one of rdflib's auto-bound defaults or our standards).
         for prefix, ns in self.graph.namespaces():
             if (
@@ -2704,6 +2715,7 @@ class OntologyManager:
             self._loaded_prefixes = self._extract_prefixes_from_jsonld(data)
         else:
             self._loaded_prefixes = []
+        self._user_added_prefixes = {}
         self.graph = Graph()
         self.graph.parse(data=data, format=format)
         self._update_namespace_from_graph()
@@ -3160,7 +3172,13 @@ class OntologyManager:
         return self.graph.serialize(format="nt").encode("utf-8")
 
     def restore_snapshot(self, snapshot: bytes):
-        """Replace the current graph with a previously captured snapshot."""
+        """Replace the current graph with a previously captured snapshot.
+
+        Snapshots are N-Triples (no prefix bindings), so custom prefixes do not
+        survive an undo/redo; reset the explicit-prefix record to match rather
+        than leave it pointing at prefixes the restored graph no longer has.
+        """
+        self._user_added_prefixes = {}
         self.graph = Graph()
         self.graph.parse(data=snapshot.decode("utf-8"), format="nt")
         self._update_namespace_from_graph()

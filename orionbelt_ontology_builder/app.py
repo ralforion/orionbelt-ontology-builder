@@ -1070,6 +1070,30 @@ def _namespace_option_index(ont, ns_options, ns_lookup, uri):
 _KEEP_NAMESPACE = object()  # sentinel: leave a resource in its current namespace
 
 
+def _rename_or_move(ont, rename_fn, old_uri, old_local, new_name, new_namespace):
+    """Resolve the target URI from the (possibly changed) local name and
+    namespace and rename via ``rename_fn`` if it differs from ``old_uri``.
+
+    A namespace change is just a rename to a full URI in the new namespace, so
+    ``rename_fn`` re-points every reference and no links are lost. Returns
+    ``(ok, current_ref)``: ``ok`` is False only when ``rename_fn`` refuses
+    because the target URI already exists. ``new_namespace`` is ``None`` (base),
+    a namespace URI, or the ``_KEEP_NAMESPACE`` sentinel to keep the current
+    namespace.
+    """
+    target_ns = (
+        ont._namespace_of(old_uri)
+        if new_namespace is _KEEP_NAMESPACE
+        else new_namespace
+    )
+    target_uri = str(ont._uri(new_name or old_local, target_ns))
+    if target_uri == old_uri:
+        return True, old_uri
+    if rename_fn(old_uri, target_uri):
+        return True, target_uri
+    return False, old_uri
+
+
 def _apply_class_edit(
     ont,
     class_info,
@@ -1090,19 +1114,20 @@ def _apply_class_edit(
     without a namespace selector). Shows an error and returns False if the target
     URI is already taken. The caller owns the undo checkpoint and rerun.
     """
-    current_ref = class_info["uri"]
-    target_ns = (
-        ont._namespace_of(class_info["uri"])
-        if new_namespace is _KEEP_NAMESPACE
-        else new_namespace
+    ok, current_ref = _rename_or_move(
+        ont,
+        ont.rename_class,
+        class_info["uri"],
+        class_info["name"],
+        new_name,
+        new_namespace,
     )
-    target_uri = str(ont._uri(new_name or class_info["name"], target_ns))
-    if target_uri != class_info["uri"]:
-        if ont.rename_class(class_info["uri"], target_uri):
-            current_ref = target_uri
-        else:
-            show_message(f"Cannot move/rename: '{target_uri}' already exists!", "error")
-            return False
+    if not ok:
+        show_message(
+            f"Cannot move/rename: '{new_name or class_info['name']}' already exists!",
+            "error",
+        )
+        return False
     if class_info["parents"] and new_parent != class_info["parents"][0]:
         ont.update_class(current_ref, remove_parent=class_info["parents"][0])
     ont.update_class(
@@ -1660,7 +1685,10 @@ def render_classes():
                                 current_ref = cls["uri"]
                                 if new_name and new_name != cls["name"]:
                                     if ont.rename_class(cls["uri"], new_name):
-                                        current_ref = new_name  # post-rename, the resource lives in the base namespace
+                                        # Rename preserves the class's namespace.
+                                        current_ref = _renamed_ref(
+                                            ont, cls["uri"], new_name
+                                        )
                                         save_checkpoint("Rename class")
                                         show_message(
                                             f"Class renamed to '{new_name}'", "success"
@@ -2153,6 +2181,19 @@ def render_properties():
                                 "property, including assertions that use it — "
                                 "no links are lost.",
                             )
+                            ns_opts, ns_lookup = build_namespace_options(ont)
+                            new_namespace = ns_lookup.get(
+                                st.selectbox(
+                                    "Namespace",
+                                    options=ns_opts,
+                                    index=_namespace_option_index(
+                                        ont, ns_opts, ns_lookup, prop["uri"]
+                                    ),
+                                    key=f"objp_ns_{prop_uid}",
+                                    help="Moving to another namespace re-points "
+                                    "every reference to this property.",
+                                )
+                            )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"objp_lbl_{prop_uid}"
                             )
@@ -2198,22 +2239,21 @@ def render_properties():
                                 )
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first — pass URI for cross-namespace safety
-                                current_ref = prop["uri"]
-                                if new_name and new_name != prop["name"]:
-                                    if ont.rename_property(prop["uri"], new_name):
-                                        current_ref = new_name
-                                        save_checkpoint("Rename property")
-                                        show_message(
-                                            f"Property renamed to '{new_name}'",
-                                            "success",
-                                        )
-                                    else:
-                                        show_message(
-                                            f"Cannot rename: '{new_name}' already exists!",
-                                            "error",
-                                        )
-                                        st.rerun()
+                                # Rename/move first so later updates hit the new URI.
+                                ok, current_ref = _rename_or_move(
+                                    ont,
+                                    ont.rename_property,
+                                    prop["uri"],
+                                    prop["name"],
+                                    new_name,
+                                    new_namespace,
+                                )
+                                if not ok:
+                                    show_message(
+                                        f"Cannot move/rename: '{new_name}' already exists!",
+                                        "error",
+                                    )
+                                    st.rerun()
 
                                 new_dom_uri = cls_lookup.get(dom_disp) or ""
                                 new_rng_uri = cls_lookup.get(rng_disp) or ""
@@ -2351,6 +2391,19 @@ def render_properties():
                                 "property, including assertions that use it — "
                                 "no links are lost.",
                             )
+                            ns_opts, ns_lookup = build_namespace_options(ont)
+                            new_namespace = ns_lookup.get(
+                                st.selectbox(
+                                    "Namespace",
+                                    options=ns_opts,
+                                    index=_namespace_option_index(
+                                        ont, ns_opts, ns_lookup, prop["uri"]
+                                    ),
+                                    key=f"dp_ns_{prop_uid}",
+                                    help="Moving to another namespace re-points "
+                                    "every reference to this property.",
+                                )
+                            )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"dp_lbl_{prop_uid}"
                             )
@@ -2393,22 +2446,21 @@ def render_properties():
                                 )
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first — pass URI for cross-namespace safety
-                                current_ref = prop["uri"]
-                                if new_name and new_name != prop["name"]:
-                                    if ont.rename_property(prop["uri"], new_name):
-                                        current_ref = new_name
-                                        save_checkpoint("Rename property")
-                                        show_message(
-                                            f"Property renamed to '{new_name}'",
-                                            "success",
-                                        )
-                                    else:
-                                        show_message(
-                                            f"Cannot rename: '{new_name}' already exists!",
-                                            "error",
-                                        )
-                                        st.rerun()
+                                # Rename/move first so later updates hit the new URI.
+                                ok, current_ref = _rename_or_move(
+                                    ont,
+                                    ont.rename_property,
+                                    prop["uri"],
+                                    prop["name"],
+                                    new_name,
+                                    new_namespace,
+                                )
+                                if not ok:
+                                    show_message(
+                                        f"Cannot move/rename: '{new_name}' already exists!",
+                                        "error",
+                                    )
+                                    st.rerun()
 
                                 new_dom_uri = cls_lookup.get(dom_disp) or ""
                                 ont.update_property(
@@ -2900,6 +2952,19 @@ def render_individuals():
                                 "individual — no links are lost, unlike "
                                 "delete-and-recreate.",
                             )
+                            ns_opts, ns_lookup = build_namespace_options(ont)
+                            new_namespace = ns_lookup.get(
+                                st.selectbox(
+                                    "Namespace",
+                                    options=ns_opts,
+                                    index=_namespace_option_index(
+                                        ont, ns_opts, ns_lookup, ind["uri"]
+                                    ),
+                                    key=f"ind_ns_{_ik}",
+                                    help="Moving to another namespace re-points "
+                                    "every reference to this individual.",
+                                )
+                            )
                             new_label = st.text_input(
                                 "Label", value=ind["label"], key=f"ind_lbl_{_ik}"
                             )
@@ -2928,22 +2993,21 @@ def render_individuals():
                                 )
 
                             if st.form_submit_button("Save Changes"):
-                                # Handle rename first — pass URI for cross-namespace safety
-                                current_ref = ind["uri"]
-                                if new_name and new_name != ind["name"]:
-                                    if ont.rename_individual(ind["uri"], new_name):
-                                        current_ref = new_name
-                                        save_checkpoint("Rename individual")
-                                        show_message(
-                                            f"Individual renamed to '{new_name}'",
-                                            "success",
-                                        )
-                                    else:
-                                        show_message(
-                                            f"Cannot rename: '{new_name}' already exists!",
-                                            "error",
-                                        )
-                                        st.rerun()
+                                # Rename/move first so later updates hit the new URI.
+                                ok, current_ref = _rename_or_move(
+                                    ont,
+                                    ont.rename_individual,
+                                    ind["uri"],
+                                    ind["name"],
+                                    new_name,
+                                    new_namespace,
+                                )
+                                if not ok:
+                                    show_message(
+                                        f"Cannot move/rename: '{new_name}' already exists!",
+                                        "error",
+                                    )
+                                    st.rerun()
 
                                 ont.update_individual(
                                     current_ref,

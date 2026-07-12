@@ -163,6 +163,27 @@ class TestCreatableNamespaces:
         assert "http://www.w3.org/2002/07/owl#" not in nss
         assert "http://www.w3.org/1999/02/22-rdf-syntax-ns#" not in nss
 
+    def test_explicit_rdflib_default_prefix_is_offered(self):
+        # Review finding 2: explicitly binding a prefix whose name matches one of
+        # rdflib's auto-bound defaults (e.g. foaf) must still be offered.
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_prefix("foaf", "http://xmlns.com/foaf/0.1/")
+        assert "http://xmlns.com/foaf/0.1/" in om.get_creatable_namespaces()
+
+    def test_auto_bound_default_prefix_not_offered(self):
+        # But an untouched auto-bound default (never added by the user) stays out.
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        assert "http://xmlns.com/foaf/0.1/" not in om.get_creatable_namespaces()
+
+    def test_user_prefix_reset_on_restore(self):
+        # Snapshots are prefix-less, so an explicit prefix must not linger in the
+        # picker after an undo/redo that the graph no longer reflects.
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_prefix("ex", OTHER)
+        snapshot = om.take_snapshot()
+        om.restore_snapshot(snapshot)
+        assert OTHER not in om.get_creatable_namespaces()
+
     def test_reflects_graph_after_load(self):
         # Derived from the live graph, so a prefix bound before a load must not
         # linger once the loaded ontology no longer declares it (issue #87
