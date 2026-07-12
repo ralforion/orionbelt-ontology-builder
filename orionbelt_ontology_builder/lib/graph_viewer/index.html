@@ -166,8 +166,12 @@ function renderGraph(args) {
     // Cache the computed layout so a re-mount (e.g. toggling the side panel)
     // restores node positions instantly instead of re-running physics and
     // flickering. Keyed by the render seq + node set, so clicking Render still
-    // recomputes a fresh layout. Stored in localStorage, shared across the
-    // component's iframe instances within the session.
+    // recomputes a fresh layout. Stored in sessionStorage (NOT localStorage) so
+    // the cache is scoped to this browser session: same-origin iframe re-mounts
+    // within the tab still share it, but a brand-new session starts fresh. With
+    // localStorage the saved zoom/pan/positions leaked across sessions — the
+    // render seq resets to 0 on a fresh session and the node-set hash is stable
+    // for the same ontology, so an old session's viewport was restored.
     function _hash(s) {
         var h = 0;
         for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
@@ -176,7 +180,7 @@ function renderGraph(args) {
     var nodeHash = _hash(nodeArr.map(function(n) { return n.id; }).sort().join('|'));
     var savedPos = null, savedView = null;
     try {
-        var _raw = JSON.parse(localStorage.getItem('viz_pos') || 'null');
+        var _raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null');
         if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash) {
             savedPos = _raw.pos;
             savedView = _raw.view || null;  // {scale, position}
@@ -217,7 +221,7 @@ function renderGraph(args) {
     // user drag/zoom, so the cache matches what's on screen (Codex review #84).
     function savePositions() {
         try {
-            localStorage.setItem('viz_pos', JSON.stringify({
+            sessionStorage.setItem('viz_pos', JSON.stringify({
                 seq: args.seq, hash: nodeHash, pos: network.getPositions(),
                 view: {scale: network.getScale(), position: network.getViewPosition()}
             }));
