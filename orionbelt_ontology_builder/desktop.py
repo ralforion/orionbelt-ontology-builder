@@ -52,6 +52,81 @@ def _preferred_gui() -> str | None:
     return None
 
 
+# Injected into the desktop webview: mirror the page's document.title (set by
+# st.set_page_config, so it carries the current ontology name) onto the native
+# window through the exposed bridge below. pywebview does not propagate
+# document.title to the OS window on its own, so the window would otherwise keep
+# its static launch title (issue #90).
+_TITLE_SYNC_JS = """
+(function () {
+  if (window.__orionbeltTitleSync) return;
+  window.__orionbeltTitleSync = true;
+  function push() {
+    try {
+      var api = window.pywebview && window.pywebview.api;
+      if (api && api.orionbelt_set_window_title) {
+        api.orionbelt_set_window_title(document.title);
+      }
+    } catch (e) {}
+  }
+  var head = document.head || document.documentElement;
+  new MutationObserver(push).observe(head, {
+    subtree: true, childList: true, characterData: true
+  });
+  push();
+})();
+"""
+
+
+def _install_window_title_sync(app_name: str):
+    """Make the native window title follow the page title (issue #90).
+
+    Hooks ``webview.create_window`` so each window (a) exposes a title setter to
+    JS and (b) once loaded, runs :data:`_TITLE_SYNC_JS`, a MutationObserver that
+    pushes ``document.title`` back through that setter. Every step is defensive:
+    any failure leaves the static launch title in place rather than breaking the
+    desktop launch. Returns the original ``create_window`` for restoration, or
+    ``None`` when there is nothing to hook (e.g. a stubbed webview in tests).
+    """
+    import webview
+
+    original_create = getattr(webview, "create_window", None)
+    if original_create is None:
+        return None
+
+    def _create(*args, **kwargs):
+        window = original_create(*args, **kwargs)
+
+        def orionbelt_set_window_title(title):
+            # Ignore the Streamlit default / empty title so the window keeps a
+            # meaningful name during the brief window before the app connects.
+            try:
+                window.set_title(title if title and title != "Streamlit" else app_name)
+            except Exception:
+                pass
+            return True
+
+        try:
+            window.expose(orionbelt_set_window_title)
+        except Exception:
+            pass
+
+        def _inject():
+            try:
+                window.evaluate_js(_TITLE_SYNC_JS)
+            except Exception:
+                pass
+
+        try:
+            window.events.loaded += _inject
+        except Exception:
+            pass
+        return window
+
+    webview.create_window = _create
+    return original_create
+
+
 def run() -> None:
     """Launch the app in a native desktop window.
 
@@ -108,6 +183,9 @@ def run() -> None:
 
     entry = Path(__file__).parent / "streamlit_entry.py"
     webview.start = _start_with_persistent_storage
+    # Mirror the page title onto the native window so it shows the current
+    # ontology name like the browser tab (issue #90).
+    original_create_window = _install_window_title_sync(APP_NAME)
     try:
         start_desktop_app(
             script_path=str(entry),
@@ -118,6 +196,8 @@ def run() -> None:
         )
     finally:
         webview.start = original_start
+        if original_create_window is not None:
+            webview.create_window = original_create_window
 
 
 if __name__ == "__main__":
