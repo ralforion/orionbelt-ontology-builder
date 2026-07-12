@@ -2,6 +2,7 @@
 
 import pytest
 from ontology_manager import OntologyManager
+from rdflib.namespace import RDFS
 
 
 @pytest.fixture
@@ -172,6 +173,83 @@ class TestBulkAddClasses:
         result = om.bulk_add_classes(entries)
         assert len(result["errors"]) == 1
         assert result["created"] == ["Valid"]
+
+    def test_missing_parent_declared_as_class(self, om):
+        # Issue #106: a referenced parent that isn't a class should be declared
+        # as one, so subClassOf points at a real class node.
+        result = om.bulk_add_classes([{"name": "Dog", "parent": "Animal"}])
+        assert "Dog" in result["created"]
+        assert "Animal" in result["created"]
+        classes = {c["name"]: c for c in om.get_classes()}
+        assert "Animal" in classes  # now a real owl:Class
+        assert "Animal" in classes["Dog"]["parents"]
+        # The whole graph still serializes.
+        assert om.graph.serialize(format="turtle")
+
+    def test_existing_parent_not_redeclared(self, om_with_classes):
+        # Person already exists; it must not be re-created or duplicated.
+        result = om_with_classes.bulk_add_classes(
+            [{"name": "Student", "parent": "Person"}]
+        )
+        assert result["created"] == ["Student"]  # Person not re-created
+        student = next(
+            c for c in om_with_classes.get_classes() if c["name"] == "Student"
+        )
+        assert "Person" in student["parents"]
+
+    def test_explicit_parent_row_keeps_its_label(self, om):
+        # When the parent is also an explicit row (even later), that row creates
+        # it with its label; it is not auto-declared as a bare class first.
+        result = om.bulk_add_classes(
+            [
+                {"name": "Dog", "parent": "Animal"},
+                {"name": "Animal", "label": "An Animal"},
+            ]
+        )
+        assert result["created"] == ["Dog", "Animal"]  # Animal once, from its row
+        classes = {c["name"]: c for c in om.get_classes()}
+        assert classes["Animal"]["label"] == "An Animal"
+        assert "Animal" in classes["Dog"]["parents"]
+
+    def test_explicit_row_in_other_namespace_does_not_suppress_parent(self, om):
+        # Review P1: a same-named explicit row in a DIFFERENT namespace must not
+        # suppress declaring the base-namespace parent the child references.
+        om.bulk_add_classes(
+            [
+                {"name": "Dog", "parent": "Animal"},
+                {"name": "Animal", "namespace": "http://other.example/ns#"},
+            ]
+        )
+        base_animal = str(om._uri("Animal"))  # base namespace
+        other_animal = "http://other.example/ns#Animal"
+        uris = {c["uri"] for c in om.get_classes()}
+        # The parent the child actually points at is a real class...
+        assert base_animal in uris
+        assert base_animal in {
+            str(o) for o in om.graph.objects(om._uri("Dog"), RDFS.subClassOf)
+        }
+        # ...and so is the unrelated other-namespace class.
+        assert other_animal in uris
+        assert om.graph.serialize(format="turtle")
+
+    def test_failed_explicit_parent_row_still_backfills(self, om):
+        # Review P2: an explicit parent row that errors must not suppress
+        # declaring the parent the child actually references.
+        result = om.bulk_add_classes(
+            [
+                {"name": "Dog", "parent": "Animal"},
+                {"name": "Animal", "parent": "Bad Parent"},  # invalid -> errors
+            ]
+        )
+        assert any(e["name"] == "Animal" for e in result["errors"])
+        base_animal = str(om._uri("Animal"))
+        uris = {c["uri"] for c in om.get_classes()}
+        # Backfilled despite the failed explicit row, so no dangling parent.
+        assert base_animal in uris
+        assert base_animal in {
+            str(o) for o in om.graph.objects(om._uri("Dog"), RDFS.subClassOf)
+        }
+        assert om.graph.serialize(format="turtle")
 
     def test_same_local_name_other_namespace_not_skipped(self):
         # Review finding 3: a base-namespace entry must not be skipped just

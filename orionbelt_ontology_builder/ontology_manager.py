@@ -871,10 +871,20 @@ class OntologyManager:
         Each entry dict can have: name, label, parent, namespace. Duplicates are
         detected by full URI, so the same local name in a different namespace is
         not treated as existing.
+
+        A referenced parent that is not already a class is declared as a bare
+        ``owl:Class`` (issue #106), so the ``rdfs:subClassOf`` target is a real
+        class node (visible in Visualization), matching the manual flow of
+        creating the parent, creating the child, then setting the parent. This
+        is done as a backfill after all rows are processed, keyed by the parent's
+        full URI: a parent that another row actually creates (with its own
+        label/comment) is left alone, but one whose explicit row is missing,
+        skipped, or errors is still declared so no dangling parent remains.
         Returns {created: [], errors: [], skipped: []}.
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
         existing = {c["uri"] for c in self.get_classes()}
+        referenced_parents: set[str] = set()
 
         for entry in entries:
             name = entry.get("name", "").strip()
@@ -882,6 +892,7 @@ class OntologyManager:
                 result["errors"].append({"name": "", "error": "Empty name"})
                 continue
             namespace = entry.get("namespace", "").strip() or None
+            parent = entry.get("parent", "").strip() or None
             uri = str(self._uri(name, namespace))
             if uri in existing:
                 result["skipped"].append(name)
@@ -889,14 +900,26 @@ class OntologyManager:
             try:
                 self.add_class(
                     name,
-                    parent=entry.get("parent", "").strip() or None,
+                    parent=parent,
                     label=entry.get("label", "").strip() or None,
                     namespace=namespace,
                 )
                 result["created"].append(name)
                 existing.add(uri)
+                if parent:
+                    referenced_parents.add(str(self._uri(parent)))
             except Exception as e:
                 result["errors"].append({"name": name, "error": str(e)})
+
+        # Backfill: any referenced parent that no successful row declared as a
+        # class becomes a bare owl:Class, so the hierarchy has no dangling target.
+        for parent_uri in sorted(referenced_parents - existing):
+            try:
+                created_uri = self.add_class(parent_uri)
+                existing.add(parent_uri)
+                result["created"].append(self._local_name(created_uri))
+            except Exception as e:
+                result["errors"].append({"name": parent_uri, "error": str(e)})
 
         return result
 
