@@ -178,22 +178,24 @@ def _page_title() -> str:
 def _configure_page() -> None:
     """Apply page config and custom CSS. Called from main() so it fires on
     every Streamlit rerun (CSS markdown only persists for the rerun in which it
-    was emitted). set_page_config is re-issued whenever the derived page title
-    changes so the browser tab tracks the current ontology (issue #90)."""
-    title = _page_title()
-    prev = st.session_state.get("_page_title")
-    if prev != title:
-        kwargs = dict(
-            page_title=title,
-            page_icon=str(_FAVICON) if _FAVICON.exists() else None,
-            layout="wide",
-        )
-        # Only steer the sidebar on the first config, so a later title change
-        # doesn't fight a sidebar the user has collapsed.
-        if prev is None:
-            kwargs["initial_sidebar_state"] = "expanded"
-        st.set_page_config(**kwargs)
-        st.session_state["_page_title"] = title
+    was emitted).
+
+    set_page_config is re-issued on *every* run — the browser resets the tab
+    title to the Streamlit default on reruns where it is not called, so it must
+    be re-asserted each time for the ontology name to persist (issue #90). The
+    title is recomputed each run so it also tracks the current ontology. Only
+    the first call steers the sidebar, so later runs don't fight a sidebar the
+    user has collapsed."""
+    first = "_page_configured" not in st.session_state
+    kwargs = dict(
+        page_title=_page_title(),
+        page_icon=str(_FAVICON) if _FAVICON.exists() else None,
+        layout="wide",
+    )
+    if first:
+        kwargs["initial_sidebar_state"] = "expanded"
+        st.session_state["_page_configured"] = True
+    st.set_page_config(**kwargs)
     st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
     # Force the brand primary on key controls in every theme (Streamlit's preset
     # themes would otherwise revert it to red), then lighten tab/pill accents in
@@ -235,17 +237,11 @@ def init_session_state():
         st.session_state.flash_message = None
     if "error_log" not in st.session_state:
         st.session_state.error_log = []
-    # On first run with empty ontology, start on Import/Export page.
-    if "nav_radio" not in st.session_state:
-        ont = st.session_state.ontology
-        _s = ont.get_statistics()
-        if (
-            _s["classes"] == 0
-            and _s["object_properties"] == 0
-            and _s["data_properties"] == 0
-            and _s.get("concepts", 0) == 0
-        ):
-            st.session_state["nav_radio"] = "Import / Export"
+    # Landing on Import/Export for a fresh empty session is handled at the
+    # navigation radio via its `index` (see main), not by pre-setting the
+    # widget's session_state value here: a pre-set value left the radio
+    # highlighting Dashboard while the page showed Import/Export and swallowed
+    # the first nav click.
 
 
 def _content_hash(text: str) -> str:
@@ -7021,7 +7017,19 @@ def main():
         del st.session_state.search_navigate_to
     if nav_override and nav_override in pages:
         st.session_state["nav_radio"] = nav_override
-    selection = st.sidebar.radio("Navigation", list(pages.keys()), key="nav_radio")
+    # Land a fresh empty session on Import/Export via the radio's `index` so the
+    # highlight and value agree (a pre-set session_state value diverged them and
+    # swallowed the first nav click). Once the user navigates, nav_radio exists
+    # in session_state and drives the selection, so index is ignored.
+    _page_names = list(pages.keys())
+    _default_idx = 0
+    if "nav_radio" not in st.session_state and _ontology_is_empty(
+        st.session_state.ontology
+    ):
+        _default_idx = _page_names.index("Import / Export")
+    selection = st.sidebar.radio(
+        "Navigation", _page_names, index=_default_idx, key="nav_radio"
+    )
 
     # Undo / Redo controls
     um = st.session_state.undo_manager
