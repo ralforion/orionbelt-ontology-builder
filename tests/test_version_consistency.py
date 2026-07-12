@@ -27,10 +27,12 @@ def test_app_version_matches_pyproject():
     )
 
 
-def test_readme_badge_matches_pyproject():
+def test_readme_pin_hint_matches_pyproject():
+    # The version badge is now a dynamic PyPI badge (auto-updates), so the only
+    # hardcoded version left in the README is the Docker image pin example.
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     version = _pyproject_version()
-    assert f"version-{version}-" in readme, (
-        "README version badge is out of sync with pyproject.toml "
-        f"(expected version-{version}-)"
+    assert f"`:{version}`" in readme, (
+        "README Docker pin hint is out of sync with pyproject.toml "
+        f"(expected `:{version}`)"
     )
