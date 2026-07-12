@@ -425,6 +425,8 @@ class OntologyManager:
         remove_parent: Optional[str] = None,
     ):
         """Update an existing class."""
+        if new_parent:
+            self._require_valid_name(new_parent)
         class_uri = self._uri(name)
 
         if new_label is not None:
@@ -1049,6 +1051,12 @@ class OntologyManager:
         new_range: Optional[str] = None,
     ):
         """Update an existing property."""
+        if new_domain:
+            self._require_valid_name(new_domain)
+        # new_range may be a datatype (looked up below) or a class URI; only the
+        # class case reaches _uri() and needs validating.
+        if new_range and new_range not in self.XSD_DATATYPES:
+            self._require_valid_name(new_range)
         prop_uri = self._uri(name)
 
         if new_label is not None:
@@ -1314,6 +1322,8 @@ class OntologyManager:
         remove_class: Optional[str] = None,
     ):
         """Update an existing individual."""
+        if add_class:
+            self._require_valid_name(add_class)
         ind_uri = self._uri(name)
 
         if new_label is not None:
@@ -2047,6 +2057,10 @@ class OntologyManager:
         remove_scheme: Optional[str] = None,
     ):
         """Update a SKOS Concept's properties."""
+        if new_broader is not _UNSET and new_broader:
+            self._require_valid_name(new_broader)
+        if add_scheme:
+            self._require_valid_name(add_scheme)
         uri = self._uri(name)
 
         if new_pref_label is not _UNSET:

@@ -165,3 +165,47 @@ class TestReferenceValidation:
         with pytest.raises(ValueError):
             om.add_individual("alice", "Bad Class")
         assert om.get_individuals() == []
+
+
+class TestUpdateReferenceValidation:
+    """Review pass: update paths must validate add-side references too."""
+
+    def test_update_class_rejects_invalid_parent(self, om):
+        om.add_class("Good")
+        with pytest.raises(ValueError):
+            om.update_class("Good", new_parent="Bad Parent")
+        assert om.graph.serialize(format="turtle")
+
+    def test_update_property_rejects_invalid_domain(self, om):
+        om.add_class("Person")
+        om.add_object_property("likes", domain="Person", range_="Person")
+        with pytest.raises(ValueError):
+            om.update_property("likes", new_domain="Bad Domain")
+        assert om.graph.serialize(format="turtle")
+
+    def test_update_property_rejects_invalid_class_range(self, om):
+        om.add_class("Person")
+        om.add_object_property("likes", domain="Person", range_="Person")
+        with pytest.raises(ValueError):
+            om.update_property("likes", new_range="Bad Range")
+
+    def test_update_property_accepts_datatype_range(self, om):
+        om.add_class("Person")
+        om.add_data_property("age", domain="Person")
+        # A datatype range is not a name and must not be rejected.
+        om.update_property("age", new_range="integer")
+        assert om.graph.serialize(format="turtle")
+
+    def test_update_individual_rejects_invalid_class(self, om):
+        om.add_class("Person")
+        om.add_individual("alice", "Person")
+        with pytest.raises(ValueError):
+            om.update_individual("alice", add_class="Bad Class")
+        assert om.graph.serialize(format="turtle")
+
+    def test_update_concept_rejects_invalid_broader(self, om):
+        om.add_concept_scheme("Scheme")
+        om.add_concept("Animal", scheme="Scheme")
+        with pytest.raises(ValueError):
+            om.update_concept("Animal", new_broader="Bad Broader")
+        assert om.graph.serialize(format="turtle")
