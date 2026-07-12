@@ -875,23 +875,16 @@ class OntologyManager:
         A referenced parent that is not already a class is declared as a bare
         ``owl:Class`` (issue #106), so the ``rdfs:subClassOf`` target is a real
         class node (visible in Visualization), matching the manual flow of
-        creating the parent, creating the child, then setting the parent. A
-        parent that a row in the same batch creates explicitly is left to that
-        row so its label/comment are not lost.
+        creating the parent, creating the child, then setting the parent. This
+        is done as a backfill after all rows are processed, keyed by the parent's
+        full URI: a parent that another row actually creates (with its own
+        label/comment) is left alone, but one whose explicit row is missing,
+        skipped, or errors is still declared so no dangling parent remains.
         Returns {created: [], errors: [], skipped: []}.
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
         existing = {c["uri"] for c in self.get_classes()}
-        # Full URIs the batch creates, keyed by (name, namespace) so a same-named
-        # row in a *different* namespace doesn't suppress declaring the parent
-        # the child actually references (which resolves in the base namespace).
-        explicit_uris = set()
-        for e in entries:
-            n = e.get("name", "").strip()
-            if n:
-                explicit_uris.add(
-                    str(self._uri(n, e.get("namespace", "").strip() or None))
-                )
+        referenced_parents: set[str] = set()
 
         for entry in entries:
             name = entry.get("name", "").strip()
@@ -913,18 +906,20 @@ class OntologyManager:
                 )
                 result["created"].append(name)
                 existing.add(uri)
-                # Declare a missing parent as a class so the hierarchy is
-                # complete. Skip parents that already exist or that a row in this
-                # batch creates explicitly (compared by full URI, since the child
-                # references the parent in the base namespace).
                 if parent:
-                    parent_uri = str(self._uri(parent))
-                    if parent_uri not in existing and parent_uri not in explicit_uris:
-                        self.add_class(parent)
-                        existing.add(parent_uri)
-                        result["created"].append(parent)
+                    referenced_parents.add(str(self._uri(parent)))
             except Exception as e:
                 result["errors"].append({"name": name, "error": str(e)})
+
+        # Backfill: any referenced parent that no successful row declared as a
+        # class becomes a bare owl:Class, so the hierarchy has no dangling target.
+        for parent_uri in sorted(referenced_parents - existing):
+            try:
+                created_uri = self.add_class(parent_uri)
+                existing.add(parent_uri)
+                result["created"].append(self._local_name(created_uri))
+            except Exception as e:
+                result["errors"].append({"name": parent_uri, "error": str(e)})
 
         return result
 

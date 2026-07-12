@@ -232,6 +232,25 @@ class TestBulkAddClasses:
         assert other_animal in uris
         assert om.graph.serialize(format="turtle")
 
+    def test_failed_explicit_parent_row_still_backfills(self, om):
+        # Review P2: an explicit parent row that errors must not suppress
+        # declaring the parent the child actually references.
+        result = om.bulk_add_classes(
+            [
+                {"name": "Dog", "parent": "Animal"},
+                {"name": "Animal", "parent": "Bad Parent"},  # invalid -> errors
+            ]
+        )
+        assert any(e["name"] == "Animal" for e in result["errors"])
+        base_animal = str(om._uri("Animal"))
+        uris = {c["uri"] for c in om.get_classes()}
+        # Backfilled despite the failed explicit row, so no dangling parent.
+        assert base_animal in uris
+        assert base_animal in {
+            str(o) for o in om.graph.objects(om._uri("Dog"), RDFS.subClassOf)
+        }
+        assert om.graph.serialize(format="turtle")
+
     def test_same_local_name_other_namespace_not_skipped(self):
         # Review finding 3: a base-namespace entry must not be skipped just
         # because the local name exists in another namespace.
