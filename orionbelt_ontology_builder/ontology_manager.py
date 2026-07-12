@@ -882,7 +882,16 @@ class OntologyManager:
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
         existing = {c["uri"] for c in self.get_classes()}
-        explicit = {e.get("name", "").strip() for e in entries}
+        # Full URIs the batch creates, keyed by (name, namespace) so a same-named
+        # row in a *different* namespace doesn't suppress declaring the parent
+        # the child actually references (which resolves in the base namespace).
+        explicit_uris = set()
+        for e in entries:
+            n = e.get("name", "").strip()
+            if n:
+                explicit_uris.add(
+                    str(self._uri(n, e.get("namespace", "").strip() or None))
+                )
 
         for entry in entries:
             name = entry.get("name", "").strip()
@@ -905,11 +914,12 @@ class OntologyManager:
                 result["created"].append(name)
                 existing.add(uri)
                 # Declare a missing parent as a class so the hierarchy is
-                # complete. Skip parents that already exist or a later row will
-                # create explicitly.
+                # complete. Skip parents that already exist or that a row in this
+                # batch creates explicitly (compared by full URI, since the child
+                # references the parent in the base namespace).
                 if parent:
                     parent_uri = str(self._uri(parent))
-                    if parent_uri not in existing and parent not in explicit:
+                    if parent_uri not in existing and parent_uri not in explicit_uris:
                         self.add_class(parent)
                         existing.add(parent_uri)
                         result["created"].append(parent)

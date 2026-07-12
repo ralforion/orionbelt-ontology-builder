@@ -2,6 +2,7 @@
 
 import pytest
 from ontology_manager import OntologyManager
+from rdflib.namespace import RDFS
 
 
 @pytest.fixture
@@ -209,6 +210,27 @@ class TestBulkAddClasses:
         classes = {c["name"]: c for c in om.get_classes()}
         assert classes["Animal"]["label"] == "An Animal"
         assert "Animal" in classes["Dog"]["parents"]
+
+    def test_explicit_row_in_other_namespace_does_not_suppress_parent(self, om):
+        # Review P1: a same-named explicit row in a DIFFERENT namespace must not
+        # suppress declaring the base-namespace parent the child references.
+        om.bulk_add_classes(
+            [
+                {"name": "Dog", "parent": "Animal"},
+                {"name": "Animal", "namespace": "http://other.example/ns#"},
+            ]
+        )
+        base_animal = str(om._uri("Animal"))  # base namespace
+        other_animal = "http://other.example/ns#Animal"
+        uris = {c["uri"] for c in om.get_classes()}
+        # The parent the child actually points at is a real class...
+        assert base_animal in uris
+        assert base_animal in {
+            str(o) for o in om.graph.objects(om._uri("Dog"), RDFS.subClassOf)
+        }
+        # ...and so is the unrelated other-namespace class.
+        assert other_animal in uris
+        assert om.graph.serialize(format="turtle")
 
     def test_same_local_name_other_namespace_not_skipped(self):
         # Review finding 3: a base-namespace entry must not be skipped just
