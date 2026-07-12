@@ -451,10 +451,10 @@ class OntologyManager:
                 if isinstance(subject, URIRef):
                     extra.add(self._namespace_of(subject))
 
-        for ns in sorted(extra):
-            if ns and ns not in seen and ns not in syntax_ns:
-                seen.add(ns)
-                result.append(ns)
+        for ns_str in sorted(extra):
+            if ns_str and ns_str not in seen and ns_str not in syntax_ns:
+                seen.add(ns_str)
+                result.append(ns_str)
         return result
 
     # ==================== CLASS OPERATIONS ====================
