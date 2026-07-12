@@ -871,10 +871,18 @@ class OntologyManager:
         Each entry dict can have: name, label, parent, namespace. Duplicates are
         detected by full URI, so the same local name in a different namespace is
         not treated as existing.
+
+        A referenced parent that is not already a class is declared as a bare
+        ``owl:Class`` (issue #106), so the ``rdfs:subClassOf`` target is a real
+        class node (visible in Visualization), matching the manual flow of
+        creating the parent, creating the child, then setting the parent. A
+        parent that a row in the same batch creates explicitly is left to that
+        row so its label/comment are not lost.
         Returns {created: [], errors: [], skipped: []}.
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
         existing = {c["uri"] for c in self.get_classes()}
+        explicit = {e.get("name", "").strip() for e in entries}
 
         for entry in entries:
             name = entry.get("name", "").strip()
@@ -882,6 +890,7 @@ class OntologyManager:
                 result["errors"].append({"name": "", "error": "Empty name"})
                 continue
             namespace = entry.get("namespace", "").strip() or None
+            parent = entry.get("parent", "").strip() or None
             uri = str(self._uri(name, namespace))
             if uri in existing:
                 result["skipped"].append(name)
@@ -889,12 +898,21 @@ class OntologyManager:
             try:
                 self.add_class(
                     name,
-                    parent=entry.get("parent", "").strip() or None,
+                    parent=parent,
                     label=entry.get("label", "").strip() or None,
                     namespace=namespace,
                 )
                 result["created"].append(name)
                 existing.add(uri)
+                # Declare a missing parent as a class so the hierarchy is
+                # complete. Skip parents that already exist or a later row will
+                # create explicitly.
+                if parent:
+                    parent_uri = str(self._uri(parent))
+                    if parent_uri not in existing and parent not in explicit:
+                        self.add_class(parent)
+                        existing.add(parent_uri)
+                        result["created"].append(parent)
             except Exception as e:
                 result["errors"].append({"name": name, "error": str(e)})
 
