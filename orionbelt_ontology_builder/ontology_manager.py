@@ -99,6 +99,12 @@ class OntologyManager:
         self.graph.bind("dcterms", DCTERMS)
         self.graph.bind("", self.namespace)
 
+        # Prefixes the user explicitly bound via add_prefix (prefix -> namespace).
+        # Tracked so the creation picker offers them even when the name collides
+        # with one of rdflib's auto-bound defaults (e.g. an explicit 'foaf').
+        # Reset on load/restore so it can never go stale against the graph.
+        self._user_added_prefixes: Dict[str, str] = {}
+
         # Create ontology declaration
         self.ontology_uri = URIRef(base_uri.rstrip("#").rstrip("/"))
         self.graph.add((self.ontology_uri, RDF.type, OWL.Ontology))
@@ -192,11 +198,13 @@ class OntologyManager:
     def add_prefix(self, prefix: str, namespace: str):
         """Bind a custom prefix to a namespace URI in the graph."""
         self.graph.bind(prefix, Namespace(namespace), override=True)
+        self._user_added_prefixes[prefix] = namespace
 
     def remove_prefix(self, prefix: str):
         """Remove a custom prefix binding. Standard prefixes cannot be removed."""
         if prefix in self.STANDARD_PREFIXES:
             raise ValueError(f"Cannot remove standard prefix '{prefix}'")
+        self._user_added_prefixes.pop(prefix, None)
         # rdflib NamespaceManager doesn't support unbinding directly.
         # Rebuild the namespace manager by creating a new graph with the same triples.
         keep = [(p, ns) for p, ns in self.graph.namespaces() if p != prefix]
@@ -325,10 +333,18 @@ class OntologyManager:
         # Re-bind the default namespace
         self.graph.bind("", self.namespace)
 
-    def _uri(self, local_name: str) -> URIRef:
-        """Create a URI from a local name."""
+    def _uri(self, local_name: str, namespace: Optional[str] = None) -> URIRef:
+        """Create a URI from a local name.
+
+        A value that is already a full ``http(s)`` URI is returned unchanged.
+        Otherwise the local name is placed in ``namespace`` when one is given
+        (any bound namespace, e.g. a custom prefix), or in the base namespace
+        by default.
+        """
         if local_name.startswith("http://") or local_name.startswith("https://"):
             return URIRef(local_name)
+        if namespace:
+            return URIRef(namespace + local_name)
         return self.namespace[local_name]
 
     # A valid local name is an NCName relaxed to also allow a leading digit:
@@ -389,6 +405,58 @@ class OntologyManager:
             return uri_str.split("#")[-1]
         return uri_str.split("/")[-1]
 
+    def _namespace_of(self, uri: Node) -> str:
+        """Return the namespace portion of a URI (everything before the local
+        name), e.g. 'http://ex.org/ns#Dog' -> 'http://ex.org/ns#'."""
+        uri_str = str(uri)
+        local = self._local_name(uri)
+        return uri_str[: len(uri_str) - len(local)]
+
+    # Prefixes rdflib auto-binds on a fresh Graph() (foaf, schema, brick, ...).
+    # Excluded from the creation picker so it is not flooded with ~30 vocab
+    # prefixes the user never chose. Computed from the running rdflib so it
+    # stays correct across versions.
+    _RDFLIB_DEFAULT_PREFIXES = frozenset(p for p, _ in Graph().namespaces())
+
+    def get_creatable_namespaces(self) -> List[str]:
+        """Namespaces offered when creating a new entity, base namespace first.
+
+        Includes the base (default) namespace, every namespace already used by
+        an existing entity (so imported namespaces are offered), every namespace
+        the user explicitly bound via add_prefix, and any namespace bound under a
+        non-default import prefix. Pure-syntax namespaces (owl, rdf, rdfs, xsd)
+        and rdflib's auto-bound default prefixes are excluded so the list stays
+        relevant. Derived from the live graph plus the (load/restore-reset)
+        record of explicit user prefixes, so it reflects the current ontology.
+        """
+        result = [self.base_uri]
+        seen = {self.base_uri}
+        syntax_ns = {str(OWL), str(RDF), str(RDFS), str(XSD)}
+
+        # Namespaces the user explicitly bound — offered even when the prefix
+        # name matches one of rdflib's auto-bound defaults (e.g. 'foaf').
+        extra = set(self._user_added_prefixes.values())
+        # Namespaces bound under a prefix an import introduced
+        # (i.e. not one of rdflib's auto-bound defaults or our standards).
+        for prefix, ns in self.graph.namespaces():
+            if (
+                prefix
+                and prefix not in self._RDFLIB_DEFAULT_PREFIXES
+                and prefix not in self.STANDARD_PREFIXES
+            ):
+                extra.add(str(ns))
+        # Namespaces already used by an existing entity.
+        for etype in self._ENTITY_TYPES:
+            for subject in self.graph.subjects(RDF.type, etype):
+                if isinstance(subject, URIRef):
+                    extra.add(self._namespace_of(subject))
+
+        for ns in sorted(extra):
+            if ns and ns not in seen and ns not in syntax_ns:
+                seen.add(ns)
+                result.append(ns)
+        return result
+
     # ==================== CLASS OPERATIONS ====================
 
     def add_class(
@@ -397,12 +465,17 @@ class OntologyManager:
         parent: Optional[str] = None,
         label: Optional[str] = None,
         comment: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new OWL class."""
+        """Add a new OWL class.
+
+        ``namespace`` places the class in a specific namespace (any bound
+        prefix); when omitted the base namespace is used.
+        """
         self._require_valid_name(name)
         if parent:
             self._require_valid_name(parent)
-        class_uri = self._uri(name)
+        class_uri = self._uri(name, namespace)
         self.graph.add((class_uri, RDF.type, OWL.Class))
 
         if parent:
@@ -462,13 +535,18 @@ class OntologyManager:
         return any((uri, RDF.type, t) in self.graph for t in self._ENTITY_TYPES)
 
     def rename_class(self, old_name: str, new_name: str) -> bool:
-        """Rename a class, updating all references."""
+        """Rename a class, updating all references.
+
+        The renamed class keeps its current namespace: a new local name is
+        placed in the same namespace as ``old_name`` (a full URI passed as
+        ``new_name`` still overrides).
+        """
         if old_name == new_name:
             return True
         self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
-        new_uri = self._uri(new_name)
+        new_uri = self._uri(new_name, self._namespace_of(old_uri))
 
         # Refuse if the target name is already used by any entity (any type).
         if self._name_in_use(new_uri):
@@ -729,14 +807,34 @@ class OntologyManager:
         if not lines:
             return []
 
-        # Determine the delimiter from the first line that contains one. Picking
-        # whichever separator is more frequent on that single line keeps a stray
-        # ';' inside a comma CSV (or ',' inside a semicolon CSV) from flipping it.
+        # Determine the delimiter from the first line that contains one. When the
+        # column count is known, prefer whichever delimiter splits that line into
+        # exactly that many fields; if both do (equal numbers of ',' and ';'),
+        # break the tie by whichever appears first, since the leading field (the
+        # name) is delimiter-free and its terminator is the real delimiter.
+        # Otherwise fall back to whichever separator is more frequent on the
+        # line, so a stray ';' in a comma CSV (or ',' in a semicolon CSV) can't
+        # flip it.
+        expected = (
+            len(columns)
+            if columns
+            else (len(default_columns) if default_columns else None)
+        )
         delimiter = ","
         for line in lines:
-            if ";" in line or "," in line:
+            if ";" not in line and "," not in line:
+                continue
+            semi_exact = expected and ";" in line and len(line.split(";")) == expected
+            comma_exact = expected and "," in line and len(line.split(",")) == expected
+            if semi_exact and comma_exact:
+                delimiter = ";" if line.index(";") < line.index(",") else ","
+            elif semi_exact:
+                delimiter = ";"
+            elif comma_exact:
+                delimiter = ","
+            else:
                 delimiter = ";" if line.count(";") > line.count(",") else ","
-                break
+            break
 
         # Auto-detect CSV header
         if columns is None and delimiter in lines[0]:
@@ -770,18 +868,22 @@ class OntologyManager:
     def bulk_add_classes(self, entries: List[Dict[str, str]]) -> Dict[str, Any]:
         """Batch create classes.
 
-        Each entry dict can have: name, label, parent.
+        Each entry dict can have: name, label, parent, namespace. Duplicates are
+        detected by full URI, so the same local name in a different namespace is
+        not treated as existing.
         Returns {created: [], errors: [], skipped: []}.
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
-        existing = {c["name"] for c in self.get_classes()}
+        existing = {c["uri"] for c in self.get_classes()}
 
         for entry in entries:
             name = entry.get("name", "").strip()
             if not name:
                 result["errors"].append({"name": "", "error": "Empty name"})
                 continue
-            if name in existing:
+            namespace = entry.get("namespace", "").strip() or None
+            uri = str(self._uri(name, namespace))
+            if uri in existing:
                 result["skipped"].append(name)
                 continue
             try:
@@ -789,9 +891,10 @@ class OntologyManager:
                     name,
                     parent=entry.get("parent", "").strip() or None,
                     label=entry.get("label", "").strip() or None,
+                    namespace=namespace,
                 )
                 result["created"].append(name)
-                existing.add(name)
+                existing.add(uri)
             except Exception as e:
                 result["errors"].append({"name": name, "error": str(e)})
 
@@ -802,22 +905,24 @@ class OntologyManager:
     ) -> Dict[str, Any]:
         """Batch create properties.
 
-        Each entry dict can have: name, domain, range, label.
-        property_type: "object" or "data".
+        Each entry dict can have: name, domain, range, label, namespace.
+        property_type: "object" or "data". Duplicates are detected by full URI.
         Returns {created: [], errors: [], skipped: []}.
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
         if property_type == "object":
-            existing = {p["name"] for p in self.get_object_properties()}
+            existing = {p["uri"] for p in self.get_object_properties()}
         else:
-            existing = {p["name"] for p in self.get_data_properties()}
+            existing = {p["uri"] for p in self.get_data_properties()}
 
         for entry in entries:
             name = entry.get("name", "").strip()
             if not name:
                 result["errors"].append({"name": "", "error": "Empty name"})
                 continue
-            if name in existing:
+            namespace = entry.get("namespace", "").strip() or None
+            uri = str(self._uri(name, namespace))
+            if uri in existing:
                 result["skipped"].append(name)
                 continue
             try:
@@ -826,14 +931,22 @@ class OntologyManager:
                 label = entry.get("label", "").strip() or None
                 if property_type == "object":
                     self.add_object_property(
-                        name, domain=domain, range_=range_, label=label
+                        name,
+                        domain=domain,
+                        range_=range_,
+                        label=label,
+                        namespace=namespace,
                     )
                 else:
                     self.add_data_property(
-                        name, domain=domain, range_=range_ or "string", label=label
+                        name,
+                        domain=domain,
+                        range_=range_ or "string",
+                        label=label,
+                        namespace=namespace,
                     )
                 result["created"].append(name)
-                existing.add(name)
+                existing.add(uri)
             except Exception as e:
                 result["errors"].append({"name": name, "error": str(e)})
 
@@ -842,11 +955,12 @@ class OntologyManager:
     def bulk_add_individuals(self, entries: List[Dict[str, str]]) -> Dict[str, Any]:
         """Batch create individuals.
 
-        Each entry dict can have: name, class, label.
+        Each entry dict can have: name, class, label, namespace. Duplicates are
+        detected by full URI.
         Returns {created: [], errors: [], skipped: []}.
         """
         result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
-        existing = {i["name"] for i in self.get_individuals()}
+        existing = {i["uri"] for i in self.get_individuals()}
 
         for entry in entries:
             name = entry.get("name", "").strip()
@@ -857,7 +971,9 @@ class OntologyManager:
             if not class_name:
                 result["errors"].append({"name": name, "error": "Missing class"})
                 continue
-            if name in existing:
+            namespace = entry.get("namespace", "").strip() or None
+            uri = str(self._uri(name, namespace))
+            if uri in existing:
                 result["skipped"].append(name)
                 continue
             try:
@@ -865,9 +981,10 @@ class OntologyManager:
                     name,
                     class_name=class_name,
                     label=entry.get("label", "").strip() or None,
+                    namespace=namespace,
                 )
                 result["created"].append(name)
-                existing.add(name)
+                existing.add(uri)
             except Exception as e:
                 result["errors"].append({"name": name, "error": str(e)})
 
@@ -974,13 +1091,18 @@ class OntologyManager:
         reflexive: bool = False,
         irreflexive: bool = False,
         inverse_of: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new object property."""
+        """Add a new object property.
+
+        ``namespace`` places the property in a specific namespace (any bound
+        prefix); when omitted the base namespace is used.
+        """
         self._require_valid_name(name)
         for ref in (domain, range_, inverse_of):
             if ref:
                 self._require_valid_name(ref)
-        prop_uri = self._uri(name)
+        prop_uri = self._uri(name, namespace)
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
 
         if domain:
@@ -1020,12 +1142,17 @@ class OntologyManager:
         label: Optional[str] = None,
         comment: Optional[str] = None,
         functional: bool = False,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new data property."""
+        """Add a new data property.
+
+        ``namespace`` places the property in a specific namespace (any bound
+        prefix); when omitted the base namespace is used.
+        """
         self._require_valid_name(name)
         if domain:
             self._require_valid_name(domain)
-        prop_uri = self._uri(name)
+        prop_uri = self._uri(name, namespace)
         self.graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
 
         if domain:
@@ -1086,13 +1213,17 @@ class OntologyManager:
                     self.graph.add((prop_uri, RDFS.range, self._uri(new_range)))
 
     def rename_property(self, old_name: str, new_name: str) -> bool:
-        """Rename a property, updating all references."""
+        """Rename a property, updating all references.
+
+        The renamed property keeps its current namespace (see
+        :meth:`rename_class`).
+        """
         if old_name == new_name:
             return True
         self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
-        new_uri = self._uri(new_name)
+        new_uri = self._uri(new_name, self._namespace_of(old_uri))
 
         # Refuse if the target name is already used by any entity (any type).
         if self._name_in_use(new_uri):
@@ -1279,11 +1410,18 @@ class OntologyManager:
         class_name: str,
         label: Optional[str] = None,
         comment: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> URIRef:
-        """Add a new individual (instance)."""
+        """Add a new individual (instance).
+
+        ``namespace`` places the individual in a specific namespace (any bound
+        prefix); when omitted the base namespace is used. The class reference is
+        resolved independently, so an individual can live in a different
+        namespace than its type.
+        """
         self._require_valid_name(name)
         self._require_valid_name(class_name)
-        ind_uri = self._uri(name)
+        ind_uri = self._uri(name, namespace)
         class_uri = self._uri(class_name)
 
         self.graph.add((ind_uri, RDF.type, OWL.NamedIndividual))
@@ -1343,13 +1481,17 @@ class OntologyManager:
             self.graph.remove((ind_uri, RDF.type, self._uri(remove_class)))
 
     def rename_individual(self, old_name: str, new_name: str) -> bool:
-        """Rename an individual, updating all references."""
+        """Rename an individual, updating all references.
+
+        The renamed individual keeps its current namespace (see
+        :meth:`rename_class`).
+        """
         if old_name == new_name:
             return True
         self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
-        new_uri = self._uri(new_name)
+        new_uri = self._uri(new_name, self._namespace_of(old_uri))
 
         # Refuse if the target name is already used by any entity (any type).
         if self._name_in_use(new_uri):
@@ -1907,7 +2049,7 @@ class OntologyManager:
                 old_uri = cast(URIRef, s_uri)
                 break
 
-        new_uri = self._uri(new_name)
+        new_uri = self._uri(new_name, self._namespace_of(old_uri))
         # Refuse if the target name is already used by any entity (any type).
         if self._name_in_use(new_uri):
             return False
@@ -2091,13 +2233,17 @@ class OntologyManager:
             self.graph.remove((uri, SKOS.inScheme, self._uri(remove_scheme)))
 
     def rename_concept(self, old_name: str, new_name: str) -> bool:
-        """Rename a SKOS concept, updating all references."""
+        """Rename a SKOS concept, updating all references.
+
+        The renamed concept keeps its current namespace (see
+        :meth:`rename_class`).
+        """
         if old_name == new_name:
             return True
         self._require_valid_name(new_name)
 
         old_uri = self._uri(old_name)
-        new_uri = self._uri(new_name)
+        new_uri = self._uri(new_name, self._namespace_of(old_uri))
 
         # Refuse if the target name is already used by any entity (any type).
         if self._name_in_use(new_uri):
@@ -2657,6 +2803,7 @@ class OntologyManager:
             self._loaded_prefixes = self._extract_prefixes_from_jsonld(data)
         else:
             self._loaded_prefixes = []
+        self._user_added_prefixes = {}
         self.graph = Graph()
         self.graph.parse(data=data, format=format)
         self._update_namespace_from_graph()
@@ -3113,7 +3260,13 @@ class OntologyManager:
         return self.graph.serialize(format="nt").encode("utf-8")
 
     def restore_snapshot(self, snapshot: bytes):
-        """Replace the current graph with a previously captured snapshot."""
+        """Replace the current graph with a previously captured snapshot.
+
+        Snapshots are N-Triples (no prefix bindings), so custom prefixes do not
+        survive an undo/redo; reset the explicit-prefix record to match rather
+        than leave it pointing at prefixes the restored graph no longer has.
+        """
+        self._user_added_prefixes = {}
         self.graph = Graph()
         self.graph.parse(data=snapshot.decode("utf-8"), format="nt")
         self._update_namespace_from_graph()
