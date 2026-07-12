@@ -202,6 +202,72 @@ def test_run_omits_theme_base_when_unset(monkeypatch, tmp_path):
     assert "theme.base" not in captured["options"]
 
 
+class _Event(list):
+    """Minimal stand-in for a pywebview event that supports ``+= handler``."""
+
+    def __iadd__(self, handler):
+        self.append(handler)
+        return self
+
+
+class _FakeWindow:
+    def __init__(self):
+        self.exposed = []
+        self.title = None
+        self.evaluated = None
+        self.events = types.SimpleNamespace(loaded=_Event())
+
+    def expose(self, *fns):
+        self.exposed.extend(fns)
+
+    def set_title(self, title):
+        self.title = title
+
+    def evaluate_js(self, js):
+        self.evaluated = js
+
+
+def test_window_title_sync_wiring(monkeypatch):
+    """The title-sync hook exposes a setter and injects the observer, and the
+    setter mirrors the page title onto the window (issue #90)."""
+    window = _FakeWindow()
+    fake_webview = types.ModuleType("webview")
+    fake_webview.create_window = lambda *a, **k: window
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    original = desktop._install_window_title_sync("AppName")
+    assert original is not None  # a real create_window was hooked
+
+    # start_desktop_app would call create_window; simulate that.
+    import webview
+
+    returned = webview.create_window("AppName", "http://localhost")
+    assert returned is window
+
+    # The setter was exposed to JS, and mirrors a real title through.
+    assert window.exposed, "title setter was not exposed"
+    setter = window.exposed[0]
+    setter("Pizza Ontology · OrionBelt")
+    assert window.title == "Pizza Ontology · OrionBelt"
+    # The Streamlit default / empty title falls back to the app name.
+    setter("Streamlit")
+    assert window.title == "AppName"
+    setter("")
+    assert window.title == "AppName"
+
+    # On load, the MutationObserver script is injected.
+    assert window.events.loaded, "no loaded handler registered"
+    window.events.loaded[0]()
+    assert "MutationObserver" in window.evaluated
+
+
+def test_window_title_sync_noop_without_create_window(monkeypatch):
+    """A stubbed webview lacking create_window must not raise (returns None)."""
+    fake_webview = types.ModuleType("webview")  # no create_window attribute
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+    assert desktop._install_window_title_sync("AppName") is None
+
+
 def test_run_without_dependency_exits_cleanly(monkeypatch):
     """Missing the optional ``desktop`` extra should exit non-zero, not crash."""
     monkeypatch.setitem(sys.modules, "streamlit_desktop_app", None)
