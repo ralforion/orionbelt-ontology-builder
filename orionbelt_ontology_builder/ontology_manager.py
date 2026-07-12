@@ -338,21 +338,29 @@ class OntologyManager:
     # allowing Unicode letters, digits, dots and hyphens (e.g. 'my-class.v2').
     _LOCAL_NAME_RE = re.compile(r"^\w[\w.\-]*$", re.UNICODE)
 
+    # Characters that make a full IRI unserializable in Turtle/N3 (mirrors
+    # rdflib's own check); whitespace is handled separately via str.isspace().
+    _INVALID_URI_CHARS = frozenset('<>"{}|\\^`')
+
     @classmethod
     def invalid_name_reason(cls, name: str) -> Optional[str]:
         """Return a human-readable reason ``name`` is not a valid entity name,
         or ``None`` if it is valid.
 
-        A full ``http(s)`` URI is accepted as an explicit identifier (only a
-        space makes one invalid). Otherwise the name must be a local name that
-        maps to a valid URI fragment (see :attr:`_LOCAL_NAME_RE`).
+        The name is validated verbatim (no stripping), so leading/trailing
+        whitespace is rejected — the string is used as-is to build the URI. A
+        full ``http(s)`` URI is accepted as an explicit identifier as long as it
+        contains no whitespace or characters that break serialization. Otherwise
+        the name must be a valid local name (see :attr:`_LOCAL_NAME_RE`).
         """
         if name is None or not name.strip():
             return "Name cannot be empty."
-        name = name.strip()
         if name.startswith("http://") or name.startswith("https://"):
-            if any(c.isspace() for c in name):
-                return "A full URI cannot contain spaces."
+            if any(c.isspace() or c in cls._INVALID_URI_CHARS for c in name):
+                return (
+                    "A full URI cannot contain spaces or any of the characters "
+                    '< > " { } | \\ ^ `.'
+                )
             return None
         if any(c.isspace() for c in name):
             return (
@@ -392,6 +400,8 @@ class OntologyManager:
     ) -> URIRef:
         """Add a new OWL class."""
         self._require_valid_name(name)
+        if parent:
+            self._require_valid_name(parent)
         class_uri = self._uri(name)
         self.graph.add((class_uri, RDF.type, OWL.Class))
 
@@ -965,6 +975,9 @@ class OntologyManager:
     ) -> URIRef:
         """Add a new object property."""
         self._require_valid_name(name)
+        for ref in (domain, range_, inverse_of):
+            if ref:
+                self._require_valid_name(ref)
         prop_uri = self._uri(name)
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
 
@@ -1008,6 +1021,8 @@ class OntologyManager:
     ) -> URIRef:
         """Add a new data property."""
         self._require_valid_name(name)
+        if domain:
+            self._require_valid_name(domain)
         prop_uri = self._uri(name)
         self.graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
 
@@ -1259,6 +1274,7 @@ class OntologyManager:
     ) -> URIRef:
         """Add a new individual (instance)."""
         self._require_valid_name(name)
+        self._require_valid_name(class_name)
         ind_uri = self._uri(name)
         class_uri = self._uri(class_name)
 
@@ -1921,6 +1937,9 @@ class OntologyManager:
     ) -> URIRef:
         """Add a SKOS Concept with optional scheme/broader links."""
         self._require_valid_name(name)
+        for ref in (scheme, broader):
+            if ref:
+                self._require_valid_name(ref)
         concept_uri = self._uri(name)
         self.graph.add((concept_uri, RDF.type, SKOS.Concept))
 
