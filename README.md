@@ -202,6 +202,19 @@ or `PYWEBVIEW_GUI=gtk` to override.
 This is fully opt-in: the plain install and the `orionbelt-ontology-builder`
 command above are unchanged.
 
+#### Upgrading
+
+`uv tool upgrade` can occasionally leave the tool's environment inconsistent
+(for example the app's Streamlit server quitting when you switch to a tab). If
+the app misbehaves after an upgrade, do a clean reinstall, keeping your backend
+extra (issue #95):
+
+```bash
+uv tool uninstall orionbelt-ontology-builder
+uv tool install "orionbelt-ontology-builder[qt]"   # or [gtk]; omit the extra for the browser-only command
+orionbelt-ontology-builder-desktop                 # start it once
+```
+
 ### Local file storage
 
 When you launch the app locally (the `orionbelt-ontology-builder` command or the
