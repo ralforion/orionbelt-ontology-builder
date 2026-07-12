@@ -152,18 +152,48 @@ _DARK_CSS = f"""
 """
 
 
+def _page_title() -> str:
+    """Browser-tab / window title. Uses the current ontology's name so multiple
+    instances are distinguishable when switching tabs (issue #90): its
+    rdfs:label, else the last segment of the base URI, else the app name.
+
+    The ontology is restored after this runs on the very first render, so the
+    first paint shows the app name and it updates to the ontology name on the
+    next rerun.
+    """
+    ont = st.session_state.get("ontology")
+    if ont is not None:
+        try:
+            name = (ont.get_ontology_metadata().get("label") or "").strip()
+        except Exception:
+            name = ""
+        if not name:
+            base = ont.base_uri.rstrip("#/")
+            name = base.split("/")[-1].split("#")[-1]
+        if name:
+            return f"{name} · OrionBelt"
+    return APP_NAME
+
+
 def _configure_page() -> None:
     """Apply page config and custom CSS. Called from main() so it fires on
-    every Streamlit rerun (CSS markdown only persists for the rerun in which
-    it was emitted; set_page_config is idempotent across reruns)."""
-    if not st.session_state.get("_page_configured"):
-        st.set_page_config(
-            page_title=APP_NAME,
+    every Streamlit rerun (CSS markdown only persists for the rerun in which it
+    was emitted). set_page_config is re-issued whenever the derived page title
+    changes so the browser tab tracks the current ontology (issue #90)."""
+    title = _page_title()
+    prev = st.session_state.get("_page_title")
+    if prev != title:
+        kwargs = dict(
+            page_title=title,
             page_icon=str(_FAVICON) if _FAVICON.exists() else None,
             layout="wide",
-            initial_sidebar_state="expanded",
         )
-        st.session_state["_page_configured"] = True
+        # Only steer the sidebar on the first config, so a later title change
+        # doesn't fight a sidebar the user has collapsed.
+        if prev is None:
+            kwargs["initial_sidebar_state"] = "expanded"
+        st.set_page_config(**kwargs)
+        st.session_state["_page_title"] = title
     st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
     # Force the brand primary on key controls in every theme (Streamlit's preset
     # themes would otherwise revert it to red), then lighten tab/pill accents in
