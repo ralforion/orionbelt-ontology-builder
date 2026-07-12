@@ -1028,6 +1028,9 @@ def _apply_class_edit(ont, class_info, new_name, new_label, new_comment, new_par
     """
     current_ref = class_info["uri"]
     if new_name and new_name != class_info["name"]:
+        if reason := ont.invalid_name_reason(new_name):
+            show_message(reason, "error")
+            return False
         if ont.rename_class(class_info["uri"], new_name):
             current_ref = new_name
         else:
@@ -1057,6 +1060,9 @@ def _apply_property_edit(
     """
     current_ref = prop["uri"]
     if new_name and new_name != prop["name"]:
+        if reason := ont.invalid_name_reason(new_name):
+            show_message(reason, "error")
+            return False
         if ont.rename_property(prop["uri"], new_name):
             current_ref = new_name
         else:
@@ -1082,6 +1088,9 @@ def _apply_individual_edit(
     """
     current_ref = ind["uri"]
     if new_name and new_name != ind["name"]:
+        if reason := ont.invalid_name_reason(new_name):
+            show_message(reason, "error")
+            return False
         if ont.rename_individual(ind["uri"], new_name):
             current_ref = new_name
         else:
@@ -1589,6 +1598,9 @@ def render_classes():
                                 # Handle rename first — pass URI so cross-namespace duplicates resolve correctly
                                 current_ref = cls["uri"]
                                 if new_name and new_name != cls["name"]:
+                                    if reason := ont.invalid_name_reason(new_name):
+                                        show_message(reason, "error")
+                                        st.rerun()
                                     if ont.rename_class(cls["uri"], new_name):
                                         current_ref = new_name  # post-rename, the resource lives in the base namespace
                                         save_checkpoint("Rename class")
@@ -1658,6 +1670,8 @@ def render_classes():
             if submitted:
                 if not name:
                     show_message("Class name is required!", "error")
+                elif reason := ont.invalid_name_reason(name):
+                    show_message(reason, "error")
                 elif name in [c["name"] for c in classes]:
                     show_message(f"Class '{name}' already exists!", "error")
                 else:
@@ -2105,6 +2119,9 @@ def render_properties():
                                 # Handle rename first — pass URI for cross-namespace safety
                                 current_ref = prop["uri"]
                                 if new_name and new_name != prop["name"]:
+                                    if reason := ont.invalid_name_reason(new_name):
+                                        show_message(reason, "error")
+                                        st.rerun()
                                     if ont.rename_property(prop["uri"], new_name):
                                         current_ref = new_name
                                         save_checkpoint("Rename property")
@@ -2300,6 +2317,9 @@ def render_properties():
                                 # Handle rename first — pass URI for cross-namespace safety
                                 current_ref = prop["uri"]
                                 if new_name and new_name != prop["name"]:
+                                    if reason := ont.invalid_name_reason(new_name):
+                                        show_message(reason, "error")
+                                        st.rerun()
                                     if ont.rename_property(prop["uri"], new_name):
                                         current_ref = new_name
                                         save_checkpoint("Rename property")
@@ -2449,6 +2469,8 @@ def render_properties():
                 if submitted:
                     if not name:
                         show_message("Property name is required!", "error")
+                    elif reason := ont.invalid_name_reason(name):
+                        show_message(reason, "error")
                     elif name in obj_prop_names or name in data_prop_names:
                         show_message(f"Property '{name}' already exists!", "error")
                     else:
@@ -2497,6 +2519,8 @@ def render_properties():
             if submitted:
                 if not name:
                     show_message("Property name is required!", "error")
+                elif reason := ont.invalid_name_reason(name):
+                    show_message(reason, "error")
                 elif name in obj_prop_names or name in data_prop_names:
                     show_message(f"Property '{name}' already exists!", "error")
                 else:
@@ -2812,6 +2836,9 @@ def render_individuals():
                                 # Handle rename first — pass URI for cross-namespace safety
                                 current_ref = ind["uri"]
                                 if new_name and new_name != ind["name"]:
+                                    if reason := ont.invalid_name_reason(new_name):
+                                        show_message(reason, "error")
+                                        st.rerun()
                                     if ont.rename_individual(ind["uri"], new_name):
                                         current_ref = new_name
                                         save_checkpoint("Rename individual")
@@ -2858,6 +2885,8 @@ def render_individuals():
                 if submitted:
                     if not name:
                         show_message("Individual name is required!", "error")
+                    elif reason := ont.invalid_name_reason(name):
+                        show_message(reason, "error")
                     elif name in ind_names:
                         show_message(f"Individual '{name}' already exists!", "error")
                     else:
@@ -3843,6 +3872,10 @@ def render_skos_vocabulary():
                                 key=f"scheme_cmt_{scheme['name']}",
                             )
                             if st.form_submit_button("Save Changes"):
+                                if new_name and new_name != scheme["name"]:
+                                    if reason := ont.invalid_name_reason(new_name):
+                                        show_message(reason, "error")
+                                        st.rerun()
                                 renamed = bool(new_name and new_name != scheme["name"])
                                 if renamed and not ont.rename_concept_scheme(
                                     scheme["name"], new_name
@@ -3877,6 +3910,8 @@ def render_skos_vocabulary():
             if st.form_submit_button("Add Scheme"):
                 if not s_name:
                     show_message("Scheme name is required!", "error")
+                elif reason := ont.invalid_name_reason(s_name):
+                    show_message(reason, "error")
                 elif s_name in scheme_names:
                     show_message(f"Scheme '{s_name}' already exists!", "error")
                 else:
@@ -4100,6 +4135,10 @@ def render_skos_vocabulary():
                             if st.form_submit_button("Save Changes"):
                                 # Rename first (updates all references) so the
                                 # rest of the update targets the new name.
+                                if new_name and new_name != concept["name"]:
+                                    if reason := ont.invalid_name_reason(new_name):
+                                        show_message(reason, "error")
+                                        st.rerun()
                                 renamed = bool(new_name and new_name != concept["name"])
                                 if renamed and not ont.rename_concept(
                                     concept["name"], new_name
@@ -4183,6 +4222,8 @@ def render_skos_vocabulary():
             if st.form_submit_button("Add Concept"):
                 if not c_name:
                     show_message("Concept name is required!", "error")
+                elif reason := ont.invalid_name_reason(c_name):
+                    show_message(reason, "error")
                 elif c_name in concept_names:
                     show_message(f"Concept '{c_name}' already exists!", "error")
                 else:
