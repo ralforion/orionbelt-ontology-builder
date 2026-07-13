@@ -3623,8 +3623,11 @@ def render_relations():
     if _rel_tab == "Class Relations":
         st.subheader("Add Class Relation")
 
-        if len(classes) < 2:
-            st.warning("Need at least 2 classes to create relations.")
+        if len(classes) < 1:
+            st.warning(
+                "Add at least one class to create a relation "
+                "(link it to another class or to an external URI)."
+            )
         else:
             with st.form("add_class_relation_form"):
                 cls_opts, cls_lookup = build_class_options(classes)
@@ -3682,8 +3685,11 @@ def render_relations():
         st.subheader("Add Property Relation")
 
         all_props = object_props + data_props
-        if len(all_props) < 2:
-            st.warning("Need at least 2 properties to create relations.")
+        if len(all_props) < 1:
+            st.warning(
+                "Add at least one property to create a relation "
+                "(link it to another property or to an external URI)."
+            )
         else:
             with st.form("add_property_relation_form"):
                 prop_opts, prop_lookup = build_uri_options(all_props)
@@ -3740,8 +3746,11 @@ def render_relations():
     if _rel_tab == "Individual Relations":
         st.subheader("Add Individual Relation")
 
-        if len(individuals) < 2:
-            st.warning("Need at least 2 individuals to create relations.")
+        if len(individuals) < 1:
+            st.warning(
+                "Add at least one individual to create a relation "
+                "(link it to another individual or to an external URI)."
+            )
         else:
             with st.form("add_individual_relation_form"):
                 ind_opts, ind_lookup = build_uri_options(individuals)
@@ -4416,8 +4425,12 @@ def render_skos_vocabulary():
                                 key=f"rel_target_{_ck}",
                             )
                             if st.button("Add", key=f"add_rel_{_ck}"):
+                                # Address the concept by its actual URI, not its
+                                # local name: a concept moved to a non-base
+                                # namespace (e.g. via a custom URI) would not
+                                # resolve through the base namespace (issue #87).
                                 ont.add_concept_relation(
-                                    concept["name"], rel_type, rel_target
+                                    concept["uri"], rel_type, rel_target
                                 )
                                 save_checkpoint("Add concept relation")
                                 show_message(f"Added {rel_type} relation!", "success")
@@ -4430,8 +4443,8 @@ def render_skos_vocabulary():
                             args=("skos", _ck),
                         )
 
-                    if confirm_delete(concept["name"], "concept", f"c_{_ck}"):
-                        ont.delete_concept(concept["name"])
+                    if confirm_delete(concept["uri"], "concept", f"c_{_ck}"):
+                        ont.delete_concept(concept["uri"])
                         save_checkpoint("Delete concept")
                         set_flash_message(
                             f"Concept '{concept['name']}' deleted!", "success"
@@ -4513,15 +4526,24 @@ def render_skos_vocabulary():
                                         show_message(reason, "error")
                                         st.rerun()
                                 renamed = bool(new_name and new_name != concept["name"])
+                                # Address the concept by its actual URI so a
+                                # concept in a non-base namespace (e.g. moved via
+                                # a custom URI) resolves; ``target`` is the full
+                                # URI it now lives at, which later updates use
+                                # instead of a base-namespace local name (#87).
                                 if renamed and not ont.rename_concept(
-                                    concept["name"], new_name
+                                    concept["uri"], new_name
                                 ):
                                     show_message(
                                         f"Cannot rename: '{new_name}' already exists!",
                                         "error",
                                     )
                                 else:
-                                    target = new_name if renamed else concept["name"]
+                                    target = (
+                                        _renamed_ref(ont, concept["uri"], new_name)
+                                        if renamed
+                                        else concept["uri"]
+                                    )
                                     # Handle broader change
                                     broader_val = (
                                         new_broader if new_broader != "None" else ""
@@ -4566,9 +4588,7 @@ def render_skos_vocabulary():
                                     save_checkpoint("Update concept")
                                     st.session_state[_ek] = False
                                     if renamed:
-                                        _new_ck = str(
-                                            abs(hash(str(ont._uri(new_name))))
-                                        )[:8]
+                                        _new_ck = str(abs(hash(target)))[:8]
                                         st.session_state[f"view_skos_{_new_ck}"] = True
                                     else:
                                         st.session_state[_sk] = True

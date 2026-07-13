@@ -6,7 +6,7 @@ a full URI into the engine's existing rename and relation methods, so these
 tests exercise the engine paths those helpers feed.
 """
 
-from rdflib import URIRef
+from rdflib import Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS, SKOS
 
 from ontology_manager import OntologyManager
@@ -209,6 +209,64 @@ def test_validate_ignores_standard_namespace_targets():
 
     # owl:Thing is a pure-syntax target, not an external reference.
     assert _external_issues(om) == []
+
+
+# ---- A concept in a non-base namespace is addressed by its URI --------------
+# Regression for issue #87 part B: after a concept is moved to a custom
+# (non-base) URI, later edit/delete/relation actions must address it by that
+# URI. Addressing it by the bare local name resolves through the base namespace
+# and silently misses the real concept. The UI now passes concept["uri"].
+
+
+def _triples(om, s):
+    return list(om.graph.triples((s, None, None)))
+
+
+def test_nonbase_concept_rename_by_uri():
+    om = _om()
+    om.add_concept_scheme("Scheme")
+    om.add_concept("Old", scheme="Scheme")
+    assert om.rename_concept("Old", EXT + "New") is True  # move to external ns
+
+    assert om.rename_concept(EXT + "New", EXT + "Newer") is True
+    assert (URIRef(EXT + "Newer"), RDF.type, SKOS.Concept) in om.graph
+    assert _triples(om, URIRef(EXT + "New")) == []
+    # The base namespace was never touched.
+    assert _triples(om, URIRef(BASE + "New")) == []
+
+
+def test_nonbase_concept_update_by_uri():
+    om = _om()
+    om.add_concept_scheme("Scheme")
+    om.add_concept("Old", scheme="Scheme")
+    om.rename_concept("Old", EXT + "New")
+
+    om.update_concept(EXT + "New", new_pref_label="Moved label")
+    assert (URIRef(EXT + "New"), SKOS.prefLabel, Literal("Moved label")) in om.graph
+    # A base-namespace stub must not have been created.
+    assert _triples(om, URIRef(BASE + "New")) == []
+
+
+def test_nonbase_concept_delete_by_uri():
+    om = _om()
+    om.add_concept_scheme("Scheme")
+    om.add_concept("Old", scheme="Scheme")
+    om.rename_concept("Old", EXT + "New")
+
+    om.delete_concept(EXT + "New")
+    assert _triples(om, URIRef(EXT + "New")) == []
+    assert EXT + "New" not in {c["uri"] for c in om.get_concepts()}
+
+
+def test_nonbase_concept_relation_by_uri():
+    om = _om()
+    om.add_concept_scheme("Scheme")
+    om.add_concept("Old", scheme="Scheme")
+    om.add_concept("Other", scheme="Scheme")
+    om.rename_concept("Old", EXT + "New")
+
+    om.add_concept_relation(EXT + "New", "related", "Other")
+    assert (URIRef(EXT + "New"), SKOS.related, URIRef(BASE + "Other")) in om.graph
 
 
 def test_validate_external_reference_clears_once_defined():
