@@ -301,6 +301,66 @@ def test_nonbase_scheme_delete_by_uri():
     assert _triples(om, URIRef(EXT + "New")) == []
 
 
+# ---- SKOS selector targets resolve by URI, not base-namespace local name ----
+# Regression for issue #87 part B: the Concepts tab selectors (scheme filter,
+# relation target, broader, and the add form) now pass the picked URI to the
+# engine, so a scheme/concept sharing a local name across namespaces is not
+# silently rewritten to the base namespace or matched by first-local-name.
+
+
+def test_get_concepts_exposes_uris():
+    om = _om()
+    om.add_concept_scheme("S")
+    om.add_concept("Broad", scheme="S")
+    om.add_concept("Narrow", scheme="S", broader="Broad")
+    narrow = next(c for c in om.get_concepts() if c["name"] == "Narrow")
+    assert narrow["scheme_uris"] == [BASE + "S"]
+    assert narrow["broader_uris"] == [BASE + "Broad"]
+
+
+def test_get_concepts_filter_by_scheme_uri_disambiguates():
+    om = _om()
+    om.add_concept_scheme("Scheme")  # base#Scheme
+    om.add_concept("A", scheme="Scheme")
+    om.add_concept_scheme("Tmp")
+    om.rename_concept_scheme("Tmp", EXT + "Scheme")  # same local name, other ns
+    om.add_concept("B", scheme=EXT + "Scheme")
+
+    assert {c["name"] for c in om.get_concepts(scheme=BASE + "Scheme")} == {"A"}
+    assert {c["name"] for c in om.get_concepts(scheme=EXT + "Scheme")} == {"B"}
+
+
+def test_concept_relation_to_nonbase_target():
+    om = _om()
+    om.add_concept_scheme("S")
+    om.add_concept("A", scheme="S")
+    om.add_concept("B", scheme="S")
+    om.rename_concept("B", EXT + "B")  # target moved to a non-base namespace
+
+    om.add_concept_relation(BASE + "A", "related", EXT + "B")
+    assert (URIRef(BASE + "A"), SKOS.related, URIRef(EXT + "B")) in om.graph
+
+
+def test_update_concept_broader_by_nonbase_uri():
+    om = _om()
+    om.add_concept_scheme("S")
+    om.add_concept("A", scheme="S")
+    om.add_concept("Top", scheme="S")
+    om.rename_concept("Top", EXT + "Top")
+
+    om.update_concept(BASE + "A", new_broader=EXT + "Top")
+    assert (URIRef(BASE + "A"), SKOS.broader, URIRef(EXT + "Top")) in om.graph
+
+
+def test_add_concept_with_nonbase_scheme_uri():
+    om = _om()
+    om.add_concept_scheme("Tmp")
+    om.rename_concept_scheme("Tmp", EXT + "S")
+
+    om.add_concept("A", scheme=EXT + "S")
+    assert (URIRef(BASE + "A"), SKOS.inScheme, URIRef(EXT + "S")) in om.graph
+
+
 def test_validate_external_reference_clears_once_defined():
     om = _om()
     om.add_class("Organization")

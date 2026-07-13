@@ -2174,28 +2174,30 @@ class OntologyManager:
 
             alt_labels = [str(o) for o in self.graph.objects(uri, SKOS.altLabel)]
 
-            broader_list = [
-                self._local_name(o)
+            broader_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.broader)
                 if isinstance(o, URIRef)
             ]
-            narrower_list = [
-                self._local_name(o)
+            narrower_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.narrower)
                 if isinstance(o, URIRef)
             ]
-            related_list = [
-                self._local_name(o)
+            related_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.related)
                 if isinstance(o, URIRef)
             ]
-
-            schemes = [
-                self._local_name(o)
+            scheme_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.inScheme)
                 if isinstance(o, URIRef)
             ]
 
+            # Full URIs (``*_uris``) accompany the local-name lists so callers can
+            # address a broader/related concept or scheme unambiguously even when
+            # local names collide across namespaces (issue #87 part B).
             concepts.append(
                 {
                     "name": name,
@@ -2203,10 +2205,14 @@ class OntologyManager:
                     "prefLabel": pref_label,
                     "definition": definition,
                     "altLabels": alt_labels,
-                    "broader": broader_list,
-                    "narrower": narrower_list,
-                    "related": related_list,
-                    "schemes": schemes,
+                    "broader": [self._local_name(URIRef(u)) for u in broader_uris],
+                    "narrower": [self._local_name(URIRef(u)) for u in narrower_uris],
+                    "related": [self._local_name(URIRef(u)) for u in related_uris],
+                    "schemes": [self._local_name(URIRef(u)) for u in scheme_uris],
+                    "broader_uris": broader_uris,
+                    "narrower_uris": narrower_uris,
+                    "related_uris": related_uris,
+                    "scheme_uris": scheme_uris,
                 }
             )
 

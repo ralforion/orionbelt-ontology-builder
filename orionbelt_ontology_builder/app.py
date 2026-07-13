@@ -4145,6 +4145,12 @@ def render_skos_vocabulary():
     concepts = ont.get_concepts()
     scheme_names = [s["name"] for s in schemes]
     concept_names = [c["name"] for c in concepts]
+    # URI-keyed dropdown options for scheme/concept selectors (issue #87 part B):
+    # a scheme or concept moved to a custom URI can share a local name with
+    # another, so pass the picked URI to the engine instead of a bare local name
+    # that would resolve through the base namespace. ``.get(sentinel)`` returns
+    # None for the "All"/"None" entries, which is what the engine expects.
+    scheme_opts, scheme_lookup = build_uri_options(schemes)
 
     # Clean up unused navigation flag
     st.session_state.pop("_skos_navigate_to_concept", None)
@@ -4315,12 +4321,12 @@ def render_skos_vocabulary():
         else:
             # Filter by scheme
             filter_scheme = st.selectbox(
-                "Filter by Scheme", ["All"] + scheme_names, key="concept_filter_scheme"
+                "Filter by Scheme", ["All"] + scheme_opts, key="concept_filter_scheme"
             )
             filtered = (
                 concepts
                 if filter_scheme == "All"
-                else ont.get_concepts(scheme=filter_scheme)
+                else ont.get_concepts(scheme=scheme_lookup.get(filter_scheme))
             )
 
             # Collapse other concepts when one is active
@@ -4425,21 +4431,24 @@ def render_skos_vocabulary():
                                 list(ont.SKOS_RELATIONS.keys()),
                                 key=f"rel_type_{_ck}",
                             )
-                            other_concepts = [
-                                c for c in concept_names if c != concept["name"]
-                            ]
+                            _rel_opts, _rel_lookup = build_uri_options(
+                                [c for c in concepts if c["uri"] != concept["uri"]]
+                            )
                             rel_target = st.selectbox(
                                 "Target Concept",
-                                other_concepts,
+                                _rel_opts,
                                 key=f"rel_target_{_ck}",
                             )
-                            if st.button("Add", key=f"add_rel_{_ck}"):
-                                # Address the concept by its actual URI, not its
-                                # local name: a concept moved to a non-base
-                                # namespace (e.g. via a custom URI) would not
-                                # resolve through the base namespace (issue #87).
+                            if st.button("Add", key=f"add_rel_{_ck}") and rel_target:
+                                # Address both concepts by their actual URIs: a
+                                # concept moved to a non-base namespace (e.g. via a
+                                # custom URI) would not resolve through the base
+                                # namespace, and two concepts can share a local
+                                # name across namespaces (issue #87 part B).
                                 ont.add_concept_relation(
-                                    concept["uri"], rel_type, rel_target
+                                    concept["uri"],
+                                    rel_type,
+                                    _rel_lookup.get(rel_target),
                                 )
                                 save_checkpoint("Add concept relation")
                                 show_message(f"Added {rel_type} relation!", "success")
@@ -4483,42 +4492,55 @@ def render_skos_vocabulary():
                                 key=f"def_{_ck}",
                             )
 
-                            # Broader concept
-                            other_concepts = [
-                                c for c in concept_names if c != concept["name"]
-                            ]
-                            current_broader = (
-                                concept["broader"][0] if concept["broader"] else "None"
+                            # Broader concept — URI-keyed so a broader concept in
+                            # a non-base namespace resolves unambiguously (#87).
+                            _broader_opts, _broader_lookup = build_uri_options(
+                                [c for c in concepts if c["uri"] != concept["uri"]]
                             )
-                            broader_options = ["None"] + other_concepts
-                            broader_idx = (
-                                broader_options.index(current_broader)
-                                if current_broader in broader_options
-                                else 0
+                            _cur_broader_uri = (
+                                concept["broader_uris"][0]
+                                if concept["broader_uris"]
+                                else None
                             )
+                            _cur_broader_disp = next(
+                                (
+                                    d
+                                    for d, u in _broader_lookup.items()
+                                    if u == _cur_broader_uri
+                                ),
+                                "None",
+                            )
+                            broader_options = ["None"] + _broader_opts
                             new_broader = st.selectbox(
                                 "Broader Concept",
                                 broader_options,
-                                index=broader_idx,
+                                index=broader_options.index(_cur_broader_disp)
+                                if _cur_broader_disp in broader_options
+                                else 0,
                                 key=f"broader_{_ck}",
                             )
 
-                            # Scheme
-                            current_scheme = (
-                                concept["schemes"][0]
-                                if concept.get("schemes")
-                                else "None"
+                            # Scheme — URI-keyed for the same reason.
+                            _cur_scheme_uri = (
+                                concept["scheme_uris"][0]
+                                if concept.get("scheme_uris")
+                                else None
                             )
-                            scheme_options = ["None"] + scheme_names
-                            scheme_idx = (
-                                scheme_options.index(current_scheme)
-                                if current_scheme in scheme_options
-                                else 0
+                            _cur_scheme_disp = next(
+                                (
+                                    d
+                                    for d, u in scheme_lookup.items()
+                                    if u == _cur_scheme_uri
+                                ),
+                                "None",
                             )
+                            scheme_options = ["None"] + scheme_opts
                             new_scheme = st.selectbox(
                                 "Scheme",
                                 scheme_options,
-                                index=scheme_idx,
+                                index=scheme_options.index(_cur_scheme_disp)
+                                if _cur_scheme_disp in scheme_options
+                                else 0,
                                 key=f"scheme_{_ck}",
                             )
                             new_name = _custom_uri_field(
@@ -4553,26 +4575,14 @@ def render_skos_vocabulary():
                                         if renamed
                                         else concept["uri"]
                                     )
-                                    # Handle broader change
-                                    broader_val = (
-                                        new_broader if new_broader != "None" else ""
-                                    )
-                                    old_broader = (
-                                        concept["broader"][0]
-                                        if concept["broader"]
-                                        else ""
-                                    )
+                                    # Handle broader change (resolve by URI)
+                                    broader_val = _broader_lookup.get(new_broader) or ""
+                                    old_broader = _cur_broader_uri or ""
                                     broader_changed = broader_val != old_broader
 
-                                    # Handle scheme change
-                                    old_scheme = (
-                                        concept["schemes"][0]
-                                        if concept.get("schemes")
-                                        else ""
-                                    )
-                                    new_scheme_val = (
-                                        new_scheme if new_scheme != "None" else ""
-                                    )
+                                    # Handle scheme change (resolve by URI)
+                                    old_scheme = _cur_scheme_uri or ""
+                                    new_scheme_val = scheme_lookup.get(new_scheme) or ""
                                     add_s = (
                                         new_scheme_val
                                         if new_scheme_val
@@ -4613,11 +4623,12 @@ def render_skos_vocabulary():
             c_pref = st.text_input("Preferred Label")
             c_def = st.text_area("Definition")
             c_scheme = st.selectbox(
-                "Scheme", ["None"] + scheme_names, key="concept_scheme_select"
+                "Scheme", ["None"] + scheme_opts, key="concept_scheme_select"
             )
+            _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
             c_broader = st.selectbox(
                 "Broader Concept",
-                ["None"] + concept_names,
+                ["None"] + _add_broader_opts,
                 key="concept_broader_select",
             )
             c_lang = st.text_input("Language Tag (e.g., en, de)", key="concept_lang")
@@ -4631,10 +4642,10 @@ def render_skos_vocabulary():
                 else:
                     ont.add_concept(
                         c_name,
-                        scheme=c_scheme if c_scheme != "None" else None,
+                        scheme=scheme_lookup.get(c_scheme),
                         pref_label=c_pref or None,
                         definition=c_def or None,
-                        broader=c_broader if c_broader != "None" else None,
+                        broader=_add_broader_lookup.get(c_broader),
                         lang=c_lang or None,
                     )
                     save_checkpoint("Add concept")
@@ -4647,10 +4658,10 @@ def render_skos_vocabulary():
             st.info("No concepts to display.")
         else:
             h_scheme = st.selectbox(
-                "Scheme", ["All"] + scheme_names, key="hierarchy_scheme_select"
+                "Scheme", ["All"] + scheme_opts, key="hierarchy_scheme_select"
             )
             hierarchy = ont.get_concept_hierarchy(
-                scheme=h_scheme if h_scheme != "All" else None
+                scheme=scheme_lookup.get(h_scheme) if h_scheme != "All" else None
             )
 
             # Find root concepts (those that are not narrower of any other)
