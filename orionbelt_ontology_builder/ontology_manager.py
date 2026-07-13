@@ -3810,6 +3810,54 @@ class OntologyManager:
                     }
                 )
 
+        # External references: links whose target is defined in another ontology
+        # that has not been imported (issue #87 part B). Editing an entity to a
+        # custom URI or adding a cross-ontology relation (equivalentClass,
+        # sameAs, ...) is intentional and cannot be validated here, so surface
+        # each such target as info rather than silently leaving it unresolvable.
+        # A target that is a subject in this graph is defined here (or was
+        # imported) and is not external; pure-syntax namespaces are always known.
+        _syntax_ns = (str(OWL), str(RDF), str(RDFS), str(XSD))
+        _link_preds = (
+            (
+                RDFS.subClassOf,
+                OWL.equivalentClass,
+                OWL.disjointWith,
+                RDFS.subPropertyOf,
+                OWL.equivalentProperty,
+                OWL.inverseOf,
+                OWL.propertyDisjointWith,
+                OWL.sameAs,
+                OWL.differentFrom,
+                RDFS.domain,
+                RDFS.range,
+                RDF.type,
+            )
+            + _DOMAIN_INCLUDES
+            + _RANGE_INCLUDES
+        )
+        defined = set(self.graph.subjects())
+        external: Dict[str, str] = {}
+        for pred in _link_preds:
+            for _subj, obj in self.graph.subject_objects(pred):
+                if not isinstance(obj, URIRef) or obj in defined:
+                    continue
+                obj_str = str(obj)
+                if any(obj_str.startswith(ns) for ns in _syntax_ns):
+                    continue
+                external.setdefault(obj_str, self._local_name(obj))
+        for uri, name in sorted(external.items()):
+            issues.append(
+                {
+                    "severity": "info",
+                    "type": "external_reference",
+                    "subject": name,
+                    "message": f"'{name}' ({uri}) is referenced but not defined in "
+                    "this ontology (external link). Import its ontology to "
+                    "validate it fully.",
+                }
+            )
+
         return issues
 
     def apply_reasoning(self, profile: str = "rdfs") -> int:

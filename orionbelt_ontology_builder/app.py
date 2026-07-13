@@ -1136,6 +1136,71 @@ def _rename_or_move(ont, rename_fn, old_uri, old_local, new_name, new_namespace)
     return False, old_uri
 
 
+def _custom_uri_field(current_uri, new_name, key):
+    """Render an "Advanced: set a custom URI" expander inside an edit form and
+    return the effective name to rename to (issue #87 part B).
+
+    A full ``http(s)`` URI entered here overrides the Name (local part) and any
+    Namespace selector, so the entity is renamed to that exact IRI everywhere it
+    appears — used to give an entity an arbitrary identifier or to match an
+    entity in another ontology. The engine already accepts a full URI as a rename
+    target (``_uri`` passes it through, ``invalid_name_reason`` allows it), so the
+    returned value flows through the form's existing validate-and-rename path
+    unchanged. Returns ``new_name`` untouched when the field is blank or equal to
+    the current URI, so nothing renames on a no-op.
+
+    Must be called inside the ``st.form(...)`` body, before the submit button, so
+    the text input is submitted with the form.
+    """
+    with st.expander("Advanced: set a custom URI"):
+        custom = st.text_input(
+            "Full URI (overrides Name and Namespace)",
+            value="",
+            key=key,
+            placeholder=str(current_uri),
+            help="Enter a full http(s) URI to give this entity an arbitrary "
+            "identifier, e.g. to match an entity in another ontology. Every "
+            "reference is re-pointed, so no links are lost. Leave blank to use "
+            "the Name and Namespace above.",
+        )
+    custom = custom.strip()
+    if custom and custom != str(current_uri):
+        return custom
+    return new_name
+
+
+def _external_uri_target(ont, default_uri, key, label):
+    """Optional "external URI" input for a relation target (issue #87 part B).
+
+    Lets a relation (equivalentClass / equivalentProperty / sameAs, or any other
+    type) point at an entity in another ontology that has not been imported, by
+    typing its full ``http(s)`` URI instead of picking an existing entity from
+    the dropdown. The engine's ``add_*_relation`` already passes a full URI
+    through ``_uri`` unchanged, so the returned target flows straight into it.
+
+    Returns ``(target_uri, error)``: when the field holds a valid full URI that
+    becomes the target (overriding ``default_uri``, the dropdown pick); when it
+    is blank, ``default_uri`` is returned; when it is present but not a valid full
+    URI, ``error`` is a message string (and ``default_uri`` is returned). Must be
+    called inside the ``st.form(...)`` body, before the submit button.
+    """
+    ext = st.text_input(
+        f"…or link {label} to an external URI (optional)",
+        value="",
+        key=key,
+        placeholder="http://other.example.org/ns#Entity",
+        help="Link to an entity in another ontology that has not been imported. "
+        "Enter its full http(s) URI. Overrides the dropdown above.",
+    ).strip()
+    if not ext:
+        return default_uri, None
+    if not (ext.startswith("http://") or ext.startswith("https://")):
+        return default_uri, "External URI must be a full http(s) URI."
+    if reason := ont.invalid_name_reason(ext):
+        return default_uri, reason
+    return ext, None
+
+
 def _apply_class_edit(
     ont,
     class_info,
@@ -1885,6 +1950,11 @@ def render_classes():
                         "reference to this class.",
                     )
                     new_namespace = ns_lookup.get(new_ns_display)
+                    new_name = _custom_uri_field(
+                        class_info["uri"],
+                        new_name,
+                        key=f"custom_uri_class_{selected_uid}",
+                    )
                     new_label = st.text_input("Label", value=class_info["label"])
                     new_comment = st.text_area("Comment", value=class_info["comment"])
 
@@ -2257,6 +2327,11 @@ def render_properties():
                                     "every reference to this property.",
                                 )
                             )
+                            new_name = _custom_uri_field(
+                                prop["uri"],
+                                new_name,
+                                key=f"custom_uri_objp_{prop_uid}",
+                            )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"objp_lbl_{prop_uid}"
                             )
@@ -2470,6 +2545,11 @@ def render_properties():
                                     help="Moving to another namespace re-points "
                                     "every reference to this property.",
                                 )
+                            )
+                            new_name = _custom_uri_field(
+                                prop["uri"],
+                                new_name,
+                                key=f"custom_uri_dp_{prop_uid}",
                             )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"dp_lbl_{prop_uid}"
@@ -3040,6 +3120,9 @@ def render_individuals():
                                     "every reference to this individual.",
                                 )
                             )
+                            new_name = _custom_uri_field(
+                                ind["uri"], new_name, key=f"custom_uri_ind_{_ik}"
+                            )
                             new_label = st.text_input(
                                 "Label", value=ind["label"], key=f"ind_lbl_{_ik}"
                             )
@@ -3568,17 +3651,29 @@ def render_relations():
                 - **disjointWith**: Class 1 and Class 2 have no common instances
                 """)
 
+                class2_uri, ext_err = _external_uri_target(
+                    ont,
+                    cls_lookup.get(class2_disp),
+                    key="crel_class2_ext",
+                    label="Class 2",
+                )
                 submitted = st.form_submit_button("Add Class Relation")
                 if submitted:
                     class1_uri = cls_lookup.get(class1_disp)
-                    class2_uri = cls_lookup.get(class2_disp)
-                    if class1_uri == class2_uri:
+                    class2_show = (
+                        class2_disp
+                        if class2_uri == cls_lookup.get(class2_disp)
+                        else class2_uri
+                    )
+                    if ext_err:
+                        show_message(ext_err, "error")
+                    elif class1_uri == class2_uri:
                         show_message("Please select two different classes!", "error")
                     else:
                         ont.add_class_relation(class1_uri, relation_type, class2_uri)
                         save_checkpoint("Add class relation")
                         show_message(
-                            f"Relation added: {class1_disp} {relation_type} {class2_disp}",
+                            f"Relation added: {class1_disp} {relation_type} {class2_show}",
                             "success",
                         )
                         st.rerun()
@@ -3615,17 +3710,29 @@ def render_relations():
                 - **inverseOf**: Property 1 is the inverse of Property 2 (e.g., hasParent / hasChild)
                 """)
 
+                prop2_uri, ext_err = _external_uri_target(
+                    ont,
+                    prop_lookup.get(prop2_disp),
+                    key="prel_prop2_ext",
+                    label="Property 2",
+                )
                 submitted = st.form_submit_button("Add Property Relation")
                 if submitted:
                     prop1_uri = prop_lookup.get(prop1_disp)
-                    prop2_uri = prop_lookup.get(prop2_disp)
-                    if prop1_uri == prop2_uri:
+                    prop2_show = (
+                        prop2_disp
+                        if prop2_uri == prop_lookup.get(prop2_disp)
+                        else prop2_uri
+                    )
+                    if ext_err:
+                        show_message(ext_err, "error")
+                    elif prop1_uri == prop2_uri:
                         show_message("Please select two different properties!", "error")
                     else:
                         ont.add_property_relation(prop1_uri, relation_type, prop2_uri)
                         save_checkpoint("Add property relation")
                         show_message(
-                            f"Relation added: {prop1_disp} {relation_type} {prop2_disp}",
+                            f"Relation added: {prop1_disp} {relation_type} {prop2_show}",
                             "success",
                         )
                         st.rerun()
@@ -3660,11 +3767,21 @@ def render_relations():
                 - **differentFrom**: Individual 1 and Individual 2 are definitely different entities
                 """)
 
+                ind2_uri, ext_err = _external_uri_target(
+                    ont,
+                    ind_lookup.get(ind2_disp),
+                    key="irel_ind2_ext",
+                    label="Individual 2",
+                )
                 submitted = st.form_submit_button("Add Individual Relation")
                 if submitted:
                     ind1_uri = ind_lookup.get(ind1_disp)
-                    ind2_uri = ind_lookup.get(ind2_disp)
-                    if ind1_uri == ind2_uri:
+                    ind2_show = (
+                        ind2_disp if ind2_uri == ind_lookup.get(ind2_disp) else ind2_uri
+                    )
+                    if ext_err:
+                        show_message(ext_err, "error")
+                    elif ind1_uri == ind2_uri:
                         show_message(
                             "Please select two different individuals!", "error"
                         )
@@ -3672,7 +3789,7 @@ def render_relations():
                         ont.add_individual_relation(ind1_uri, relation_type, ind2_uri)
                         save_checkpoint("Add individual relation")
                         show_message(
-                            f"Relation added: {ind1_disp} {relation_type} {ind2_disp}",
+                            f"Relation added: {ind1_disp} {relation_type} {ind2_show}",
                             "success",
                         )
                         st.rerun()
@@ -4117,6 +4234,11 @@ def render_skos_vocabulary():
                                 value=scheme["comment"] or "",
                                 key=f"scheme_cmt_{scheme['name']}",
                             )
+                            new_name = _custom_uri_field(
+                                scheme["uri"],
+                                new_name,
+                                key=f"custom_uri_scheme_{scheme['name']}",
+                            )
                             if st.form_submit_button("Save Changes"):
                                 if new_name and new_name != scheme["name"]:
                                     if reason := ont.invalid_name_reason(new_name):
@@ -4376,6 +4498,11 @@ def render_skos_vocabulary():
                                 scheme_options,
                                 index=scheme_idx,
                                 key=f"scheme_{_ck}",
+                            )
+                            new_name = _custom_uri_field(
+                                concept["uri"],
+                                new_name,
+                                key=f"custom_uri_concept_{_ck}",
                             )
 
                             if st.form_submit_button("Save Changes"):
