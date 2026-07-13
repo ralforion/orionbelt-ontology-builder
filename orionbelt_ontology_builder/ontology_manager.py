@@ -2174,28 +2174,30 @@ class OntologyManager:
 
             alt_labels = [str(o) for o in self.graph.objects(uri, SKOS.altLabel)]
 
-            broader_list = [
-                self._local_name(o)
+            broader_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.broader)
                 if isinstance(o, URIRef)
             ]
-            narrower_list = [
-                self._local_name(o)
+            narrower_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.narrower)
                 if isinstance(o, URIRef)
             ]
-            related_list = [
-                self._local_name(o)
+            related_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.related)
                 if isinstance(o, URIRef)
             ]
-
-            schemes = [
-                self._local_name(o)
+            scheme_uris = [
+                str(o)
                 for o in self.graph.objects(uri, SKOS.inScheme)
                 if isinstance(o, URIRef)
             ]
 
+            # Full URIs (``*_uris``) accompany the local-name lists so callers can
+            # address a broader/related concept or scheme unambiguously even when
+            # local names collide across namespaces (issue #87 part B).
             concepts.append(
                 {
                     "name": name,
@@ -2203,10 +2205,14 @@ class OntologyManager:
                     "prefLabel": pref_label,
                     "definition": definition,
                     "altLabels": alt_labels,
-                    "broader": broader_list,
-                    "narrower": narrower_list,
-                    "related": related_list,
-                    "schemes": schemes,
+                    "broader": [self._local_name(URIRef(u)) for u in broader_uris],
+                    "narrower": [self._local_name(URIRef(u)) for u in narrower_uris],
+                    "related": [self._local_name(URIRef(u)) for u in related_uris],
+                    "schemes": [self._local_name(URIRef(u)) for u in scheme_uris],
+                    "broader_uris": broader_uris,
+                    "narrower_uris": narrower_uris,
+                    "related_uris": related_uris,
+                    "scheme_uris": scheme_uris,
                 }
             )
 
@@ -3809,6 +3815,57 @@ class OntologyManager:
                         "message": f"Duplicate label '{label_str}' shared by: {', '.join(sorted(resources))}",
                     }
                 )
+
+        # External references: links whose target is defined in another ontology
+        # that has not been imported (issue #87 part B). Editing an entity to a
+        # custom URI or adding a cross-ontology relation (equivalentClass,
+        # sameAs, ...) is intentional and cannot be validated here, so surface
+        # each such target as info rather than silently leaving it unresolvable.
+        # A target that is a subject in this graph is defined here (or was
+        # imported) and is not external. Pure-syntax and core-vocabulary
+        # namespaces are always known: SKOS is included so scanning rdf:type
+        # does not flag skos:Concept / skos:ConceptScheme (which every SKOS
+        # ontology references) as unresolved external links.
+        _syntax_ns = (str(OWL), str(RDF), str(RDFS), str(XSD), str(SKOS))
+        _link_preds = (
+            (
+                RDFS.subClassOf,
+                OWL.equivalentClass,
+                OWL.disjointWith,
+                RDFS.subPropertyOf,
+                OWL.equivalentProperty,
+                OWL.inverseOf,
+                OWL.propertyDisjointWith,
+                OWL.sameAs,
+                OWL.differentFrom,
+                RDFS.domain,
+                RDFS.range,
+                RDF.type,
+            )
+            + _DOMAIN_INCLUDES
+            + _RANGE_INCLUDES
+        )
+        defined = set(self.graph.subjects())
+        external: Dict[str, str] = {}
+        for pred in _link_preds:
+            for _subj, obj in self.graph.subject_objects(pred):
+                if not isinstance(obj, URIRef) or obj in defined:
+                    continue
+                obj_str = str(obj)
+                if any(obj_str.startswith(ns) for ns in _syntax_ns):
+                    continue
+                external.setdefault(obj_str, self._local_name(obj))
+        for uri, name in sorted(external.items()):
+            issues.append(
+                {
+                    "severity": "info",
+                    "type": "external_reference",
+                    "subject": name,
+                    "message": f"'{name}' ({uri}) is referenced but not defined in "
+                    "this ontology (external link). Import its ontology to "
+                    "validate it fully.",
+                }
+            )
 
         return issues
 

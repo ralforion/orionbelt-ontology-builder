@@ -965,9 +965,18 @@ def _disambiguated_name(item: dict, collisions: set) -> str:
     """
     name = item.get("name", "")
     if name in collisions:
-        prefix = _prefix_for_uri(item.get("uri", ""))
+        uri = item.get("uri", "")
+        prefix = _prefix_for_uri(uri)
         if prefix:
             return f"{name} ({prefix})"
+        # No bound prefix (e.g. an arbitrary custom URI entered for issue #87
+        # part B): fall back to the namespace so two distinct URIs sharing a
+        # local name still render — and key — distinctly. The namespace alone is
+        # unique here: same namespace plus same local name would be the same URI,
+        # not a collision.
+        ns = uri[: len(uri) - len(name)] if uri.endswith(name) else uri
+        if ns:
+            return f"{name} ({ns})"
     return name
 
 
@@ -1134,6 +1143,71 @@ def _rename_or_move(ont, rename_fn, old_uri, old_local, new_name, new_namespace)
     if rename_fn(old_uri, target_uri):
         return True, target_uri
     return False, old_uri
+
+
+def _custom_uri_field(current_uri, new_name, key):
+    """Render an "Advanced: set a custom URI" expander inside an edit form and
+    return the effective name to rename to (issue #87 part B).
+
+    A full ``http(s)`` URI entered here overrides the Name (local part) and any
+    Namespace selector, so the entity is renamed to that exact IRI everywhere it
+    appears — used to give an entity an arbitrary identifier or to match an
+    entity in another ontology. The engine already accepts a full URI as a rename
+    target (``_uri`` passes it through, ``invalid_name_reason`` allows it), so the
+    returned value flows through the form's existing validate-and-rename path
+    unchanged. Returns ``new_name`` untouched when the field is blank or equal to
+    the current URI, so nothing renames on a no-op.
+
+    Must be called inside the ``st.form(...)`` body, before the submit button, so
+    the text input is submitted with the form.
+    """
+    with st.expander("Advanced: set a custom URI"):
+        custom = st.text_input(
+            "Full URI (overrides Name and Namespace)",
+            value="",
+            key=key,
+            placeholder=str(current_uri),
+            help="Enter a full http(s) URI to give this entity an arbitrary "
+            "identifier, e.g. to match an entity in another ontology. Every "
+            "reference is re-pointed, so no links are lost. Leave blank to use "
+            "the Name and Namespace above.",
+        )
+    custom = custom.strip()
+    if custom and custom != str(current_uri):
+        return custom
+    return new_name
+
+
+def _external_uri_target(ont, default_uri, key, label):
+    """Optional "external URI" input for a relation target (issue #87 part B).
+
+    Lets a relation (equivalentClass / equivalentProperty / sameAs, or any other
+    type) point at an entity in another ontology that has not been imported, by
+    typing its full ``http(s)`` URI instead of picking an existing entity from
+    the dropdown. The engine's ``add_*_relation`` already passes a full URI
+    through ``_uri`` unchanged, so the returned target flows straight into it.
+
+    Returns ``(target_uri, error)``: when the field holds a valid full URI that
+    becomes the target (overriding ``default_uri``, the dropdown pick); when it
+    is blank, ``default_uri`` is returned; when it is present but not a valid full
+    URI, ``error`` is a message string (and ``default_uri`` is returned). Must be
+    called inside the ``st.form(...)`` body, before the submit button.
+    """
+    ext = st.text_input(
+        f"…or link {label} to an external URI (optional)",
+        value="",
+        key=key,
+        placeholder="http://other.example.org/ns#Entity",
+        help="Link to an entity in another ontology that has not been imported. "
+        "Enter its full http(s) URI. Overrides the dropdown above.",
+    ).strip()
+    if not ext:
+        return default_uri, None
+    if not (ext.startswith("http://") or ext.startswith("https://")):
+        return default_uri, "External URI must be a full http(s) URI."
+    if reason := ont.invalid_name_reason(ext):
+        return default_uri, reason
+    return ext, None
 
 
 def _apply_class_edit(
@@ -1885,6 +1959,11 @@ def render_classes():
                         "reference to this class.",
                     )
                     new_namespace = ns_lookup.get(new_ns_display)
+                    new_name = _custom_uri_field(
+                        class_info["uri"],
+                        new_name,
+                        key=f"custom_uri_class_{selected_uid}",
+                    )
                     new_label = st.text_input("Label", value=class_info["label"])
                     new_comment = st.text_area("Comment", value=class_info["comment"])
 
@@ -2257,6 +2336,11 @@ def render_properties():
                                     "every reference to this property.",
                                 )
                             )
+                            new_name = _custom_uri_field(
+                                prop["uri"],
+                                new_name,
+                                key=f"custom_uri_objp_{prop_uid}",
+                            )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"objp_lbl_{prop_uid}"
                             )
@@ -2470,6 +2554,11 @@ def render_properties():
                                     help="Moving to another namespace re-points "
                                     "every reference to this property.",
                                 )
+                            )
+                            new_name = _custom_uri_field(
+                                prop["uri"],
+                                new_name,
+                                key=f"custom_uri_dp_{prop_uid}",
                             )
                             new_label = st.text_input(
                                 "Label", value=prop["label"], key=f"dp_lbl_{prop_uid}"
@@ -3040,6 +3129,9 @@ def render_individuals():
                                     "every reference to this individual.",
                                 )
                             )
+                            new_name = _custom_uri_field(
+                                ind["uri"], new_name, key=f"custom_uri_ind_{_ik}"
+                            )
                             new_label = st.text_input(
                                 "Label", value=ind["label"], key=f"ind_lbl_{_ik}"
                             )
@@ -3540,8 +3632,11 @@ def render_relations():
     if _rel_tab == "Class Relations":
         st.subheader("Add Class Relation")
 
-        if len(classes) < 2:
-            st.warning("Need at least 2 classes to create relations.")
+        if len(classes) < 1:
+            st.warning(
+                "Add at least one class to create a relation "
+                "(link it to another class or to an external URI)."
+            )
         else:
             with st.form("add_class_relation_form"):
                 cls_opts, cls_lookup = build_class_options(classes)
@@ -3568,17 +3663,29 @@ def render_relations():
                 - **disjointWith**: Class 1 and Class 2 have no common instances
                 """)
 
+                class2_uri, ext_err = _external_uri_target(
+                    ont,
+                    cls_lookup.get(class2_disp),
+                    key="crel_class2_ext",
+                    label="Class 2",
+                )
                 submitted = st.form_submit_button("Add Class Relation")
                 if submitted:
                     class1_uri = cls_lookup.get(class1_disp)
-                    class2_uri = cls_lookup.get(class2_disp)
-                    if class1_uri == class2_uri:
+                    class2_show = (
+                        class2_disp
+                        if class2_uri == cls_lookup.get(class2_disp)
+                        else class2_uri
+                    )
+                    if ext_err:
+                        show_message(ext_err, "error")
+                    elif class1_uri == class2_uri:
                         show_message("Please select two different classes!", "error")
                     else:
                         ont.add_class_relation(class1_uri, relation_type, class2_uri)
                         save_checkpoint("Add class relation")
                         show_message(
-                            f"Relation added: {class1_disp} {relation_type} {class2_disp}",
+                            f"Relation added: {class1_disp} {relation_type} {class2_show}",
                             "success",
                         )
                         st.rerun()
@@ -3587,8 +3694,11 @@ def render_relations():
         st.subheader("Add Property Relation")
 
         all_props = object_props + data_props
-        if len(all_props) < 2:
-            st.warning("Need at least 2 properties to create relations.")
+        if len(all_props) < 1:
+            st.warning(
+                "Add at least one property to create a relation "
+                "(link it to another property or to an external URI)."
+            )
         else:
             with st.form("add_property_relation_form"):
                 prop_opts, prop_lookup = build_uri_options(all_props)
@@ -3615,17 +3725,29 @@ def render_relations():
                 - **inverseOf**: Property 1 is the inverse of Property 2 (e.g., hasParent / hasChild)
                 """)
 
+                prop2_uri, ext_err = _external_uri_target(
+                    ont,
+                    prop_lookup.get(prop2_disp),
+                    key="prel_prop2_ext",
+                    label="Property 2",
+                )
                 submitted = st.form_submit_button("Add Property Relation")
                 if submitted:
                     prop1_uri = prop_lookup.get(prop1_disp)
-                    prop2_uri = prop_lookup.get(prop2_disp)
-                    if prop1_uri == prop2_uri:
+                    prop2_show = (
+                        prop2_disp
+                        if prop2_uri == prop_lookup.get(prop2_disp)
+                        else prop2_uri
+                    )
+                    if ext_err:
+                        show_message(ext_err, "error")
+                    elif prop1_uri == prop2_uri:
                         show_message("Please select two different properties!", "error")
                     else:
                         ont.add_property_relation(prop1_uri, relation_type, prop2_uri)
                         save_checkpoint("Add property relation")
                         show_message(
-                            f"Relation added: {prop1_disp} {relation_type} {prop2_disp}",
+                            f"Relation added: {prop1_disp} {relation_type} {prop2_show}",
                             "success",
                         )
                         st.rerun()
@@ -3633,8 +3755,11 @@ def render_relations():
     if _rel_tab == "Individual Relations":
         st.subheader("Add Individual Relation")
 
-        if len(individuals) < 2:
-            st.warning("Need at least 2 individuals to create relations.")
+        if len(individuals) < 1:
+            st.warning(
+                "Add at least one individual to create a relation "
+                "(link it to another individual or to an external URI)."
+            )
         else:
             with st.form("add_individual_relation_form"):
                 ind_opts, ind_lookup = build_uri_options(individuals)
@@ -3660,11 +3785,21 @@ def render_relations():
                 - **differentFrom**: Individual 1 and Individual 2 are definitely different entities
                 """)
 
+                ind2_uri, ext_err = _external_uri_target(
+                    ont,
+                    ind_lookup.get(ind2_disp),
+                    key="irel_ind2_ext",
+                    label="Individual 2",
+                )
                 submitted = st.form_submit_button("Add Individual Relation")
                 if submitted:
                     ind1_uri = ind_lookup.get(ind1_disp)
-                    ind2_uri = ind_lookup.get(ind2_disp)
-                    if ind1_uri == ind2_uri:
+                    ind2_show = (
+                        ind2_disp if ind2_uri == ind_lookup.get(ind2_disp) else ind2_uri
+                    )
+                    if ext_err:
+                        show_message(ext_err, "error")
+                    elif ind1_uri == ind2_uri:
                         show_message(
                             "Please select two different individuals!", "error"
                         )
@@ -3672,7 +3807,7 @@ def render_relations():
                         ont.add_individual_relation(ind1_uri, relation_type, ind2_uri)
                         save_checkpoint("Add individual relation")
                         show_message(
-                            f"Relation added: {ind1_disp} {relation_type} {ind2_disp}",
+                            f"Relation added: {ind1_disp} {relation_type} {ind2_show}",
                             "success",
                         )
                         st.rerun()
@@ -4017,8 +4152,12 @@ def render_skos_vocabulary():
     ont = st.session_state.ontology
     schemes = ont.get_concept_schemes()
     concepts = ont.get_concepts()
-    scheme_names = [s["name"] for s in schemes]
-    concept_names = [c["name"] for c in concepts]
+    # URI-keyed dropdown options for scheme/concept selectors (issue #87 part B):
+    # a scheme or concept moved to a custom URI can share a local name with
+    # another, so pass the picked URI to the engine instead of a bare local name
+    # that would resolve through the base namespace. ``.get(sentinel)`` returns
+    # None for the "All"/"None" entries, which is what the engine expects.
+    scheme_opts, scheme_lookup = build_uri_options(schemes)
 
     # Clean up unused navigation flag
     st.session_state.pop("_skos_navigate_to_concept", None)
@@ -4040,9 +4179,14 @@ def render_skos_vocabulary():
         else:
             for scheme in schemes:
                 display_name = format_label_name(scheme["name"], scheme.get("label"))
+                # Key and address schemes by a URI-derived id, not the local name:
+                # a scheme moved to a custom URI can share a local name with
+                # another, which would collide Streamlit widget keys and make
+                # local-name-based actions ambiguous (issue #87 part B).
+                _sk = str(abs(hash(scheme["uri"])))[:8]
                 _scheme_expanded = st.session_state.get(
-                    f"view_scheme_{scheme['name']}", False
-                ) or st.session_state.get(f"edit_scheme_{scheme['name']}", False)
+                    f"view_scheme_{_sk}", False
+                ) or st.session_state.get(f"edit_scheme_{_sk}", False)
                 with st.expander(
                     f"📚 **{display_name}** ({scheme['concept_count']} concepts)",
                     expanded=_scheme_expanded,
@@ -4057,52 +4201,50 @@ def render_skos_vocabulary():
                     with btn_view:
                         st.button(
                             "👁️ View",
-                            key=f"btn_view_scheme_{scheme['name']}",
+                            key=f"btn_view_scheme_{_sk}",
                             use_container_width=True,
                             on_click=_cb_toggle_view,
-                            args=("scheme", scheme["name"]),
+                            args=("scheme", _sk),
                         )
                     with btn_edit:
                         st.button(
                             "✏️ Edit",
-                            key=f"btn_edit_scheme_{scheme['name']}",
+                            key=f"btn_edit_scheme_{_sk}",
                             use_container_width=True,
                             on_click=_cb_toggle_edit,
-                            args=("scheme", scheme["name"]),
+                            args=("scheme", _sk),
                         )
                     with btn_del:
                         st.button(
                             "🗑️ Delete",
-                            key=f"btn_del_scheme_{scheme['name']}",
+                            key=f"btn_del_scheme_{_sk}",
                             use_container_width=True,
                             on_click=_cb_confirm_delete,
-                            args=(f"scheme_{scheme['name']}",),
+                            args=(f"scheme_{_sk}",),
                         )
 
-                    if st.session_state.get(f"view_scheme_{scheme['name']}", False):
+                    if st.session_state.get(f"view_scheme_{_sk}", False):
                         st.divider()
                         st.write(f"**Name:** {scheme['name']}")
                         st.write(f"**Label:** {scheme['label'] or '—'}")
                         st.write(f"**Comment:** {scheme['comment'] or '—'}")
                         st.write(f"**Concepts:** {scheme['concept_count']}")
 
-                    if confirm_delete(
-                        scheme["name"], "concept", f"scheme_{scheme['name']}"
-                    ):
-                        ont.delete_concept_scheme(scheme["name"])
+                    if confirm_delete(scheme["uri"], "concept", f"scheme_{_sk}"):
+                        ont.delete_concept_scheme(scheme["uri"])
                         save_checkpoint("Delete concept scheme")
                         set_flash_message(
                             f"Scheme '{scheme['name']}' deleted!", "success"
                         )
                         st.rerun()
 
-                    if st.session_state.get(f"edit_scheme_{scheme['name']}", False):
+                    if st.session_state.get(f"edit_scheme_{_sk}", False):
                         st.divider()
-                        with st.form(f"edit_scheme_form_{scheme['name']}"):
+                        with st.form(f"edit_scheme_form_{_sk}"):
                             new_name = st.text_input(
                                 "Name (URI local part)",
                                 value=scheme["name"],
-                                key=f"scheme_name_{scheme['name']}",
+                                key=f"scheme_name_{_sk}",
                                 help="Renaming updates every reference, including "
                                 "the inScheme links from its concepts — no "
                                 "membership is lost.",
@@ -4110,12 +4252,17 @@ def render_skos_vocabulary():
                             new_label = st.text_input(
                                 "Label",
                                 value=scheme["label"] or "",
-                                key=f"scheme_lbl_{scheme['name']}",
+                                key=f"scheme_lbl_{_sk}",
                             )
                             new_comment = st.text_area(
                                 "Comment",
                                 value=scheme["comment"] or "",
-                                key=f"scheme_cmt_{scheme['name']}",
+                                key=f"scheme_cmt_{_sk}",
+                            )
+                            new_name = _custom_uri_field(
+                                scheme["uri"],
+                                new_name,
+                                key=f"custom_uri_scheme_{_sk}",
                             )
                             if st.form_submit_button("Save Changes"):
                                 if new_name and new_name != scheme["name"]:
@@ -4123,27 +4270,33 @@ def render_skos_vocabulary():
                                         show_message(reason, "error")
                                         st.rerun()
                                 renamed = bool(new_name and new_name != scheme["name"])
+                                # Address the scheme by its actual URI so a scheme
+                                # in a non-base namespace resolves; target is the
+                                # URI it now lives at (issue #87 part B).
                                 if renamed and not ont.rename_concept_scheme(
-                                    scheme["name"], new_name
+                                    scheme["uri"], new_name
                                 ):
                                     show_message(
                                         f"Cannot rename: '{new_name}' already exists!",
                                         "error",
                                     )
                                 else:
-                                    target = new_name if renamed else scheme["name"]
+                                    target = (
+                                        _renamed_ref(ont, scheme["uri"], new_name)
+                                        if renamed
+                                        else scheme["uri"]
+                                    )
                                     ont.update_concept_scheme(
                                         target,
                                         new_label=new_label,
                                         new_comment=new_comment,
                                     )
                                     save_checkpoint("Update concept scheme")
-                                    st.session_state[
-                                        f"edit_scheme_{scheme['name']}"
-                                    ] = False
-                                    st.session_state[f"view_scheme_{target}"] = True
+                                    st.session_state[f"edit_scheme_{_sk}"] = False
+                                    _new_sk = str(abs(hash(target)))[:8]
+                                    st.session_state[f"view_scheme_{_new_sk}"] = True
                                     show_message(
-                                        f"Scheme '{target}' updated!", "success"
+                                        f"Scheme '{scheme['name']}' updated!", "success"
                                     )
                                     st.rerun()
 
@@ -4158,7 +4311,11 @@ def render_skos_vocabulary():
                     show_message("Scheme name is required!", "error")
                 elif reason := ont.invalid_name_reason(s_name):
                     show_message(reason, "error")
-                elif s_name in scheme_names:
+                elif str(ont._uri(s_name)) in {s["uri"] for s in schemes}:
+                    # Reject by target URI, not local name, so a base scheme can
+                    # be recreated after an existing one is moved to a custom URI
+                    # (issue #87 part B), mirroring the class/property/individual
+                    # add flows.
                     show_message(f"Scheme '{s_name}' already exists!", "error")
                 else:
                     ont.add_concept_scheme(
@@ -4175,12 +4332,12 @@ def render_skos_vocabulary():
         else:
             # Filter by scheme
             filter_scheme = st.selectbox(
-                "Filter by Scheme", ["All"] + scheme_names, key="concept_filter_scheme"
+                "Filter by Scheme", ["All"] + scheme_opts, key="concept_filter_scheme"
             )
             filtered = (
                 concepts
                 if filter_scheme == "All"
-                else ont.get_concepts(scheme=filter_scheme)
+                else ont.get_concepts(scheme=scheme_lookup.get(filter_scheme))
             )
 
             # Collapse other concepts when one is active
@@ -4285,17 +4442,24 @@ def render_skos_vocabulary():
                                 list(ont.SKOS_RELATIONS.keys()),
                                 key=f"rel_type_{_ck}",
                             )
-                            other_concepts = [
-                                c for c in concept_names if c != concept["name"]
-                            ]
+                            _rel_opts, _rel_lookup = build_uri_options(
+                                [c for c in concepts if c["uri"] != concept["uri"]]
+                            )
                             rel_target = st.selectbox(
                                 "Target Concept",
-                                other_concepts,
+                                _rel_opts,
                                 key=f"rel_target_{_ck}",
                             )
-                            if st.button("Add", key=f"add_rel_{_ck}"):
+                            if st.button("Add", key=f"add_rel_{_ck}") and rel_target:
+                                # Address both concepts by their actual URIs: a
+                                # concept moved to a non-base namespace (e.g. via a
+                                # custom URI) would not resolve through the base
+                                # namespace, and two concepts can share a local
+                                # name across namespaces (issue #87 part B).
                                 ont.add_concept_relation(
-                                    concept["name"], rel_type, rel_target
+                                    concept["uri"],
+                                    rel_type,
+                                    _rel_lookup.get(rel_target),
                                 )
                                 save_checkpoint("Add concept relation")
                                 show_message(f"Added {rel_type} relation!", "success")
@@ -4308,8 +4472,8 @@ def render_skos_vocabulary():
                             args=("skos", _ck),
                         )
 
-                    if confirm_delete(concept["name"], "concept", f"c_{_ck}"):
-                        ont.delete_concept(concept["name"])
+                    if confirm_delete(concept["uri"], "concept", f"c_{_ck}"):
+                        ont.delete_concept(concept["uri"])
                         save_checkpoint("Delete concept")
                         set_flash_message(
                             f"Concept '{concept['name']}' deleted!", "success"
@@ -4339,43 +4503,61 @@ def render_skos_vocabulary():
                                 key=f"def_{_ck}",
                             )
 
-                            # Broader concept
-                            other_concepts = [
-                                c for c in concept_names if c != concept["name"]
-                            ]
-                            current_broader = (
-                                concept["broader"][0] if concept["broader"] else "None"
+                            # Broader concept — URI-keyed so a broader concept in
+                            # a non-base namespace resolves unambiguously (#87).
+                            _broader_opts, _broader_lookup = build_uri_options(
+                                [c for c in concepts if c["uri"] != concept["uri"]]
                             )
-                            broader_options = ["None"] + other_concepts
-                            broader_idx = (
-                                broader_options.index(current_broader)
-                                if current_broader in broader_options
-                                else 0
+                            _cur_broader_uri = (
+                                concept["broader_uris"][0]
+                                if concept["broader_uris"]
+                                else None
                             )
+                            _cur_broader_disp = next(
+                                (
+                                    d
+                                    for d, u in _broader_lookup.items()
+                                    if u == _cur_broader_uri
+                                ),
+                                "None",
+                            )
+                            broader_options = ["None"] + _broader_opts
                             new_broader = st.selectbox(
                                 "Broader Concept",
                                 broader_options,
-                                index=broader_idx,
+                                index=broader_options.index(_cur_broader_disp)
+                                if _cur_broader_disp in broader_options
+                                else 0,
                                 key=f"broader_{_ck}",
                             )
 
-                            # Scheme
-                            current_scheme = (
-                                concept["schemes"][0]
-                                if concept.get("schemes")
-                                else "None"
+                            # Scheme — URI-keyed for the same reason.
+                            _cur_scheme_uri = (
+                                concept["scheme_uris"][0]
+                                if concept.get("scheme_uris")
+                                else None
                             )
-                            scheme_options = ["None"] + scheme_names
-                            scheme_idx = (
-                                scheme_options.index(current_scheme)
-                                if current_scheme in scheme_options
-                                else 0
+                            _cur_scheme_disp = next(
+                                (
+                                    d
+                                    for d, u in scheme_lookup.items()
+                                    if u == _cur_scheme_uri
+                                ),
+                                "None",
                             )
+                            scheme_options = ["None"] + scheme_opts
                             new_scheme = st.selectbox(
                                 "Scheme",
                                 scheme_options,
-                                index=scheme_idx,
+                                index=scheme_options.index(_cur_scheme_disp)
+                                if _cur_scheme_disp in scheme_options
+                                else 0,
                                 key=f"scheme_{_ck}",
+                            )
+                            new_name = _custom_uri_field(
+                                concept["uri"],
+                                new_name,
+                                key=f"custom_uri_concept_{_ck}",
                             )
 
                             if st.form_submit_button("Save Changes"):
@@ -4386,35 +4568,32 @@ def render_skos_vocabulary():
                                         show_message(reason, "error")
                                         st.rerun()
                                 renamed = bool(new_name and new_name != concept["name"])
+                                # Address the concept by its actual URI so a
+                                # concept in a non-base namespace (e.g. moved via
+                                # a custom URI) resolves; ``target`` is the full
+                                # URI it now lives at, which later updates use
+                                # instead of a base-namespace local name (#87).
                                 if renamed and not ont.rename_concept(
-                                    concept["name"], new_name
+                                    concept["uri"], new_name
                                 ):
                                     show_message(
                                         f"Cannot rename: '{new_name}' already exists!",
                                         "error",
                                     )
                                 else:
-                                    target = new_name if renamed else concept["name"]
-                                    # Handle broader change
-                                    broader_val = (
-                                        new_broader if new_broader != "None" else ""
+                                    target = (
+                                        _renamed_ref(ont, concept["uri"], new_name)
+                                        if renamed
+                                        else concept["uri"]
                                     )
-                                    old_broader = (
-                                        concept["broader"][0]
-                                        if concept["broader"]
-                                        else ""
-                                    )
+                                    # Handle broader change (resolve by URI)
+                                    broader_val = _broader_lookup.get(new_broader) or ""
+                                    old_broader = _cur_broader_uri or ""
                                     broader_changed = broader_val != old_broader
 
-                                    # Handle scheme change
-                                    old_scheme = (
-                                        concept["schemes"][0]
-                                        if concept.get("schemes")
-                                        else ""
-                                    )
-                                    new_scheme_val = (
-                                        new_scheme if new_scheme != "None" else ""
-                                    )
+                                    # Handle scheme change (resolve by URI)
+                                    old_scheme = _cur_scheme_uri or ""
+                                    new_scheme_val = scheme_lookup.get(new_scheme) or ""
                                     add_s = (
                                         new_scheme_val
                                         if new_scheme_val
@@ -4439,9 +4618,7 @@ def render_skos_vocabulary():
                                     save_checkpoint("Update concept")
                                     st.session_state[_ek] = False
                                     if renamed:
-                                        _new_ck = str(
-                                            abs(hash(str(ont._uri(new_name))))
-                                        )[:8]
+                                        _new_ck = str(abs(hash(target)))[:8]
                                         st.session_state[f"view_skos_{_new_ck}"] = True
                                     else:
                                         st.session_state[_sk] = True
@@ -4457,11 +4634,12 @@ def render_skos_vocabulary():
             c_pref = st.text_input("Preferred Label")
             c_def = st.text_area("Definition")
             c_scheme = st.selectbox(
-                "Scheme", ["None"] + scheme_names, key="concept_scheme_select"
+                "Scheme", ["None"] + scheme_opts, key="concept_scheme_select"
             )
+            _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
             c_broader = st.selectbox(
                 "Broader Concept",
-                ["None"] + concept_names,
+                ["None"] + _add_broader_opts,
                 key="concept_broader_select",
             )
             c_lang = st.text_input("Language Tag (e.g., en, de)", key="concept_lang")
@@ -4470,15 +4648,18 @@ def render_skos_vocabulary():
                     show_message("Concept name is required!", "error")
                 elif reason := ont.invalid_name_reason(c_name):
                     show_message(reason, "error")
-                elif c_name in concept_names:
+                elif str(ont._uri(c_name)) in {c["uri"] for c in concepts}:
+                    # Reject by target URI, not local name, so a base concept can
+                    # be recreated after an existing one is moved to a custom URI
+                    # (issue #87 part B).
                     show_message(f"Concept '{c_name}' already exists!", "error")
                 else:
                     ont.add_concept(
                         c_name,
-                        scheme=c_scheme if c_scheme != "None" else None,
+                        scheme=scheme_lookup.get(c_scheme),
                         pref_label=c_pref or None,
                         definition=c_def or None,
-                        broader=c_broader if c_broader != "None" else None,
+                        broader=_add_broader_lookup.get(c_broader),
                         lang=c_lang or None,
                     )
                     save_checkpoint("Add concept")
@@ -4491,10 +4672,10 @@ def render_skos_vocabulary():
             st.info("No concepts to display.")
         else:
             h_scheme = st.selectbox(
-                "Scheme", ["All"] + scheme_names, key="hierarchy_scheme_select"
+                "Scheme", ["All"] + scheme_opts, key="hierarchy_scheme_select"
             )
             hierarchy = ont.get_concept_hierarchy(
-                scheme=h_scheme if h_scheme != "All" else None
+                scheme=scheme_lookup.get(h_scheme) if h_scheme != "All" else None
             )
 
             # Find root concepts (those that are not narrower of any other)
