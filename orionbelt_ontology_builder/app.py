@@ -965,9 +965,18 @@ def _disambiguated_name(item: dict, collisions: set) -> str:
     """
     name = item.get("name", "")
     if name in collisions:
-        prefix = _prefix_for_uri(item.get("uri", ""))
+        uri = item.get("uri", "")
+        prefix = _prefix_for_uri(uri)
         if prefix:
             return f"{name} ({prefix})"
+        # No bound prefix (e.g. an arbitrary custom URI entered for issue #87
+        # part B): fall back to the namespace so two distinct URIs sharing a
+        # local name still render — and key — distinctly. The namespace alone is
+        # unique here: same namespace plus same local name would be the same URI,
+        # not a collision.
+        ns = uri[: len(uri) - len(name)] if uri.endswith(name) else uri
+        if ns:
+            return f"{name} ({ns})"
     return name
 
 
@@ -4143,8 +4152,6 @@ def render_skos_vocabulary():
     ont = st.session_state.ontology
     schemes = ont.get_concept_schemes()
     concepts = ont.get_concepts()
-    scheme_names = [s["name"] for s in schemes]
-    concept_names = [c["name"] for c in concepts]
     # URI-keyed dropdown options for scheme/concept selectors (issue #87 part B):
     # a scheme or concept moved to a custom URI can share a local name with
     # another, so pass the picked URI to the engine instead of a bare local name
@@ -4304,7 +4311,11 @@ def render_skos_vocabulary():
                     show_message("Scheme name is required!", "error")
                 elif reason := ont.invalid_name_reason(s_name):
                     show_message(reason, "error")
-                elif s_name in scheme_names:
+                elif str(ont._uri(s_name)) in {s["uri"] for s in schemes}:
+                    # Reject by target URI, not local name, so a base scheme can
+                    # be recreated after an existing one is moved to a custom URI
+                    # (issue #87 part B), mirroring the class/property/individual
+                    # add flows.
                     show_message(f"Scheme '{s_name}' already exists!", "error")
                 else:
                     ont.add_concept_scheme(
@@ -4637,7 +4648,10 @@ def render_skos_vocabulary():
                     show_message("Concept name is required!", "error")
                 elif reason := ont.invalid_name_reason(c_name):
                     show_message(reason, "error")
-                elif c_name in concept_names:
+                elif str(ont._uri(c_name)) in {c["uri"] for c in concepts}:
+                    # Reject by target URI, not local name, so a base concept can
+                    # be recreated after an existing one is moved to a custom URI
+                    # (issue #87 part B).
                     show_message(f"Concept '{c_name}' already exists!", "error")
                 else:
                     ont.add_concept(

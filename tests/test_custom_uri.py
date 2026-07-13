@@ -10,6 +10,7 @@ from rdflib import Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS, SKOS
 
 from ontology_manager import OntologyManager
+from orionbelt_ontology_builder import app
 
 BASE = "http://test.org/ont#"
 EXT = "http://other.example/ns#"
@@ -359,6 +360,60 @@ def test_add_concept_with_nonbase_scheme_uri():
 
     om.add_concept("A", scheme=EXT + "S")
     assert (URIRef(BASE + "A"), SKOS.inScheme, URIRef(EXT + "S")) in om.graph
+
+
+# ---- Dropdown disambiguation without a bound prefix -------------------------
+# Regression for issue #87 part B: two resources sharing a local name across
+# namespaces must render (and key) distinctly even when the custom namespace has
+# no bound prefix, or build_uri_options' lookup would keep only one URI.
+
+
+def test_disambiguated_name_falls_back_to_namespace(monkeypatch):
+    monkeypatch.setattr(app, "_prefix_for_uri", lambda uri: "")
+    items = [
+        {"name": "Target", "uri": BASE + "Target"},
+        {"name": "Target", "uri": EXT + "Target"},
+    ]
+    collisions = app._build_name_collision_set(items)
+    d1 = app._disambiguated_name(items[0], collisions)
+    d2 = app._disambiguated_name(items[1], collisions)
+    assert d1 != d2
+    assert BASE in d1 and EXT in d2
+
+
+def test_build_uri_options_keeps_both_uris_without_prefix(monkeypatch):
+    monkeypatch.setattr(app, "_prefix_for_uri", lambda uri: "")
+    items = [
+        {"name": "Target", "uri": BASE + "Target"},
+        {"name": "Target", "uri": EXT + "Target"},
+    ]
+    opts, lookup = app.build_uri_options(items)
+    assert len(opts) == 2
+    assert set(lookup.values()) == {BASE + "Target", EXT + "Target"}
+
+
+# ---- Add forms reject by target URI, not local name ------------------------
+
+
+def test_add_base_scheme_after_moving_existing_to_custom_uri():
+    om = _om()
+    om.add_concept_scheme("Scheme")
+    om.rename_concept_scheme("Scheme", EXT + "Scheme")  # align existing to ext URI
+
+    om.add_concept_scheme("Scheme")  # recreate the base-namespace scheme
+    uris = {s["uri"] for s in om.get_concept_schemes()}
+    assert {BASE + "Scheme", EXT + "Scheme"} <= uris
+
+
+def test_add_base_concept_after_moving_existing_to_custom_uri():
+    om = _om()
+    om.add_concept_scheme("S")
+    om.add_concept("C", scheme="S")
+    om.rename_concept("C", EXT + "C")
+
+    om.add_concept("C", scheme="S")  # recreate the base-namespace concept
+    uris = {c["uri"] for c in om.get_concepts()}
+    assert {BASE + "C", EXT + "C"} <= uris
 
 
 def test_validate_external_reference_clears_once_defined():
