@@ -351,3 +351,8 @@ By contributing to this project, you agree to the [Contributor License Agreement
     <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/orionbelt_ontology_builder/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
 </p>
+
+<p align="center">
+  <sub>Copyright © 2026 RALFORION d.o.o.</sub><br>
+  <sub>OrionBelt® is a registered trademark of RALFORION d.o.o.</sub>
+</p>
