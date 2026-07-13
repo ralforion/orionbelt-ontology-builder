@@ -211,6 +211,16 @@ def test_validate_ignores_standard_namespace_targets():
     assert _external_issues(om) == []
 
 
+def test_validate_ignores_skos_core_terms():
+    om = _om()
+    om.add_concept_scheme("Scheme")
+    om.add_concept("Concept", scheme="Scheme")
+
+    # skos:Concept / skos:ConceptScheme (rdf:type targets) are core vocabulary,
+    # not un-imported external links.
+    assert _external_issues(om) == []
+
+
 # ---- A concept in a non-base namespace is addressed by its URI --------------
 # Regression for issue #87 part B: after a concept is moved to a custom
 # (non-base) URI, later edit/delete/relation actions must address it by that
@@ -267,6 +277,28 @@ def test_nonbase_concept_relation_by_uri():
 
     om.add_concept_relation(EXT + "New", "related", "Other")
     assert (URIRef(EXT + "New"), SKOS.related, URIRef(BASE + "Other")) in om.graph
+
+
+def test_nonbase_scheme_rename_by_uri():
+    om = _om()
+    om.add_concept_scheme("Old")
+    om.add_concept("C", scheme="Old")
+    assert om.rename_concept_scheme("Old", EXT + "New") is True  # move to external ns
+
+    assert om.rename_concept_scheme(EXT + "New", EXT + "Newer") is True
+    assert (URIRef(EXT + "Newer"), RDF.type, SKOS.ConceptScheme) in om.graph
+    assert _triples(om, URIRef(EXT + "New")) == []
+    # The concept's inScheme link followed the rename.
+    assert (URIRef(BASE + "C"), SKOS.inScheme, URIRef(EXT + "Newer")) in om.graph
+
+
+def test_nonbase_scheme_delete_by_uri():
+    om = _om()
+    om.add_concept_scheme("Old")
+    om.rename_concept_scheme("Old", EXT + "New")
+
+    om.delete_concept_scheme(EXT + "New")
+    assert _triples(om, URIRef(EXT + "New")) == []
 
 
 def test_validate_external_reference_clears_once_defined():

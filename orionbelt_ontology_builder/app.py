@@ -4166,9 +4166,14 @@ def render_skos_vocabulary():
         else:
             for scheme in schemes:
                 display_name = format_label_name(scheme["name"], scheme.get("label"))
+                # Key and address schemes by a URI-derived id, not the local name:
+                # a scheme moved to a custom URI can share a local name with
+                # another, which would collide Streamlit widget keys and make
+                # local-name-based actions ambiguous (issue #87 part B).
+                _sk = str(abs(hash(scheme["uri"])))[:8]
                 _scheme_expanded = st.session_state.get(
-                    f"view_scheme_{scheme['name']}", False
-                ) or st.session_state.get(f"edit_scheme_{scheme['name']}", False)
+                    f"view_scheme_{_sk}", False
+                ) or st.session_state.get(f"edit_scheme_{_sk}", False)
                 with st.expander(
                     f"📚 **{display_name}** ({scheme['concept_count']} concepts)",
                     expanded=_scheme_expanded,
@@ -4183,52 +4188,50 @@ def render_skos_vocabulary():
                     with btn_view:
                         st.button(
                             "👁️ View",
-                            key=f"btn_view_scheme_{scheme['name']}",
+                            key=f"btn_view_scheme_{_sk}",
                             use_container_width=True,
                             on_click=_cb_toggle_view,
-                            args=("scheme", scheme["name"]),
+                            args=("scheme", _sk),
                         )
                     with btn_edit:
                         st.button(
                             "✏️ Edit",
-                            key=f"btn_edit_scheme_{scheme['name']}",
+                            key=f"btn_edit_scheme_{_sk}",
                             use_container_width=True,
                             on_click=_cb_toggle_edit,
-                            args=("scheme", scheme["name"]),
+                            args=("scheme", _sk),
                         )
                     with btn_del:
                         st.button(
                             "🗑️ Delete",
-                            key=f"btn_del_scheme_{scheme['name']}",
+                            key=f"btn_del_scheme_{_sk}",
                             use_container_width=True,
                             on_click=_cb_confirm_delete,
-                            args=(f"scheme_{scheme['name']}",),
+                            args=(f"scheme_{_sk}",),
                         )
 
-                    if st.session_state.get(f"view_scheme_{scheme['name']}", False):
+                    if st.session_state.get(f"view_scheme_{_sk}", False):
                         st.divider()
                         st.write(f"**Name:** {scheme['name']}")
                         st.write(f"**Label:** {scheme['label'] or '—'}")
                         st.write(f"**Comment:** {scheme['comment'] or '—'}")
                         st.write(f"**Concepts:** {scheme['concept_count']}")
 
-                    if confirm_delete(
-                        scheme["name"], "concept", f"scheme_{scheme['name']}"
-                    ):
-                        ont.delete_concept_scheme(scheme["name"])
+                    if confirm_delete(scheme["uri"], "concept", f"scheme_{_sk}"):
+                        ont.delete_concept_scheme(scheme["uri"])
                         save_checkpoint("Delete concept scheme")
                         set_flash_message(
                             f"Scheme '{scheme['name']}' deleted!", "success"
                         )
                         st.rerun()
 
-                    if st.session_state.get(f"edit_scheme_{scheme['name']}", False):
+                    if st.session_state.get(f"edit_scheme_{_sk}", False):
                         st.divider()
-                        with st.form(f"edit_scheme_form_{scheme['name']}"):
+                        with st.form(f"edit_scheme_form_{_sk}"):
                             new_name = st.text_input(
                                 "Name (URI local part)",
                                 value=scheme["name"],
-                                key=f"scheme_name_{scheme['name']}",
+                                key=f"scheme_name_{_sk}",
                                 help="Renaming updates every reference, including "
                                 "the inScheme links from its concepts — no "
                                 "membership is lost.",
@@ -4236,17 +4239,17 @@ def render_skos_vocabulary():
                             new_label = st.text_input(
                                 "Label",
                                 value=scheme["label"] or "",
-                                key=f"scheme_lbl_{scheme['name']}",
+                                key=f"scheme_lbl_{_sk}",
                             )
                             new_comment = st.text_area(
                                 "Comment",
                                 value=scheme["comment"] or "",
-                                key=f"scheme_cmt_{scheme['name']}",
+                                key=f"scheme_cmt_{_sk}",
                             )
                             new_name = _custom_uri_field(
                                 scheme["uri"],
                                 new_name,
-                                key=f"custom_uri_scheme_{scheme['name']}",
+                                key=f"custom_uri_scheme_{_sk}",
                             )
                             if st.form_submit_button("Save Changes"):
                                 if new_name and new_name != scheme["name"]:
@@ -4254,27 +4257,33 @@ def render_skos_vocabulary():
                                         show_message(reason, "error")
                                         st.rerun()
                                 renamed = bool(new_name and new_name != scheme["name"])
+                                # Address the scheme by its actual URI so a scheme
+                                # in a non-base namespace resolves; target is the
+                                # URI it now lives at (issue #87 part B).
                                 if renamed and not ont.rename_concept_scheme(
-                                    scheme["name"], new_name
+                                    scheme["uri"], new_name
                                 ):
                                     show_message(
                                         f"Cannot rename: '{new_name}' already exists!",
                                         "error",
                                     )
                                 else:
-                                    target = new_name if renamed else scheme["name"]
+                                    target = (
+                                        _renamed_ref(ont, scheme["uri"], new_name)
+                                        if renamed
+                                        else scheme["uri"]
+                                    )
                                     ont.update_concept_scheme(
                                         target,
                                         new_label=new_label,
                                         new_comment=new_comment,
                                     )
                                     save_checkpoint("Update concept scheme")
-                                    st.session_state[
-                                        f"edit_scheme_{scheme['name']}"
-                                    ] = False
-                                    st.session_state[f"view_scheme_{target}"] = True
+                                    st.session_state[f"edit_scheme_{_sk}"] = False
+                                    _new_sk = str(abs(hash(target)))[:8]
+                                    st.session_state[f"view_scheme_{_new_sk}"] = True
                                     show_message(
-                                        f"Scheme '{target}' updated!", "success"
+                                        f"Scheme '{scheme['name']}' updated!", "success"
                                     )
                                     st.rerun()
 

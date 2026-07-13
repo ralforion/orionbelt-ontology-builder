@@ -3816,8 +3816,11 @@ class OntologyManager:
         # sameAs, ...) is intentional and cannot be validated here, so surface
         # each such target as info rather than silently leaving it unresolvable.
         # A target that is a subject in this graph is defined here (or was
-        # imported) and is not external; pure-syntax namespaces are always known.
-        _syntax_ns = (str(OWL), str(RDF), str(RDFS), str(XSD))
+        # imported) and is not external. Pure-syntax and core-vocabulary
+        # namespaces are always known: SKOS is included so scanning rdf:type
+        # does not flag skos:Concept / skos:ConceptScheme (which every SKOS
+        # ontology references) as unresolved external links.
+        _syntax_ns = (str(OWL), str(RDF), str(RDFS), str(XSD), str(SKOS))
         _link_preds = (
             (
                 RDFS.subClassOf,
