@@ -376,3 +376,92 @@ class TestBulkDeleteIndividuals:
         assert result["deleted"] == ["fido", "rex"]
         inds = [i["name"] for i in om_with_classes.get_individuals()]
         assert "fido" not in inds
+
+
+class TestBulkErrorDetail:
+    """Bulk add reports failed entries with a reason instead of failing
+    silently (issue #114)."""
+
+    def test_invalid_name_recorded_with_reason(self, om):
+        result = om.bulk_add_classes([{"name": "Dog, 1"}])
+        assert result["created"] == []
+        assert len(result["errors"]) == 1
+        err = result["errors"][0]
+        assert err["name"] == "Dog, 1"
+        assert err["error"]  # a non-empty human-readable reason
+
+    def test_issue_114_repro_parses_to_one_invalid_entry(self, om):
+        # The exact input from issue #114: the parser picks ';' (it splits to the
+        # expected 3 fields, comma splits to 4), yielding a single entry whose
+        # name contains a comma/space and is rejected -- now surfaced, not silent.
+        text = "Dog, 1; A very, special Dog; Animal, and friends"
+        entries = OntologyManager.parse_bulk_text(
+            text, default_columns=["name", "label", "parent"]
+        )
+        assert entries == [
+            {
+                "name": "Dog, 1",
+                "label": "A very, special Dog",
+                "parent": "Animal, and friends",
+            }
+        ]
+        result = om.bulk_add_classes(entries)
+        assert result["created"] == []
+        assert [e["name"] for e in result["errors"]] == ["Dog, 1"]
+        assert not om.get_classes()
+
+    def test_partial_success_records_only_the_bad_rows(self, om):
+        result = om.bulk_add_classes(
+            [{"name": "Dog"}, {"name": "bad name"}, {"name": "Cat"}]
+        )
+        assert set(result["created"]) == {"Dog", "Cat"}
+        assert [e["name"] for e in result["errors"]] == ["bad name"]
+
+
+class TestBulkResultMessage:
+    """The flash-message builder names failed entries and their reason."""
+
+    def test_message_lists_failures_with_reason(self):
+        from orionbelt_ontology_builder import app
+
+        result = {
+            "created": [],
+            "skipped": [],
+            "errors": [{"name": "Dog, 1", "error": "Names cannot contain spaces."}],
+        }
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert "Dog, 1" in msg
+        assert "Names cannot contain spaces." in msg
+        assert mtype == "error"  # nothing created, only errors
+
+    def test_message_partial_is_warning(self):
+        from orionbelt_ontology_builder import app
+
+        result = {
+            "created": ["Dog"],
+            "skipped": [],
+            "errors": [{"name": "bad name", "error": "invalid"}],
+        }
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert "Created 1 class(es)" in msg
+        assert "bad name" in msg
+        assert mtype == "warning"
+
+    def test_message_all_created_is_success(self):
+        from orionbelt_ontology_builder import app
+
+        result = {"created": ["Dog", "Cat"], "skipped": [], "errors": []}
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert mtype == "success"
+        assert "could not be created" not in msg
+
+    def test_message_truncates_long_error_lists(self):
+        from orionbelt_ontology_builder import app
+
+        result = {
+            "created": [],
+            "skipped": [],
+            "errors": [{"name": f"n{i}", "error": "bad"} for i in range(15)],
+        }
+        msg, _ = app._bulk_result_message(result, "class(es)")
+        assert "...and 5 more" in msg

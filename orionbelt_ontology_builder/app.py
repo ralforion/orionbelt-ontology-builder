@@ -876,6 +876,42 @@ def display_flash_message():
         st.session_state.flash_message = None
 
 
+def _bulk_result_message(result: dict, label: str) -> tuple[str, str]:
+    """Summarize a bulk-add result for a flash message, naming each entry that
+    failed and why, so a rejected row (e.g. an invalid name) is not a silent
+    failure (issue #114). ``label`` is the noun with its plural suffix, e.g.
+    "class(es)". Returns ``(message, type)`` for :func:`set_flash_message`.
+    """
+    parts = []
+    if result["created"]:
+        parts.append(f"Created {len(result['created'])} {label}")
+    if result["skipped"]:
+        parts.append(f"Skipped {len(result['skipped'])} existing")
+    errors = result["errors"]
+    if errors:
+        parts.append(f"{len(errors)} could not be created")
+    summary = ". ".join(parts) if parts else "Nothing to create"
+    if errors:
+        shown = errors[:10]
+        lines = "\n".join(
+            f"- **{e.get('name') or '(empty name)'}**: "
+            f"{e.get('error') or 'unknown error'}"
+            for e in shown
+        )
+        if len(errors) > len(shown):
+            lines += f"\n- ...and {len(errors) - len(shown)} more"
+        summary = f"{summary}:\n\n{lines}"
+    if errors and not result["created"]:
+        msg_type = "error"
+    elif errors:
+        msg_type = "warning"
+    elif result["created"]:
+        msg_type = "success"
+    else:
+        msg_type = "info"
+    return summary, msg_type
+
+
 def confirm_delete(resource_name: str, resource_type: str, key_suffix: str) -> bool:
     """Show delete impact and confirmation UI. Returns True when confirmed."""
     ont = st.session_state.ontology
@@ -2066,17 +2102,8 @@ def render_classes():
                     ):
                         result = ont.bulk_add_classes(entries)
                         save_checkpoint("Bulk add classes")
-                        parts = []
-                        if result["created"]:
-                            parts.append(f"Created {len(result['created'])} class(es)")
-                        if result["skipped"]:
-                            parts.append(f"Skipped {len(result['skipped'])} existing")
-                        if result["errors"]:
-                            parts.append(f"{len(result['errors'])} error(s)")
-                        show_message(
-                            ". ".join(parts),
-                            "success" if result["created"] else "warning",
-                        )
+                        _msg, _type = _bulk_result_message(result, "class(es)")
+                        set_flash_message(_msg, _type)
                         st.rerun()
 
         elif bulk_op == "Edit":
@@ -2885,19 +2912,8 @@ def render_properties():
                     ):
                         result = ont.bulk_add_properties(entries, property_type=ptype)
                         save_checkpoint("Bulk add properties")
-                        parts = []
-                        if result["created"]:
-                            parts.append(
-                                f"Created {len(result['created'])} propert(ies)"
-                            )
-                        if result["skipped"]:
-                            parts.append(f"Skipped {len(result['skipped'])} existing")
-                        if result["errors"]:
-                            parts.append(f"{len(result['errors'])} error(s)")
-                        show_message(
-                            ". ".join(parts),
-                            "success" if result["created"] else "warning",
-                        )
+                        _msg, _type = _bulk_result_message(result, "propert(ies)")
+                        set_flash_message(_msg, _type)
                         st.rerun()
 
         elif bulk_op == "Edit":
@@ -3318,19 +3334,8 @@ def render_individuals():
                     ):
                         result = ont.bulk_add_individuals(entries)
                         save_checkpoint("Bulk add individuals")
-                        parts = []
-                        if result["created"]:
-                            parts.append(
-                                f"Created {len(result['created'])} individual(s)"
-                            )
-                        if result["skipped"]:
-                            parts.append(f"Skipped {len(result['skipped'])} existing")
-                        if result["errors"]:
-                            parts.append(f"{len(result['errors'])} error(s)")
-                        show_message(
-                            ". ".join(parts),
-                            "success" if result["created"] else "warning",
-                        )
+                        _msg, _type = _bulk_result_message(result, "individual(s)")
+                        set_flash_message(_msg, _type)
                         st.rerun()
 
         elif bulk_op == "Edit":
@@ -4137,7 +4142,8 @@ def render_annotations():
                 msg = f"Applied {result['applied']} change(s)"
                 if result["errors"]:
                     msg += f", {len(result['errors'])} error(s)"
-                show_message(msg, "success" if not result["errors"] else "warning")
+                # Flash (not show_message) so the summary survives the rerun below.
+                set_flash_message(msg, "success" if not result["errors"] else "warning")
                 st.rerun()
             else:
                 show_message(
@@ -4723,9 +4729,6 @@ def render_skos_vocabulary():
 def render_import_export():
     """Render the import/export page."""
     st.header("Import / Export")
-
-    # Display any flash messages from previous actions
-    display_flash_message()
 
     ont = st.session_state.ontology
 
@@ -7369,6 +7372,11 @@ def main():
             st.session_state.pop("_back_to_viz", None)
             st.session_state.search_navigate_to = "Visualization"
             st.rerun()
+
+    # Show any flash message from a previous action (set_flash_message), for
+    # every page rather than only Import/Export, so bulk-add results and delete
+    # confirmations aren't lost after their rerun (issue #114).
+    display_flash_message()
 
     # Render selected page
     try:
