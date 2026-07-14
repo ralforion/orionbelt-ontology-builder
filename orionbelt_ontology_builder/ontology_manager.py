@@ -195,10 +195,27 @@ class OntologyManager:
         prefixes.sort(key=lambda x: "" if x["prefix"] == "(default)" else x["prefix"])
         return prefixes
 
-    def add_prefix(self, prefix: str, namespace: str):
-        """Bind a custom prefix to a namespace URI in the graph."""
+    def add_prefix(self, prefix: str, namespace: str) -> str:
+        """Bind a custom prefix to a namespace URI in the graph.
+
+        An ``http(s)`` namespace that lacks a trailing delimiter is normalized
+        to end with ``#`` so entities created in it get a separator between the
+        namespace and the local name. Without it, a namespace like
+        ``http://example.org/ontology`` would concatenate with a name into
+        ``http://example.org/ontologyDog`` (issue #115). Namespaces that already
+        end in a delimiter (``# / : ? = &``) and non-``http`` schemes such as
+        ``urn:example:`` are left untouched, since their separator is already
+        intentional. Returns the namespace actually bound, so callers can
+        surface the normalization.
+        """
+        namespace = namespace.strip()
+        if namespace.startswith(("http://", "https://")) and not namespace.endswith(
+            ("#", "/", ":", "?", "=", "&")
+        ):
+            namespace = namespace + "#"
         self.graph.bind(prefix, Namespace(namespace), override=True)
         self._user_added_prefixes[prefix] = namespace
+        return namespace
 
     def remove_prefix(self, prefix: str):
         """Remove a custom prefix binding. Standard prefixes cannot be removed."""

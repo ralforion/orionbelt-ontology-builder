@@ -1610,13 +1610,20 @@ def render_dashboard():
                 key="new_prefix_ns",
             )
         if st.button("Add Prefix", key="add_prefix_btn"):
-            if new_prefix and new_ns:
-                ont.add_prefix(new_prefix, new_ns)
-                save_checkpoint("Add prefix")
-                set_flash_message(f"Added prefix '{new_prefix}'", "success")
-                st.rerun()
-            else:
+            _pfx = (new_prefix or "").strip()
+            _ns = (new_ns or "").strip()
+            if not _pfx or not _ns:
                 show_message("Both prefix and namespace URI are required.", "warning")
+            elif any(c.isspace() for c in _ns):
+                show_message("Namespace URI cannot contain spaces.", "warning")
+            else:
+                bound = ont.add_prefix(_pfx, _ns)
+                save_checkpoint("Add prefix")
+                # A namespace URI needs a trailing '#' or '/' so entities created
+                # in it get a separator; note it when we add one (issue #115).
+                note = "" if bound == _ns else f" (normalized to {bound})"
+                set_flash_message(f"Added prefix '{_pfx}'{note}", "success")
+                st.rerun()
 
     # Show remove buttons for custom prefixes
     custom_pfx = [p for p in all_prefixes if p["source"] == "custom"]
