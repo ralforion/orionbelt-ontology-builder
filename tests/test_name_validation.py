@@ -38,6 +38,20 @@ class TestInvalidNameReason:
     def test_invalid(self, name):
         assert OntologyManager.invalid_name_reason(name) is not None
 
+    def test_message_names_the_offending_characters(self):
+        # The reason names each disallowed character, not just the first problem
+        # (issue #114): "Dog, 1" has both a comma and a space.
+        assert "','" in OntologyManager.invalid_name_reason("Dog,1")
+        assert "'/'" in OntologyManager.invalid_name_reason("a/b")
+        msg = OntologyManager.invalid_name_reason("Dog, 1")
+        assert "','" in msg and "spaces" in msg
+
+    def test_leading_dash_message_is_specific(self):
+        # All characters are individually allowed, so the reason is the leading
+        # character rule rather than a bad-character list.
+        msg = OntologyManager.invalid_name_reason("-leading")
+        assert "start with" in msg
+
 
 class TestAddRejectsInvalid:
     def test_add_class_rejects_slash(self, om):
