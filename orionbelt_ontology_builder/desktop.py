@@ -21,6 +21,7 @@ This reuses the same in-package Streamlit entry script as the console launcher
 
 import importlib.util
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,15 +79,95 @@ _TITLE_SYNC_JS = """
 """
 
 
-def _install_window_title_sync(app_name: str):
-    """Make the native window title follow the page title (issue #90).
+# Injected into the desktop webview: the embedded browser blocks
+# JavaScript-initiated clipboard writes, so Streamlit's built-in copy buttons
+# (e.g. the IRI in the Visualization details panel) silently do nothing (issue
+# #120, the same webview capability gap as the disabled downloads in #86).
+# Reroute navigator.clipboard.writeText through the native bridge exposed below;
+# the page keeps calling the standard API, so every copy button just works.
+_CLIPBOARD_BRIDGE_JS = """
+(function () {
+  if (window.__orionbeltClipboardBridge) return;
+  window.__orionbeltClipboardBridge = true;
+  function nativeCopy(text) {
+    try {
+      var api = window.pywebview && window.pywebview.api;
+      if (api && api.orionbelt_copy_to_clipboard) {
+        api.orionbelt_copy_to_clipboard(text == null ? '' : String(text));
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  try {
+    var clip = navigator.clipboard;
+    if (!clip) return;
+    var original = typeof clip.writeText === 'function'
+      ? clip.writeText.bind(clip)
+      : null;
+    clip.writeText = function (text) {
+      if (nativeCopy(text)) return Promise.resolve();
+      return original
+        ? original(text)
+        : Promise.reject(new Error('clipboard unavailable'));
+    };
+  } catch (e) {}
+})();
+"""
 
-    Hooks ``webview.create_window`` so each window (a) exposes a title setter to
-    JS and (b) once loaded, runs :data:`_TITLE_SYNC_JS`, a MutationObserver that
-    pushes ``document.title`` back through that setter. Every step is defensive:
-    any failure leaves the static launch title in place rather than breaking the
-    desktop launch. Returns the original ``create_window`` for restoration, or
-    ``None`` when there is nothing to hook (e.g. a stubbed webview in tests).
+
+def _clipboard_commands() -> list[list[str]]:
+    """Return OS clipboard tools (stdin -> clipboard), tried in order.
+
+    macOS and Windows ship one; Linux depends on the session's clipboard helper
+    being installed, so Wayland and X11 tools are attempted in turn.
+    """
+    if sys.platform == "darwin":
+        return [["pbcopy"]]
+    if sys.platform == "win32":
+        return [["clip"]]
+    return [
+        ["wl-copy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+    ]
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Write ``text`` to the OS clipboard from the desktop process (issue #120).
+
+    The embedded webview blocks JavaScript-initiated clipboard writes, so
+    Streamlit's built-in copy buttons do nothing there. :data:`_CLIPBOARD_BRIDGE_JS`
+    reroutes the page's ``navigator.clipboard.writeText`` to this, and because
+    the desktop app's Streamlit server runs on the user's own machine, writing
+    from Python lands on their real clipboard.
+
+    Best effort: returns ``True`` once a clipboard tool accepts the text, and
+    ``False`` when none is available (e.g. a Linux box without ``xclip`` /
+    ``wl-copy``) rather than raising.
+    """
+    data = text.encode("utf-8")
+    for command in _clipboard_commands():
+        try:
+            subprocess.run(command, input=data, check=True)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
+
+def _install_window_bridges(app_name: str):
+    """Wire the native <-> page bridges each webview window needs.
+
+    Hooks ``webview.create_window`` so every window (a) exposes a title setter
+    and a clipboard writer to JS and (b) once loaded, injects the companion
+    scripts: :data:`_TITLE_SYNC_JS` (a MutationObserver mirroring
+    ``document.title`` onto the window, issue #90) and
+    :data:`_CLIPBOARD_BRIDGE_JS` (route the page's clipboard writes through the
+    native writer, issue #120). Every step is defensive: any failure leaves the
+    window working without that enhancement rather than breaking the desktop
+    launch. Returns the original ``create_window`` for restoration, or ``None``
+    when there is nothing to hook (e.g. a stubbed webview in tests).
     """
     import webview
 
@@ -106,16 +187,26 @@ def _install_window_title_sync(app_name: str):
                 pass
             return True
 
+        def orionbelt_copy_to_clipboard(text):
+            # Called from _CLIPBOARD_BRIDGE_JS when the page copies text. The
+            # desktop server runs on the user's own machine, so writing here
+            # reaches their real clipboard (issue #120).
+            try:
+                return _copy_to_clipboard("" if text is None else str(text))
+            except Exception:
+                return False
+
         try:
-            window.expose(orionbelt_set_window_title)
+            window.expose(orionbelt_set_window_title, orionbelt_copy_to_clipboard)
         except Exception:
             pass
 
         def _inject():
-            try:
-                window.evaluate_js(_TITLE_SYNC_JS)
-            except Exception:
-                pass
+            for script in (_TITLE_SYNC_JS, _CLIPBOARD_BRIDGE_JS):
+                try:
+                    window.evaluate_js(script)
+                except Exception:
+                    pass
 
         try:
             window.events.loaded += _inject
@@ -183,9 +274,9 @@ def run() -> None:
 
     entry = Path(__file__).parent / "streamlit_entry.py"
     webview.start = _start_with_persistent_storage
-    # Mirror the page title onto the native window so it shows the current
-    # ontology name like the browser tab (issue #90).
-    original_create_window = _install_window_title_sync(APP_NAME)
+    # Wire the native bridges: mirror the page title onto the window (issue #90)
+    # and route the page's clipboard writes to the OS clipboard (issue #120).
+    original_create_window = _install_window_bridges(APP_NAME)
     try:
         start_desktop_app(
             script_path=str(entry),

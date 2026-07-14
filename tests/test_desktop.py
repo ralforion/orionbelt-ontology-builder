@@ -214,7 +214,7 @@ class _FakeWindow:
     def __init__(self):
         self.exposed = []
         self.title = None
-        self.evaluated = None
+        self.evaluated = []
         self.events = types.SimpleNamespace(loaded=_Event())
 
     def expose(self, *fns):
@@ -224,18 +224,18 @@ class _FakeWindow:
         self.title = title
 
     def evaluate_js(self, js):
-        self.evaluated = js
+        self.evaluated.append(js)
 
 
 def test_window_title_sync_wiring(monkeypatch):
-    """The title-sync hook exposes a setter and injects the observer, and the
+    """The bridge hook exposes a title setter and injects the observer, and the
     setter mirrors the page title onto the window (issue #90)."""
     window = _FakeWindow()
     fake_webview = types.ModuleType("webview")
     fake_webview.create_window = lambda *a, **k: window
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
 
-    original = desktop._install_window_title_sync("AppName")
+    original = desktop._install_window_bridges("AppName")
     assert original is not None  # a real create_window was hooked
 
     # start_desktop_app would call create_window; simulate that.
@@ -258,14 +258,100 @@ def test_window_title_sync_wiring(monkeypatch):
     # On load, the MutationObserver script is injected.
     assert window.events.loaded, "no loaded handler registered"
     window.events.loaded[0]()
-    assert "MutationObserver" in window.evaluated
+    assert any("MutationObserver" in js for js in window.evaluated)
 
 
 def test_window_title_sync_noop_without_create_window(monkeypatch):
     """A stubbed webview lacking create_window must not raise (returns None)."""
     fake_webview = types.ModuleType("webview")  # no create_window attribute
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
-    assert desktop._install_window_title_sync("AppName") is None
+    assert desktop._install_window_bridges("AppName") is None
+
+
+def test_window_bridges_wire_clipboard(monkeypatch):
+    """The bridge hook exposes a clipboard writer and injects the bridge script,
+    and the exposed writer delegates to the OS clipboard helper (issue #120)."""
+    window = _FakeWindow()
+    fake_webview = types.ModuleType("webview")
+    fake_webview.create_window = lambda *a, **k: window
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    desktop._install_window_bridges("AppName")
+
+    import webview
+
+    webview.create_window("AppName", "http://localhost")
+
+    # The clipboard writer is exposed alongside the title setter, and routes
+    # text through _copy_to_clipboard.
+    copied = {}
+
+    def _fake_copy(text):
+        copied["text"] = text
+        return True
+
+    monkeypatch.setattr(desktop, "_copy_to_clipboard", _fake_copy)
+    writer = next(
+        fn for fn in window.exposed if fn.__name__ == "orionbelt_copy_to_clipboard"
+    )
+    assert writer("http://example.org/ontology#Dog") is True
+    assert copied["text"] == "http://example.org/ontology#Dog"
+    # None coalesces to an empty string rather than crashing.
+    assert writer(None) is True
+    assert copied["text"] == ""
+
+    # On load, the clipboard bridge script is injected.
+    window.events.loaded[0]()
+    assert any("__orionbeltClipboardBridge" in js for js in window.evaluated)
+
+
+def test_copy_to_clipboard_uses_platform_command(monkeypatch):
+    """Each platform writes stdin to its native clipboard tool (issue #120)."""
+    calls = {}
+
+    def _fake_run(command, input, check):  # noqa: A002 - mirror subprocess.run
+        calls["command"] = command
+        calls["input"] = input
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(desktop.subprocess, "run", _fake_run)
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop._copy_to_clipboard("Dog") is True
+    assert calls["command"] == ["pbcopy"]
+    assert calls["input"] == b"Dog"
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop._copy_to_clipboard("Dog") is True
+    assert calls["command"] == ["clip"]
+
+
+def test_copy_to_clipboard_falls_back_across_linux_tools(monkeypatch):
+    """On Linux, an unavailable tool is skipped for the next candidate."""
+    tried = []
+
+    def _fake_run(command, input, check):  # noqa: A002 - mirror subprocess.run
+        tried.append(command[0])
+        if command[0] == "wl-copy":
+            raise FileNotFoundError("wl-copy")
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(desktop.subprocess, "run", _fake_run)
+
+    assert desktop._copy_to_clipboard("Dog") is True
+    assert tried == ["wl-copy", "xclip"]
+
+
+def test_copy_to_clipboard_returns_false_when_unavailable(monkeypatch):
+    """With no working clipboard tool, it reports failure instead of raising."""
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    def _fake_run(command, input, check):  # noqa: A002 - mirror subprocess.run
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(desktop.subprocess, "run", _fake_run)
+    assert desktop._copy_to_clipboard("Dog") is False
 
 
 def test_run_without_dependency_exits_cleanly(monkeypatch):
