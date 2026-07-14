@@ -625,11 +625,28 @@ def persist_autosave():
     if not st.session_state.get("_autosave_restored"):
         return
 
-    # Local/desktop runs persist to disk instead of browser localStorage.
-    if local_store.local_persist_enabled():
-        _persist_autosave_to_disk()
-    else:
-        _persist_autosave_to_localstorage()
+    # Autosave is best-effort and must never take down the app. It runs at the
+    # end of every rerun, outside main()'s error handling, and an important
+    # action (e.g. linking a file) forces an immediate flush — so an unexpected
+    # backend failure here would otherwise escape and stop the app on that very
+    # action (issue #121). The disk backend already handles the expected
+    # transient OSErrors; this catch-all is the safety net for anything else:
+    # log it (surfacing the cause in the in-app error log) and, on disk runs,
+    # pause further writes so it isn't retried every rerun until the user fixes
+    # the file and reloads.
+    try:
+        if local_store.local_persist_enabled():
+            _persist_autosave_to_disk()
+        else:
+            _persist_autosave_to_localstorage()
+    except Exception as e:
+        log_error(e, context="Autosave")
+        if local_store.local_persist_enabled():
+            _block_disk_persist(
+                "Autosave hit an unexpected error and has been paused so it "
+                "doesn't retry. Your work is still here — fix or re-link the "
+                "file, then reload."
+            )
 
 
 def _load_linked_file(target) -> bool:
