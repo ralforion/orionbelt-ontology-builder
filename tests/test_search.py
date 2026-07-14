@@ -81,3 +81,34 @@ def test_search_name_ranks_above_alt_label(populated_om):
     results = populated_om.search("Doggo")
     names = [r["name"] for r in results]
     assert names.index("Doggo") < names.index("Wolf")
+
+
+def test_search_disambiguates_same_name_across_namespaces(monkeypatch):
+    """Two entities sharing a local name in different namespaces get a
+    namespace tag in the sidebar search, matching the graph/UI (issue #119)."""
+    import types
+
+    from ontology_manager import OntologyManager
+    from orionbelt_ontology_builder import app
+
+    om = OntologyManager(base_uri="http://example.org/ontology#")
+    om.add_class("Dog")  # base namespace
+    other_ns = "http://example.org/other-ontology#"
+    om.add_prefix("other", other_ns)
+    om.add_class("Dog", namespace=other_ns)
+
+    results = [r for r in om.search("Dog") if r["type"] == "Class"]
+    assert len(results) == 2
+    assert {r["name"] for r in results} == {"Dog"}
+    assert len({r["uri"] for r in results}) == 2  # distinct URIs carried through
+
+    # The sidebar builds a per-group collision set and disambiguates via the
+    # shared helper; _prefix_for_uri reads the active ontology from session.
+    monkeypatch.setattr(
+        app, "st", types.SimpleNamespace(session_state={"ontology": om})
+    )
+    collisions = app._build_name_collision_set(results)
+    assert "Dog" in collisions
+    displayed = {app._disambiguated_name(r, collisions) for r in results}
+    assert len(displayed) == 2  # no two identical entries
+    assert "Dog (other)" in displayed

@@ -7317,7 +7317,14 @@ def main():
             for type_label, items in grouped.items():
                 st.sidebar.caption(type_label)
                 page = type_to_page.get(type_label, "Dashboard")
+                # Tag the namespace when the same local name appears under more
+                # than one URI in these results, so duplicates don't render as
+                # identical entries (e.g. `Dog` and `Dog (other)`). This is the
+                # same disambiguation the rest of the UI and the graph already
+                # use (issue #119).
+                collisions = _build_name_collision_set(items)
                 for r in items:
+                    disp_name = _disambiguated_name(r, collisions)
                     label_str = (
                         f" ({r['label']})"
                         if r["label"] and r["label"] != r["name"]
@@ -7328,7 +7335,7 @@ def main():
                     r_uri = r.get("uri", r["name"])
                     r_uid = _uid(r_uri)
                     if st.sidebar.button(
-                        f"{r['name']}{label_str}",
+                        f"{disp_name}{label_str}",
                         key=f"search_{type_label}_{r_uid}",
                         use_container_width=True,
                     ):
