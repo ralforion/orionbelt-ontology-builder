@@ -353,6 +353,10 @@ class OntologyManager:
     # the app — spaces, '/', '#', ':' and stray punctuation — while still
     # allowing Unicode letters, digits, dots and hyphens (e.g. 'my-class.v2').
     _LOCAL_NAME_RE = re.compile(r"^\w[\w.\-]*$", re.UNICODE)
+    # A single character allowed anywhere in a local name (used to name the
+    # specific offending characters in an error, e.g. a ',' rather than only
+    # reporting the first-detected problem).
+    _LOCAL_NAME_CHAR_RE = re.compile(r"[\w.\-]", re.UNICODE)
 
     # Characters that make a full IRI unserializable in Turtle/N3 (mirrors
     # rdflib's own check); whitespace is handled separately via str.isspace().
@@ -378,17 +382,25 @@ class OntologyManager:
                     '< > " { } | \\ ^ `.'
                 )
             return None
-        if any(c.isspace() for c in name):
+        # Name the specific disallowed characters so a comma (or any other
+        # punctuation) is reported, not just the first problem found.
+        bad: List[str] = []
+        for c in name:
+            if not cls._LOCAL_NAME_CHAR_RE.match(c):
+                token = "spaces" if c.isspace() else f"'{c}'"
+                if token not in bad:
+                    bad.append(token)
+        if bad:
             return (
-                "Names cannot contain spaces. Put the readable name in the "
-                "Label field and use a name like 'MyClass' or 'my-class' here."
+                f"Names cannot contain {', '.join(bad)}. Names may contain only "
+                "letters, digits, '_', '-' and '.'. Put spaces and punctuation "
+                "in the Label field instead, and use a name like 'MyClass' or "
+                "'my-class' here."
             )
         if not cls._LOCAL_NAME_RE.match(name):
             return (
-                "Names may contain only letters, digits, '_', '-' and '.', and "
-                "cannot start with '-' or '.'. Characters like '/', '#', ':' or "
-                "spaces would produce an invalid URI. Put punctuation or spaces "
-                "in the Label instead."
+                "Names cannot start with '-' or '.'. Use a name like 'MyClass' "
+                "or 'my-class' here, and put spaces or punctuation in the Label."
             )
         return None
 
