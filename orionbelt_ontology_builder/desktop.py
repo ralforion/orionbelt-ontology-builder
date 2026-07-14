@@ -89,15 +89,19 @@ _CLIPBOARD_BRIDGE_JS = """
 (function () {
   if (window.__orionbeltClipboardBridge) return;
   window.__orionbeltClipboardBridge = true;
+  // Hand the text to the native writer and return its Promise<bool>, or null
+  // when the bridge is not available. The Python side reports whether the OS
+  // clipboard actually accepted the text, so callers must await it.
   function nativeCopy(text) {
     try {
       var api = window.pywebview && window.pywebview.api;
       if (api && api.orionbelt_copy_to_clipboard) {
-        api.orionbelt_copy_to_clipboard(text == null ? '' : String(text));
-        return true;
+        return Promise.resolve(
+          api.orionbelt_copy_to_clipboard(text == null ? '' : String(text))
+        );
       }
     } catch (e) {}
-    return false;
+    return null;
   }
   try {
     var clip = navigator.clipboard;
@@ -105,11 +109,19 @@ _CLIPBOARD_BRIDGE_JS = """
     var original = typeof clip.writeText === 'function'
       ? clip.writeText.bind(clip)
       : null;
-    clip.writeText = function (text) {
-      if (nativeCopy(text)) return Promise.resolve();
+    function fallback(text) {
       return original
         ? original(text)
         : Promise.reject(new Error('clipboard unavailable'));
+    }
+    clip.writeText = function (text) {
+      var pending = nativeCopy(text);
+      if (!pending) return fallback(text);
+      // Only resolve once the native write succeeds; on failure (e.g. no
+      // clipboard tool installed) fall back to the original API.
+      return pending.then(function (ok) {
+        return ok ? undefined : fallback(text);
+      });
     };
   } catch (e) {}
 })();
