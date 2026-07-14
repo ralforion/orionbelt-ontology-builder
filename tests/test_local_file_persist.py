@@ -343,3 +343,47 @@ def test_localstorage_writes_when_dirty_and_settled(fake_st, monkeypatch):
     app._persist_autosave_to_localstorage()
     assert app.AUTOSAVE_KEY in ls.items  # written
     assert fake_st.session_state["_ls_saved_rev"] == 1
+
+
+# ---- autosave is best-effort and never crashes the app (issue #121) -------
+
+
+def test_persist_autosave_swallows_unexpected_disk_error(fake_st, monkeypatch):
+    """A non-OSError escaping the disk backend must not propagate; it is logged
+    and disk autosave is paused so it isn't retried (issue #121)."""
+    monkeypatch.setattr(local_store, "local_persist_enabled", lambda: True)
+    fake_st.session_state["_autosave_restored"] = True
+
+    def _boom():
+        raise ValueError("serialization blew up")
+
+    monkeypatch.setattr(app, "_persist_autosave_to_disk", _boom)
+
+    app.persist_autosave()  # must not raise
+
+    assert fake_st.session_state.get("_disk_persist_blocked") is True
+    assert fake_st.session_state.error_log  # the cause was logged
+
+
+def test_link_flush_with_bad_write_does_not_crash(fake_st, tmp_path, monkeypatch):
+    """Linking forces an immediate flush; a non-OSError on that write is caught
+    and pauses autosave rather than stopping the app (issue #121)."""
+    monkeypatch.setattr(local_store, "local_persist_enabled", lambda: True)
+    linked = tmp_path / "linked.ttl"
+    local_store.set_linked_path(str(linked))
+    om = _populated()
+    fake_st.session_state.ontology = om
+    fake_st.session_state["_autosave_restored"] = True
+    _set_state(fake_st, mc=1, recovery=None, linked=None, settled=True)
+    fake_st.session_state["_force_autosave_flush"] = True
+
+    def bad_save(self, path, format=None):
+        raise ValueError("rdflib serialize failed")
+
+    monkeypatch.setattr(type(om), "save_to_file", bad_save)
+
+    app.persist_autosave()  # must not raise
+
+    assert fake_st.session_state.get("_disk_persist_blocked") is True
+    assert fake_st.session_state["_linked_saved_rev"] is None  # never recorded
+    assert fake_st.session_state.error_log
