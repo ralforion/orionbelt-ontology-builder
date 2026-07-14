@@ -198,15 +198,20 @@ class OntologyManager:
     def add_prefix(self, prefix: str, namespace: str) -> str:
         """Bind a custom prefix to a namespace URI in the graph.
 
-        The namespace is normalized to end with ``#`` or ``/`` (mirroring
-        :meth:`set_base_uri`) so entities created in it get a separator between
-        the namespace and the local name. Without it, a namespace like
+        An ``http(s)`` namespace that lacks a trailing delimiter is normalized
+        to end with ``#`` so entities created in it get a separator between the
+        namespace and the local name. Without it, a namespace like
         ``http://example.org/ontology`` would concatenate with a name into
-        ``http://example.org/ontologyDog`` (issue #115). Returns the namespace
-        actually bound, so callers can surface the normalization.
+        ``http://example.org/ontologyDog`` (issue #115). Namespaces that already
+        end in a delimiter (``# / : ? = &``) and non-``http`` schemes such as
+        ``urn:example:`` are left untouched, since their separator is already
+        intentional. Returns the namespace actually bound, so callers can
+        surface the normalization.
         """
         namespace = namespace.strip()
-        if namespace and not namespace.endswith(("#", "/")):
+        if namespace.startswith(("http://", "https://")) and not namespace.endswith(
+            ("#", "/", ":", "?", "=", "&")
+        ):
             namespace = namespace + "#"
         self.graph.bind(prefix, Namespace(namespace), override=True)
         self._user_added_prefixes[prefix] = namespace

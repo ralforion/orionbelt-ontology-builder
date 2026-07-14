@@ -94,3 +94,21 @@ class TestPrefixNamespaceNormalization:
         cls = {c["uri"]: c for c in om.get_classes()}
         assert cls["http://example.org/ontology#Dog"]["name"] == "Dog"
         assert "http://example.org/ontologyDog" not in cls
+
+    def test_urn_namespace_is_not_normalized(self, om):
+        # A URN already ends in its own separator (':'); appending '#' would
+        # mangle it into urn:example:#Dog (review on #117).
+        assert om.add_prefix("ex", "urn:example:") == "urn:example:"
+        uri = om.add_class("Dog", namespace="urn:example:")
+        assert str(uri) == "urn:example:Dog"
+
+    def test_non_http_scheme_left_as_is(self, om):
+        # Only http(s) namespaces are normalized; other schemes are untouched.
+        assert om.add_prefix("ex", "urn:example") == "urn:example"
+
+    def test_http_query_namespace_not_normalized(self, om):
+        # A trailing '=', '?' or '&' is an intentional separator.
+        assert (
+            om.add_prefix("q", "http://example.org/ns?term=")
+            == "http://example.org/ns?term="
+        )
