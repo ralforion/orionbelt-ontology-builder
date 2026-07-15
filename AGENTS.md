@@ -39,7 +39,7 @@ update the shim's import list too.
 
 ```bash
 # Install (dev)
-pip install -r requirements.txt          # or: pip install -e ".[dev]"
+uv sync --extra dev                      # or: pip install -e ".[dev]"
 
 # Run the app locally
 streamlit run app.py                     # opens http://localhost:8501

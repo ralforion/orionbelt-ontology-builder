@@ -4,12 +4,18 @@
 # Run:    docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 # Open:   http://localhost:8501
 
+# uv provides the resolver; a pinned stage keeps the version reproducible and
+# lets Dependabot bump it like any other base image.
+FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
+
 FROM python:3.12-slim
+
+COPY --from=uv /uv /uvx /bin/
 
 # Streamlit / runtime defaults
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
     STREAMLIT_SERVER_PORT=8501 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true \
@@ -17,13 +23,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install dependencies first so they stay cached across code changes.
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# Install dependencies first so they stay cached across code changes. --frozen
+# installs exactly what uv.lock pins and fails if it has drifted from
+# pyproject.toml, so the image matches the deployed app.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-install-project
 
 # Install the application as a package (pulls in bundled samples/lib/assets).
 COPY . .
-RUN pip install --no-deps .
+RUN uv sync --frozen --no-editable
+
+# uv installs into a project venv; put it first on PATH so `streamlit` resolves.
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Run as a non-root user.
 RUN useradd --create-home --uid 1000 appuser \
