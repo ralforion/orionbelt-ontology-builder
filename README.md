@@ -157,6 +157,48 @@ pipx run orionbelt-ontology-builder
 Any extra arguments are forwarded to Streamlit, e.g.
 `orionbelt-ontology-builder --server.port 8502`.
 
+### Use as a Python library
+
+The app is a thin wrapper over `OntologyManager`, the rdflib-backed engine. It
+needs no Streamlit runtime, so you can build ontologies from a script, a
+notebook, or a CI job:
+
+```python
+from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+ont = OntologyManager()
+ont.add_class("Question")
+
+# The same text format the Bulk Operations page accepts: name,label,parent
+entries = ont.parse_bulk_text(
+    "1,,Question\n1a,,1",
+    default_columns=["name", "label", "parent"],
+)
+result = ont.bulk_add_classes(entries)
+print(result["errors"])  # bulk methods report per entry, they do not raise
+
+ont.save_to_file("out.ttl")  # format inferred from the extension, written atomically
+```
+
+Three things that are easy to trip over:
+
+- Bulk methods return `{"created": [...], "errors": [...], "skipped": [...]}`
+  rather than raising, so a script that ignores `errors` will look like it
+  succeeded on input it silently rejected.
+- A parent referenced by a row but never given a row of its own is declared as a
+  bare `owl:Class`, so the `rdfs:subClassOf` target is a real node. Twenty rows
+  can legitimately produce twenty-one classes.
+- `parse_bulk_text` is a `@staticmethod`, so `OntologyManager.parse_bulk_text(...)`
+  works without an instance.
+
+The same applies to the rest of the app: classes, properties, individuals, class
+expressions, SKOS, reasoning and export are all `OntologyManager` methods. See
+[`orionbelt_ontology_builder/ontology_manager.py`](orionbelt_ontology_builder/ontology_manager.py)
+for the full surface.
+
+There is no REST/HTTP API, and the `orionbelt-ontology-builder` command only
+launches the app. In-process Python is the way to automate it.
+
 ### Run as a native desktop app
 
 Prefer a native window over a browser tab? Install the optional `desktop` extra
