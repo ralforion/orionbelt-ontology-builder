@@ -8,7 +8,7 @@
 # lets Dependabot bump it like any other base image.
 FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 COPY --from=uv /uv /uvx /bin/
 
