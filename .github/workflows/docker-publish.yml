@@ -3,12 +3,16 @@ name: Docker Publish
 # Build and push the OrionBelt Ontology Builder image to Docker Hub, and keep
 # the Hub repo overview in sync with README.md.
 #
+# - build       → on PRs and main: builds the image and smoke-tests it, never
+#                 pushes. Catches Dockerfile and dependency regressions before a
+#                 release tag rather than during one.
 # - image       → only on version tags (v1.2.3): publishes :1.2.3, :1.2, :1, :latest
 # - description → on pushes to main and manual runs: syncs README.md to the
 #                 Docker Hub overview. This job never builds an image, so no
 #                 rolling :main / :edge tags are created.
 #
-# Requires two repository secrets:
+# Only the image and description jobs need secrets; build runs without them so it
+# works on pull requests from forks:
 #   DOCKERHUB_USERNAME — Docker Hub account / org
 #   DOCKERHUB_TOKEN    — a Docker Hub access token (Account Settings → Security)
 #                        with read/write scope (read-only fails the description sync)
@@ -17,12 +21,59 @@ on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orionbelt-ontology-builder
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Everything except a release tag, which the image job already builds.
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # linux/amd64 only: it matches the runner, so this needs no QEMU and can
+      # load the result for the smoke test. The release build stays multi-arch.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: orionbelt-ontology-builder:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A build that succeeds can still produce an image that never serves, so
+      # start it and wait for Streamlit to report healthy.
+      - name: Smoke-test image
+        run: |
+          docker run -d --name ob-ci -p 8501:8501 orionbelt-ontology-builder:ci
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8501/_stcore/health || true)
+            if [ "$code" = "200" ]; then
+              echo "healthy after ${i}s"
+              docker exec ob-ci python -c "import streamlit; print('streamlit', streamlit.__version__)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::/_stcore/health never returned 200"
+          docker logs ob-ci
+          exit 1
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f ob-ci || true
+
   image:
     runs-on: ubuntu-latest
     # Build/push only for released version tags — never for branch or PR pushes.
