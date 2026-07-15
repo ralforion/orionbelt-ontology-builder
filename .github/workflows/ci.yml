@@ -14,8 +14,11 @@ jobs:
       # first failure, so a version-specific break is obvious.
       fail-fast: false
       matrix:
-        # 3.12 is what Streamlit Cloud runs; 3.14 is the base image the Docker
-        # image moves to in #128.
+        # 3.14 is the base image the Docker image ships (see Dockerfile). 3.12 is
+        # Streamlit Community Cloud's default and the oldest runtime we keep
+        # green. The hosted app's interpreter is picked in Community Cloud's
+        # Advanced settings at deploy time and is not recorded in this repo, so
+        # this floor is a deliberate choice rather than a reading of the deploy.
         python: ["3.12", "3.14"]
     name: check (py${{ matrix.python }})
     steps:
