@@ -5,10 +5,10 @@
 # they get an individual PR to review; minor/patch are batched into one.
 version: 2
 updates:
-  # Python dependencies. The pip ecosystem covers both manifests at the root:
-  # requirements.txt and the PEP 621 dependencies in pyproject.toml, which
-  # duplicate each other and must stay in sync.
-  - package-ecosystem: "pip"
+  # Python dependencies. pyproject.toml plus uv.lock are the single source of
+  # truth: uv.lock installs the Streamlit Cloud app and the Docker image, and
+  # pyproject.toml drives the PyPI release.
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -31,7 +31,7 @@ updates:
         patterns:
           - "*"
 
-  # Base image in the Dockerfile.
+  # Base images in the Dockerfile (python and the pinned uv stage).
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

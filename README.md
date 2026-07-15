@@ -128,7 +128,7 @@ Interactive vis-network graph with class filtering, configurable node limits, cl
 # Clone and install
 git clone https://github.com/ralforion/orionbelt-ontology-builder.git
 cd orionbelt-ontology-builder
-pip install -r requirements.txt
+uv sync                                  # or: pip install .
 
 # Or install from PyPI
 pip install orionbelt-ontology-builder

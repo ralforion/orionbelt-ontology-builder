@@ -27,7 +27,6 @@ Thumbs.db
 # Local dev / docs not needed at runtime
 design/
 tests/
-uv.lock
 .streamlit/secrets.toml
 .playwright-mcp/
 .claude/
