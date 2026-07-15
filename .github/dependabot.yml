@@ -1,0 +1,43 @@
+# Dependabot configuration.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+#
+# Weekly, grouped updates to keep noise low. Major Python bumps are ungrouped so
+# they get an individual PR to review; minor/patch are batched into one.
+version: 2
+updates:
+  # Python dependencies. The pip ecosystem covers both manifests at the root:
+  # requirements.txt and the PEP 621 dependencies in pyproject.toml, which
+  # duplicate each other and must stay in sync.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Base image in the Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      docker:
+        patterns:
+          - "*"
