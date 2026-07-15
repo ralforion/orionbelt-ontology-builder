@@ -9,19 +9,40 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      # Report every version's result, rather than cancelling siblings on the
+      # first failure, so a version-specific break is obvious.
+      fail-fast: false
+      matrix:
+        # 3.12 is what Streamlit Cloud runs; 3.14 is the base image the Docker
+        # image moves to in #128.
+        python: ["3.12", "3.14"]
+    name: check (py${{ matrix.python }})
     steps:
       - uses: actions/checkout@v7
 
+      # python-version sets UV_PYTHON, binding every uv command below to the
+      # matrix interpreter: uv is otherwise free to pick any python satisfying
+      # requires-python, so a leg could silently test a version other than the
+      # one it names. It also feeds setup-uv's cache key, which would otherwise
+      # be computed from the runner's system python and so collide across legs.
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: ${{ matrix.python }}
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${{ matrix.python }}
 
       - name: Install dependencies
         run: uv sync --extra dev
+
+      - name: Verify interpreter
+        run: |
+          actual=$(uv run python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          echo "matrix=${{ matrix.python }} actual=$actual"
+          [ "$actual" = "${{ matrix.python }}" ] || { echo "::error::expected Python ${{ matrix.python }}, got $actual"; exit 1; }
 
       - name: Lint (ruff)
         run: uv run ruff check orionbelt_ontology_builder tests app.py ontology_manager.py templates.py
