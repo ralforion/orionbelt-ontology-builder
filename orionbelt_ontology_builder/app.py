@@ -1037,18 +1037,21 @@ def _cb_toggle_view(prefix, uid):
     """Callback: open view panel, close edit. `uid` must be unique per resource."""
     st.session_state[f"view_{prefix}_{uid}"] = True
     st.session_state[f"edit_{prefix}_{uid}"] = False
+    st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
 def _cb_toggle_edit(prefix, uid):
     """Callback: open edit panel, close view. `uid` must be unique per resource."""
     st.session_state[f"edit_{prefix}_{uid}"] = True
     st.session_state[f"view_{prefix}_{uid}"] = False
+    st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
 def _cb_view_to_edit(prefix, uid):
     """Callback: switch from view to edit. `uid` must be unique per resource."""
     st.session_state[f"view_{prefix}_{uid}"] = False
     st.session_state[f"edit_{prefix}_{uid}"] = True
+    st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
 def _cb_confirm_delete(key_suffix):
@@ -1777,15 +1780,38 @@ def render_classes():
                     _disambiguated_name(c, collisions), c.get("label")
                 ).lower(),
             )
-            _active_cls = next(
-                (
-                    c
-                    for c in sorted_classes
-                    if st.session_state.get(f"view_class_{_uid(c['uri'])}", False)
-                    or st.session_state.get(f"edit_class_{_uid(c['uri'])}", False)
-                ),
-                None,
+
+            def _is_active_cls(c):
+                _u = _uid(c["uri"])
+                return st.session_state.get(
+                    f"view_class_{_u}", False
+                ) or st.session_state.get(f"edit_class_{_u}", False)
+
+            # Prefer the most recently opened class, not just the first in sorted
+            # order. Otherwise a class left open (view/edit state still set) on an
+            # earlier page would win over one the user just clicked on a later
+            # page, and the single-active cleanup below would wipe the new click
+            # before it could render (issue #143 review).
+            _last_opened = st.session_state.get("_last_opened_entity")
+            _preferred_uid = (
+                _last_opened[1]
+                if isinstance(_last_opened, tuple) and _last_opened[0] == "class"
+                else None
             )
+            _active_cls = None
+            if _preferred_uid is not None:
+                _active_cls = next(
+                    (
+                        c
+                        for c in sorted_classes
+                        if _uid(c["uri"]) == _preferred_uid and _is_active_cls(c)
+                    ),
+                    None,
+                )
+            if _active_cls is None:
+                _active_cls = next(
+                    (c for c in sorted_classes if _is_active_cls(c)), None
+                )
             if _active_cls:
                 _active_uid = _uid(_active_cls["uri"])
                 for c in sorted_classes:
