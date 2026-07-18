@@ -1058,6 +1058,22 @@ def _cb_view_to_edit(prefix, uid):
     st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
+def _mark_view_flag_open(view_flag: str) -> None:
+    """Open a card by its raw ``view_{kind}_{key}`` flag from a navigation path.
+
+    Search, graph-click, and "Open full editor" navigation set the view flag
+    directly rather than through the View/Edit callbacks, so they must also record
+    the entity as the most recently opened. Otherwise, if another card is already
+    open, the list view's single-active resolver prefers that stale card and
+    clears the freshly requested one (issue #146 review). The flag's ``kind``
+    segment never contains an underscore, so a 3-way split recovers (kind, key).
+    """
+    st.session_state[view_flag] = True
+    parts = view_flag.split("_", 2)
+    if len(parts) == 3 and parts[0] == "view":
+        st.session_state["_last_opened_entity"] = (parts[1], parts[2])
+
+
 def _cb_confirm_delete(key_suffix):
     """Callback: trigger delete confirmation."""
     st.session_state[f"confirm_delete_{key_suffix}"] = True
@@ -7054,8 +7070,7 @@ def render_visualization():
                             st.session_state["cls_active_tab"] = "Edit/Delete Class"
                             st.session_state["edit_class_select"] = _disp
                             st.rerun()
-                vk = _view_key_map[_ntype](_ename)
-                st.session_state[vk] = True
+                _mark_view_flag_open(_view_key_map[_ntype](_ename))
                 if _ntype == "SKOS Concept":
                     st.session_state["_skos_navigate_to_concept"] = True
                 st.rerun()
@@ -7330,7 +7345,7 @@ def main():
             st.session_state.search_navigate_to = _nav_page
             _vk = _view_key_map.get(_gv_type)
             if _vk:
-                st.session_state[_vk] = True
+                _mark_view_flag_open(_vk)
             if _gv_type == "SKOS Concept":
                 st.session_state["_skos_navigate_to_concept"] = True
         st.query_params.clear()
@@ -7448,7 +7463,7 @@ def main():
                         }
                         view_key = view_key_map.get(type_label)
                         if view_key:
-                            st.session_state[view_key] = True
+                            _mark_view_flag_open(view_key)
                         st.rerun()
         else:
             st.sidebar.caption("No results found.")
