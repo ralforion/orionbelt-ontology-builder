@@ -711,7 +711,11 @@ def _render_disk_autosave_sidebar():
         if saved_rev == mc:
             st.sidebar.caption("✓ Saved to disk")
         elif saved_rev is not None:
-            st.sidebar.caption("• Autosaving…")
+            # The disk write is debounced and only runs on a rerun, so a pending
+            # write lands on the next edit/interaction rather than immediately. Say
+            # so honestly instead of "Autosaving…", which looked stuck when the
+            # session went idle even though the work is safe in memory (issue #145).
+            st.sidebar.caption("• Saved in memory; writing to disk shortly…")
 
     linked = local_store.get_linked_path()
     with st.sidebar.expander("Linked working file", expanded=linked is not None):
