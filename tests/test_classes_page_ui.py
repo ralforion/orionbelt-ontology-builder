@@ -33,7 +33,7 @@ def _script():
             uid = app._uid(classes[open_idx]["uri"])
             st.session_state[f"view_class_{uid}"] = True
             if os.environ.get("SET_TRACKER") == "1":
-                st.session_state["_cls_active_page_uid"] = uid
+                st.session_state["cls_view_page__active_key"] = uid
         if os.environ.get("SET_PAGE"):
             st.session_state["cls_view_page"] = int(os.environ["SET_PAGE"])
 
@@ -70,7 +70,7 @@ def test_opening_a_card_jumps_to_its_page_once():
     at = _run(open_idx=0, set_page=2, set_tracker=False)
     assert _shown_range(at) == "Showing classes 1–50 of 120."
     # And the jump is recorded so it won't fire again on later renders.
-    assert at.session_state["_cls_active_page_uid"]
+    assert at.session_state["cls_view_page__active_key"]
 
 
 def test_no_card_open_leaves_the_chosen_page_alone():
@@ -103,7 +103,7 @@ def _script_multi():
         )
         _tr = os.environ["TRACKER_IDX"]
         if _tr:
-            st.session_state["_cls_active_page_uid"] = app._uid(
+            st.session_state["cls_view_page__active_key"] = app._uid(
                 classes[int(_tr)]["uri"]
             )
         st.session_state["cls_view_page"] = int(os.environ["SET_PAGE"])
@@ -138,4 +138,4 @@ def test_clicking_a_class_on_a_later_page_wins_over_a_hidden_open_one():
     assert at.session_state[f"view_class_{uids[60]}"] is True
     _stale = f"view_class_{uids[0]}"
     assert _stale not in at.session_state or at.session_state[_stale] is False
-    assert at.session_state["_cls_active_page_uid"] == uids[60]
+    assert at.session_state["cls_view_page__active_key"] == uids[60]

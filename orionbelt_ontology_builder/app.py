@@ -1058,6 +1058,22 @@ def _cb_view_to_edit(prefix, uid):
     st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
+def _mark_view_flag_open(view_flag: str) -> None:
+    """Open a card by its raw ``view_{kind}_{key}`` flag from a navigation path.
+
+    Search, graph-click, and "Open full editor" navigation set the view flag
+    directly rather than through the View/Edit callbacks, so they must also record
+    the entity as the most recently opened. Otherwise, if another card is already
+    open, the list view's single-active resolver prefers that stale card and
+    clears the freshly requested one (issue #146 review). The flag's ``kind``
+    segment never contains an underscore, so a 3-way split recovers (kind, key).
+    """
+    st.session_state[view_flag] = True
+    parts = view_flag.split("_", 2)
+    if len(parts) == 3 and parts[0] == "view":
+        st.session_state["_last_opened_entity"] = (parts[1], parts[2])
+
+
 def _cb_confirm_delete(key_suffix):
     """Callback: trigger delete confirmation."""
     st.session_state[f"confirm_delete_{key_suffix}"] = True
@@ -1723,12 +1739,13 @@ def render_dashboard():
                         st.write(f"{icon} **{issue['subject']}**: {issue['message']}")
 
 
-# Cap how many class cards the View Classes tab renders at once. Each card is an
-# expander plus several buttons (and a form when expanded), so an ontology with
-# hundreds of classes would otherwise emit thousands of widgets in one render —
-# enough to overwhelm the embedded desktop webview and take the app down (issue
-# #140). Paginating bounds the payload regardless of ontology size.
-CLASSES_PER_PAGE = 50
+# Cap how many item cards a "view" list renders at once. Each card is an expander
+# plus several buttons (and a form when expanded), so an ontology with hundreds of
+# classes / properties / individuals / concepts would otherwise emit thousands of
+# widgets in one render — enough to overwhelm the embedded desktop webview and take
+# the app down (issue #140). Paginating bounds the payload regardless of size, and
+# every per-item list view shares this cap (issue #146).
+LIST_PAGE_SIZE = 50
 
 
 def _page_bounds(total: int, page: int, page_size: int) -> tuple[int, int, int, int]:
@@ -1742,6 +1759,110 @@ def _page_bounds(total: int, page: int, page_size: int) -> tuple[int, int, int, 
     page = min(max(int(page), 1), num_pages)
     start = (page - 1) * page_size
     return num_pages, page, start, min(start + page_size, total)
+
+
+def _paginate_rows(items: list, page_key: str, noun: str) -> list:
+    """Paginate a flat list of rows (no open/active state) at LIST_PAGE_SIZE.
+
+    Renders a page selector and a range caption when there is more than one
+    page, and returns the slice of ``items`` to render. ``page_key`` is the
+    session-state key backing the selector (unique per list). Used for the
+    Relations lists, which are plain rows rather than expandable cards.
+    """
+    total = len(items)
+    if total <= LIST_PAGE_SIZE:
+        return items
+    num_pages, page, _, _ = _page_bounds(
+        total, st.session_state.get(page_key, 1), LIST_PAGE_SIZE
+    )
+    st.session_state[page_key] = page  # clamp before the widget reads the key
+    page = st.number_input(
+        "Page",
+        min_value=1,
+        max_value=num_pages,
+        step=1,
+        key=page_key,
+        help=f"{total} {noun}; {LIST_PAGE_SIZE} shown per page.",
+    )
+    _, _, start, end = _page_bounds(total, page, LIST_PAGE_SIZE)
+    st.caption(f"Showing {noun} {start + 1}–{end} of {total}.")
+    return items[start:end]
+
+
+def _resolve_list_view(items, kind, key_of, page_key, noun):
+    """Shared logic for a per-item "view" list (classes, properties, ...).
+
+    Given the already sorted/filtered display list, this:
+
+      * picks the active (open) item, preferring the most recently opened one
+        over the first in list order, so a fresh click wins over a card left
+        open on another page (issue #143 review);
+      * enforces single-active by clearing every other item's view/edit flags;
+      * paginates at LIST_PAGE_SIZE with a page selector, jumping to the active
+        item's page once when it becomes active — not every render, so a manual
+        page change sticks while a card stays open (issues #140 / #146).
+
+    ``kind`` is the session-state flag segment (``view_{kind}_{key}`` /
+    ``edit_{kind}_{key}``) and also the ``_last_opened_entity`` tag set by the
+    open callbacks. ``key_of`` maps an item to its unique key string.
+
+    Returns ``(page_items, active_item)``.
+    """
+
+    def _is_active(it):
+        _k = key_of(it)
+        return st.session_state.get(f"view_{kind}_{_k}", False) or st.session_state.get(
+            f"edit_{kind}_{_k}", False
+        )
+
+    last = st.session_state.get("_last_opened_entity")
+    preferred = last[1] if isinstance(last, tuple) and last[0] == kind else None
+    active = None
+    if preferred is not None:
+        active = next(
+            (it for it in items if key_of(it) == preferred and _is_active(it)),
+            None,
+        )
+    if active is None:
+        active = next((it for it in items if _is_active(it)), None)
+
+    if active is not None:
+        _akey = key_of(active)
+        for it in items:
+            _k = key_of(it)
+            if _k != _akey:
+                st.session_state.pop(f"view_{kind}_{_k}", None)
+                st.session_state.pop(f"edit_{kind}_{_k}", None)
+
+    total = len(items)
+    if total <= LIST_PAGE_SIZE:
+        return items, active
+
+    jump_key = f"{page_key}__active_key"
+    if active is not None:
+        _akey = key_of(active)
+        if st.session_state.get(jump_key) != _akey:
+            st.session_state[page_key] = items.index(active) // LIST_PAGE_SIZE + 1
+            st.session_state[jump_key] = _akey
+    else:
+        # No card open: forget the last jump so reopening one jumps again.
+        st.session_state.pop(jump_key, None)
+
+    num_pages, page, _, _ = _page_bounds(
+        total, st.session_state.get(page_key, 1), LIST_PAGE_SIZE
+    )
+    st.session_state[page_key] = page  # clamp before the widget reads the key
+    page = st.number_input(
+        "Page",
+        min_value=1,
+        max_value=num_pages,
+        step=1,
+        key=page_key,
+        help=f"{total} {noun}; {LIST_PAGE_SIZE} shown per page.",
+    )
+    _, _, start, end = _page_bounds(total, page, LIST_PAGE_SIZE)
+    st.caption(f"Showing {noun} {start + 1}–{end} of {total}.")
+    return items[start:end], active
 
 
 def render_classes():
@@ -1785,84 +1906,15 @@ def render_classes():
                 ).lower(),
             )
 
-            def _is_active_cls(c):
-                _u = _uid(c["uri"])
-                return st.session_state.get(
-                    f"view_class_{_u}", False
-                ) or st.session_state.get(f"edit_class_{_u}", False)
-
-            # Prefer the most recently opened class, not just the first in sorted
-            # order. Otherwise a class left open (view/edit state still set) on an
-            # earlier page would win over one the user just clicked on a later
-            # page, and the single-active cleanup below would wipe the new click
-            # before it could render (issue #143 review).
-            _last_opened = st.session_state.get("_last_opened_entity")
-            _preferred_uid = (
-                _last_opened[1]
-                if isinstance(_last_opened, tuple) and _last_opened[0] == "class"
-                else None
+            # Single-active selection + pagination (issues #140 / #143 / #146).
+            # The full list stays available in the "All Classes" table below.
+            _page_classes, _ = _resolve_list_view(
+                sorted_classes,
+                "class",
+                lambda c: _uid(c["uri"]),
+                "cls_view_page",
+                "classes",
             )
-            _active_cls = None
-            if _preferred_uid is not None:
-                _active_cls = next(
-                    (
-                        c
-                        for c in sorted_classes
-                        if _uid(c["uri"]) == _preferred_uid and _is_active_cls(c)
-                    ),
-                    None,
-                )
-            if _active_cls is None:
-                _active_cls = next(
-                    (c for c in sorted_classes if _is_active_cls(c)), None
-                )
-            if _active_cls:
-                _active_uid = _uid(_active_cls["uri"])
-                for c in sorted_classes:
-                    c_uid = _uid(c["uri"])
-                    if c_uid != _active_uid:
-                        st.session_state.pop(f"view_class_{c_uid}", None)
-                        st.session_state.pop(f"edit_class_{c_uid}", None)
-
-            # Only render one page of class cards at a time (issue #140). The full
-            # list stays available in the "All Classes" table below.
-            _total = len(sorted_classes)
-            if _total > CLASSES_PER_PAGE:
-                # Jump to the page holding a class only when it *becomes* the
-                # active (viewed/edited) card, not on every render — otherwise the
-                # auto-jump fights a manual page change and pins the user to that
-                # page for as long as the card stays open. Tracking the last
-                # jumped-to UID makes it a one-shot per open.
-                if _active_cls is not None:
-                    _active_uid = _uid(_active_cls["uri"])
-                    if st.session_state.get("_cls_active_page_uid") != _active_uid:
-                        st.session_state["cls_view_page"] = (
-                            sorted_classes.index(_active_cls) // CLASSES_PER_PAGE + 1
-                        )
-                        st.session_state["_cls_active_page_uid"] = _active_uid
-                else:
-                    # No card open: forget the last jump so reopening one jumps again.
-                    st.session_state.pop("_cls_active_page_uid", None)
-                _num_pages, _page, _, _ = _page_bounds(
-                    _total, st.session_state.get("cls_view_page", 1), CLASSES_PER_PAGE
-                )
-                # Clamp back before the widget reads the key (e.g. a stale page
-                # left over after deletions) so number_input never sees an
-                # out-of-range value.
-                st.session_state["cls_view_page"] = _page
-                _page = st.number_input(
-                    "Class page",
-                    min_value=1,
-                    max_value=_num_pages,
-                    step=1,
-                    key="cls_view_page",
-                    help=f"{_total} classes; {CLASSES_PER_PAGE} shown per page.",
-                )
-                _, _, _start, _end = _page_bounds(_total, _page, CLASSES_PER_PAGE)
-                _page_classes = sorted_classes[_start:_end]
-                st.caption(f"Showing classes {_start + 1}–{_end} of {_total}.")
-            else:
-                _page_classes = sorted_classes
 
             for cls in _page_classes:
                 cls_uid = _uid(cls["uri"])
@@ -2369,22 +2421,13 @@ def render_properties():
             )
 
             op_collisions = _build_name_collision_set(object_props)
-            _active_op = next(
-                (
-                    p
-                    for p in filtered_obj_props
-                    if st.session_state.get(f"view_objprop_{_uid(p['uri'])}", False)
-                    or st.session_state.get(f"edit_objprop_{_uid(p['uri'])}", False)
-                ),
-                None,
+            filtered_obj_props, _ = _resolve_list_view(
+                filtered_obj_props,
+                "objprop",
+                lambda p: _uid(p["uri"]),
+                "objprop_view_page",
+                "properties",
             )
-            if _active_op:
-                _active_op_uid = _uid(_active_op["uri"])
-                for p in filtered_obj_props:
-                    p_uid = _uid(p["uri"])
-                    if p_uid != _active_op_uid:
-                        st.session_state.pop(f"view_objprop_{p_uid}", None)
-                        st.session_state.pop(f"edit_objprop_{p_uid}", None)
 
             for prop in filtered_obj_props:
                 prop_uid = _uid(prop["uri"])
@@ -2589,22 +2632,13 @@ def render_properties():
             datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())
 
             dp_collisions = _build_name_collision_set(data_props)
-            _active_dp = next(
-                (
-                    p
-                    for p in filtered_data_props
-                    if st.session_state.get(f"view_dataprop_{_uid(p['uri'])}", False)
-                    or st.session_state.get(f"edit_dataprop_{_uid(p['uri'])}", False)
-                ),
-                None,
+            filtered_data_props, _ = _resolve_list_view(
+                filtered_data_props,
+                "dataprop",
+                lambda p: _uid(p["uri"]),
+                "dataprop_view_page",
+                "properties",
             )
-            if _active_dp:
-                _active_dp_uid = _uid(_active_dp["uri"])
-                for p in filtered_data_props:
-                    p_uid = _uid(p["uri"])
-                    if p_uid != _active_dp_uid:
-                        st.session_state.pop(f"view_dataprop_{p_uid}", None)
-                        st.session_state.pop(f"edit_dataprop_{p_uid}", None)
 
             for prop in filtered_data_props:
                 prop_uid = _uid(prop["uri"])
@@ -3130,24 +3164,17 @@ def render_individuals():
             # Use URI hash for unique widget keys (name may not be unique across namespaces)
             ind_collisions = _build_name_collision_set(individuals)
 
-            _active_ind = next(
-                (
-                    i
-                    for i in individuals
-                    if st.session_state.get(f"view_ind_{_uid(i['uri'])}", False)
-                    or st.session_state.get(f"edit_ind_{_uid(i['uri'])}", False)
-                ),
-                None,
+            # Master `individuals` list is reused elsewhere in this page, so keep
+            # it intact and iterate only the current page here.
+            _page_inds, _ = _resolve_list_view(
+                individuals,
+                "ind",
+                lambda i: _uid(i["uri"]),
+                "ind_view_page",
+                "individuals",
             )
-            if _active_ind:
-                _active_ind_uid = _uid(_active_ind["uri"])
-                for i in individuals:
-                    i_uid = _uid(i["uri"])
-                    if i_uid != _active_ind_uid:
-                        st.session_state.pop(f"view_ind_{i_uid}", None)
-                        st.session_state.pop(f"edit_ind_{i_uid}", None)
 
-            for ind in individuals:
+            for ind in _page_inds:
                 classes_str = (
                     ", ".join(ind["classes"]) if ind["classes"] else "No class"
                 )
@@ -3675,7 +3702,9 @@ def render_relations():
         class_relations = ont.get_class_relations()
         if class_relations:
             st.write("**Class Relations:**")
-            for rel in class_relations:
+            for rel in _paginate_rows(
+                class_relations, "rel_class_page", "class relations"
+            ):
                 subj_uri = rel.get("subject_uri", rel["subject"])
                 obj_uri = rel.get("object_uri", rel["object"])
                 rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
@@ -3701,7 +3730,9 @@ def render_relations():
         prop_relations = ont.get_property_relations()
         if prop_relations:
             st.write("**Property Relations:**")
-            for rel in prop_relations:
+            for rel in _paginate_rows(
+                prop_relations, "rel_prop_page", "property relations"
+            ):
                 col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
                 with col1:
                     st.write(f"🔗 {rel['subject']}")
@@ -3727,7 +3758,9 @@ def render_relations():
         ind_relations = ont.get_individual_relations()
         if ind_relations:
             st.write("**Individual Relations:**")
-            for rel in ind_relations:
+            for rel in _paginate_rows(
+                ind_relations, "rel_ind_page", "individual relations"
+            ):
                 col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
                 with col1:
                     st.write(f"👤 {rel['subject']}")
@@ -4461,26 +4494,14 @@ def render_skos_vocabulary():
                 else ont.get_concepts(scheme=scheme_lookup.get(filter_scheme))
             )
 
-            # Collapse other concepts when one is active
             def _concept_key(c):
                 return str(abs(hash(c["uri"])))[:8]
 
-            _active_concept = next(
-                (
-                    c
-                    for c in filtered
-                    if st.session_state.get(f"view_skos_{_concept_key(c)}", False)
-                    or st.session_state.get(f"edit_skos_{_concept_key(c)}", False)
-                ),
-                None,
+            # Single-active selection + pagination, keyed by the concept's URI
+            # hash (local names may collide across schemes).
+            filtered, _ = _resolve_list_view(
+                filtered, "skos", _concept_key, "skos_view_page", "concepts"
             )
-            if _active_concept:
-                _active_ck = _concept_key(_active_concept)
-                for c in filtered:
-                    ck = _concept_key(c)
-                    if ck != _active_ck:
-                        st.session_state.pop(f"view_skos_{ck}", None)
-                        st.session_state.pop(f"edit_skos_{ck}", None)
 
             for concept in filtered:
                 pref = concept["prefLabel"] or concept["name"]
@@ -7049,8 +7070,7 @@ def render_visualization():
                             st.session_state["cls_active_tab"] = "Edit/Delete Class"
                             st.session_state["edit_class_select"] = _disp
                             st.rerun()
-                vk = _view_key_map[_ntype](_ename)
-                st.session_state[vk] = True
+                _mark_view_flag_open(_view_key_map[_ntype](_ename))
                 if _ntype == "SKOS Concept":
                     st.session_state["_skos_navigate_to_concept"] = True
                 st.rerun()
@@ -7325,7 +7345,7 @@ def main():
             st.session_state.search_navigate_to = _nav_page
             _vk = _view_key_map.get(_gv_type)
             if _vk:
-                st.session_state[_vk] = True
+                _mark_view_flag_open(_vk)
             if _gv_type == "SKOS Concept":
                 st.session_state["_skos_navigate_to_concept"] = True
         st.query_params.clear()
@@ -7443,7 +7463,7 @@ def main():
                         }
                         view_key = view_key_map.get(type_label)
                         if view_key:
-                            st.session_state[view_key] = True
+                            _mark_view_flag_open(view_key)
                         st.rerun()
         else:
             st.sidebar.caption("No results found.")
