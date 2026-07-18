@@ -1037,18 +1037,21 @@ def _cb_toggle_view(prefix, uid):
     """Callback: open view panel, close edit. `uid` must be unique per resource."""
     st.session_state[f"view_{prefix}_{uid}"] = True
     st.session_state[f"edit_{prefix}_{uid}"] = False
+    st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
 def _cb_toggle_edit(prefix, uid):
     """Callback: open edit panel, close view. `uid` must be unique per resource."""
     st.session_state[f"edit_{prefix}_{uid}"] = True
     st.session_state[f"view_{prefix}_{uid}"] = False
+    st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
 def _cb_view_to_edit(prefix, uid):
     """Callback: switch from view to edit. `uid` must be unique per resource."""
     st.session_state[f"view_{prefix}_{uid}"] = False
     st.session_state[f"edit_{prefix}_{uid}"] = True
+    st.session_state["_last_opened_entity"] = (prefix, uid)
 
 
 def _cb_confirm_delete(key_suffix):
@@ -1716,6 +1719,27 @@ def render_dashboard():
                         st.write(f"{icon} **{issue['subject']}**: {issue['message']}")
 
 
+# Cap how many class cards the View Classes tab renders at once. Each card is an
+# expander plus several buttons (and a form when expanded), so an ontology with
+# hundreds of classes would otherwise emit thousands of widgets in one render —
+# enough to overwhelm the embedded desktop webview and take the app down (issue
+# #140). Paginating bounds the payload regardless of ontology size.
+CLASSES_PER_PAGE = 50
+
+
+def _page_bounds(total: int, page: int, page_size: int) -> tuple[int, int, int, int]:
+    """Resolve a 1-based ``page`` over ``total`` items into slice bounds.
+
+    Returns ``(num_pages, page, start, end)`` where ``page`` is clamped into
+    ``[1, num_pages]`` and ``start``/``end`` are 0-based slice indices. Pure, so
+    it is unit-tested directly.
+    """
+    num_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(int(page), 1), num_pages)
+    start = (page - 1) * page_size
+    return num_pages, page, start, min(start + page_size, total)
+
+
 def render_classes():
     """Render the classes management page."""
     st.header("Classes")
@@ -1756,15 +1780,38 @@ def render_classes():
                     _disambiguated_name(c, collisions), c.get("label")
                 ).lower(),
             )
-            _active_cls = next(
-                (
-                    c
-                    for c in sorted_classes
-                    if st.session_state.get(f"view_class_{_uid(c['uri'])}", False)
-                    or st.session_state.get(f"edit_class_{_uid(c['uri'])}", False)
-                ),
-                None,
+
+            def _is_active_cls(c):
+                _u = _uid(c["uri"])
+                return st.session_state.get(
+                    f"view_class_{_u}", False
+                ) or st.session_state.get(f"edit_class_{_u}", False)
+
+            # Prefer the most recently opened class, not just the first in sorted
+            # order. Otherwise a class left open (view/edit state still set) on an
+            # earlier page would win over one the user just clicked on a later
+            # page, and the single-active cleanup below would wipe the new click
+            # before it could render (issue #143 review).
+            _last_opened = st.session_state.get("_last_opened_entity")
+            _preferred_uid = (
+                _last_opened[1]
+                if isinstance(_last_opened, tuple) and _last_opened[0] == "class"
+                else None
             )
+            _active_cls = None
+            if _preferred_uid is not None:
+                _active_cls = next(
+                    (
+                        c
+                        for c in sorted_classes
+                        if _uid(c["uri"]) == _preferred_uid and _is_active_cls(c)
+                    ),
+                    None,
+                )
+            if _active_cls is None:
+                _active_cls = next(
+                    (c for c in sorted_classes if _is_active_cls(c)), None
+                )
             if _active_cls:
                 _active_uid = _uid(_active_cls["uri"])
                 for c in sorted_classes:
@@ -1773,7 +1820,47 @@ def render_classes():
                         st.session_state.pop(f"view_class_{c_uid}", None)
                         st.session_state.pop(f"edit_class_{c_uid}", None)
 
-            for cls in sorted_classes:
+            # Only render one page of class cards at a time (issue #140). The full
+            # list stays available in the "All Classes" table below.
+            _total = len(sorted_classes)
+            if _total > CLASSES_PER_PAGE:
+                # Jump to the page holding a class only when it *becomes* the
+                # active (viewed/edited) card, not on every render — otherwise the
+                # auto-jump fights a manual page change and pins the user to that
+                # page for as long as the card stays open. Tracking the last
+                # jumped-to UID makes it a one-shot per open.
+                if _active_cls is not None:
+                    _active_uid = _uid(_active_cls["uri"])
+                    if st.session_state.get("_cls_active_page_uid") != _active_uid:
+                        st.session_state["cls_view_page"] = (
+                            sorted_classes.index(_active_cls) // CLASSES_PER_PAGE + 1
+                        )
+                        st.session_state["_cls_active_page_uid"] = _active_uid
+                else:
+                    # No card open: forget the last jump so reopening one jumps again.
+                    st.session_state.pop("_cls_active_page_uid", None)
+                _num_pages, _page, _, _ = _page_bounds(
+                    _total, st.session_state.get("cls_view_page", 1), CLASSES_PER_PAGE
+                )
+                # Clamp back before the widget reads the key (e.g. a stale page
+                # left over after deletions) so number_input never sees an
+                # out-of-range value.
+                st.session_state["cls_view_page"] = _page
+                _page = st.number_input(
+                    "Class page",
+                    min_value=1,
+                    max_value=_num_pages,
+                    step=1,
+                    key="cls_view_page",
+                    help=f"{_total} classes; {CLASSES_PER_PAGE} shown per page.",
+                )
+                _, _, _start, _end = _page_bounds(_total, _page, CLASSES_PER_PAGE)
+                _page_classes = sorted_classes[_start:_end]
+                st.caption(f"Showing classes {_start + 1}–{_end} of {_total}.")
+            else:
+                _page_classes = sorted_classes
+
+            for cls in _page_classes:
                 cls_uid = _uid(cls["uri"])
                 disp_name = _disambiguated_name(cls, collisions)
                 display_name = format_label_name(disp_name, cls.get("label"))
