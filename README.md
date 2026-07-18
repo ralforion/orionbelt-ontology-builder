@@ -298,7 +298,7 @@ A prebuilt image is published to Docker Hub. No local Python setup required:
 docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 ```
 
-Then open http://localhost:8501. Use `:1.16.6` to pin a specific version instead of `latest`.
+Then open http://localhost:8501. Use `:1.16.7` to pin a specific version instead of `latest`.
 
 To build the image yourself from a checkout:
 
