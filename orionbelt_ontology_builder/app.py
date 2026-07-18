@@ -1798,12 +1798,21 @@ def render_classes():
             # list stays available in the "All Classes" table below.
             _total = len(sorted_classes)
             if _total > CLASSES_PER_PAGE:
-                # Jump to the page holding the class being viewed/edited so its
-                # expanded card is visible no matter which page was last shown.
+                # Jump to the page holding a class only when it *becomes* the
+                # active (viewed/edited) card, not on every render — otherwise the
+                # auto-jump fights a manual page change and pins the user to that
+                # page for as long as the card stays open. Tracking the last
+                # jumped-to UID makes it a one-shot per open.
                 if _active_cls is not None:
-                    st.session_state["cls_view_page"] = (
-                        sorted_classes.index(_active_cls) // CLASSES_PER_PAGE + 1
-                    )
+                    _active_uid = _uid(_active_cls["uri"])
+                    if st.session_state.get("_cls_active_page_uid") != _active_uid:
+                        st.session_state["cls_view_page"] = (
+                            sorted_classes.index(_active_cls) // CLASSES_PER_PAGE + 1
+                        )
+                        st.session_state["_cls_active_page_uid"] = _active_uid
+                else:
+                    # No card open: forget the last jump so reopening one jumps again.
+                    st.session_state.pop("_cls_active_page_uid", None)
                 _num_pages, _page, _, _ = _page_bounds(
                     _total, st.session_state.get("cls_view_page", 1), CLASSES_PER_PAGE
                 )
