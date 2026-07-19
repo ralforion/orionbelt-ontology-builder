@@ -85,3 +85,34 @@ def test_sort_restrictions_orders_by_property_then_type():
         "hasPart",
         "owns",
     ]
+
+
+def test_filter_restrictions_tolerates_none_fields():
+    # Valid OWL restrictions the manager doesn't map (e.g. owl:hasSelf) can carry
+    # None fields; filtering must not raise.
+    rests = [
+        {
+            "property": None,
+            "type": None,
+            "value": None,
+            "on_class": None,
+            "applied_to": None,
+        }
+    ]
+    assert _filter_restrictions(rests, "x") == []
+    assert _filter_restrictions(rests, "") == rests
+
+
+def test_filter_restrictions_keeps_zero_value():
+    # value 0 (e.g. minCardinality 0) must remain searchable, not be dropped.
+    rests = [{"property": "p", "type": "minCardinality", "value": 0}]
+    assert _filter_restrictions(rests, "0") == rests
+
+
+def test_sort_restrictions_tolerates_none_fields():
+    rests = [
+        {"property": "aaa", "type": "t"},
+        {"property": None, "type": None},
+    ]
+    out = _sort_restrictions(rests)  # None coerces to "" and sorts first
+    assert out[0]["property"] is None and out[1]["property"] == "aaa"

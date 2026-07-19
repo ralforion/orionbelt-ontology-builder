@@ -1901,12 +1901,15 @@ def _filter_restrictions(restrictions: list, query: str) -> list:
         return restrictions
 
     def _haystack(r):
+        # Fields can be None for valid OWL restrictions the manager doesn't map
+        # (e.g. owl:hasSelf), so coerce before joining.
+        val = r.get("value")
         parts = [
-            r.get("property", ""),
-            r.get("type", ""),
-            str(r.get("value", "")),
+            r.get("property") or "",
+            r.get("type") or "",
+            "" if val is None else str(val),
             r.get("on_class") or "",
-            " ".join(r.get("applied_to", [])),
+            " ".join(str(c) for c in (r.get("applied_to") or [])),
         ]
         return " ".join(parts).lower()
 
@@ -1914,10 +1917,16 @@ def _filter_restrictions(restrictions: list, query: str) -> list:
 
 
 def _sort_restrictions(restrictions: list) -> list:
-    """Sort restrictions by (property, type), case-insensitively."""
+    """Sort restrictions by (property, type), case-insensitively.
+
+    Fields can be None (e.g. an unmapped owl:hasSelf), so coerce before ``.lower()``.
+    """
     return sorted(
         restrictions,
-        key=lambda r: (r.get("property", "").lower(), r.get("type", "").lower()),
+        key=lambda r: (
+            (r.get("property") or "").lower(),
+            (r.get("type") or "").lower(),
+        ),
     )
 
 
@@ -3641,7 +3650,10 @@ def render_restrictions():
                 _view_restrictions = _sort_restrictions(_view_restrictions)
             if not _view_restrictions:
                 st.caption("No restrictions match your search.")
-            for rest in _view_restrictions:
+            # Key delete buttons by the row's position in the rendered list, which
+            # is unique per render. (list.index would collide when two identical
+            # restrictions exist, since it returns the first match for both.)
+            for _row_i, rest in enumerate(_view_restrictions):
                 with st.expander(f"🔒 {rest['type']} on {rest['property']}"):
                     st.write(f"**Property:** {rest['property']}")
                     st.write(f"**Restriction Type:** {rest['type']}")
@@ -3651,11 +3663,7 @@ def render_restrictions():
                     st.write(f"**Applied to Classes:** {', '.join(rest['applied_to'])}")
 
                     if rest["applied_to"]:
-                        # Key by the restriction's stable position in the full
-                        # list so filtering/sorting can't collide widget keys.
-                        if st.button(
-                            "Delete", key=f"del_rest_{restrictions.index(rest)}"
-                        ):
+                        if st.button("Delete", key=f"del_rest_{_row_i}"):
                             # Use full URIs so restrictions on external/imported
                             # properties or classes delete correctly.
                             applied_uri = (
