@@ -1865,6 +1865,62 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
     return items[start:end], active
 
 
+def _filter_relations(relations: list, query: str) -> list:
+    """Case-insensitive substring filter over a relation row's subject, relation,
+    and object local names. An empty query returns the list unchanged (issue #148).
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return relations
+    return [
+        r
+        for r in relations
+        if q in r["subject"].lower()
+        or q in r["relation"].lower()
+        or q in r["object"].lower()
+    ]
+
+
+def _sort_relations(relations: list) -> list:
+    """Sort relation rows by (subject, relation, object), case-insensitively."""
+    return sorted(
+        relations,
+        key=lambda r: (
+            r["subject"].lower(),
+            r["relation"].lower(),
+            r["object"].lower(),
+        ),
+    )
+
+
+def _filter_restrictions(restrictions: list, query: str) -> list:
+    """Case-insensitive substring filter over a restriction's property, type,
+    value, qualified class, and the classes it applies to (issue #148)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return restrictions
+
+    def _haystack(r):
+        parts = [
+            r.get("property", ""),
+            r.get("type", ""),
+            str(r.get("value", "")),
+            r.get("on_class") or "",
+            " ".join(r.get("applied_to", [])),
+        ]
+        return " ".join(parts).lower()
+
+    return [r for r in restrictions if q in _haystack(r)]
+
+
+def _sort_restrictions(restrictions: list) -> list:
+    """Sort restrictions by (property, type), case-insensitively."""
+    return sorted(
+        restrictions,
+        key=lambda r: (r.get("property", "").lower(), r.get("type", "").lower()),
+    )
+
+
 def render_classes():
     """Render the classes management page."""
     st.header("Classes")
@@ -3572,7 +3628,20 @@ def render_restrictions():
         if not restrictions:
             st.info("No restrictions defined yet.")
         else:
-            for i, rest in enumerate(restrictions):
+            # Search + sort so a specific restriction is findable without
+            # scrolling the whole list (issue #148).
+            _rest_query = st.text_input(
+                "Search restrictions",
+                key="rest_search",
+                placeholder="Filter by property, type, value, or class",
+            )
+            _rest_sort = st.checkbox("Sort alphabetically", key="rest_sort")
+            _view_restrictions = _filter_restrictions(restrictions, _rest_query)
+            if _rest_sort:
+                _view_restrictions = _sort_restrictions(_view_restrictions)
+            if not _view_restrictions:
+                st.caption("No restrictions match your search.")
+            for rest in _view_restrictions:
                 with st.expander(f"🔒 {rest['type']} on {rest['property']}"):
                     st.write(f"**Property:** {rest['property']}")
                     st.write(f"**Restriction Type:** {rest['type']}")
@@ -3582,7 +3651,11 @@ def render_restrictions():
                     st.write(f"**Applied to Classes:** {', '.join(rest['applied_to'])}")
 
                     if rest["applied_to"]:
-                        if st.button("Delete", key=f"del_rest_{i}"):
+                        # Key by the restriction's stable position in the full
+                        # list so filtering/sorting can't collide widget keys.
+                        if st.button(
+                            "Delete", key=f"del_rest_{restrictions.index(rest)}"
+                        ):
                             # Use full URIs so restrictions on external/imported
                             # properties or classes delete correctly.
                             applied_uri = (
@@ -3698,10 +3771,25 @@ def render_relations():
     if _rel_tab == "View Relations":
         st.subheader("All Relations")
 
+        # Search + sort across all three relation lists (issue #148).
+        _rel_query = st.text_input(
+            "Search relations",
+            key="rel_search",
+            placeholder="Filter by subject, relation, or object",
+        )
+        _rel_sort = st.checkbox("Sort alphabetically", key="rel_sort")
+
+        def _prep_rels(rels):
+            rels = _filter_relations(rels, _rel_query)
+            return _sort_relations(rels) if _rel_sort else rels
+
         # Class relations
-        class_relations = ont.get_class_relations()
-        if class_relations:
+        _raw_class_relations = ont.get_class_relations()
+        class_relations = _prep_rels(_raw_class_relations)
+        if _raw_class_relations:
             st.write("**Class Relations:**")
+            if not class_relations:
+                st.caption("No class relations match your search.")
             for rel in _paginate_rows(
                 class_relations, "rel_class_page", "class relations"
             ):
@@ -3727,9 +3815,12 @@ def render_relations():
         st.divider()
 
         # Property relations
-        prop_relations = ont.get_property_relations()
-        if prop_relations:
+        _raw_prop_relations = ont.get_property_relations()
+        prop_relations = _prep_rels(_raw_prop_relations)
+        if _raw_prop_relations:
             st.write("**Property Relations:**")
+            if not prop_relations:
+                st.caption("No property relations match your search.")
             for rel in _paginate_rows(
                 prop_relations, "rel_prop_page", "property relations"
             ):
@@ -3755,9 +3846,12 @@ def render_relations():
         st.divider()
 
         # Individual relations
-        ind_relations = ont.get_individual_relations()
-        if ind_relations:
+        _raw_ind_relations = ont.get_individual_relations()
+        ind_relations = _prep_rels(_raw_ind_relations)
+        if _raw_ind_relations:
             st.write("**Individual Relations:**")
+            if not ind_relations:
+                st.caption("No individual relations match your search.")
             for rel in _paginate_rows(
                 ind_relations, "rel_ind_page", "individual relations"
             ):
