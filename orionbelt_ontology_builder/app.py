@@ -906,11 +906,16 @@ def _bulk_result_message(result: dict, label: str) -> tuple[str, str]:
     parts = []
     if result["created"]:
         parts.append(f"Created {len(result['created'])} {label}")
+    if result.get("updated"):
+        parts.append(f"Updated {len(result['updated'])} existing")
     if result["skipped"]:
         parts.append(f"Skipped {len(result['skipped'])} existing")
     errors = result["errors"]
     if errors:
-        parts.append(f"{len(errors)} could not be created")
+        # "row(s) failed" rather than "could not be created": a bulk class run
+        # can now fail while *updating* an existing class (e.g. adding an
+        # invalid parent), not only while creating one (issue #157 review).
+        parts.append(f"{len(errors)} row{'s' if len(errors) != 1 else ''} failed")
     summary = ". ".join(parts) if parts else "Nothing to create"
     if errors:
         shown = errors[:10]
@@ -922,11 +927,12 @@ def _bulk_result_message(result: dict, label: str) -> tuple[str, str]:
         if len(errors) > len(shown):
             lines += f"\n- ...and {len(errors) - len(shown)} more"
         summary = f"{summary}:\n\n{lines}"
-    if errors and not result["created"]:
+    succeeded = result["created"] or result.get("updated")
+    if errors and not succeeded:
         msg_type = "error"
     elif errors:
         msg_type = "warning"
-    elif result["created"]:
+    elif succeeded:
         msg_type = "success"
     else:
         msg_type = "info"

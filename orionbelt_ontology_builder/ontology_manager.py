@@ -909,9 +909,23 @@ class OntologyManager:
         full URI: a parent that another row actually creates (with its own
         label/comment) is left alone, but one whose explicit row is missing,
         skipped, or errors is still declared so no dangling parent remains.
-        Returns {created: [], errors: [], skipped: []}.
+
+        A row whose class already exists is not dropped outright: if it names a
+        parent the class does not yet have, that parent is added as an extra
+        ``rdfs:subClassOf`` (multiple inheritance) and the row is reported under
+        ``updated`` (issue #157). Two rows with the same name and different
+        parents therefore give the class both parents. An existing row with no
+        new parent to add stays in ``skipped``; label/comment on an existing
+        class are left untouched.
+
+        Returns {created: [], updated: [], errors: [], skipped: []}.
         """
-        result: Dict[str, Any] = {"created": [], "errors": [], "skipped": []}
+        result: Dict[str, Any] = {
+            "created": [],
+            "updated": [],
+            "errors": [],
+            "skipped": [],
+        }
         existing = {c["uri"] for c in self.get_classes()}
         referenced_parents: set[str] = set()
 
@@ -924,7 +938,25 @@ class OntologyManager:
             parent = entry.get("parent", "").strip() or None
             uri = str(self._uri(name, namespace))
             if uri in existing:
-                result["skipped"].append(name)
+                # Existing class: add a newly named parent as an extra
+                # subClassOf rather than silently dropping the whole row (#157).
+                # A row with no new parent to contribute is still a plain skip.
+                if not parent:
+                    result["skipped"].append(name)
+                    continue
+                try:
+                    self._require_valid_name(parent)
+                except Exception as e:
+                    result["errors"].append({"name": name, "error": str(e)})
+                    continue
+                class_ref = self._uri(name, namespace)
+                parent_ref = self._uri(parent)
+                if (class_ref, RDFS.subClassOf, parent_ref) in self.graph:
+                    result["skipped"].append(name)
+                else:
+                    self.graph.add((class_ref, RDFS.subClassOf, parent_ref))
+                    result["updated"].append(name)
+                    referenced_parents.add(str(parent_ref))
                 continue
             try:
                 self.add_class(
