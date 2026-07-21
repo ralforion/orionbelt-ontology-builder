@@ -6185,7 +6185,13 @@ def render_visualization():
                 args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
             )
         with col5:
-            render_graph = st.button("Render", type="primary", use_container_width=True)
+            render_graph = st.button(
+                "Render",
+                type="primary",
+                use_container_width=True,
+                help="Redraw the graph and re-run the layout. Also re-centres on "
+                "the current Find selection.",
+            )
 
         validation_subjects = set()
         if highlight_issues:
@@ -6399,6 +6405,13 @@ def render_visualization():
         # Bump sequence on Render click to force component re-init (re-runs layout)
         if render_graph:
             st.session_state.viz_render_seq += 1
+            # Render also re-centres on the current Find selection, so a user who
+            # panned away can recentre on it without clearing and re-picking
+            # (PR #144 review P3 — reuses the existing button, no new control).
+            if _find_id:
+                st.session_state["_viz_find_seq"] = (
+                    st.session_state.get("_viz_find_seq", 0) + 1
+                )
 
         # Rebuild graph data when settings change or on first visit
         needs_rebuild = (
