@@ -6053,6 +6053,14 @@ def render_visualization():
                 sel = st.session_state.get("_viz_cfg_selected_classes") or []
                 st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
 
+        def _viz_find_changed():
+            """Bump a sequence so the graph re-centres on the picked entity only
+            when the Find selection changes — not on every rerun or drag, which
+            would keep yanking the camera back (issue #144)."""
+            st.session_state["_viz_find_seq"] = (
+                st.session_state.get("_viz_find_seq", 0) + 1
+            )
+
         _cols = (
             st.columns([1, 1, 1, 1, 1, 1, 1, 1])
             if _has_skos
@@ -6226,6 +6234,23 @@ def render_visualization():
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
+
+        # Find & centre on a specific entity (issue #144). Independent of focus
+        # mode: picking an entity here selects and camera-centres it in the graph
+        # via vis-network focus(), so it's easy to locate in a large graph. The
+        # options reuse the focus_targets label -> node-id map built above.
+        _find_id: str | None = None
+        if focus_targets:
+            _find_choice = st.selectbox(
+                "🔍 Find entity in graph",
+                options=["—"] + sorted(focus_targets),
+                key="viz_find_entity",
+                on_change=_viz_find_changed,
+                help="Jump to and highlight an entity so it's easy to spot in a "
+                "large graph. Lists the entity types enabled above.",
+            )
+            if _find_choice and _find_choice != "—":
+                _find_id = focus_targets.get(_find_choice)
 
         focus_seed_ids: list = []
         focus_depth = 0
@@ -7082,6 +7107,10 @@ def render_visualization():
                     autofit=fit,
                     theme=_gv_theme,
                     selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
+                    # Find & centre target + a change-seq, so the component
+                    # re-centres only on a fresh pick (issue #144).
+                    focus_node=_find_id,
+                    focus_seq=st.session_state.get("_viz_find_seq", 0),
                     # On desktop the webview can't download; the component sends
                     # the PNG back for us to save instead (#86).
                     web_download=not local_store.local_persist_enabled(),
