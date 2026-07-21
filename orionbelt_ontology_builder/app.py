@@ -906,6 +906,8 @@ def _bulk_result_message(result: dict, label: str) -> tuple[str, str]:
     parts = []
     if result["created"]:
         parts.append(f"Created {len(result['created'])} {label}")
+    if result.get("updated"):
+        parts.append(f"Updated {len(result['updated'])} existing")
     if result["skipped"]:
         parts.append(f"Skipped {len(result['skipped'])} existing")
     errors = result["errors"]
@@ -922,11 +924,12 @@ def _bulk_result_message(result: dict, label: str) -> tuple[str, str]:
         if len(errors) > len(shown):
             lines += f"\n- ...and {len(errors) - len(shown)} more"
         summary = f"{summary}:\n\n{lines}"
-    if errors and not result["created"]:
+    succeeded = result["created"] or result.get("updated")
+    if errors and not succeeded:
         msg_type = "error"
     elif errors:
         msg_type = "warning"
-    elif result["created"]:
+    elif succeeded:
         msg_type = "success"
     else:
         msg_type = "info"

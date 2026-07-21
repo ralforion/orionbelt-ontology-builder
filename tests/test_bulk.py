@@ -275,6 +275,73 @@ class TestBulkAddClasses:
         assert result["skipped"] == ["Dog"]
         assert result["created"] == []
 
+    def test_second_row_adds_extra_parent(self, om):
+        # Issue #157: two rows for the same class naming different parents give
+        # the class both parents instead of dropping the second row.
+        result = om.bulk_add_classes(
+            [
+                {"name": "TVCurrent", "parent": "Current"},
+                {"name": "TVCurrent", "parent": "TVQuantity"},
+            ]
+        )
+        # TVCurrent is created once (row 1) and updated once (row 2's parent);
+        # both referenced parents are backfilled as classes (issue #106).
+        assert result["created"].count("TVCurrent") == 1
+        assert result["updated"] == ["TVCurrent"]
+        assert {"Current", "TVQuantity"} <= set(result["created"])
+        parents = next(c for c in om.get_classes() if c["name"] == "TVCurrent")[
+            "parents"
+        ]
+        assert "Current" in parents
+        assert "TVQuantity" in parents
+
+    def test_existing_class_gains_new_parent(self, om_with_classes):
+        # Person already exists; a row giving it a parent adds the link and is
+        # reported as updated (not created, not silently skipped).
+        result = om_with_classes.bulk_add_classes(
+            [{"name": "Person", "parent": "Animal"}]
+        )
+        assert result["created"] == []
+        assert result["updated"] == ["Person"]
+        assert result["skipped"] == []
+        person = next(c for c in om_with_classes.get_classes() if c["name"] == "Person")
+        assert "Animal" in person["parents"]
+
+    def test_existing_parent_link_is_skipped_not_duplicated(self, om_with_classes):
+        om_with_classes.update_class("Person", new_parent="Animal")
+        result = om_with_classes.bulk_add_classes(
+            [{"name": "Person", "parent": "Animal"}]
+        )
+        assert result["updated"] == []
+        assert result["skipped"] == ["Person"]
+        person = next(c for c in om_with_classes.get_classes() if c["name"] == "Person")
+        assert person["parents"].count("Animal") == 1
+
+    def test_existing_class_without_parent_still_skipped(self, om_with_classes):
+        result = om_with_classes.bulk_add_classes([{"name": "Person"}])
+        assert result["created"] == []
+        assert result["updated"] == []
+        assert result["skipped"] == ["Person"]
+
+    def test_added_parent_to_existing_class_is_backfilled(self, om_with_classes):
+        # The new parent isn't a class yet, so it's declared as a bare owl:Class
+        # just like on the create path (issue #106).
+        result = om_with_classes.bulk_add_classes(
+            [{"name": "Person", "parent": "Organism"}]
+        )
+        assert result["updated"] == ["Person"]
+        assert "Organism" in result["created"]
+        assert "Organism" in {c["name"] for c in om_with_classes.get_classes()}
+        assert om_with_classes.graph.serialize(format="turtle")
+
+    def test_invalid_parent_on_existing_class_is_an_error(self, om_with_classes):
+        result = om_with_classes.bulk_add_classes(
+            [{"name": "Person", "parent": "Bad Parent"}]
+        )
+        assert result["updated"] == []
+        assert result["skipped"] == []
+        assert [e["name"] for e in result["errors"]] == ["Person"]
+
 
 class TestBulkAddProperties:
     def test_add_object_properties(self, om_with_classes):
@@ -465,3 +532,22 @@ class TestBulkResultMessage:
         }
         msg, _ = app._bulk_result_message(result, "class(es)")
         assert "...and 5 more" in msg
+
+    def test_message_counts_updated(self):
+        from orionbelt_ontology_builder import app
+
+        result = {"created": ["Dog"], "updated": ["Cat"], "skipped": [], "errors": []}
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert "Created 1 class(es)" in msg
+        assert "Updated 1 existing" in msg
+        assert mtype == "success"
+
+    def test_message_only_updated_is_success(self):
+        # A run that only added parents to existing classes still succeeded.
+        from orionbelt_ontology_builder import app
+
+        result = {"created": [], "updated": ["Cat"], "skipped": [], "errors": []}
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert "Updated 1 existing" in msg
+        assert "Nothing to create" not in msg
+        assert mtype == "success"
