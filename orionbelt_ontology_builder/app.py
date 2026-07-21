@@ -1037,41 +1037,77 @@ def _disambiguated_name(item: dict, collisions: set) -> str:
     return name
 
 
+# Which card is open on a per-item list page is a single source of truth:
+# ``active_{kind}`` holds ``(key, mode)`` where ``mode`` is ``"view"`` or
+# ``"edit"`` (absent means nothing is open). One value per kind means opening a
+# card overwrites any previously open one, so single-active is inherent — no
+# per-item boolean flags to scan or clean up. ``kind`` is the page's flag
+# segment: ``class``, ``objprop``, ``dataprop``, ``ind``, ``skos``, ``scheme``.
+
+
 def _cb_toggle_view(prefix, uid):
-    """Callback: open view panel, close edit. `uid` must be unique per resource."""
-    st.session_state[f"view_{prefix}_{uid}"] = True
-    st.session_state[f"edit_{prefix}_{uid}"] = False
-    st.session_state["_last_opened_entity"] = (prefix, uid)
+    """Callback: open `uid`'s view panel. `uid` must be unique per resource."""
+    st.session_state[f"active_{prefix}"] = (uid, "view")
 
 
 def _cb_toggle_edit(prefix, uid):
-    """Callback: open edit panel, close view. `uid` must be unique per resource."""
-    st.session_state[f"edit_{prefix}_{uid}"] = True
-    st.session_state[f"view_{prefix}_{uid}"] = False
-    st.session_state["_last_opened_entity"] = (prefix, uid)
+    """Callback: open `uid`'s edit panel. `uid` must be unique per resource."""
+    st.session_state[f"active_{prefix}"] = (uid, "edit")
 
 
 def _cb_view_to_edit(prefix, uid):
-    """Callback: switch from view to edit. `uid` must be unique per resource."""
-    st.session_state[f"view_{prefix}_{uid}"] = False
-    st.session_state[f"edit_{prefix}_{uid}"] = True
-    st.session_state["_last_opened_entity"] = (prefix, uid)
+    """Callback: switch `uid`'s open card from view to edit."""
+    st.session_state[f"active_{prefix}"] = (uid, "edit")
 
 
-def _mark_view_flag_open(view_flag: str) -> None:
-    """Open a card by its raw ``view_{kind}_{key}`` flag from a navigation path.
-
-    Search, graph-click, and "Open full editor" navigation set the view flag
-    directly rather than through the View/Edit callbacks, so they must also record
-    the entity as the most recently opened. Otherwise, if another card is already
-    open, the list view's single-active resolver prefers that stale card and
-    clears the freshly requested one (issue #146 review). The flag's ``kind``
-    segment never contains an underscore, so a 3-way split recovers (kind, key).
+def _open_entity(kind: str, key: str, mode: str = "view") -> None:
+    """Open a card from a navigation path (search, graph-click, "Open full
+    editor"). These open a card directly rather than through the View/Edit
+    button callbacks. Because there is a single ``active_{kind}`` value, the
+    freshly requested card always wins — no card left open elsewhere can shadow
+    it (issue #146 review).
     """
-    st.session_state[view_flag] = True
-    parts = view_flag.split("_", 2)
-    if len(parts) == 3 and parts[0] == "view":
-        st.session_state["_last_opened_entity"] = (parts[1], parts[2])
+    st.session_state[f"active_{kind}"] = (key, mode)
+
+
+def _get_active(kind: str):
+    """Return ``(key, mode)`` for the open card of ``kind``, or ``None``."""
+    value = st.session_state.get(f"active_{kind}")
+    if isinstance(value, tuple) and len(value) == 2 and value[1] in ("view", "edit"):
+        return value
+    return None
+
+
+def _is_open(kind: str, key: str, mode: str | None = None) -> bool:
+    """True if ``key`` is the open card for ``kind`` (in ``mode`` if given)."""
+    active = _get_active(kind)
+    if active is None or active[0] != key:
+        return False
+    return mode is None or active[1] == mode
+
+
+# Maps a graph/search/editor entity's display type to its active-card kind.
+_NAV_KIND_BY_TYPE = {
+    "Class": "class",
+    "Object Property": "objprop",
+    "Data Property": "dataprop",
+    "Individual": "ind",
+    "SKOS Concept": "skos",
+}
+
+
+def _nav_open_entity(display_type: str, uid: str, uri: str | None = None) -> None:
+    """Open the card for a navigation target (graph-click, search, "Open full
+    editor") named by its display type. SKOS concepts key by URI hash — local
+    names collide across schemes — so pass ``uri`` for them; every other kind
+    keys by ``uid`` (already URI-derived at the call sites). No-op for unknown
+    types.
+    """
+    kind = _NAV_KIND_BY_TYPE.get(display_type)
+    if not kind:
+        return
+    key = str(abs(hash(uri if uri is not None else uid)))[:8] if kind == "skos" else uid
+    _open_entity(kind, key)
 
 
 def _cb_confirm_delete(key_suffix):
@@ -1794,45 +1830,26 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
 
     Given the already sorted/filtered display list, this:
 
-      * picks the active (open) item, preferring the most recently opened one
-        over the first in list order, so a fresh click wins over a card left
-        open on another page (issue #143 review);
-      * enforces single-active by clearing every other item's view/edit flags;
+      * reads the open item directly from the single ``active_{kind}`` value —
+        no scan over per-item flags, no cleanup loop, since only one card can be
+        open per kind by construction (issue #147);
       * paginates at LIST_PAGE_SIZE with a page selector, jumping to the active
         item's page once when it becomes active — not every render, so a manual
-        page change sticks while a card stays open (issues #140 / #146).
+        page change sticks while a card stays open (issues #140 / #143 / #146).
 
-    ``kind`` is the session-state flag segment (``view_{kind}_{key}`` /
-    ``edit_{kind}_{key}``) and also the ``_last_opened_entity`` tag set by the
-    open callbacks. ``key_of`` maps an item to its unique key string.
+    ``kind`` is the active-value segment (``active_{kind}`` holds
+    ``(key, mode)``) and ``key_of`` maps an item to its unique key string. An
+    open item that is not in ``items`` (e.g. filtered out by search) simply
+    reads as "nothing open" this render, leaving the value intact so the card
+    reappears when the filter clears.
 
     Returns ``(page_items, active_item)``.
     """
 
-    def _is_active(it):
-        _k = key_of(it)
-        return st.session_state.get(f"view_{kind}_{_k}", False) or st.session_state.get(
-            f"edit_{kind}_{_k}", False
-        )
-
-    last = st.session_state.get("_last_opened_entity")
-    preferred = last[1] if isinstance(last, tuple) and last[0] == kind else None
+    active_state = _get_active(kind)
     active = None
-    if preferred is not None:
-        active = next(
-            (it for it in items if key_of(it) == preferred and _is_active(it)),
-            None,
-        )
-    if active is None:
-        active = next((it for it in items if _is_active(it)), None)
-
-    if active is not None:
-        _akey = key_of(active)
-        for it in items:
-            _k = key_of(it)
-            if _k != _akey:
-                st.session_state.pop(f"view_{kind}_{_k}", None)
-                st.session_state.pop(f"edit_{kind}_{_k}", None)
+    if active_state is not None:
+        active = next((it for it in items if key_of(it) == active_state[0]), None)
 
     total = len(items)
     if total <= LIST_PAGE_SIZE:
@@ -1985,9 +2002,7 @@ def render_classes():
                 cls_uid = _uid(cls["uri"])
                 disp_name = _disambiguated_name(cls, collisions)
                 display_name = format_label_name(disp_name, cls.get("label"))
-                _cls_expanded = st.session_state.get(
-                    f"view_class_{cls_uid}", False
-                ) or st.session_state.get(f"edit_class_{cls_uid}", False)
+                _cls_expanded = _is_open("class", cls_uid)
                 with st.expander(f"📦 **{display_name}**", expanded=_cls_expanded):
                     st.write(
                         f"**URI:** `{cls['uri']}`"
@@ -2022,7 +2037,7 @@ def render_classes():
                         )
 
                     # View details
-                    if st.session_state.get(f"view_class_{cls_uid}", False):
+                    if _is_open("class", cls_uid, "view"):
                         st.divider()
                         st.write(f"**Name:** {cls['name']}")
                         st.write(f"**Label:** {cls['label'] or '—'}")
@@ -2046,7 +2061,7 @@ def render_classes():
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_class_{cls_uid}", False):
+                    if _is_open("class", cls_uid, "edit"):
                         st.divider()
                         with st.form(f"edit_class_form_{cls_uid}"):
                             new_name = st.text_input(
@@ -2116,7 +2131,7 @@ def render_classes():
                                     else None,
                                 )
                                 save_checkpoint("Update class")
-                                st.session_state[f"edit_class_{cls_uid}"] = False
+                                st.session_state.pop("active_class", None)
                                 show_message("Class updated!", "success")
                                 st.rerun()
 
@@ -2497,9 +2512,7 @@ def render_properties():
             for prop in filtered_obj_props:
                 prop_uid = _uid(prop["uri"])
                 disp_name = _disambiguated_name(prop, op_collisions)
-                _op_expanded = st.session_state.get(
-                    f"view_objprop_{prop_uid}", False
-                ) or st.session_state.get(f"edit_objprop_{prop_uid}", False)
+                _op_expanded = _is_open("objprop", prop_uid)
                 with st.expander(
                     f"🔗 **{disp_name}** ({prop['domain'] or '?'} → {prop['range'] or '?'})",
                     expanded=_op_expanded,
@@ -2537,7 +2550,7 @@ def render_properties():
                         )
 
                     # View details
-                    if st.session_state.get(f"view_objprop_{prop_uid}", False):
+                    if _is_open("objprop", prop_uid, "view"):
                         st.divider()
                         st.write(f"**Name:** {prop['name']}")
                         st.write(f"**Label:** {prop['label'] or '—'}")
@@ -2562,7 +2575,7 @@ def render_properties():
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_objprop_{prop_uid}", False):
+                    if _is_open("objprop", prop_uid, "edit"):
                         st.divider()
                         with st.form(f"edit_objprop_form_{prop_uid}"):
                             new_name = st.text_input(
@@ -2666,7 +2679,7 @@ def render_properties():
                                     new_range=new_rng_uri,
                                 )
                                 save_checkpoint("Update property")
-                                st.session_state[f"edit_objprop_{prop_uid}"] = False
+                                st.session_state.pop("active_objprop", None)
                                 show_message("Property updated!", "success")
                                 st.rerun()
 
@@ -2708,9 +2721,7 @@ def render_properties():
             for prop in filtered_data_props:
                 prop_uid = _uid(prop["uri"])
                 disp_name = _disambiguated_name(prop, dp_collisions)
-                _dp_expanded = st.session_state.get(
-                    f"view_dataprop_{prop_uid}", False
-                ) or st.session_state.get(f"edit_dataprop_{prop_uid}", False)
+                _dp_expanded = _is_open("dataprop", prop_uid)
                 with st.expander(
                     f"📝 **{disp_name}** ({prop['domain'] or '?'} → {prop['range']})",
                     expanded=_dp_expanded,
@@ -2748,7 +2759,7 @@ def render_properties():
                         )
 
                     # View details
-                    if st.session_state.get(f"view_dataprop_{prop_uid}", False):
+                    if _is_open("dataprop", prop_uid, "view"):
                         st.divider()
                         st.write(f"**Name:** {prop['name']}")
                         st.write(f"**Label:** {prop['label'] or '—'}")
@@ -2772,7 +2783,7 @@ def render_properties():
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_dataprop_{prop_uid}", False):
+                    if _is_open("dataprop", prop_uid, "edit"):
                         st.divider()
                         with st.form(f"edit_dataprop_form_{prop_uid}"):
                             new_name = st.text_input(
@@ -2872,7 +2883,7 @@ def render_properties():
                                     new_range=new_range,
                                 )
                                 save_checkpoint("Update property")
-                                st.session_state[f"edit_dataprop_{prop_uid}"] = False
+                                st.session_state.pop("active_dataprop", None)
                                 show_message("Property updated!", "success")
                                 st.rerun()
 
@@ -3245,9 +3256,7 @@ def render_individuals():
                 )
                 _ik = _uid(ind["uri"])
                 disp_ind_name = _disambiguated_name(ind, ind_collisions)
-                _ind_expanded = st.session_state.get(
-                    f"view_ind_{_ik}", False
-                ) or st.session_state.get(f"edit_ind_{_ik}", False)
+                _ind_expanded = _is_open("ind", _ik)
                 with st.expander(
                     f"👤 **{disp_ind_name}** ({classes_str})", expanded=_ind_expanded
                 ):
@@ -3284,7 +3293,7 @@ def render_individuals():
                         )
 
                     # View details
-                    if st.session_state.get(f"view_ind_{_ik}", False):
+                    if _is_open("ind", _ik, "view"):
                         st.divider()
                         st.write(f"**Name:** {ind['name']}")
                         st.write(f"**Label:** {ind['label'] or '—'}")
@@ -3328,7 +3337,7 @@ def render_individuals():
                             st.caption("No usages found.")
 
                     # Inline edit form
-                    if st.session_state.get(f"edit_ind_{_ik}", False):
+                    if _is_open("ind", _ik, "edit"):
                         st.divider()
                         with st.form(f"edit_ind_form_{_ik}"):
                             new_name = st.text_input(
@@ -3415,7 +3424,7 @@ def render_individuals():
                                     else None,
                                 )
                                 save_checkpoint("Update individual")
-                                st.session_state[f"edit_ind_{_ik}"] = False
+                                st.session_state.pop("active_ind", None)
                                 show_message("Individual updated!", "success")
                                 st.rerun()
 
@@ -4440,9 +4449,7 @@ def render_skos_vocabulary():
                 # another, which would collide Streamlit widget keys and make
                 # local-name-based actions ambiguous (issue #87 part B).
                 _sk = str(abs(hash(scheme["uri"])))[:8]
-                _scheme_expanded = st.session_state.get(
-                    f"view_scheme_{_sk}", False
-                ) or st.session_state.get(f"edit_scheme_{_sk}", False)
+                _scheme_expanded = _is_open("scheme", _sk)
                 with st.expander(
                     f"📚 **{display_name}** ({scheme['concept_count']} concepts)",
                     expanded=_scheme_expanded,
@@ -4479,7 +4486,7 @@ def render_skos_vocabulary():
                             args=(f"scheme_{_sk}",),
                         )
 
-                    if st.session_state.get(f"view_scheme_{_sk}", False):
+                    if _is_open("scheme", _sk, "view"):
                         st.divider()
                         st.write(f"**Name:** {scheme['name']}")
                         st.write(f"**Label:** {scheme['label'] or '—'}")
@@ -4494,7 +4501,7 @@ def render_skos_vocabulary():
                         )
                         st.rerun()
 
-                    if st.session_state.get(f"edit_scheme_{_sk}", False):
+                    if _is_open("scheme", _sk, "edit"):
                         st.divider()
                         with st.form(f"edit_scheme_form_{_sk}"):
                             new_name = st.text_input(
@@ -4548,9 +4555,8 @@ def render_skos_vocabulary():
                                         new_comment=new_comment,
                                     )
                                     save_checkpoint("Update concept scheme")
-                                    st.session_state[f"edit_scheme_{_sk}"] = False
                                     _new_sk = str(abs(hash(target)))[:8]
-                                    st.session_state[f"view_scheme_{_new_sk}"] = True
+                                    _open_entity("scheme", _new_sk)
                                     show_message(
                                         f"Scheme '{scheme['name']}' updated!", "success"
                                     )
@@ -4619,12 +4625,8 @@ def render_skos_vocabulary():
 
                 # Use URI hash for unique widget keys (local name may not be unique)
                 _ck = str(abs(hash(concept["uri"])))[:8]
-                _sk = f"view_skos_{_ck}"
-                _ek = f"edit_skos_{_ck}"
 
-                _skos_expanded = st.session_state.get(
-                    _sk, False
-                ) or st.session_state.get(_ek, False)
+                _skos_expanded = _is_open("skos", _ck)
                 with st.expander(
                     f"🏷️ **{display_name}**{badge_str}", expanded=_skos_expanded
                 ):
@@ -4661,7 +4663,7 @@ def render_skos_vocabulary():
                         )
 
                     # View details
-                    if st.session_state.get(_sk, False):
+                    if _is_open("skos", _ck, "view"):
                         st.divider()
                         st.write(f"**Name:** {concept['name']}")
                         st.write(f"**prefLabel:** {concept['prefLabel'] or '—'}")
@@ -4725,7 +4727,7 @@ def render_skos_vocabulary():
                         st.rerun()
 
                     # Inline edit form
-                    if st.session_state.get(_ek, False):
+                    if _is_open("skos", _ck, "edit"):
                         st.divider()
                         with st.form(f"edit_concept_form_{_ck}"):
                             new_name = st.text_input(
@@ -4860,12 +4862,10 @@ def render_skos_vocabulary():
                                         _update_kwargs["new_broader"] = broader_val
                                     ont.update_concept(target, **_update_kwargs)
                                     save_checkpoint("Update concept")
-                                    st.session_state[_ek] = False
-                                    if renamed:
-                                        _new_ck = str(abs(hash(target)))[:8]
-                                        st.session_state[f"view_skos_{_new_ck}"] = True
-                                    else:
-                                        st.session_state[_sk] = True
+                                    _new_ck = (
+                                        str(abs(hash(target)))[:8] if renamed else _ck
+                                    )
+                                    _open_entity("skos", _new_ck)
                                     show_message(
                                         f"Concept '{target}' updated!", "success"
                                     )
@@ -7137,14 +7137,6 @@ def render_visualization():
                 "Individual": "Individuals",
                 "SKOS Concept": "SKOS Vocabulary",
             }
-            _view_key_map = {
-                "Class": lambda n: f"view_class_{n}",
-                "Object Property": lambda n: f"view_objprop_{n}",
-                "Data Property": lambda n: f"view_dataprop_{n}",
-                "Individual": lambda n: f"view_ind_{n}",
-                "SKOS Concept": lambda n: f"view_skos_{str(abs(hash(n)))[:8]}",
-            }
-
             # The selection was already captured (from the component's current
             # value) before the component call above, so just read it here.
             _sel = st.session_state.get("_viz_last_selection")
@@ -7172,7 +7164,7 @@ def render_visualization():
                             st.session_state["cls_active_tab"] = "Edit/Delete Class"
                             st.session_state["edit_class_select"] = _disp
                             st.rerun()
-                _mark_view_flag_open(_view_key_map[_ntype](_ename))
+                _nav_open_entity(_ntype, _ename)
                 if _ntype == "SKOS Concept":
                     st.session_state["_skos_navigate_to_concept"] = True
                 st.rerun()
@@ -7435,19 +7427,10 @@ def main():
             "Individual": "Individuals",
             "SKOS Concept": "SKOS Vocabulary",
         }
-        _view_key_map = {
-            "Class": f"view_class_{_gv_name}",
-            "Object Property": f"view_objprop_{_gv_name}",
-            "Data Property": f"view_dataprop_{_gv_name}",
-            "Individual": f"view_ind_{_gv_name}",
-            "SKOS Concept": f"view_skos_{str(abs(hash(_gv_name)))[:8]}",
-        }
         _nav_page = _type_to_page.get(_gv_type)
         if _nav_page:
             st.session_state.search_navigate_to = _nav_page
-            _vk = _view_key_map.get(_gv_type)
-            if _vk:
-                _mark_view_flag_open(_vk)
+            _nav_open_entity(_gv_type, _gv_name)
             if _gv_type == "SKOS Concept":
                 st.session_state["_skos_navigate_to_concept"] = True
         st.query_params.clear()
@@ -7556,16 +7539,7 @@ def main():
                         # Open the view pane keyed by URI hash so we navigate
                         # to the *exact* resource, not whichever shares the
                         # same local name.
-                        view_key_map = {
-                            "Class": f"view_class_{r_uid}",
-                            "Object Property": f"view_objprop_{r_uid}",
-                            "Data Property": f"view_dataprop_{r_uid}",
-                            "Individual": f"view_ind_{r_uid}",
-                            "SKOS Concept": f"view_skos_{str(abs(hash(r_uri)))[:8]}",
-                        }
-                        view_key = view_key_map.get(type_label)
-                        if view_key:
-                            _mark_view_flag_open(view_key)
+                        _nav_open_entity(type_label, r_uid, r_uri)
                         st.rerun()
         else:
             st.sidebar.caption("No results found.")
