@@ -88,11 +88,26 @@ function applyTheme(theme) {
     }
 }
 
-window.addEventListener('resize', function() {
+function autofitApply() {
     if (!autofitOn || !network) return;
     var h = autofitHeight();
     if (h) { applyHeight(h); network.redraw(); }
-});
+}
+window.addEventListener('resize', autofitApply);
+// The fit-to-window height depends on this iframe's position, which shifts when
+// controls above it change (e.g. the "Filter Classes" expander opening or
+// closing) — layout changes that don't fire a 'resize' event. Poll for a
+// position change and re-fit, so the graph grows back after such a shift
+// instead of staying stuck at a height computed for the old position (bug B2).
+var _lastFitTop = null;
+setInterval(function() {
+    if (!autofitOn || !network) return;
+    var t;
+    try {
+        t = window.frameElement ? Math.round(window.frameElement.getBoundingClientRect().top) : 0;
+    } catch (e) { return; }
+    if (t !== _lastFitTop) { _lastFitTop = t; autofitApply(); }
+}, 400);
 
 function downloadGraph() {
     if (!network) return;

@@ -6328,11 +6328,25 @@ def render_visualization():
                 selected_classes = st.multiselect(
                     "Select classes to display",
                     options=all_class_names,
-                    help="Choose which classes to show in the graph",
+                    help="Choose which classes to show in the graph. Empty shows "
+                    "no classes; use 'Select all' to bring them back.",
                     key="viz_selected_classes",
                     on_change=_viz_sync,
                     args=("_viz_cfg_selected_classes", "viz_selected_classes"),
                 )
+                # An empty (or narrowed) filter hides classes and there is no
+                # native way back — offer a one-click restore (issue B3). Only
+                # shown when something is actually hidden.
+                if all_class_names and set(selected_classes) != all_class_set:
+                    if st.button(
+                        "Select all classes",
+                        key="viz_select_all_classes",
+                        help="Show every class in the graph again.",
+                    ):
+                        st.session_state["_viz_cfg_selected_classes"] = list(
+                            all_class_names
+                        )
+                        st.rerun()
 
         # Store graph settings in session state for caching
         selected_classes_key = (
