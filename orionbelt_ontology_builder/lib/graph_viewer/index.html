@@ -40,6 +40,23 @@ function sendToStreamlit(type, data) {
     window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data || {}), "*");
 }
 
+// Report a Find-selected node to Streamlit, matching the selectNode payload, so
+// the details/status panel reflects the found node. selectNodes() alone does not
+// fire selectNode, so a Find focus would otherwise leave the panel out of sync
+// with the highlighted node (PR #144 review P2).
+function sendFindSelection(id) {
+    try {
+        var ds = network && network.body && network.body.data && network.body.data.nodes;
+        var nd = ds && ds.get(id);
+        if (nd) {
+            sendToStreamlit("streamlit:setComponentValue", {
+                value: {nodeId: id, ntype: nd.ntype || null, ename: nd.ename || null,
+                        label: nd.label, title: nd.title || '', selected: true}
+            });
+        }
+    } catch (e) {}
+}
+
 var visLoaded = false;
 var pendingArgs = null;
 var network = null;
@@ -152,6 +169,7 @@ function renderGraph(args) {
             if (_spin) {
                 try { network.selectNodes([_spin]); } catch (e) {}
                 try { network.focus(_spin, {scale: 1.1, animation: {duration: 700, easingFunction: 'easeInOutQuad'}}); } catch (e) {}
+                sendFindSelection(_spin);
             }
             try {
                 sessionStorage.setItem('viz_find', JSON.stringify(
@@ -268,6 +286,7 @@ function renderGraph(args) {
         try { network.moveTo({scale: savedView.scale, position: savedView.position}); } catch (e) {}
     }
     if (_pin) {
+        var _findFresh = !_find.centred;
         try { network.selectNodes([_pin]); } catch (e) {}
         try {
             network.focus(_pin, {
@@ -275,6 +294,7 @@ function renderGraph(args) {
                 animation: _find.centred ? false : {duration: 700, easingFunction: 'easeInOutQuad'}
             });
         } catch (e) {}
+        if (_findFresh) sendFindSelection(_pin);
         _find.centred = true;
     }
     try { sessionStorage.setItem('viz_find', JSON.stringify(_find)); } catch (e) {}

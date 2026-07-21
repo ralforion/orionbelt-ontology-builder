@@ -6260,6 +6260,38 @@ def render_visualization():
                 )
                 if _find_choice:
                     _find_id = focus_targets.get(_find_choice)
+                    # The target may currently be hidden — by the class display
+                    # filter, or pruned away in focus mode — in which case its
+                    # node isn't in the graph and the JS focus() would silently
+                    # no-op (PR #144 review P2). On a fresh pick, reveal it:
+                    # restore a filtered-out class and, in focus mode, add it as
+                    # a seed so the prune keeps it. Guarded by the find seq so
+                    # this runs once per pick.
+                    _cur_seq = st.session_state.get("_viz_find_seq", 0)
+                    if st.session_state.get("_viz_find_revealed_seq") != _cur_seq:
+                        st.session_state["_viz_find_revealed_seq"] = _cur_seq
+                        _kind, _, _name = _find_choice.partition(": ")
+                        _reveal_rerun = False
+                        if _kind == "Class":
+                            _sel = list(
+                                st.session_state.get("_viz_cfg_selected_classes") or []
+                            )
+                            if _name in all_class_set and _name not in _sel:
+                                st.session_state["_viz_cfg_selected_classes"] = _sel + [
+                                    _name
+                                ]
+                                _reveal_rerun = True
+                        if st.session_state.get("_viz_cfg_focus_mode"):
+                            _seeds = list(
+                                st.session_state.get("_viz_cfg_focus_seeds") or []
+                            )
+                            if _find_choice not in _seeds:
+                                st.session_state["_viz_cfg_focus_seeds"] = _seeds + [
+                                    _find_choice
+                                ]
+                                _reveal_rerun = True
+                        if _reveal_rerun:
+                            st.rerun()
         with _filter_col.expander("Filter Classes", expanded=False):
             focus_mode = st.checkbox(
                 "Focus on one node",
