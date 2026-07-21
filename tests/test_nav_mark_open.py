@@ -1,31 +1,74 @@
-"""Navigation-open marker records the last-opened entity (issue #146 review).
+"""Navigation-open helpers set the single active-card value (issue #147).
 
-Search, graph-click, and "Open full editor" navigation open a card by its raw
-view flag; they must also record _last_opened_entity so the list view's
-single-active resolver prefers the freshly requested card over one left open
-elsewhere.
+Search, graph-click, and "Open full editor" navigation open a card directly
+rather than through the View/Edit button callbacks. Since issue #147 that means
+writing the one ``active_{kind}`` value, so the freshly requested card always
+wins over one left open elsewhere (no per-item flag to shadow it).
 """
 
 from orionbelt_ontology_builder import app
 
 
-def test_marks_flag_and_last_opened(monkeypatch):
+def test_open_entity_sets_active_value(monkeypatch):
     fake: dict = {}
     monkeypatch.setattr(app.st, "session_state", fake)
 
-    app._mark_view_flag_open("view_ind_abc123")
-    assert fake["view_ind_abc123"] is True
-    assert fake["_last_opened_entity"] == ("ind", "abc123")
+    app._open_entity("ind", "abc123")
+    assert fake["active_ind"] == ("abc123", "view")
+    assert app._get_active("ind") == ("abc123", "view")
+    assert app._is_open("ind", "abc123")
+    assert app._is_open("ind", "abc123", "view")
+    assert not app._is_open("ind", "abc123", "edit")
+    assert not app._is_open("ind", "other")
 
 
-def test_skos_hash_key_and_underscored_uid_preserved(monkeypatch):
+def test_open_entity_overwrites_any_prior_open_card(monkeypatch):
+    fake: dict = {"active_ind": ("stale", "edit")}
+    monkeypatch.setattr(app.st, "session_state", fake)
+
+    app._open_entity("ind", "fresh")
+    # One value, so the fresh request fully replaces the stale one.
+    assert fake["active_ind"] == ("fresh", "view")
+    assert app._get_active("ind") == ("fresh", "view")
+
+
+def test_nav_open_entity_maps_display_type_to_kind(monkeypatch):
     fake: dict = {}
     monkeypatch.setattr(app.st, "session_state", fake)
 
-    app._mark_view_flag_open("view_skos_9f8e7d6c")
-    assert fake["_last_opened_entity"] == ("skos", "9f8e7d6c")
+    app._nav_open_entity("Individual", "abc123")
+    assert fake["active_ind"] == ("abc123", "view")
 
-    # A key that itself contains underscores stays intact (only kind is split off).
-    app._mark_view_flag_open("view_objprop_a_b_c")
-    assert fake["view_objprop_a_b_c"] is True
-    assert fake["_last_opened_entity"] == ("objprop", "a_b_c")
+    # A uid that itself contains underscores stays intact.
+    app._nav_open_entity("Object Property", "a_b_c")
+    assert fake["active_objprop"] == ("a_b_c", "view")
+
+
+def test_nav_open_entity_skos_keys_by_uri_hash(monkeypatch):
+    fake: dict = {}
+    monkeypatch.setattr(app.st, "session_state", fake)
+
+    uri = "http://example.org/concepts/Dog"
+    expected = str(abs(hash(uri)))[:8]
+    app._nav_open_entity("SKOS Concept", "unused_uid", uri)
+    assert fake["active_skos"] == (expected, "view")
+
+
+def test_nav_open_entity_ignores_unknown_type(monkeypatch):
+    fake: dict = {}
+    monkeypatch.setattr(app.st, "session_state", fake)
+
+    app._nav_open_entity("Restriction", "abc123")
+    assert fake == {}
+
+
+def test_get_active_rejects_malformed_values(monkeypatch):
+    fake: dict = {"active_class": "not-a-tuple"}
+    monkeypatch.setattr(app.st, "session_state", fake)
+    assert app._get_active("class") is None
+
+    fake["active_class"] = ("uid", "bogus-mode")
+    assert app._get_active("class") is None
+
+    fake["active_class"] = ("uid", "edit")
+    assert app._get_active("class") == ("uid", "edit")
