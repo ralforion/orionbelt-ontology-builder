@@ -6238,23 +6238,28 @@ def render_visualization():
         # Find & centre on a specific entity (issue #144). Independent of focus
         # mode: picking an entity here selects and camera-centres it in the graph
         # via vis-network focus(), so it's easy to locate in a large graph. The
-        # options reuse the focus_targets label -> node-id map built above.
+        # options reuse the focus_targets label -> node-id map built above. It
+        # sits beside the Filter Classes expander so it doesn't cost the graph a
+        # whole row; the empty state is a placeholder (clearable), not a "—" row.
         _find_id: str | None = None
-        if focus_targets:
-            _find_choice = st.selectbox(
-                "🔍 Find entity in graph",
-                options=["—"] + sorted(focus_targets),
-                key="viz_find_entity",
-                on_change=_viz_find_changed,
-                help="Jump to and highlight an entity so it's easy to spot in a "
-                "large graph. Lists the entity types enabled above.",
-            )
-            if _find_choice and _find_choice != "—":
-                _find_id = focus_targets.get(_find_choice)
-
         focus_seed_ids: list = []
         focus_depth = 0
-        with st.expander("Filter Classes", expanded=False):
+        _find_col, _filter_col = st.columns([1, 1])
+        with _find_col:
+            if focus_targets:
+                _find_choice = st.selectbox(
+                    "🔍 Find entity in graph",
+                    options=sorted(focus_targets),
+                    index=None,
+                    placeholder="Find and centre on an entity…",
+                    key="viz_find_entity",
+                    on_change=_viz_find_changed,
+                    help="Jump to and highlight an entity so it's easy to spot "
+                    "in a large graph. Lists the entity types enabled above.",
+                )
+                if _find_choice:
+                    _find_id = focus_targets.get(_find_choice)
+        with _filter_col.expander("Filter Classes", expanded=False):
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
