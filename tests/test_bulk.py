@@ -551,3 +551,33 @@ class TestBulkResultMessage:
         assert "Updated 1 existing" in msg
         assert "Nothing to create" not in msg
         assert mtype == "success"
+
+    def test_message_failure_wording_is_path_neutral(self):
+        # A failure can come from the update path (e.g. adding an invalid parent
+        # to an existing class), so the summary must not claim "could not be
+        # created" (issue #157 review).
+        from orionbelt_ontology_builder import app
+
+        result = {
+            "created": [],
+            "updated": [],
+            "skipped": [],
+            "errors": [{"name": "Person", "error": "invalid parent"}],
+        }
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert "1 row failed" in msg
+        assert "could not be created" not in msg
+        assert mtype == "error"
+
+    def test_message_pluralizes_failed_rows(self):
+        from orionbelt_ontology_builder import app
+
+        result = {
+            "created": ["Dog"],
+            "updated": [],
+            "skipped": [],
+            "errors": [{"name": "a", "error": "x"}, {"name": "b", "error": "y"}],
+        }
+        msg, mtype = app._bulk_result_message(result, "class(es)")
+        assert "2 rows failed" in msg
+        assert mtype == "warning"
