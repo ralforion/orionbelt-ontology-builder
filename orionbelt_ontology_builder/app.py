@@ -6244,14 +6244,15 @@ def render_visualization():
         _find_id: str | None = None
         focus_seed_ids: list = []
         focus_depth = 0
-        _find_col, _filter_col = st.columns([1, 1])
+        _find_col, _filter_col = st.columns([1, 3])
         with _find_col:
             if focus_targets:
                 _find_choice = st.selectbox(
-                    "🔍 Find entity in graph",
+                    "Find entity in graph",
                     options=sorted(focus_targets),
                     index=None,
-                    placeholder="Find and centre on an entity…",
+                    placeholder="🔍 Find and centre on an entity…",
+                    label_visibility="collapsed",
                     key="viz_find_entity",
                     on_change=_viz_find_changed,
                     help="Jump to and highlight an entity so it's easy to spot "
