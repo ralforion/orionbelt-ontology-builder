@@ -6553,7 +6553,11 @@ def render_visualization():
         if "viz_render_seq" not in st.session_state:
             st.session_state.viz_render_seq = 0
 
-        # Bump sequence on Render click to force component re-init (re-runs layout)
+        # Bump the layout generation only when a fresh re-layout is actually
+        # wanted: an explicit Render click, or a node-spacing change (which
+        # alters the physics and should spread the graph out rather than freeze
+        # the old spread). Every other rebuild reuses cached positions so the
+        # graph stays put (issue #141).
         if render_graph:
             st.session_state.viz_render_seq += 1
             # Render also re-centres on the current Find selection, so a user who
@@ -6563,6 +6567,12 @@ def render_visualization():
                 st.session_state["_viz_find_seq"] = (
                     st.session_state.get("_viz_find_seq", 0) + 1
                 )
+        if (
+            "_viz_last_node_spacing" in st.session_state
+            and st.session_state["_viz_last_node_spacing"] != node_spacing
+        ):
+            st.session_state.viz_render_seq += 1
+        st.session_state["_viz_last_node_spacing"] = node_spacing
 
         # Rebuild graph data when settings change or on first visit
         needs_rebuild = (
@@ -7232,8 +7242,12 @@ def render_visualization():
                     "edges": edges_json,
                     "options": options_json,
                 }
-                # Bump seq so the iframe component re-initialises with the new data
-                st.session_state.viz_render_seq += 1
+                # NB: don't bump viz_render_seq here. The component re-renders on
+                # its own whenever nodes/edges change, and seq is the layout-cache
+                # generation: bumping it on every rebuild invalidated the cache so
+                # a node-set change (e.g. a focus expand) always re-ran physics
+                # from scratch instead of freezing the existing nodes (issue #141,
+                # PR review). seq is now bumped only for a real re-layout below.
                 status.empty()
 
             except Exception as e:
