@@ -160,6 +160,22 @@ _BRAND_CSS = f"""
     .stTabs [data-baseweb="tab-highlight"] {{
         background-color: {_BRAND} !important;
     }}
+    /* Slider thumb + its floating value label */
+    [data-testid="stSlider"] [role="slider"] {{
+        background-color: {_BRAND} !important;
+    }}
+    [data-testid="stSliderThumbValue"] {{
+        color: {_BRAND} !important;
+    }}
+    /* (The filled-track bar keeps its Streamlit colour: its fill % lives in an
+       inline gradient we can't recolour without losing the fill indicator.) */
+    /* Multiselect selected chips and their focus outline */
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] {{
+        background-color: {_BRAND} !important;
+    }}
+    [data-testid="stMultiSelect"] [data-baseweb="select"] > div:focus-within {{
+        border-color: {_BRAND} !important;
+    }}
 </style>
 """
 
