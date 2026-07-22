@@ -6053,6 +6053,14 @@ def render_visualization():
                 sel = st.session_state.get("_viz_cfg_selected_classes") or []
                 st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
 
+        def _viz_find_changed():
+            """Bump a sequence so the graph re-centres on the picked entity only
+            when the Find selection changes — not on every rerun or drag, which
+            would keep yanking the camera back (issue #144)."""
+            st.session_state["_viz_find_seq"] = (
+                st.session_state.get("_viz_find_seq", 0) + 1
+            )
+
         _cols = (
             st.columns([1, 1, 1, 1, 1, 1, 1, 1])
             if _has_skos
@@ -6177,7 +6185,13 @@ def render_visualization():
                 args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
             )
         with col5:
-            render_graph = st.button("Render", type="primary", use_container_width=True)
+            render_graph = st.button(
+                "Render",
+                type="primary",
+                use_container_width=True,
+                help="Redraw the graph and re-run the layout. Also re-centres on "
+                "the current Find selection.",
+            )
 
         validation_subjects = set()
         if highlight_issues:
@@ -6227,9 +6241,64 @@ def render_visualization():
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
 
+        # Find & centre on a specific entity (issue #144). Independent of focus
+        # mode: picking an entity here selects and camera-centres it in the graph
+        # via vis-network focus(), so it's easy to locate in a large graph. The
+        # options reuse the focus_targets label -> node-id map built above. It
+        # sits beside the Filter Classes expander so it doesn't cost the graph a
+        # whole row; the empty state is a placeholder (clearable), not a "—" row.
+        _find_id: str | None = None
         focus_seed_ids: list = []
         focus_depth = 0
-        with st.expander("Filter Classes", expanded=False):
+        _find_col, _filter_col = st.columns([1, 3])
+        with _find_col:
+            if focus_targets:
+                _find_choice = st.selectbox(
+                    "Find entity in graph",
+                    options=sorted(focus_targets),
+                    index=None,
+                    placeholder="🔍 Find and centre on an entity…",
+                    label_visibility="collapsed",
+                    key="viz_find_entity",
+                    on_change=_viz_find_changed,
+                    help="Jump to and highlight an entity so it's easy to spot "
+                    "in a large graph. Lists the entity types enabled above.",
+                )
+                if _find_choice:
+                    _find_id = focus_targets.get(_find_choice)
+                    # The target may currently be hidden — by the class display
+                    # filter, or pruned away in focus mode — in which case its
+                    # node isn't in the graph and the JS focus() would silently
+                    # no-op (PR #144 review P2). On a fresh pick, reveal it:
+                    # restore a filtered-out class and, in focus mode, add it as
+                    # a seed so the prune keeps it. Guarded by the find seq so
+                    # this runs once per pick.
+                    _cur_seq = st.session_state.get("_viz_find_seq", 0)
+                    if st.session_state.get("_viz_find_revealed_seq") != _cur_seq:
+                        st.session_state["_viz_find_revealed_seq"] = _cur_seq
+                        _kind, _, _name = _find_choice.partition(": ")
+                        _reveal_rerun = False
+                        if _kind == "Class":
+                            _sel = list(
+                                st.session_state.get("_viz_cfg_selected_classes") or []
+                            )
+                            if _name in all_class_set and _name not in _sel:
+                                st.session_state["_viz_cfg_selected_classes"] = _sel + [
+                                    _name
+                                ]
+                                _reveal_rerun = True
+                        if st.session_state.get("_viz_cfg_focus_mode"):
+                            _seeds = list(
+                                st.session_state.get("_viz_cfg_focus_seeds") or []
+                            )
+                            if _find_choice not in _seeds:
+                                st.session_state["_viz_cfg_focus_seeds"] = _seeds + [
+                                    _find_choice
+                                ]
+                                _reveal_rerun = True
+                        if _reveal_rerun:
+                            st.rerun()
+        with _filter_col.expander("Filter Classes", expanded=False):
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
@@ -6297,11 +6366,25 @@ def render_visualization():
                 selected_classes = st.multiselect(
                     "Select classes to display",
                     options=all_class_names,
-                    help="Choose which classes to show in the graph",
+                    help="Choose which classes to show in the graph. Empty shows "
+                    "no classes; use 'Select all' to bring them back.",
                     key="viz_selected_classes",
                     on_change=_viz_sync,
                     args=("_viz_cfg_selected_classes", "viz_selected_classes"),
                 )
+                # An empty (or narrowed) filter hides classes and there is no
+                # native way back — offer a one-click restore (issue B3). Only
+                # shown when something is actually hidden.
+                if all_class_names and set(selected_classes) != all_class_set:
+                    if st.button(
+                        "Select all classes",
+                        key="viz_select_all_classes",
+                        help="Show every class in the graph again.",
+                    ):
+                        st.session_state["_viz_cfg_selected_classes"] = list(
+                            all_class_names
+                        )
+                        st.rerun()
 
         # Store graph settings in session state for caching
         selected_classes_key = (
@@ -6322,6 +6405,13 @@ def render_visualization():
         # Bump sequence on Render click to force component re-init (re-runs layout)
         if render_graph:
             st.session_state.viz_render_seq += 1
+            # Render also re-centres on the current Find selection, so a user who
+            # panned away can recentre on it without clearing and re-picking
+            # (PR #144 review P3 — reuses the existing button, no new control).
+            if _find_id:
+                st.session_state["_viz_find_seq"] = (
+                    st.session_state.get("_viz_find_seq", 0) + 1
+                )
 
         # Rebuild graph data when settings change or on first visit
         needs_rebuild = (
@@ -7082,6 +7172,10 @@ def render_visualization():
                     autofit=fit,
                     theme=_gv_theme,
                     selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
+                    # Find & centre target + a change-seq, so the component
+                    # re-centres only on a fresh pick (issue #144).
+                    focus_node=_find_id,
+                    focus_seq=st.session_state.get("_viz_find_seq", 0),
                     # On desktop the webview can't download; the component sends
                     # the PNG back for us to save instead (#86).
                     web_download=not local_store.local_persist_enabled(),

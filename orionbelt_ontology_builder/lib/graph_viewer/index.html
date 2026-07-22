@@ -40,6 +40,23 @@ function sendToStreamlit(type, data) {
     window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data || {}), "*");
 }
 
+// Report a Find-selected node to Streamlit, matching the selectNode payload, so
+// the details/status panel reflects the found node. selectNodes() alone does not
+// fire selectNode, so a Find focus would otherwise leave the panel out of sync
+// with the highlighted node (PR #144 review P2).
+function sendFindSelection(id) {
+    try {
+        var ds = network && network.body && network.body.data && network.body.data.nodes;
+        var nd = ds && ds.get(id);
+        if (nd) {
+            sendToStreamlit("streamlit:setComponentValue", {
+                value: {nodeId: id, ntype: nd.ntype || null, ename: nd.ename || null,
+                        label: nd.label, title: nd.title || '', selected: true}
+            });
+        }
+    } catch (e) {}
+}
+
 var visLoaded = false;
 var pendingArgs = null;
 var network = null;
@@ -88,11 +105,26 @@ function applyTheme(theme) {
     }
 }
 
-window.addEventListener('resize', function() {
+function autofitApply() {
     if (!autofitOn || !network) return;
     var h = autofitHeight();
     if (h) { applyHeight(h); network.redraw(); }
-});
+}
+window.addEventListener('resize', autofitApply);
+// The fit-to-window height depends on this iframe's position, which shifts when
+// controls above it change (e.g. the "Filter Classes" expander opening or
+// closing) — layout changes that don't fire a 'resize' event. Poll for a
+// position change and re-fit, so the graph grows back after such a shift
+// instead of staying stuck at a height computed for the old position (bug B2).
+var _lastFitTop = null;
+setInterval(function() {
+    if (!autofitOn || !network) return;
+    var t;
+    try {
+        t = window.frameElement ? Math.round(window.frameElement.getBoundingClientRect().top) : 0;
+    } catch (e) { return; }
+    if (t !== _lastFitTop) { _lastFitTop = t; autofitApply(); }
+}, 400);
 
 function downloadGraph() {
     if (!network) return;
@@ -125,6 +157,25 @@ function renderGraph(args) {
         applyTheme(args.theme);
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
         if (hh) applyHeight(hh);
+        // A fresh "Find entity" pick is a same-data re-render (only focus_seq
+        // changed), so centre on the new node here without rebuilding the whole
+        // network (issue #144). Anything that isn't a new pick leaves the
+        // viewport and selection exactly as the user left them.
+        var _sf = {};
+        try { _sf = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {}; } catch (e) {}
+        if (_sf.seq !== args.focus_seq) {
+            var _sds = network.body && network.body.data && network.body.data.nodes;
+            var _spin = (args.focus_node && _sds && _sds.get(args.focus_node)) ? args.focus_node : null;
+            if (_spin) {
+                try { network.selectNodes([_spin]); } catch (e) {}
+                try { network.focus(_spin, {scale: 1.1, animation: {duration: 700, easingFunction: 'easeInOutQuad'}}); } catch (e) {}
+                sendFindSelection(_spin);
+            }
+            try {
+                sessionStorage.setItem('viz_find', JSON.stringify(
+                    {seq: args.focus_seq, released: false, centred: !!_spin}));
+            } catch (e) {}
+        }
         return;
     }
     lastSeq = args.seq;
@@ -212,9 +263,52 @@ function renderGraph(args) {
     if (args.selected_node !== null && args.selected_node !== undefined) {
         try { network.selectNodes([args.selected_node]); } catch (e) {}
     }
-    if (usedSaved && savedView) {
+    // --- Find & centre (issue #144) ---------------------------------------
+    // Python sends focus_node (the entity picked in "Find entity", present on
+    // every render while it stays picked) and focus_seq (bumps only on a fresh
+    // pick). The component iframe can re-mount between renders and renderGraph
+    // rebuilds the whole network each render, so window state isn't reliable —
+    // we keep the find state in sessionStorage like the viewport cache above.
+    // While a pick is active we "pin" the camera on the node and keep it
+    // selected across rebuilds instead of restoring the (now stale) saved
+    // viewport; the pin is released the moment the user clicks or drags, so we
+    // never fight them, and a fresh pick (new seq) re-arms it.
+    var _find = {};
+    try { _find = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {}; } catch (e) {}
+    if (_find.seq !== args.focus_seq) {
+        _find = {seq: args.focus_seq, released: false, centred: false};
+    }
+    var _pin = (!_find.released && args.focus_node && nodes.get(args.focus_node))
+        ? args.focus_node : null;
+    // Hold the camera on the pinned node across this rebuild instead of
+    // restoring the (now stale) saved viewport; otherwise use the saved view.
+    if (usedSaved && savedView && !_pin) {
         try { network.moveTo({scale: savedView.scale, position: savedView.position}); } catch (e) {}
     }
+    if (_pin) {
+        var _findFresh = !_find.centred;
+        try { network.selectNodes([_pin]); } catch (e) {}
+        try {
+            network.focus(_pin, {
+                scale: 1.1,
+                animation: _find.centred ? false : {duration: 700, easingFunction: 'easeInOutQuad'}
+            });
+        } catch (e) {}
+        if (_findFresh) sendFindSelection(_pin);
+        _find.centred = true;
+    }
+    try { sessionStorage.setItem('viz_find', JSON.stringify(_find)); } catch (e) {}
+    // Release the pin the moment the user takes control (click or drag), so we
+    // never fight their navigation; a fresh Find pick (new seq) re-arms it.
+    function _releaseFindPin() {
+        try {
+            var f = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {};
+            f.released = true;
+            sessionStorage.setItem('viz_find', JSON.stringify(f));
+        } catch (e) {}
+    }
+    network.on('dragStart', _releaseFindPin);
+    network.on('click', _releaseFindPin);
     // Cache the layout AND viewport so re-mounts restore both instantly. Save
     // after the settle animation has frozen (not on stabilizationIterationsDone,
     // which fires ~500ms before the freeze while nodes still move), and after any
