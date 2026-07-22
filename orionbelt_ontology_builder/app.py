@@ -167,8 +167,13 @@ _BRAND_CSS = f"""
     [data-testid="stSliderThumbValue"] {{
         color: {_BRAND} !important;
     }}
-    /* (The filled-track bar keeps its Streamlit colour: its fill % lives in an
-       inline gradient we can't recolour without losing the fill indicator.) */
+    /* Slider track: the filled portion's colour (red on a reset theme) is baked
+       into a per-value class we can't recolour selectively, so neutralise the
+       whole bar to Streamlit's unfilled tint — no red shows, and the navy thumb
+       marks the position. Targets the track (the thumb's direct parent). */
+    [data-testid="stSlider"] [data-baseweb="slider"] div:has(> [role="slider"]) {{
+        background: rgba(151, 166, 195, 0.25) !important;
+    }}
     /* Multiselect selected chips and their focus outline */
     [data-testid="stMultiSelect"] [data-baseweb="tag"] {{
         background-color: {_BRAND} !important;
