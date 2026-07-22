@@ -706,15 +706,30 @@ def _apply_viz_settings(data, defaults) -> None:
             st.session_state[f"_viz_cfg_{k}"] = max(lo, min(hi, v))
 
 
+def _viz_settings_payload() -> str:
+    """Serialize the persisted viz settings for change detection and storage."""
+    data = {
+        k: st.session_state[f"_viz_cfg_{k}"]
+        for k in _VIZ_PERSIST_KEYS
+        if f"_viz_cfg_{k}" in st.session_state
+    }
+    return json.dumps(data, sort_keys=True)
+
+
 def _restore_viz_settings(defaults) -> None:
     """Restore persisted viz display settings once per session (issue #142).
 
-    Mirrors the ontology-autosave restore: on the cloud the localStorage value
-    arrives on a later rerun, so this keeps retrying until either our value
-    arrives or the storage component has delivered its items (nothing saved).
-    On desktop the config file is read synchronously.
+    On the cloud the localStorage value arrives on a *later* rerun, and the
+    storage component's first render hands back an empty default — so this only
+    resolves once a real value is read (disk and no-storage cases resolve
+    immediately). Until then it retries. It also stops, without overriding, once
+    the user has started changing settings this session, so a late-arriving
+    saved set never clobbers what they are doing now (PR #142 review P1).
     """
     if st.session_state.get("_viz_settings_restored"):
+        return
+    if st.session_state.get("_viz_settings_dirty"):
+        st.session_state["_viz_settings_restored"] = True
         return
     if local_store.local_persist_enabled():
         _apply_viz_settings(local_store.load_config().get("viz_settings"), defaults)
@@ -724,10 +739,6 @@ def _restore_viz_settings(defaults) -> None:
     if ls is None:
         st.session_state["_viz_settings_restored"] = True
         return
-    _stored_key = getattr(ls, "storedKey", None)
-    delivered = isinstance(_stored_key, str) and isinstance(
-        st.session_state.get(_stored_key), dict
-    )
     saved = ls.getItem(VIZ_SETTINGS_KEY)
     if isinstance(saved, dict):
         saved = saved.get(VIZ_SETTINGS_KEY) or next(
@@ -739,32 +750,28 @@ def _restore_viz_settings(defaults) -> None:
         except (ValueError, TypeError):
             pass
         st.session_state["_viz_settings_restored"] = True
-    elif delivered:
-        # The component handed back its items and ours isn't among them: nothing
-        # was ever saved, so stop retrying and let the defaults stand.
-        st.session_state["_viz_settings_restored"] = True
+    # else: the real value hasn't arrived (or nothing was ever saved). Retry on
+    # a later rerun; a brand-new user's first change lifts the save gate via the
+    # dirty flag, so nothing is written until there is a real change to save.
 
 
 def _persist_viz_settings() -> None:
-    """Save the current viz display settings when they change (issue #142).
+    """Save the current viz display settings after the user changes one (#142).
 
-    Waits until restore has resolved so the starting defaults don't overwrite a
-    saved set before it is read back. No-ops when nothing changed.
+    Gated on an explicit change (the dirty flag set by the settings callbacks),
+    not merely on the page rendering: otherwise a cloud reload could write the
+    starting defaults back over a saved set before localStorage had answered
+    (PR #142 review P1). No-ops when nothing changed since the last write.
     """
-    if not st.session_state.get("_viz_settings_restored"):
+    if not st.session_state.get("_viz_settings_dirty"):
         return
-    data = {
-        k: st.session_state[f"_viz_cfg_{k}"]
-        for k in _VIZ_PERSIST_KEYS
-        if f"_viz_cfg_{k}" in st.session_state
-    }
-    payload = json.dumps(data, sort_keys=True)
+    payload = _viz_settings_payload()
     if payload == st.session_state.get("_viz_settings_saved_json"):
         return
     if local_store.local_persist_enabled():
         try:
             cfg = local_store.load_config()
-            cfg["viz_settings"] = data
+            cfg["viz_settings"] = json.loads(payload)
             local_store.save_config(cfg)
         except OSError as e:
             log_error(e, context="Viz settings save")
@@ -6175,6 +6182,10 @@ def render_visualization():
         def _viz_sync(cfg_key, wid_key):
             """Callback to persist widget value when changed."""
             st.session_state[cfg_key] = st.session_state[wid_key]
+            # A change to a persisted setting lifts the cross-session save gate
+            # (issue #142); changes to per-ontology filters do not.
+            if cfg_key.removeprefix("_viz_cfg_") in _VIZ_PERSIST_KEYS:
+                st.session_state["_viz_settings_dirty"] = True
 
         def _viz_focus_toggle():
             """Persist the focus toggle and, when it turns on, seed the focus
@@ -6183,6 +6194,7 @@ def render_visualization():
             or several). An empty selection falls back to the first node."""
             on = st.session_state["viz_focus_mode"]
             st.session_state["_viz_cfg_focus_mode"] = on
+            st.session_state["_viz_settings_dirty"] = True
             if on:
                 sel = st.session_state.get("_viz_cfg_selected_classes") or []
                 st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
@@ -7300,6 +7312,7 @@ def render_visualization():
                         type="primary" if _prev_has_sel else "secondary",
                     ):
                         st.session_state["_viz_cfg_details_panel"] = True
+                        st.session_state["_viz_settings_dirty"] = True
                         st.rerun()
 
             with _col_graph:
@@ -7416,6 +7429,7 @@ def render_visualization():
                     with _h2:
                         if st.button("›", key="viz_hide_panel", help="Hide panel"):
                             st.session_state["_viz_cfg_details_panel"] = False
+                            st.session_state["_viz_settings_dirty"] = True
                             st.rerun()
                     if not has_selection:
                         st.caption(
