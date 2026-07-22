@@ -4,6 +4,7 @@ and managing OWL ontologies.
 """
 
 import hashlib
+import json
 import logging
 import streamlit as st
 import time
@@ -28,6 +29,38 @@ GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/iss
 AUTOSAVE_KEY = "orionbelt_ontology_builder_autosave"
 # localStorage is ~5 MB per origin; stay well under to leave headroom.
 AUTOSAVE_MAX_BYTES = 4_000_000
+
+# Visualization display preferences persisted across sessions (issue #142), so a
+# user's Fit-to-window / entity-type / spacing etc. choices survive a reload.
+# Stored in the same backends as the ontology autosave (browser localStorage on
+# the cloud, config.json on desktop). Only ontology-INDEPENDENT settings are
+# persisted; the class filter and focus seeds reference entity names and are
+# left to their own per-ontology reset logic.
+VIZ_SETTINGS_KEY = "orionbelt_viz_settings"
+_VIZ_PERSIST_KEYS = (
+    "show_classes",
+    "show_obj_props",
+    "show_data_props",
+    "show_annotations",
+    "show_individuals",
+    "show_skos",
+    "show_ind_edges",
+    "show_triples",
+    "graph_height",
+    "node_spacing",
+    "fit",
+    "highlight_issues",
+    "details_panel",
+    "focus_mode",
+    "focus_depth",
+)
+# Clamp restored integer settings so a stale/tampered value can't crash a slider
+# whose value must lie within its min/max.
+_VIZ_INT_RANGES = {
+    "graph_height": (300, 1200),
+    "node_spacing": (50, 300),
+    "focus_depth": (1, 5),
+}
 # Disk autosave (local/desktop) is gated on the mutation counter and debounced:
 # the graph is only serialized when it actually changed and edits have settled,
 # so normal UI reruns do no work even for large ontologies. Important actions
@@ -647,6 +680,104 @@ def persist_autosave():
                 "doesn't retry. Your work is still here — fix or re-link the "
                 "file, then reload."
             )
+
+
+def _apply_viz_settings(data, defaults) -> None:
+    """Copy persisted viz settings into the ``_viz_cfg_*`` session keys.
+
+    ``defaults`` is the ``_viz_cfg`` dict, used both to enumerate the settings
+    and to validate types: a saved value is only applied when it matches the
+    default's type (bools stay bools, ints stay ints), and ints are clamped to
+    their widget range so a stale/tampered value can't crash a slider.
+    """
+    if not isinstance(data, dict):
+        return
+    for k, default in defaults.items():
+        if k not in _VIZ_PERSIST_KEYS or k not in data:
+            continue
+        v = data[k]
+        if isinstance(default, bool):
+            if isinstance(v, bool):
+                st.session_state[f"_viz_cfg_{k}"] = v
+        elif (
+            isinstance(default, int) and isinstance(v, int) and not isinstance(v, bool)
+        ):
+            lo, hi = _VIZ_INT_RANGES.get(k, (v, v))
+            st.session_state[f"_viz_cfg_{k}"] = max(lo, min(hi, v))
+
+
+def _restore_viz_settings(defaults) -> None:
+    """Restore persisted viz display settings once per session (issue #142).
+
+    Mirrors the ontology-autosave restore: on the cloud the localStorage value
+    arrives on a later rerun, so this keeps retrying until either our value
+    arrives or the storage component has delivered its items (nothing saved).
+    On desktop the config file is read synchronously.
+    """
+    if st.session_state.get("_viz_settings_restored"):
+        return
+    if local_store.local_persist_enabled():
+        _apply_viz_settings(local_store.load_config().get("viz_settings"), defaults)
+        st.session_state["_viz_settings_restored"] = True
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        st.session_state["_viz_settings_restored"] = True
+        return
+    _stored_key = getattr(ls, "storedKey", None)
+    delivered = isinstance(_stored_key, str) and isinstance(
+        st.session_state.get(_stored_key), dict
+    )
+    saved = ls.getItem(VIZ_SETTINGS_KEY)
+    if isinstance(saved, dict):
+        saved = saved.get(VIZ_SETTINGS_KEY) or next(
+            (v for v in saved.values() if isinstance(v, str)), None
+        )
+    if isinstance(saved, str) and saved.strip():
+        try:
+            _apply_viz_settings(json.loads(saved), defaults)
+        except (ValueError, TypeError):
+            pass
+        st.session_state["_viz_settings_restored"] = True
+    elif delivered:
+        # The component handed back its items and ours isn't among them: nothing
+        # was ever saved, so stop retrying and let the defaults stand.
+        st.session_state["_viz_settings_restored"] = True
+
+
+def _persist_viz_settings() -> None:
+    """Save the current viz display settings when they change (issue #142).
+
+    Waits until restore has resolved so the starting defaults don't overwrite a
+    saved set before it is read back. No-ops when nothing changed.
+    """
+    if not st.session_state.get("_viz_settings_restored"):
+        return
+    data = {
+        k: st.session_state[f"_viz_cfg_{k}"]
+        for k in _VIZ_PERSIST_KEYS
+        if f"_viz_cfg_{k}" in st.session_state
+    }
+    payload = json.dumps(data, sort_keys=True)
+    if payload == st.session_state.get("_viz_settings_saved_json"):
+        return
+    if local_store.local_persist_enabled():
+        try:
+            cfg = local_store.load_config()
+            cfg["viz_settings"] = data
+            local_store.save_config(cfg)
+        except OSError as e:
+            log_error(e, context="Viz settings save")
+            return
+    else:
+        ls = _get_local_storage()
+        if ls is None:
+            return
+        h = _content_hash(payload)
+        ls.setItem(
+            VIZ_SETTINGS_KEY, payload, key=f"orionbelt_viz_settings_set_{h[:12]}"
+        )
+    st.session_state["_viz_settings_saved_json"] = payload
 
 
 def _load_linked_file(target) -> bool:
@@ -6030,6 +6161,9 @@ def render_visualization():
             "focus_mode": False,
             "focus_depth": 1,
         }
+        # Bring back settings saved in a previous session before applying
+        # defaults, so a returning user opens with their own preferences (#142).
+        _restore_viz_settings(_viz_cfg)
         for _k, _v in _viz_cfg.items():
             cfg_key = f"_viz_cfg_{_k}"
             wid_key = f"viz_{_k}"
@@ -6385,6 +6519,11 @@ def render_visualization():
                             all_class_names
                         )
                         st.rerun()
+
+        # Persist the display preferences (entity toggles, spacing, fit, ...) so
+        # they survive a reload (#142). Runs after every control has synced its
+        # value; no-ops when nothing changed.
+        _persist_viz_settings()
 
         # Store graph settings in session state for caching
         selected_classes_key = (
