@@ -28,3 +28,17 @@ def test_brand_css_forces_the_brand_colour_on_every_accent_widget():
     ]
     missing = [h for h in required_hooks if h not in css]
     assert not missing, f"_BRAND_CSS no longer styles: {missing}"
+
+
+def test_dark_css_relightens_text_and_indicator_accents():
+    # Navy is too dark for text/indicator accents on a dark backdrop, so the
+    # dark-mode CSS must re-colour those to the lighter accent. The slider value
+    # label and the multiselect focus outline are text/line accents and must be
+    # covered (filled shapes like the thumb and chips stay navy).
+    dark = app._DARK_CSS
+    assert app._DARK_ACCENT in dark
+    for hook in [
+        'data-testid="stSliderThumbValue"',
+        'data-testid="stMultiSelect"',
+    ]:
+        assert hook in dark, f"_DARK_CSS missing a dark override for {hook}"

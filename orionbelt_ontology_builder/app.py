@@ -197,6 +197,15 @@ _DARK_CSS = f"""
     .stTabs [data-baseweb="tab-highlight"] {{
         background-color: {_DARK_ACCENT} !important;
     }}
+    /* Text/indicator accents from _BRAND_CSS that are too dark on a dark
+       backdrop: the slider value label and the multiselect focus outline.
+       (The filled thumb and chips stay navy, like the checkboxes/buttons.) */
+    [data-testid="stSliderThumbValue"] {{
+        color: {_DARK_ACCENT} !important;
+    }}
+    [data-testid="stMultiSelect"] [data-baseweb="select"] > div:focus-within {{
+        border-color: {_DARK_ACCENT} !important;
+    }}
 </style>
 """
 
