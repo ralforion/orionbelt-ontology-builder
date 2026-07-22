@@ -6541,7 +6541,7 @@ def render_visualization():
         selected_classes_key = (
             "_".join(sorted(selected_classes)) if selected_classes else "none"
         )
-        _graph_ver = 15  # Bump to invalidate cached graph data after code changes
+        _graph_ver = 16  # Bump to invalidate cached graph data after code changes
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -6600,6 +6600,12 @@ def render_visualization():
 
             net = _GraphBuilder()
             net.options = {
+                # Pin the layout's initial-placement RNG so a given graph always
+                # stabilizes to the same arrangement instead of a fresh random
+                # one each time it is rebuilt (issue #141). Combined with the
+                # cached positions, this keeps the picture consistent across
+                # renders, Render clicks, and fresh sessions.
+                "layout": {"randomSeed": 191021},
                 "physics": {
                     "enabled": True,
                     "barnesHut": {

@@ -229,26 +229,40 @@ function renderGraph(args) {
         return h;
     }
     var nodeHash = _hash(nodeArr.map(function(n) { return n.id; }).sort().join('|'));
-    var savedPos = null, savedView = null;
-    try {
-        var _raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null');
-        if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash) {
-            savedPos = _raw.pos;
-            savedView = _raw.view || null;  // {scale, position}
-        }
-    } catch (e) {}
+    var savedPos = null, savedView = null, pinnedIds = [];
+    var _raw = null;
+    try { _raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null'); } catch (e) {}
 
     var usedSaved = false;
-    if (savedPos) {
-        // Render at saved positions with physics off — no stabilization, no flicker.
+    if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash && _raw.pos) {
+        // Exact same graph: restore every position with physics off — no
+        // stabilization, no flicker.
+        savedPos = _raw.pos;
+        savedView = _raw.view || null;  // {scale, position}
         nodeArr.forEach(function(n) {
             if (savedPos[n.id]) { n.x = savedPos[n.id].x; n.y = savedPos[n.id].y; }
         });
         options.physics.enabled = false;
         usedSaved = true;
+    } else if (_raw && _raw.seq === args.seq && _raw.pos) {
+        // Same render generation but a changed node set — e.g. a Ctrl/Cmd-click
+        // expand revealed new nodes. Freeze the nodes we already placed exactly
+        // where they are and let physics settle only the new ones around them,
+        // so the graph doesn't jump (issue #141). Existing nodes are pinned for
+        // the stabilization pass, then released so they stay draggable.
+        savedView = _raw.view || null;  // hold the camera steady too
+        nodeArr.forEach(function(n) {
+            if (_raw.pos[n.id]) {
+                n.x = _raw.pos[n.id].x; n.y = _raw.pos[n.id].y;
+                n.fixed = { x: true, y: true };
+                pinnedIds.push(n.id);
+            }
+        });
+        var iters2 = Math.min(Math.max(nCount * 3, 150), 500);
+        options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50 };
     } else {
-        // Batch-stabilize most of the layout, then freeze. Scale iterations with
-        // node count for a quality vs speed balance.
+        // Fresh layout (Render, or nothing cached): deterministic thanks to the
+        // pinned randomSeed set in Python (issue #141).
         var iters = Math.min(Math.max(nCount * 3, 150), 500);
         var batchIters = Math.max(iters - 40, 80);
         options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50 };
@@ -282,7 +296,7 @@ function renderGraph(args) {
         ? args.focus_node : null;
     // Hold the camera on the pinned node across this rebuild instead of
     // restoring the (now stale) saved viewport; otherwise use the saved view.
-    if (usedSaved && savedView && !_pin) {
+    if (savedView && !_pin) {
         try { network.moveTo({scale: savedView.scale, position: savedView.position}); } catch (e) {}
     }
     if (_pin) {
@@ -332,6 +346,15 @@ function renderGraph(args) {
         network.once('stabilizationIterationsDone', function() {
             setTimeout(function() {
                 network.setOptions({ physics: { enabled: false } });
+                // Release the frozen-existing pins now that physics is off (so
+                // they won't move), keeping those nodes draggable (issue #141).
+                if (pinnedIds.length) {
+                    try {
+                        nodes.update(pinnedIds.map(function(id) {
+                            return { id: id, fixed: false };
+                        }));
+                    } catch (e) {}
+                }
                 savePositions();
             }, 500);
         });
