@@ -6413,6 +6413,11 @@ def render_visualization():
         if show_individuals:
             for ind in individuals:
                 focus_targets[f"Individual: {ind['name']}"] = f"ind_{_uid(ind['uri'])}"
+        if show_data_props:
+            for prop in data_props:
+                focus_targets[f"Data Property: {prop['name']}"] = (
+                    f"dprop_{_uid(prop['uri'])}"
+                )
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
