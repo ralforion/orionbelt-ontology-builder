@@ -3,13 +3,17 @@ name: Docker Publish
 # Build and push the OrionBelt Ontology Builder image to Docker Hub, and keep
 # the Hub repo overview in sync with README.md.
 #
-# - build       → on PRs and main: builds the image and smoke-tests it, never
-#                 pushes. Catches Dockerfile and dependency regressions before a
-#                 release tag rather than during one.
-# - image       → only on version tags (v1.2.3): publishes :1.2.3, :1.2, :1, :latest
-# - description → on pushes to main and manual runs: syncs README.md to the
-#                 Docker Hub overview. This job never builds an image, so no
-#                 rolling :main / :edge tags are created.
+# - changes     → detects whether Docker-relevant files or the README changed,
+#                 so the two jobs below don't run for unrelated edits (e.g. a
+#                 docs-only or version-bump PR no longer triggers a full build).
+# - build       → on PRs and main, only when Docker-relevant files change:
+#                 builds the image and smoke-tests it, never pushes. Catches
+#                 Dockerfile and dependency regressions before a release tag.
+# - image       → only on version tags (v1.2.3): publishes :1.2.3, :1.2, :1,
+#                 :latest. Always runs on a tag, never path-filtered.
+# - description → on main pushes only when README.md changed, plus manual runs
+#                 and releases: syncs README.md to the Docker Hub overview. This
+#                 job never builds an image, so no rolling :main / :edge tags.
 #
 # Only the image and description jobs need secrets; build runs without them so it
 # works on pull requests from forks:
@@ -29,10 +33,45 @@ env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orionbelt-ontology-builder
 
 jobs:
-  build:
+  # Which parts changed, so build/description can skip unrelated edits. Not run
+  # for release tags (image publishes there regardless) or manual runs (which
+  # always sync the description); build/description handle those cases directly.
+  changes:
     runs-on: ubuntu-latest
-    # Everything except a release tag, which the image job already builds.
-    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')) }}
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+      readme: ${{ steps.filter.outputs.readme }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'app.py'
+              - 'ontology_manager.py'
+              - 'templates.py'
+              - 'orionbelt_ontology_builder/**'
+              - '.streamlit/**'
+              - '.github/workflows/docker-publish.yml'
+            readme:
+              - 'README.md'
+
+  build:
+    needs: changes
+    runs-on: ubuntu-latest
+    # PRs and main pushes, but only when Docker-relevant files changed (the image
+    # job already builds release tags). always() so it still evaluates when the
+    # changes job was skipped (manual runs, where we build unconditionally).
+    if: >-
+      ${{ always()
+      && !startsWith(github.ref, 'refs/tags/v')
+      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.docker == 'true') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -118,10 +157,18 @@ jobs:
           cache-to: type=gha,mode=max
 
   description:
+    needs: changes
     runs-on: ubuntu-latest
-    # Sync the README to the Hub overview on main pushes, manual runs, and
-    # releases. Independent of the image build — no image is produced here.
-    if: github.event_name != 'pull_request'
+    # Sync the README to the Hub overview on manual runs and releases, and on
+    # main pushes only when README.md actually changed. Independent of the image
+    # build — no image is produced here. always() so it still evaluates when the
+    # changes job was skipped (manual runs and release tags).
+    if: >-
+      ${{ always()
+      && github.event_name != 'pull_request'
+      && (github.event_name == 'workflow_dispatch'
+          || startsWith(github.ref, 'refs/tags/v')
+          || needs.changes.outputs.readme == 'true') }}
     steps:
       - uses: actions/checkout@v7
 
