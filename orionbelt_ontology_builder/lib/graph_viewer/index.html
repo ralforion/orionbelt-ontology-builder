@@ -83,6 +83,7 @@ var lastEdges = null;
 var currentTheme = {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
 var currentHeight = 600;  // last non-fullscreen graph height, restored on exit
 var fsRestoreView = null;  // viewport captured just before a fullscreen toggle
+var FS_ZOOM_OUT = 0.65;    // entering fullscreen zooms out ~35% around the centre
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
@@ -191,24 +192,22 @@ function toggleFullscreen() {
 }
 
 // Resize the graph to fill the screen on enter and back to the toolbar-driven
-// height on exit, and swap the icon/hint. On enter the graph is fit to the
-// larger canvas so it actually uses the space; on exit the pre-fullscreen
+// height on exit, and swap the icon/hint. On enter the graph zooms out ~35%
+// around the same centre so fullscreen reveals more context without shrinking a
+// large graph to an unreadable whole-graph fit; on exit the pre-fullscreen
 // viewport is restored, so a round-trip leaves the user's zoom/pan untouched
 // (review P2). vis rescales the view on each of the several 'resize' events it
-// fires while the canvas changes size, and a fit()/moveTo() *inside* that emit
-// is overwritten by vis — so we re-apply after each resize via a deferred call
+// fires while the canvas changes size, and a moveTo() *inside* that emit is
+// overwritten by vis — so we re-apply after each resize via a deferred call
 // (which sticks) and detach after a window so we never fight the user later.
 function onFullscreenChange() {
     var el = document.getElementById('graph');
     var fsBtn = document.getElementById('fullscreen-btn');
     var entering = isFullscreen();
     function applyView() {
-        if (!network) return;
-        if (entering) {
-            try { network.fit({animation: false}); } catch (e) {}
-        } else if (fsRestoreView) {
-            try { network.moveTo({scale: fsRestoreView.scale, position: fsRestoreView.position}); } catch (e) {}
-        }
+        if (!network || !fsRestoreView) return;
+        var scale = entering ? fsRestoreView.scale * FS_ZOOM_OUT : fsRestoreView.scale;
+        try { network.moveTo({scale: scale, position: fsRestoreView.position}); } catch (e) {}
     }
     if (entering) {
         el.style.height = window.innerHeight + 'px';
