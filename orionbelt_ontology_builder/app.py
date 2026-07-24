@@ -6141,6 +6141,44 @@ def render_validation():
                 show_message(f"Error during reasoning: {str(e)}", "error")
 
 
+def build_class_hierarchy_text(classes):
+    """Render the class list as an indented subClassOf tree.
+
+    ``classes`` is the list returned by ``OntologyManager.get_classes()``. A
+    subClassOf cycle (e.g. A ⊑ B and B ⊑ A) would otherwise recurse forever and
+    raise "maximum recursion depth exceeded" (issue #171), so each branch tracks
+    its ancestors and stops when it meets one again, marking it as a cycle.
+    """
+    by_name = {}
+    for c in classes:
+        by_name.setdefault(c["name"], c)  # first wins, matching old lookup
+
+    roots = [c for c in classes if not c["parents"]]
+    if not roots:
+        roots = classes[:1]
+
+    lines = []
+
+    def add_class(cls_name, level=0, path=frozenset()):
+        cls = by_name.get(cls_name)
+        if not cls:
+            return
+        prefix = "  " * level + ("└── " if level > 0 else "")
+        label = f" ({cls['label']})" if cls["label"] else ""
+        if cls_name in path:
+            lines.append(f"{prefix}{cls['name']}{label}  (cycle)")
+            return
+        lines.append(f"{prefix}{cls['name']}{label}")
+        child_path = path | {cls_name}
+        for child in cls["children"]:
+            add_class(child, level + 1, child_path)
+
+    for root in roots:
+        add_class(root["name"])
+
+    return "\n".join(lines)
+
+
 def render_visualization():
     """Render the visualization page."""
     st.header("Visualization")
@@ -7578,29 +7616,7 @@ def render_visualization():
         if not classes:
             st.info("No classes defined.")
         else:
-            # Build hierarchy text
-            def build_tree_text(classes):
-                roots = [c for c in classes if not c["parents"]]
-                if not roots:
-                    roots = classes[:1]
-
-                lines = []
-
-                def add_class(cls_name, level=0):
-                    cls = next((c for c in classes if c["name"] == cls_name), None)
-                    if cls:
-                        prefix = "  " * level + ("└── " if level > 0 else "")
-                        label = f" ({cls['label']})" if cls["label"] else ""
-                        lines.append(f"{prefix}{cls['name']}{label}")
-                        for child in cls["children"]:
-                            add_class(child, level + 1)
-
-                for root in roots:
-                    add_class(root["name"])
-
-                return "\n".join(lines)
-
-            tree_text = build_tree_text(classes)
+            tree_text = build_class_hierarchy_text(classes)
             st.code(tree_text, language=None)
 
     if _viz_tab == "Statistics":
