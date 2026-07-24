@@ -84,6 +84,9 @@ var currentTheme = {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#3333
 var currentHeight = 600;  // last non-fullscreen graph height, restored on exit
 var fsRestoreView = null;  // viewport captured just before a fullscreen toggle
 var FS_ZOOM_OUT = 0.65;    // entering fullscreen zooms out ~35% around the centre
+var fsGen = 0;             // fullscreen transition counter, to void stale callbacks
+var fsResizeHandler = null; // active 'resize' listener from the current transition
+var fsDetachTimer = null;   // timer that detaches fsResizeHandler
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
@@ -204,8 +207,12 @@ function onFullscreenChange() {
     var el = document.getElementById('graph');
     var fsBtn = document.getElementById('fullscreen-btn');
     var entering = isFullscreen();
+    // Each transition gets a generation id; a deferred callback only acts if it
+    // still matches, so a superseded transition (e.g. a quick enter/exit) can't
+    // apply its zoom after a newer one has run (review P3).
+    var gen = ++fsGen;
     function applyView() {
-        if (!network || !fsRestoreView) return;
+        if (!network || !fsRestoreView || gen !== fsGen) return;
         var scale = entering ? fsRestoreView.scale * FS_ZOOM_OUT : fsRestoreView.scale;
         try { network.moveTo({scale: scale, position: fsRestoreView.position}); } catch (e) {}
     }
@@ -227,12 +234,21 @@ function onFullscreenChange() {
         sendToStreamlit("streamlit:setFrameHeight", {height: h});
     }
     if (network) {
+        // Tear down the previous transition's listener/timer before redraw(),
+        // which synchronously emits 'resize' — otherwise a stale "entering"
+        // listener from a just-superseded transition would schedule its
+        // zoom-out and undo this one (review P3).
+        if (fsResizeHandler) { try { network.off('resize', fsResizeHandler); } catch (e) {} fsResizeHandler = null; }
+        if (fsDetachTimer) { clearTimeout(fsDetachTimer); fsDetachTimer = null; }
         network.redraw();
         applyView();  // handles the case where no 'resize' fires at all
-        var onResize = function () { setTimeout(applyView, 0); };
+        fsResizeHandler = function () { setTimeout(applyView, 0); };
         try {
-            network.on('resize', onResize);
-            setTimeout(function () { try { network.off('resize', onResize); } catch (e) {} }, 1000);
+            network.on('resize', fsResizeHandler);
+            fsDetachTimer = setTimeout(function () {
+                if (fsResizeHandler) { try { network.off('resize', fsResizeHandler); } catch (e) {} fsResizeHandler = null; }
+                fsDetachTimer = null;
+            }, 1000);
         } catch (e) {}
     }
 }
