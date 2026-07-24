@@ -6141,6 +6141,58 @@ def render_validation():
                 show_message(f"Error during reasoning: {str(e)}", "error")
 
 
+def build_class_hierarchy_text(classes):
+    """Render the class list as an indented subClassOf tree.
+
+    ``classes`` is the list returned by ``OntologyManager.get_classes()``.
+
+    The traversal is iterative rather than recursive so a very deep hierarchy
+    can't overflow the call stack and raise "maximum recursion depth exceeded"
+    (issue #171). Each branch also tracks its ancestors and stops when it meets
+    one again, marking it ``(cycle)`` instead of following the back-edge, so a
+    subClassOf cycle (e.g. A ⊑ B and B ⊑ A) terminates too. After the normal
+    roots are walked, any class not yet emitted is walked as an extra root, so
+    disconnected or wholly-cyclic components are shown rather than dropped.
+    """
+    by_name = {}
+    for c in classes:
+        by_name.setdefault(c["name"], c)  # first wins, matching old lookup
+
+    lines = []
+    emitted = set()  # classes shown as a real node (not just a cycle back-edge)
+
+    def walk(start):
+        # Explicit stack of (name, level, ancestors-on-this-branch).
+        stack = [(start, 0, frozenset())]
+        while stack:
+            cls_name, level, path = stack.pop()
+            cls = by_name.get(cls_name)
+            if not cls:
+                continue
+            prefix = "  " * level + ("└── " if level > 0 else "")
+            label = f" ({cls['label']})" if cls["label"] else ""
+            if cls_name in path:
+                lines.append(f"{prefix}{cls['name']}{label}  (cycle)")
+                continue
+            lines.append(f"{prefix}{cls['name']}{label}")
+            emitted.add(cls_name)
+            child_path = path | {cls_name}
+            # Push in reverse so children pop in their listed order.
+            for child in reversed(cls["children"]):
+                stack.append((child, level + 1, child_path))
+
+    for c in classes:
+        if not c["parents"]:
+            walk(c["name"])
+    # Cover components that no root reaches (disconnected trees, all-cyclic
+    # ontologies, multiple detached cycles).
+    for c in classes:
+        if c["name"] not in emitted:
+            walk(c["name"])
+
+    return "\n".join(lines)
+
+
 def render_visualization():
     """Render the visualization page."""
     st.header("Visualization")
@@ -7578,29 +7630,7 @@ def render_visualization():
         if not classes:
             st.info("No classes defined.")
         else:
-            # Build hierarchy text
-            def build_tree_text(classes):
-                roots = [c for c in classes if not c["parents"]]
-                if not roots:
-                    roots = classes[:1]
-
-                lines = []
-
-                def add_class(cls_name, level=0):
-                    cls = next((c for c in classes if c["name"] == cls_name), None)
-                    if cls:
-                        prefix = "  " * level + ("└── " if level > 0 else "")
-                        label = f" ({cls['label']})" if cls["label"] else ""
-                        lines.append(f"{prefix}{cls['name']}{label}")
-                        for child in cls["children"]:
-                            add_class(child, level + 1)
-
-                for root in roots:
-                    add_class(root["name"])
-
-                return "\n".join(lines)
-
-            tree_text = build_tree_text(classes)
+            tree_text = build_class_hierarchy_text(classes)
             st.code(tree_text, language=None)
 
     if _viz_tab == "Statistics":
