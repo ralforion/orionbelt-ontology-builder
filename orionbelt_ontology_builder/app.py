@@ -1027,6 +1027,11 @@ def save_checkpoint(label: str = "Edit"):
     st.session_state["_ont_mutation_count"] = (
         st.session_state.get("_ont_mutation_count", 0) + 1
     )
+    # A separate counter tracking only incremental edits (not ontology
+    # replacements like load/import/new, which bump the mutation counter
+    # directly). The Visualization class filter uses the gap between the two to
+    # tell an edit apart from a replacement (issue #180).
+    st.session_state["_ont_edit_count"] = st.session_state.get("_ont_edit_count", 0) + 1
 
 
 def log_error(error: Exception, context: str = ""):
@@ -6193,6 +6198,37 @@ def build_class_hierarchy_text(classes):
     return "\n".join(lines)
 
 
+def reconcile_class_filter(all_class_names, selected, known, replaced=False):
+    """Reconcile the Visualization "Filter Classes" selection with the ontology.
+
+    Diffs the current class names against those seen on the previous render
+    (``known``) rather than resetting on every edit, so adding a class or a
+    restriction no longer wipes a narrowed filter (issue #180):
+
+    - classes deleted since last render drop out of the selection;
+    - classes created since last render are added (new content is shown by
+      default, matching the "everything selected" default);
+    - the rest of the selection is left as-is, so a deliberately emptied filter
+      stays empty (nothing is "new" when the user clears it).
+
+    ``replaced`` marks that the whole ontology was swapped (load/import/new/undo)
+    rather than incrementally edited. Diffing must not run then: an unrelated
+    ontology that happens to reuse a class name (e.g. ``Person``) could otherwise
+    inherit its hidden/narrowed state and load with classes missing. On a
+    replacement — or the first render, when ``selected``/``known`` is ``None`` —
+    everything is shown. Returns ``(selected_list, known_set)`` where
+    ``selected_list`` keeps the class-list order.
+    """
+    all_class_set = set(all_class_names)
+    if replaced or selected is None or known is None:
+        selected_set = set(all_class_names)
+    else:
+        newly_added = all_class_set - known
+        selected_set = (set(selected) | newly_added) & all_class_set
+    ordered = [c for c in all_class_names if c in selected_set]
+    return ordered, all_class_set
+
+
 def render_visualization():
     """Render the visualization page."""
     st.header("Visualization")
@@ -6426,32 +6462,32 @@ def render_visualization():
             issues = ont.validate()
             validation_subjects = {i["subject"] for i in issues}
 
-        # Class filter — reset to "all selected" whenever the ontology mutates
-        # (load, import, replace, undo) so a previously narrowed filter doesn't
-        # silently hide most of the newly loaded content.
+        # Class filter — reconcile the selection with the current class set
+        # instead of resetting it on every ontology mutation, which used to wipe
+        # a narrowed filter whenever a class or restriction was added (#180).
+        # A mutation-counter jump not matched by the edit counter means the whole
+        # ontology was replaced (load/import/new/undo), so reset to "all" rather
+        # than diffing against a now-unrelated ontology that may reuse names.
         all_class_names = [c["name"] for c in classes] if classes else []
         all_class_set = set(all_class_names)
-        current_mutation = st.session_state.get("_ont_mutation_count", 0)
-        last_seen_mutation = st.session_state.get("_viz_cfg_classes_at_mutation")
-        if (
-            "_viz_cfg_selected_classes" not in st.session_state
-            or last_seen_mutation != current_mutation
-        ):
-            st.session_state["_viz_cfg_selected_classes"] = all_class_names
-            st.session_state["_viz_cfg_classes_at_mutation"] = current_mutation
-        else:
-            # Drop names that no longer exist, but keep an intentionally empty
-            # selection empty — repopulating here would make "Clear all" (the
-            # multiselect's ✕) snap straight back to every class. The mutation
-            # branch above is what resets to "all" when the ontology changes.
-            st.session_state["_viz_cfg_selected_classes"] = [
-                c
-                for c in st.session_state["_viz_cfg_selected_classes"]
-                if c in all_class_set
-            ]
-        st.session_state["viz_selected_classes"] = st.session_state[
-            "_viz_cfg_selected_classes"
-        ]
+        mutation = st.session_state.get("_ont_mutation_count", 0)
+        edits = st.session_state.get("_ont_edit_count", 0)
+        prev_mutation = st.session_state.get("_viz_cfg_seen_mutation")
+        prev_edits = st.session_state.get("_viz_cfg_seen_edits", 0)
+        replaced = prev_mutation is not None and (mutation - prev_mutation) != (
+            edits - prev_edits
+        )
+        selected_classes_list, known_class_set = reconcile_class_filter(
+            all_class_names,
+            st.session_state.get("_viz_cfg_selected_classes"),
+            st.session_state.get("_viz_cfg_known_classes"),
+            replaced=replaced,
+        )
+        st.session_state["_viz_cfg_selected_classes"] = selected_classes_list
+        st.session_state["_viz_cfg_known_classes"] = known_class_set
+        st.session_state["_viz_cfg_seen_mutation"] = mutation
+        st.session_state["_viz_cfg_seen_edits"] = edits
+        st.session_state["viz_selected_classes"] = selected_classes_list
 
         # Focus mode: centre the view on one node (class, individual or SKOS
         # concept) and show only its neighbourhood within N hops. The pruning
