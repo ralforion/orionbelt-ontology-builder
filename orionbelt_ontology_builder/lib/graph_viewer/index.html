@@ -24,12 +24,27 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 }
 #download-btn:hover { opacity: 1; }
 #download-btn svg { width: 18px; height: 18px; fill: #555; }
+#fullscreen-btn {
+    position: absolute; top: 8px; right: 48px; z-index: 10;
+    width: 32px; height: 32px; border: none; border-radius: 6px;
+    background: rgba(255,255,255,0.92); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0.7; transition: opacity 0.2s;
+}
+#fullscreen-btn:hover { opacity: 1; }
+#fullscreen-btn svg { width: 18px; height: 18px; fill: #555; }
+/* In fullscreen the container fills the screen; keep the themed background so
+   the graph doesn't fall back to the browser's default black backdrop. */
+#container:fullscreen { width: 100vw; height: 100vh; }
 </style>
 </head>
 <body>
 <div id="container" style="position: relative;">
     <div id="graph"></div>
     <div id="legend"></div>
+    <button id="fullscreen-btn" title="Fullscreen" style="display:none;" onclick="toggleFullscreen()">
+        <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+    </button>
     <button id="download-btn" title="Download as PNG" style="display:none;" onclick="downloadGraph()">
         <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v6h3.66V9h3.84L12 2z" transform="rotate(180 12 12)"/></svg>
     </button>
@@ -65,6 +80,8 @@ var webDownload = true;  // browser download works on the web; on desktop we sav
 var lastSeq = null;
 var lastNodes = null;
 var lastEdges = null;
+var currentTheme = {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
+var currentHeight = 600;  // last non-fullscreen graph height, restored on exit
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
@@ -90,13 +107,21 @@ function applyHeight(h) {
 // encode type, not theme, so only the background, overlays and edge labels change.
 function applyTheme(theme) {
     theme = theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
+    currentTheme = theme;
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
+    document.getElementById('container').style.background = theme.bg;
     var dlBtn = document.getElementById('download-btn');
     if (dlBtn) {
         dlBtn.style.background = theme.panel;
         var dlSvg = dlBtn.querySelector('svg');
         if (dlSvg) dlSvg.style.fill = theme.text;
+    }
+    var fsBtn = document.getElementById('fullscreen-btn');
+    if (fsBtn) {
+        fsBtn.style.background = theme.panel;
+        var fsSvg = fsBtn.querySelector('svg');
+        if (fsSvg) fsSvg.style.fill = theme.text;
     }
     var legendEl = document.getElementById('legend');
     if (legendEl) { legendEl.style.background = theme.panel; legendEl.style.color = theme.text; }
@@ -106,7 +131,7 @@ function applyTheme(theme) {
 }
 
 function autofitApply() {
-    if (!autofitOn || !network) return;
+    if (!autofitOn || !network || document.fullscreenElement) return;
     var h = autofitHeight();
     if (h) { applyHeight(h); network.redraw(); }
 }
@@ -141,6 +166,52 @@ function downloadGraph() {
     }
 }
 
+// Enter/exit fullscreen for just the graph. The whole vis-network canvas lives
+// in this iframe, so fullscreening the container makes the graph fill the
+// physical screen — no sidebar, no toolbar, no black borders (issue #177).
+function toggleFullscreen() {
+    var c = document.getElementById('container');
+    if (!document.fullscreenElement) {
+        (c.requestFullscreen || c.webkitRequestFullscreen || function () {}).call(c);
+    } else {
+        (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
+    }
+}
+
+// Resize the graph to fill the screen on enter, and restore the toolbar-driven
+// height on exit. Swap the icon and hint between enter/exit.
+function onFullscreenChange() {
+    var el = document.getElementById('graph');
+    var fsBtn = document.getElementById('fullscreen-btn');
+    if (document.fullscreenElement) {
+        el.style.height = window.innerHeight + 'px';
+        if (fsBtn) {
+            fsBtn.title = 'Exit fullscreen';
+            fsBtn.querySelector('svg').innerHTML =
+                '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>';
+        }
+    } else {
+        if (fsBtn) {
+            fsBtn.title = 'Fullscreen';
+            fsBtn.querySelector('svg').innerHTML =
+                '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';
+        }
+        var h = autofitOn ? (autofitHeight() || currentHeight) : currentHeight;
+        el.style.height = h + 'px';
+        sendToStreamlit("streamlit:setFrameHeight", {height: h});
+    }
+    if (network) { network.redraw(); network.fit(); }
+}
+document.addEventListener('fullscreenchange', onFullscreenChange);
+document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+// Fullscreen from inside an iframe needs the frame to permit it. Streamlit's
+// component iframe is same-origin, so grant it defensively (belt and braces on
+// top of Streamlit's own allowFullScreen).
+try {
+    var _fe = window.frameElement;
+    if (_fe) { _fe.allowFullscreen = true; _fe.setAttribute('allow', 'fullscreen'); }
+} catch (e) {}
+
 function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
     autofitOn = !!args.autofit;
@@ -156,7 +227,7 @@ function renderGraph(args) {
     if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
         applyTheme(args.theme);
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
-        if (hh) applyHeight(hh);
+        if (hh) { currentHeight = hh; if (!document.fullscreenElement) applyHeight(hh); }
         // A fresh "Find entity" pick is a same-data re-render (only focus_seq
         // changed), so centre on the new node here without rebuilding the whole
         // network (issue #144). Anything that isn't a new pick leaves the
@@ -188,14 +259,28 @@ function renderGraph(args) {
         if (af) height = af;
     }
     var el = document.getElementById('graph');
-    el.style.height = height + 'px';
-    sendToStreamlit("streamlit:setFrameHeight", {height: height});
+    // In fullscreen the graph fills the screen; don't clobber that with the
+    // toolbar height. Remember the requested height so exiting fullscreen can
+    // restore it.
+    currentHeight = height;
+    if (!document.fullscreenElement) {
+        el.style.height = height + 'px';
+        sendToStreamlit("streamlit:setFrameHeight", {height: height});
+    }
 
     // Theme the canvas + overlays to match the app, so the graph isn't a white
     // box in dark mode (issue #62). Defaults keep the original light look.
     var theme = args.theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
+    currentTheme = theme;
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
+    document.getElementById('container').style.background = theme.bg;
+    var fsBtn2 = document.getElementById('fullscreen-btn');
+    if (fsBtn2) {
+        fsBtn2.style.background = theme.panel;
+        var fsSvg2 = fsBtn2.querySelector('svg');
+        if (fsSvg2) fsSvg2.style.fill = theme.text;
+    }
     var dlBtn = document.getElementById('download-btn');
     dlBtn.style.background = theme.panel;
     var dlSvg = dlBtn.querySelector('svg');
@@ -270,6 +355,7 @@ function renderGraph(args) {
     var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
     document.getElementById('download-btn').style.display = 'flex';
+    document.getElementById('fullscreen-btn').style.display = 'flex';
     // Restore selection + viewport after a genuine re-mount (e.g. the panel
     // toggled), so the node stays highlighted and the zoom/pan don't reset —
     // making the rebuild invisible. selectNodes() does not fire selectNode, so
