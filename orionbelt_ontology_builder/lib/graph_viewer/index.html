@@ -83,7 +83,7 @@ var lastEdges = null;
 var currentTheme = {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
 var currentHeight = 600;  // last non-fullscreen graph height, restored on exit
 var fsRestoreView = null;  // viewport captured just before a fullscreen toggle
-var FS_ZOOM_OUT = 0.65;    // entering fullscreen zooms out ~35% around the centre
+var FS_ZOOM_OUT = 0.70;    // entering fullscreen zooms out ~30% around the centre
 var fsGen = 0;             // fullscreen transition counter, to void stale callbacks
 var fsResizeHandler = null; // active 'resize' listener from the current transition
 var fsDetachTimer = null;   // timer that detaches fsResizeHandler
@@ -195,7 +195,7 @@ function toggleFullscreen() {
 }
 
 // Resize the graph to fill the screen on enter and back to the toolbar-driven
-// height on exit, and swap the icon/hint. On enter the graph zooms out ~35%
+// height on exit, and swap the icon/hint. On enter the graph zooms out ~30%
 // around the same centre so fullscreen reveals more context without shrinking a
 // large graph to an unreadable whole-graph fit; on exit the pre-fullscreen
 // viewport is restored, so a round-trip leaves the user's zoom/pan untouched
