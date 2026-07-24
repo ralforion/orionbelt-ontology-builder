@@ -53,11 +53,28 @@ def test_cleared_filter_still_admits_a_newly_created_class():
     assert selected == ["C"]
 
 
-def test_wholesale_replacement_resets_to_all():
-    # Load/import/undo swaps in a fresh set of names -> everything shown.
+def test_disjoint_replacement_shows_everything_by_diffing():
+    # A load whose names don't overlap the old set diffs to "all" on its own.
     selected, known = _reconcile(["X", "Y", "Z"], ["A"], {"A", "B"})
     assert selected == ["X", "Y", "Z"]
     assert known == {"X", "Y", "Z"}
+
+
+def test_overlapping_replacement_would_hide_classes_without_the_flag():
+    # Regression: previous ontology hid B; a NEW ontology of just ["B"] must not
+    # inherit that hidden state (review of #180). Diffing alone returns []...
+    assert _reconcile(["B"], [], {"A", "B"})[0] == []
+    # ...so the replacement flag forces "show everything".
+    selected, known = app.reconcile_class_filter(["B"], [], {"A", "B"}, replaced=True)
+    assert selected == ["B"]
+    assert known == {"B"}
+
+
+def test_replaced_flag_ignores_prior_narrowing():
+    selected, _ = app.reconcile_class_filter(
+        ["Person", "Org"], ["Org"], {"Person", "Org"}, replaced=True
+    )
+    assert selected == ["Person", "Org"]
 
 
 def test_selection_order_follows_class_list():
