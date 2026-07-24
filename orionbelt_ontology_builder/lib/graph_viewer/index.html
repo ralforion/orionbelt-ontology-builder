@@ -16,7 +16,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #legend .line.dashed { border-top: 2px dashed; height: 0; }
 #legend .line.solid { border-top: 2px solid; height: 0; }
 #download-btn {
-    position: absolute; top: 8px; right: 8px; z-index: 10;
+    position: absolute; top: 8px; right: 48px; z-index: 10;
     width: 32px; height: 32px; border: none; border-radius: 6px;
     background: rgba(255,255,255,0.92); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
@@ -25,7 +25,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #download-btn:hover { opacity: 1; }
 #download-btn svg { width: 18px; height: 18px; fill: #555; }
 #fullscreen-btn {
-    position: absolute; top: 8px; right: 48px; z-index: 10;
+    position: absolute; top: 8px; right: 8px; z-index: 10;
     width: 32px; height: 32px; border: none; border-radius: 6px;
     background: rgba(255,255,255,0.92); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
@@ -82,6 +82,7 @@ var lastNodes = null;
 var lastEdges = null;
 var currentTheme = {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
 var currentHeight = 600;  // last non-fullscreen graph height, restored on exit
+var fsRestoreView = null;  // viewport captured just before a fullscreen toggle
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
@@ -131,7 +132,7 @@ function applyTheme(theme) {
 }
 
 function autofitApply() {
-    if (!autofitOn || !network || document.fullscreenElement) return;
+    if (!autofitOn || !network || isFullscreen()) return;
     var h = autofitHeight();
     if (h) { applyHeight(h); network.redraw(); }
 }
@@ -166,24 +167,50 @@ function downloadGraph() {
     }
 }
 
+// True when the document is fullscreen, checking the prefixed property too so a
+// WebKit implementation isn't misread as "not fullscreen" (review P3).
+function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
 // Enter/exit fullscreen for just the graph. The whole vis-network canvas lives
 // in this iframe, so fullscreening the container makes the graph fill the
 // physical screen — no sidebar, no toolbar, no black borders (issue #177).
+// Before entering, remember the current viewport so exiting can put it back.
 function toggleFullscreen() {
     var c = document.getElementById('container');
-    if (!document.fullscreenElement) {
+    if (!isFullscreen()) {
+        if (network) {
+            try { fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()}; }
+            catch (e) { fsRestoreView = null; }
+        }
         (c.requestFullscreen || c.webkitRequestFullscreen || function () {}).call(c);
     } else {
         (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
     }
 }
 
-// Resize the graph to fill the screen on enter, and restore the toolbar-driven
-// height on exit. Swap the icon and hint between enter/exit.
+// Resize the graph to fill the screen on enter and back to the toolbar-driven
+// height on exit, and swap the icon/hint. On enter the graph is fit to the
+// larger canvas so it actually uses the space; on exit the pre-fullscreen
+// viewport is restored, so a round-trip leaves the user's zoom/pan untouched
+// (review P2). vis rescales the view on each of the several 'resize' events it
+// fires while the canvas changes size, and a fit()/moveTo() *inside* that emit
+// is overwritten by vis — so we re-apply after each resize via a deferred call
+// (which sticks) and detach after a window so we never fight the user later.
 function onFullscreenChange() {
     var el = document.getElementById('graph');
     var fsBtn = document.getElementById('fullscreen-btn');
-    if (document.fullscreenElement) {
+    var entering = isFullscreen();
+    function applyView() {
+        if (!network) return;
+        if (entering) {
+            try { network.fit({animation: false}); } catch (e) {}
+        } else if (fsRestoreView) {
+            try { network.moveTo({scale: fsRestoreView.scale, position: fsRestoreView.position}); } catch (e) {}
+        }
+    }
+    if (entering) {
         el.style.height = window.innerHeight + 'px';
         if (fsBtn) {
             fsBtn.title = 'Exit fullscreen';
@@ -200,7 +227,15 @@ function onFullscreenChange() {
         el.style.height = h + 'px';
         sendToStreamlit("streamlit:setFrameHeight", {height: h});
     }
-    if (network) { network.redraw(); network.fit(); }
+    if (network) {
+        network.redraw();
+        applyView();  // handles the case where no 'resize' fires at all
+        var onResize = function () { setTimeout(applyView, 0); };
+        try {
+            network.on('resize', onResize);
+            setTimeout(function () { try { network.off('resize', onResize); } catch (e) {} }, 1000);
+        } catch (e) {}
+    }
 }
 document.addEventListener('fullscreenchange', onFullscreenChange);
 document.addEventListener('webkitfullscreenchange', onFullscreenChange);
@@ -227,7 +262,7 @@ function renderGraph(args) {
     if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
         applyTheme(args.theme);
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
-        if (hh) { currentHeight = hh; if (!document.fullscreenElement) applyHeight(hh); }
+        if (hh) { currentHeight = hh; if (!isFullscreen()) applyHeight(hh); }
         // A fresh "Find entity" pick is a same-data re-render (only focus_seq
         // changed), so centre on the new node here without rebuilding the whole
         // network (issue #144). Anything that isn't a new pick leaves the
@@ -263,7 +298,7 @@ function renderGraph(args) {
     // toolbar height. Remember the requested height so exiting fullscreen can
     // restore it.
     currentHeight = height;
-    if (!document.fullscreenElement) {
+    if (!isFullscreen()) {
         el.style.height = height + 'px';
         sendToStreamlit("streamlit:setFrameHeight", {height: height});
     }
