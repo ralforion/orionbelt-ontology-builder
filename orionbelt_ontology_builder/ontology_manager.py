@@ -1863,6 +1863,15 @@ class OntologyManager:
                     return URIRef(str(ns) + local)
         return self._uri(predicate)
 
+    def resolve_annotation_predicate(self, predicate: str) -> str:
+        """Return the URI an annotation type resolves to, as a string.
+
+        Public form of :meth:`_resolve_predicate_uri`, so callers can recognise
+        the same predicate however it was written: a known name, a new local
+        name, a ``prefix:local`` CURIE, or a full URI (issue #161).
+        """
+        return str(self._resolve_predicate_uri(predicate))
+
     def invalid_annotation_predicate_reason(self, predicate: str) -> Optional[str]:
         """Return a human-readable reason ``predicate`` can't be used as an
         annotation type, or ``None`` if it can.

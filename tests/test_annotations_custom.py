@@ -4,7 +4,10 @@ and an unusable one is reported rather than minted into a broken URI (issue #161
 
 from rdflib import OWL, RDF, URIRef
 
-from orionbelt_ontology_builder.app import resolve_annotation_predicate_choice
+from orionbelt_ontology_builder.app import (
+    annotation_option_for_predicate,
+    resolve_annotation_predicate_choice,
+)
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
 
 
@@ -148,3 +151,43 @@ def test_typed_choice_with_unbound_prefix_reports_error(populated_om):
 def test_empty_choice_reports_error(populated_om):
     _predicate, error = resolve_annotation_predicate_choice(populated_om, None, {})
     assert error is not None
+
+
+# --- re-selecting the type just used ----------------------------------------
+#
+# After an add, the picker's value is the raw text that was typed while the
+# rebuilt options carry the predicate's canonical display, so the just-used type
+# has to be found again by the URI it resolves to.
+
+
+def test_typed_name_finds_its_canonical_option(populated_om):
+    populated_om.add_annotation("Person", "wikidataId", "Q5")
+    lookup = {
+        "rdfs:comment": "comment",
+        "test:wikidataId": "http://test.org/ont#wikidataId",
+    }
+    uri = populated_om.resolve_annotation_predicate("wikidataId")
+    assert annotation_option_for_predicate(populated_om, lookup, uri) == (
+        "test:wikidataId"
+    )
+
+
+def test_full_uri_and_short_name_find_the_same_option(populated_om):
+    lookup = {"skos:example": "example", "rdfs:comment": "comment"}
+    uri = populated_om.resolve_annotation_predicate(
+        "http://www.w3.org/2004/02/skos/core#example"
+    )
+    assert annotation_option_for_predicate(populated_om, lookup, uri) == "skos:example"
+
+
+def test_curie_finds_its_option(populated_om):
+    populated_om.add_prefix("wdt", "http://www.wikidata.org/prop/direct/")
+    lookup = {"wdt:P31": "http://www.wikidata.org/prop/direct/P31"}
+    uri = populated_om.resolve_annotation_predicate("wdt:P31")
+    assert annotation_option_for_predicate(populated_om, lookup, uri) == "wdt:P31"
+
+
+def test_unlisted_predicate_finds_no_option(populated_om):
+    lookup = {"rdfs:comment": "comment"}
+    uri = populated_om.resolve_annotation_predicate("wikidataId")
+    assert annotation_option_for_predicate(populated_om, lookup, uri) is None
