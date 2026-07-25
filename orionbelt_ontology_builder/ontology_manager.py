@@ -1651,6 +1651,25 @@ class OntologyManager:
 
     # ==================== RESTRICTION OPERATIONS ====================
 
+    @classmethod
+    def _cardinality_value(cls, restriction_type: str, value: Any) -> int:
+        """Return ``value`` as a cardinality, or raise ``ValueError``.
+
+        Cardinalities are written as ``xsd:nonNegativeInteger``, so a negative
+        number would serialize as invalid OWL. The Add form's number input
+        blocks that at the widget; checking here covers the edit form's free-text
+        value and any other caller (review P2).
+        """
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{restriction_type} needs a whole number, got {value!r}"
+            ) from None
+        if number < 0:
+            raise ValueError(f"{restriction_type} cannot be negative, got {number}")
+        return number
+
     def add_restriction(
         self,
         class_name: str,
@@ -1659,17 +1678,28 @@ class OntologyManager:
         value: Any,
         on_class: Optional[str] = None,
     ) -> BNode:
-        """Add a restriction to a class."""
+        """Add a restriction to a class.
+
+        Raises ``ValueError`` for a cardinality that is not a whole number of
+        zero or more, so no caller can write a value that breaks the
+        ``xsd:nonNegativeInteger`` it is stored as.
+        """
         class_uri = self._uri(class_name)
         prop_uri = self._uri(property_name)
+
+        # Everything that can be rejected is checked before the first triple is
+        # written: raising once the blank node existed left an orphan
+        # restriction behind, with no type and no value, that the Restrictions
+        # page then listed as an empty row.
+        restriction_pred = self.RESTRICTION_TYPES.get(restriction_type)
+        if not restriction_pred:
+            raise ValueError(f"Unknown restriction type: {restriction_type}")
+        if restriction_type in self._CARDINALITY_TYPES:
+            cardinality = self._cardinality_value(restriction_type, value)
 
         restriction = BNode()
         self.graph.add((restriction, RDF.type, OWL.Restriction))
         self.graph.add((restriction, OWL.onProperty, prop_uri))
-
-        restriction_pred = self.RESTRICTION_TYPES.get(restriction_type)
-        if not restriction_pred:
-            raise ValueError(f"Unknown restriction type: {restriction_type}")
 
         # Handle different value types
         if restriction_type in ["someValuesFrom", "allValuesFrom"]:
@@ -1679,28 +1709,12 @@ class OntologyManager:
                 self.graph.add((restriction, restriction_pred, Literal(value)))
             else:
                 self.graph.add((restriction, restriction_pred, self._uri(value)))
-        elif restriction_type in [
-            "minCardinality",
-            "maxCardinality",
-            "exactCardinality",
-        ]:
+        elif restriction_type in self._CARDINALITY_TYPES:
             self.graph.add(
                 (
                     restriction,
                     restriction_pred,
-                    Literal(int(value), datatype=XSD.nonNegativeInteger),
-                )
-            )
-        elif restriction_type in [
-            "minQualifiedCardinality",
-            "maxQualifiedCardinality",
-            "qualifiedCardinality",
-        ]:
-            self.graph.add(
-                (
-                    restriction,
-                    restriction_pred,
-                    Literal(int(value), datatype=XSD.nonNegativeInteger),
+                    Literal(cardinality, datatype=XSD.nonNegativeInteger),
                 )
             )
             if on_class:
@@ -1949,12 +1963,9 @@ class OntologyManager:
         if new_type not in self.RESTRICTION_TYPES:
             raise ValueError(f"Unknown restriction type: {new_type}")
         if new_type in self._CARDINALITY_TYPES:
-            try:
-                int(new.get("value"))  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                raise ValueError(
-                    f"{new_type} needs a whole number, got {new.get('value')!r}"
-                ) from None
+            # Checked here as well as in add_restriction, so a bad number is
+            # rejected before the original is detached.
+            self._cardinality_value(new_type, new.get("value"))
 
         node, _row = self._find_restriction(
             old_class,

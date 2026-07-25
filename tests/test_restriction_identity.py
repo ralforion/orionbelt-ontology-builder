@@ -213,3 +213,53 @@ def test_local_name_still_does_not_match_an_external_namespace():
         value="http://other.example/vocab#Bar",
     )
     assert om.get_restrictions() == []
+
+
+# --- cardinality values (review P2) -----------------------------------------
+
+
+def test_a_negative_cardinality_is_rejected_on_add(rest_om):
+    """It would serialize as an invalid xsd:nonNegativeInteger."""
+    with pytest.raises(ValueError, match="negative"):
+        rest_om.add_restriction("Bicycle", "hasPart", "minCardinality", -1)
+
+
+def test_a_negative_cardinality_is_rejected_on_edit(rest_om):
+    with pytest.raises(ValueError, match="negative"):
+        rest_om.update_restriction(
+            {
+                "class_name": "Bicycle",
+                "property_name": "hasPart",
+                "restriction_type": "someValuesFrom",
+                "value": "Wheel",
+            },
+            {
+                "class_name": "Bicycle",
+                "property_name": "hasPart",
+                "restriction_type": "maxCardinality",
+                "value": -3,
+            },
+        )
+    assert _rows(rest_om) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]
+
+
+def test_zero_is_a_valid_cardinality(rest_om):
+    rest_om.add_restriction("Car", "hasPart", "maxCardinality", 0)
+    assert ("hasPart", "maxCardinality", "0") in _rows(rest_om)
+
+
+def test_a_rejected_add_leaves_no_orphan_restriction(rest_om):
+    """Raising after the blank node existed left an empty row on the page."""
+    before = len(rest_om.get_restrictions())
+    for restriction_type, value in (
+        ("minCardinality", -1),
+        ("minCardinality", "two"),
+        ("nonsense", 1),
+    ):
+        with pytest.raises(ValueError):
+            rest_om.add_restriction("Bicycle", "hasPart", restriction_type, value)
+    assert len(rest_om.get_restrictions()) == before
+    assert all(r["type"] is not None for r in rest_om.get_restrictions())

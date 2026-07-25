@@ -119,3 +119,21 @@ def test_a_bad_cardinality_is_reported_and_changes_nothing():
         ("hasPart", "someValuesFrom", "Engine"),
         ("hasPart", "someValuesFrom", "Wheel"),
     ]
+
+
+def test_a_negative_cardinality_is_reported_and_changes_nothing():
+    """The Add form's number input blocks this; the edit form takes free text."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    at.selectbox(key="er_type_0").set_value("maxCardinality")
+    at.text_input(key="er_val_0").set_value("-1")
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    assert any("negative" in e.value for e in at.error)
+    assert _rows(at.session_state["ontology"]) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]

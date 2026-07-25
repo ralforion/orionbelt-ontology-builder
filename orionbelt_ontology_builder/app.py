@@ -4520,14 +4520,24 @@ def render_relation_rows(ont, rows, spec):
         if not _is_open(spec["kind"], rel_uid, "edit"):
             continue
 
+        # A relation may point at an entity this list doesn't hold — the add
+        # forms accept an external URI. Offer it as its own option, or the
+        # editor would silently rewrite it to the first local entity when the
+        # user only meant to change the relation type (review P2).
+        row_options, row_lookup = list(options), dict(lookup)
+        for endpoint in (subj_uri, obj_uri):
+            if endpoint not in row_lookup.values():
+                row_options.append(endpoint)
+                row_lookup[endpoint] = endpoint
+
         with st.form(f"edit_form_{spec['kind']}_{rel_uid}"):
             # Slots are pre-set to the row's own values, so an edit that touches
             # one part leaves the rest exactly as asserted.
-            subj_default = _uri_option_index(options, lookup, subj_uri)
-            obj_default = _uri_option_index(options, lookup, obj_uri)
+            subj_default = _uri_option_index(row_options, row_lookup, subj_uri)
+            obj_default = _uri_option_index(row_options, row_lookup, obj_uri)
             types = list(spec["relation_types"])
             new_subject = st.selectbox(
-                "Subject", options, index=subj_default, key=f"es_{rel_uid}"
+                "Subject", row_options, index=subj_default, key=f"es_{rel_uid}"
             )
             new_type = st.selectbox(
                 "Relation",
@@ -4536,7 +4546,7 @@ def render_relation_rows(ont, rows, spec):
                 key=f"et_{rel_uid}",
             )
             new_object = st.selectbox(
-                "Object", options, index=obj_default, key=f"eo_{rel_uid}"
+                "Object", row_options, index=obj_default, key=f"eo_{rel_uid}"
             )
             save_col, cancel_col = st.columns(2)
             with save_col:
@@ -4550,7 +4560,7 @@ def render_relation_rows(ont, rows, spec):
             if saved:
                 changed = spec["update"](
                     (subj_uri, rel["relation"], obj_uri),
-                    (lookup[new_subject], new_type, lookup[new_object]),
+                    (row_lookup[new_subject], new_type, row_lookup[new_object]),
                 )
                 if changed:
                     save_checkpoint(f"Edit {spec['label']}")

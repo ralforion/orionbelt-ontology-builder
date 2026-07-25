@@ -133,3 +133,71 @@ def test_cancel_leaves_the_relation_alone():
 # form never re-renders and its handler never runs. It stays as a guard against a
 # stale row resurrecting a deleted relation, and update_class_relation returning
 # False for exactly that case is covered in test_relation_editing.py.
+
+
+def _external_script():
+    """A relation whose object is an external URI, which no local entity holds."""
+    import streamlit as st
+
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_class("Alpha")
+        om.add_class("Beta")
+        om.add_class_relation("Alpha", "subClassOf", "http://external.example/Thing")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+
+    from orionbelt_ontology_builder import app
+
+    ont = st.session_state.ontology
+    app.render_relation_rows(
+        ont,
+        ont.get_class_relations(),
+        {
+            "icon": "📦",
+            "kind": "crel",
+            "label": "class relation",
+            "entities": ont.get_classes(),
+            "relation_types": ont.CLASS_RELATIONS,
+            "remove": ont.remove_class_relation,
+            "update": ont.update_class_relation,
+        },
+    )
+
+
+def _open_external_editor(at):
+    om = at.session_state["ontology"]
+    rel = om.get_class_relations()[0]
+    uid = _uid(f"{rel['subject_uri']}|{rel['relation']}|{rel['object_uri']}")
+    at.session_state["active_crel"] = (uid, "edit")
+    at.run(timeout=120)
+    return uid
+
+
+def test_an_external_target_is_offered_as_its_own_option():
+    at = AppTest.from_function(_external_script)
+    at.run(timeout=120)
+    uid = _open_external_editor(at)
+
+    assert not at.exception, at.exception
+    assert at.selectbox(key=f"eo_{uid}").value == "http://external.example/Thing"
+
+
+def test_editing_only_the_type_keeps_an_external_target():
+    """The object isn't a local entity, so the picker used to fall back to the
+    first class and silently rewrite it on save (review P2)."""
+    at = AppTest.from_function(_external_script)
+    at.run(timeout=120)
+    uid = _open_external_editor(at)
+
+    at.selectbox(key=f"et_{uid}").set_value("equivalentClass")
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    om = at.session_state["ontology"]
+    rels = [
+        (r["subject"], r["relation"], r["object_uri"]) for r in om.get_class_relations()
+    ]
+    assert rels == [("Alpha", "equivalentClass", "http://external.example/Thing")]
