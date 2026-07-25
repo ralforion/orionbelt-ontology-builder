@@ -136,7 +136,7 @@ function applyTheme(theme) {
 }
 
 function autofitApply() {
-    if (!autofitOn || !network || isFullscreen()) return;
+    if (!autofitOn || !network || isFullscreen() || desktopFsOn) return;
     var h = autofitHeight();
     if (h) { applyHeight(h); network.redraw(); }
 }
@@ -201,37 +201,96 @@ function desktopFullscreenToggle() {
     return null;
 }
 
-// Offer the button when either the HTML API works (web) or the native desktop
-// toggle is available; hide it only where neither exists.
+// Offer the button when either the HTML API works (web) or we can build the
+// desktop overlay (a same-origin frame plus the native pywebview toggle); hide
+// it only where neither path exists.
 function fullscreenSupported() {
-    return htmlFullscreenSupported() || !!desktopFullscreenToggle();
+    return htmlFullscreenSupported() ||
+        (!!desktopFullscreenToggle() && !!window.frameElement);
 }
 
-var desktopFsOn = false;  // tracked native-window state (no fullscreenchange fires)
+var desktopFsOn = false;   // tracked pseudo-fullscreen state (no fullscreenchange)
+var pseudoFsPrevStyle = null;  // saved inline style of this iframe in the parent
 
-// Toggle the native desktop window's fullscreen via the pywebview bridge, and
-// swap the icon ourselves since no fullscreenchange event fires for it. Returns
-// true if a bridge was found and invoked.
+// Desktop graph-only fullscreen. The webview has no HTML Fullscreen API and the
+// native-window toggle alone fullscreens the whole app (sidebar + toolbar), not
+// the graph (issue #177 follow-up). So promote this same-origin iframe to a
+// fixed, full-viewport overlay — it covers the sidebar and toolbar, leaving just
+// the graph — and also toggle the native window so it fills the monitor.
+function enterPseudoFullscreen() {
+    var fe = window.frameElement;
+    if (!fe) return false;
+    if (network) {
+        try { fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()}; }
+        catch (e) { fsRestoreView = null; }
+    }
+    pseudoFsPrevStyle = fe.getAttribute('style') || '';
+    fe.style.position = 'fixed';
+    fe.style.top = '0';
+    fe.style.left = '0';
+    fe.style.width = '100vw';
+    fe.style.height = '100vh';
+    fe.style.zIndex = '2147483647';
+    fe.style.background = currentTheme.bg;
+    desktopFsOn = true;
+    var el = document.getElementById('graph');
+    el.style.height = window.innerHeight + 'px';
+    if (network) {
+        network.redraw();
+        if (fsRestoreView) {
+            try { network.moveTo({scale: fsRestoreView.scale * FS_ZOOM_OUT, position: fsRestoreView.position}); }
+            catch (e) {}
+        }
+    }
+    setFullscreenIcon(true);
+    return true;
+}
+
+function exitPseudoFullscreen() {
+    var fe = window.frameElement;
+    if (fe) fe.setAttribute('style', pseudoFsPrevStyle || '');
+    desktopFsOn = false;
+    var el = document.getElementById('graph');
+    var h = autofitOn ? (autofitHeight() || currentHeight) : currentHeight;
+    el.style.height = h + 'px';
+    sendToStreamlit("streamlit:setFrameHeight", {height: h});
+    if (network) {
+        network.redraw();
+        if (fsRestoreView) {
+            try { network.moveTo({scale: fsRestoreView.scale, position: fsRestoreView.position}); }
+            catch (e) {}
+        }
+    }
+    setFullscreenIcon(false);
+}
+
+// Toggle desktop fullscreen: the overlay (graph-only) plus, when available, the
+// native window (fills the monitor). Returns true if it handled the toggle.
 function tryDesktopFullscreen() {
+    if (!window.frameElement) return false;  // can't build the overlay
     var nativeToggle = desktopFullscreenToggle();
-    if (!nativeToggle) return false;
-    try {
-        var r = nativeToggle();
-        desktopFsOn = !desktopFsOn;
-        setFullscreenIcon(desktopFsOn);
-        if (r && r.catch) r.catch(function () {});
-    } catch (e) {}
+    var callNative = function () {
+        if (!nativeToggle) return;
+        try { var r = nativeToggle(); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+    };
+    if (!desktopFsOn) {
+        callNative();
+        enterPseudoFullscreen();
+    } else {
+        exitPseudoFullscreen();
+        callNative();
+    }
     return true;
 }
 
 // Enter/exit fullscreen for just the graph. The whole vis-network canvas lives
 // in this iframe, so fullscreening the container makes the graph fill the
-// physical screen — no sidebar, no toolbar, no black borders (issue #177). In
-// the desktop app the HTML API is unavailable, so we toggle the native window
-// instead (the whole window; with "Fit to window" on, the graph fills it) — used
-// both when the API is reported unsupported and if a requestFullscreen attempt
-// throws/rejects anyway. Before entering, remember the viewport so exiting
-// restores it.
+// physical screen — no sidebar, no toolbar, no black borders (issue #177). On
+// the web the HTML Fullscreen API does this; in the desktop app it's
+// unavailable, so tryDesktopFullscreen() builds an equivalent graph-only overlay
+// (used both when the API is reported unsupported and if a requestFullscreen
+// attempt throws/rejects anyway). Before entering, remember the viewport so
+// exiting restores it.
 function toggleFullscreen() {
     var c = document.getElementById('container');
     if (htmlFullscreenSupported()) {
@@ -343,7 +402,7 @@ function renderGraph(args) {
     if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
         applyTheme(args.theme);
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
-        if (hh) { currentHeight = hh; if (!isFullscreen()) applyHeight(hh); }
+        if (hh) { currentHeight = hh; if (!isFullscreen() && !desktopFsOn) applyHeight(hh); }
         // A fresh "Find entity" pick is a same-data re-render (only focus_seq
         // changed), so centre on the new node here without rebuilding the whole
         // network (issue #144). Anything that isn't a new pick leaves the
@@ -379,7 +438,7 @@ function renderGraph(args) {
     // toolbar height. Remember the requested height so exiting fullscreen can
     // restore it.
     currentHeight = height;
-    if (!isFullscreen()) {
+    if (!isFullscreen() && !desktopFsOn) {
         el.style.height = height + 'px';
         sendToStreamlit("streamlit:setFrameHeight", {height: height});
     }
