@@ -2061,19 +2061,67 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
     return items[start:end], active
 
 
-def _filter_relations(relations: list, query: str) -> list:
-    """Case-insensitive substring filter over a relation row's subject, relation,
-    and object local names. An empty query returns the list unchanged (issue #148).
+# Stands for "anything" in a slot of a pasted triple, so two of the three parts
+# can be pinned: "* disjointWith inductor".
+_SEARCH_ANY = {"*", "?", "_", "-"}
+
+
+def parse_search_query(query: str) -> tuple:
+    """Split a search box's text into ``(slots, terms)``.
+
+    ``slots`` is a three-item tuple when the text reads like a pasted triple —
+    ``capacitor disjointWith inductor`` — so each word can be matched against its
+    own column, with ``*`` standing for anything (issue #170). It is None
+    otherwise, and then ``terms`` are the words that must each appear somewhere
+    in the row. Local names never contain whitespace (the name validation
+    rejects it), so splitting on whitespace is unambiguous.
     """
-    q = (query or "").strip().lower()
-    if not q:
+    words = (query or "").strip().lower().split()
+    if not words:
+        return None, []
+    if len(words) == 3:
+        slots = tuple(None if w in _SEARCH_ANY else w for w in words)
+        return slots, []
+    return None, words
+
+
+def _matches_slots(slots: tuple, fields: tuple) -> bool:
+    """Whether each non-wildcard slot is a substring of its field.
+
+    A field may be a tuple of alternatives, in which case any of them can carry
+    the match (a restriction's middle column is its property *or* its type).
+    """
+    for slot, field in zip(slots, fields):
+        if slot is None:
+            continue
+        candidates = field if isinstance(field, tuple) else (field,)
+        if not any(slot in (c or "").lower() for c in candidates):
+            return False
+    return True
+
+
+def _filter_relations(relations: list, query: str) -> list:
+    """Filter relation rows by subject, relation and object local names.
+
+    A pasted triple matches column by column, so ``capacitor disjointWith
+    inductor`` finds exactly that relation (issue #170). Anything else is
+    matched as separate words that must each appear in the row, which keeps the
+    single-word search from issue #148 working. An empty query returns the list
+    unchanged.
+    """
+    slots, terms = parse_search_query(query)
+    if slots is None and not terms:
         return relations
+
+    def _fields(r):
+        return (r["subject"], r["relation"], r["object"])
+
+    if slots:
+        return [r for r in relations if _matches_slots(slots, _fields(r))]
     return [
         r
         for r in relations
-        if q in r["subject"].lower()
-        or q in r["relation"].lower()
-        or q in r["object"].lower()
+        if all(any(t in f.lower() for f in _fields(r)) for t in terms)
     ]
 
 
@@ -2091,9 +2139,16 @@ def _sort_relations(relations: list) -> list:
 
 def _filter_restrictions(restrictions: list, query: str) -> list:
     """Case-insensitive substring filter over a restriction's property, type,
-    value, qualified class, and the classes it applies to (issue #148)."""
-    q = (query or "").strip().lower()
-    if not q:
+    value, qualified class, and the classes it applies to (issue #148).
+
+    A restriction is not a triple, but it reads like one: the class it applies to,
+    the property, and the value. So a pasted ``Bicycle hasPart Wheel`` matches
+    those three columns (issue #170). The middle word also matches the
+    restriction type and the last one the qualified class, so ``Bicycle
+    someValuesFrom Wheel`` finds it too.
+    """
+    slots, terms = parse_search_query(query)
+    if slots is None and not terms:
         return restrictions
 
     def _haystack(r):
@@ -2109,7 +2164,17 @@ def _filter_restrictions(restrictions: list, query: str) -> list:
         ]
         return " ".join(parts).lower()
 
-    return [r for r in restrictions if q in _haystack(r)]
+    def _fields(r):
+        val = r.get("value")
+        return (
+            " ".join(str(c) for c in (r.get("applied_to") or [])),
+            (r.get("property") or "", r.get("type") or ""),
+            ("" if val is None else str(val), r.get("on_class") or ""),
+        )
+
+    if slots:
+        return [r for r in restrictions if _matches_slots(slots, _fields(r))]
+    return [r for r in restrictions if all(t in _haystack(r) for t in terms)]
 
 
 def _sort_restrictions(restrictions: list) -> list:
@@ -3830,7 +3895,12 @@ def render_restrictions():
             _rest_query = st.text_input(
                 "Search restrictions",
                 key="rest_search",
-                placeholder="Filter by property, type, value, or class",
+                placeholder="Bicycle hasPart Wheel",
+                help=(
+                    "Paste class, property and value to find just that "
+                    "restriction, or type any words to match a property, type, "
+                    "value or class. Use `*` for a part you don't want to pin."
+                ),
             )
             _rest_sort = st.checkbox("Sort alphabetically", key="rest_sort")
             _view_restrictions = _filter_restrictions(restrictions, _rest_query)
@@ -3971,7 +4041,12 @@ def render_relations():
         _rel_query = st.text_input(
             "Search relations",
             key="rel_search",
-            placeholder="Filter by subject, relation, or object",
+            placeholder="capacitor disjointWith inductor",
+            help=(
+                "Paste a whole relation to find just that one, or type any words "
+                "to match a subject, relation or object. Use `*` for a part you "
+                "don't want to pin: `* disjointWith inductor`."
+            ),
         )
         _rel_sort = st.checkbox("Sort alphabetically", key="rel_sort")
 
