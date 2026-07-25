@@ -4256,6 +4256,21 @@ def render_relations():
                         st.rerun()
 
 
+def resolve_annotation_predicate_choice(ont, choice, lookup) -> tuple:
+    """Map the "Annotation Type" picker's value to a ``(predicate, error)`` pair.
+
+    A listed type comes back through ``lookup`` as its URI and always resolves.
+    Anything else was typed into the picker to create a new annotation type
+    (issue #161), so it is validated first: an unbound prefix or an unusable name
+    is reported rather than minted into a broken URI. ``error`` is None when the
+    predicate is usable.
+    """
+    if choice in lookup:
+        return lookup[choice], None
+    text = (choice or "").strip()
+    return text, ont.invalid_annotation_predicate_reason(text)
+
+
 def render_annotations():
     """Render the annotations management page."""
     st.header("Annotations")
@@ -4483,8 +4498,20 @@ def render_annotations():
                 ]
                 selected = st.selectbox("Select Resource", options=resource_options)
 
+                # Typing a type that isn't listed creates it, so an ID with no
+                # standard predicate (a Wikidata item, an internal ticket) gets
+                # its own annotation type instead of going into Comment
+                # (issue #161).
                 predicate_display = st.selectbox(
-                    "Annotation Type", options=predicate_options
+                    "Annotation Type",
+                    options=predicate_options,
+                    accept_new_options=True,
+                    help=(
+                        "Pick a type, or type your own to create it: a name like "
+                        "`wikidataId`, a bound prefix like `wdt:P31`, or a full "
+                        "URI. A new name of your own is declared as an "
+                        "annotation property in the ontology."
+                    ),
                 )
 
                 value = st.text_area("Value")
@@ -4495,15 +4522,19 @@ def render_annotations():
 
                 submitted = st.form_submit_button("Add Annotation")
                 if submitted:
+                    predicate_uri, predicate_reason = (
+                        resolve_annotation_predicate_choice(
+                            ont, predicate_display, predicate_lookup
+                        )
+                    )
                     if not value:
                         show_message("Value is required!", "error")
+                    elif predicate_reason:
+                        show_message(predicate_reason, "error")
                     else:
                         # Find the resource by matching the option string
                         idx = resource_options.index(selected)
                         resource_name = all_resources[idx]["name"]
-                        predicate_uri = predicate_lookup.get(
-                            predicate_display, predicate_display
-                        )
                         ont.add_annotation(
                             resource_name,
                             predicate_uri,
