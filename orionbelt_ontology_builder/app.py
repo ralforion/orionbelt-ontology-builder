@@ -4250,6 +4250,7 @@ def render_relations():
                 {
                     "icon": "📦",
                     "kind": "crel",
+                    "noun": "classes",
                     "label": "class relation",
                     "entities": classes,
                     "relation_types": ont.CLASS_RELATIONS,
@@ -4275,6 +4276,7 @@ def render_relations():
                 {
                     "icon": "🔗",
                     "kind": "prel",
+                    "noun": "properties",
                     "label": "property relation",
                     "entities": object_props + data_props,
                     "relation_types": ont.PROPERTY_RELATIONS,
@@ -4300,6 +4302,7 @@ def render_relations():
                 {
                     "icon": "👤",
                     "kind": "irel",
+                    "noun": "individuals",
                     "label": "individual relation",
                     "entities": individuals,
                     "relation_types": ont.INDIVIDUAL_RELATIONS,
@@ -4589,9 +4592,19 @@ def render_relation_rows(ont, rows, spec):
                 _close_entity(spec["kind"])
                 st.rerun()
             if saved:
+                new_subj_uri = row_lookup[new_subject]
+                new_obj_uri = row_lookup[new_object]
+                if new_subj_uri == new_obj_uri:
+                    # The add forms refuse this; the editor has to as well, or
+                    # it becomes the way to assert "A disjointWith A"
+                    # (review P2).
+                    show_message(
+                        f"Please select two different {spec['noun']}!", "error"
+                    )
+                    return
                 changed = spec["update"](
                     (subj_uri, rel["relation"], obj_uri),
-                    (row_lookup[new_subject], new_type, row_lookup[new_object]),
+                    (new_subj_uri, new_type, new_obj_uri),
                 )
                 if changed:
                     save_checkpoint(f"Edit {spec['label']}")

@@ -33,6 +33,7 @@ def _script():
         {
             "icon": "📦",
             "kind": "crel",
+            "noun": "classes",
             "label": "class relation",
             "entities": ont.get_classes(),
             "relation_types": ont.CLASS_RELATIONS,
@@ -158,6 +159,7 @@ def _external_script():
         {
             "icon": "📦",
             "kind": "crel",
+            "noun": "classes",
             "label": "class relation",
             "entities": ont.get_classes(),
             "relation_types": ont.CLASS_RELATIONS,
@@ -201,3 +203,23 @@ def test_editing_only_the_type_keeps_an_external_target():
         (r["subject"], r["relation"], r["object_uri"]) for r in om.get_class_relations()
     ]
     assert rels == [("Alpha", "equivalentClass", "http://external.example/Thing")]
+
+
+def test_pointing_a_relation_at_itself_is_refused():
+    """The add forms reject this, so the editor must not become the way in."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    uid = _open_editor(at)
+
+    at.selectbox(key=f"eo_{uid}").set_value("Capacitor")  # same as the subject
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    assert any("two different classes" in e.value for e in at.error)
+    om = at.session_state["ontology"]
+    rels = [
+        (r["subject"], r["relation"], r["object"]) for r in om.get_class_relations()
+    ]
+    assert rels == [("Capacitor", "disjointWith", "Inductor")]
+    # The editor stays open so the mistake can be corrected in place.
+    assert "active_crel" in at.session_state
