@@ -1826,6 +1826,7 @@ def render_dashboard():
             with col2:
                 if st.button("Remove", key=f"rm_import_{imp}"):
                     ont.remove_import(imp)
+                    save_checkpoint("Remove import")
                     st.rerun()
 
     with st.expander("Add Import"):
@@ -1835,6 +1836,7 @@ def render_dashboard():
         if st.button("Add Import"):
             if new_import:
                 ont.add_import(new_import)
+                save_checkpoint("Add import")
                 show_message(f"Import added: {new_import}", "success")
                 st.rerun()
 
@@ -6094,6 +6096,7 @@ def render_advanced():
                         show_message("Chain must have at least 2 properties!", "error")
                     else:
                         ont.add_property_chain(result_prop, chain_props)
+                        save_checkpoint("Add property chain")
                         show_message(
                             f"Property chain added for {result_prop}", "success"
                         )
@@ -6142,6 +6145,7 @@ def render_advanced():
                         show_message("Parent class cannot be a member!", "error")
                     else:
                         ont.add_disjoint_union(parent_class, member_classes)
+                        save_checkpoint("Add disjoint union")
                         show_message(
                             f"Disjoint union added for {parent_class}", "success"
                         )
@@ -6178,6 +6182,7 @@ def render_advanced():
                         show_message("Select at least 2 individuals!", "error")
                     else:
                         ont.add_all_different(selected_inds)
+                        save_checkpoint("Add all different")
                         show_message("AllDifferent declaration added!", "success")
                         st.rerun()
 
@@ -6216,6 +6221,7 @@ def render_advanced():
                         show_message("Select at least 1 property!", "error")
                     else:
                         ont.add_has_key(target_class, key_props)
+                        save_checkpoint("Add has key")
                         show_message(f"hasKey added for {target_class}", "success")
                         st.rerun()
 
