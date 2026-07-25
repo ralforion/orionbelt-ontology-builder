@@ -3966,12 +3966,20 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
     on_options, on_lookup = _slot_options(classes, rest.get("on_class_uri"))
 
     # The value stays free text: it can be a class, a cardinality or a literal,
-    # and a form cannot swap the widget when the type picker changes. An
-    # imported class is pre-filled as its full URI, so saving round-trips it
-    # instead of resolving the local name into the base namespace (review P2).
+    # and a form cannot swap the widget when the type picker changes. It is
+    # pre-filled as a full URI in the two cases where a bare local name would
+    # not round-trip (review P2):
+    #   * an imported entity, since a local name resolves into the base
+    #     namespace and would point at a different thing;
+    #   * any resource-valued hasValue, since add_restriction stores a
+    #     non-http value as a literal — so saving an unchanged row would turn
+    #     owl:hasValue :alice into owl:hasValue "alice".
+    # A hasValue that already holds a literal has no value_uri and stays as it is.
     value_default = "" if rest["value"] is None else str(rest["value"])
     _value_uri = rest.get("value_uri")
-    if _value_uri and not str(_value_uri).startswith(str(ont.namespace)):
+    if _value_uri and (
+        rest["type"] == "hasValue" or not str(_value_uri).startswith(str(ont.namespace))
+    ):
         value_default = str(_value_uri)
 
     with st.form(f"edit_rest_form_{row_key}"):

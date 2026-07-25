@@ -211,3 +211,67 @@ def test_an_empty_value_is_reported_and_changes_nothing():
         ("hasPart", "someValuesFrom", "Engine"),
         ("hasPart", "someValuesFrom", "Wheel"),
     ]
+
+
+def _has_value_script():
+    """A hasValue restriction pointing at a local individual."""
+    import streamlit as st
+
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Person")
+        om.add_object_property("owns")
+        om.add_individual("alice", "Person")
+        om.add_restriction("Person", "owns", "hasValue", "http://test.org/ont#alice")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+
+    from orionbelt_ontology_builder import app
+
+    ont = st.session_state.ontology
+    app.render_restriction_row(
+        ont,
+        ont.get_restrictions()[0],
+        "0",
+        ont.get_classes(),
+        ont.get_object_properties(),
+    )
+
+
+def test_a_hasvalue_individual_survives_an_unchanged_save():
+    """A bare local name is stored as a literal, so owl:hasValue :alice would
+    quietly become owl:hasValue "alice" (review P2)."""
+    at = AppTest.from_function(_has_value_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    # Pre-filled as the URI, precisely so an unchanged save round-trips.
+    assert at.text_input(key="er_val_0").value == "http://test.org/ont#alice"
+
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    row = at.session_state["ontology"].get_restrictions()[0]
+    assert row["type"] == "hasValue"
+    assert row["value_uri"] == "http://test.org/ont#alice", (
+        "the individual became a literal"
+    )
+
+
+def test_a_hasvalue_literal_stays_a_literal():
+    """The pre-fill must not turn a genuine literal into a URI."""
+    at = AppTest.from_function(_has_value_script)
+    at.run(timeout=120)
+    ont = at.session_state["ontology"]
+    ont.delete_restriction("Person", "owns", "hasValue")
+    ont.add_restriction("Person", "owns", "hasValue", "42")
+    _open_row(at, 0)
+
+    assert at.text_input(key="er_val_0").value == "42"
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    row = at.session_state["ontology"].get_restrictions()[0]
+    assert row["value"] == "42" and row["value_uri"] is None
