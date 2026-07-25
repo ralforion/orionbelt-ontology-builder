@@ -3927,10 +3927,16 @@ def render_restrictions():
                             applied_uri = (
                                 rest.get("applied_to_uris") or rest["applied_to"]
                             )
+                            # Pass the value (and qualified class) as well, or a
+                            # sibling restriction on the same property and type
+                            # is deleted instead of this row (issue #152).
                             removed = ont.delete_restriction(
                                 applied_uri[0],
                                 rest.get("property_uri") or rest["property"],
                                 rest["type"],
+                                value=rest.get("value_uri") or rest.get("value"),
+                                on_class=rest.get("on_class_uri")
+                                or rest.get("on_class"),
                             )
                             if removed:
                                 save_checkpoint("Delete restriction")

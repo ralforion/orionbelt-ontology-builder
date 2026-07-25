@@ -1745,78 +1745,236 @@ class OntologyManager:
             )
         return self.add_restriction(source, property_name, restriction_type, target)
 
-    def get_restrictions(
-        self, class_name: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """Get restrictions, optionally filtered by class."""
-        restrictions = []
+    def _iter_restrictions(self):
+        """Yield ``(node, row)`` for every restriction in the graph.
 
+        Shared by :meth:`get_restrictions`, :meth:`delete_restriction` and
+        :meth:`update_restriction` so all three agree on what a restriction row
+        is, and the last two can act on the exact node behind a row (issue #152).
+        """
         for restriction in self.graph.subjects(RDF.type, OWL.Restriction):
             prop = self.graph.value(restriction, OWL.onProperty)
             if not prop:
                 continue
+            yield restriction, self._restriction_row(restriction, prop)
 
-            rest_info: Dict[str, Any] = {
-                "property": self._local_name(prop),
-                # Full URIs alongside the display-friendly local names so callers
-                # can delete a restriction whose property/class live in an
-                # external namespace (local names would resolve to the wrong URI).
-                "property_uri": str(prop),
-                "type": None,
-                "value": None,
-                "value_uri": None,
-                "on_class": None,
-                "on_class_uri": None,
-                "applied_to": [],
-                "applied_to_uris": [],
-            }
+    def _restriction_row(self, restriction: Node, prop: Node) -> Dict[str, Any]:
+        """Build the display row for one restriction node."""
+        rest_info: Dict[str, Any] = {
+            "property": self._local_name(prop),
+            # Full URIs alongside the display-friendly local names so callers
+            # can delete a restriction whose property/class live in an
+            # external namespace (local names would resolve to the wrong URI).
+            "property_uri": str(prop),
+            "type": None,
+            "value": None,
+            "value_uri": None,
+            "on_class": None,
+            "on_class_uri": None,
+            "applied_to": [],
+            "applied_to_uris": [],
+        }
 
-            # Determine restriction type
-            for rtype, pred in self.RESTRICTION_TYPES.items():
-                val = self.graph.value(restriction, pred)
-                if val is not None:
-                    rest_info["type"] = rtype
-                    if isinstance(val, URIRef):
-                        rest_info["value"] = self._local_name(val)
-                        rest_info["value_uri"] = str(val)
-                    else:
-                        rest_info["value"] = str(val)
-                    break
+        # Determine restriction type
+        for rtype, pred in self.RESTRICTION_TYPES.items():
+            val = self.graph.value(restriction, pred)
+            if val is not None:
+                rest_info["type"] = rtype
+                if isinstance(val, URIRef):
+                    rest_info["value"] = self._local_name(val)
+                    rest_info["value_uri"] = str(val)
+                else:
+                    rest_info["value"] = str(val)
+                break
 
-            on_class = self.graph.value(restriction, OWL.onClass)
-            if on_class:
-                rest_info["on_class"] = self._local_name(on_class)
-                rest_info["on_class_uri"] = str(on_class)
+        on_class = self.graph.value(restriction, OWL.onClass)
+        if on_class:
+            rest_info["on_class"] = self._local_name(on_class)
+            rest_info["on_class_uri"] = str(on_class)
 
-            # Find classes this restriction applies to
-            for cls in self.graph.subjects(RDFS.subClassOf, restriction):
-                if isinstance(cls, URIRef):
-                    rest_info["applied_to"].append(self._local_name(cls))
-                    rest_info["applied_to_uris"].append(str(cls))
+        # Find classes this restriction applies to
+        for cls in self.graph.subjects(RDFS.subClassOf, restriction):
+            if isinstance(cls, URIRef):
+                rest_info["applied_to"].append(self._local_name(cls))
+                rest_info["applied_to_uris"].append(str(cls))
 
-            if class_name is None or class_name in rest_info["applied_to"]:
-                restrictions.append(rest_info)
+        return rest_info
 
-        return restrictions
+    def get_restrictions(
+        self, class_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get restrictions, optionally filtered by class."""
+        return [
+            row
+            for _node, row in self._iter_restrictions()
+            if class_name is None or class_name in row["applied_to"]
+        ]
+
+    def _restriction_matches(
+        self,
+        row: Dict[str, Any],
+        class_name: str,
+        property_name: str,
+        restriction_type: str,
+        value: Any = None,
+        on_class: Optional[str] = None,
+    ) -> bool:
+        """Whether ``row`` is the restriction described by these fields.
+
+        Names are compared as resolved URIs, so a local name matches only what it
+        actually resolves to: passing ``Foo`` never touches a restriction on an
+        imported ``other:Foo``, which is why callers holding URIs should pass
+        them. ``value`` and ``on_class`` only narrow the match when given, and a
+        literal value (a cardinality, a hasValue string) is compared as text
+        since it has no URI.
+        """
+
+        def _same_entity(row_uri, wanted) -> bool:
+            return row_uri is not None and str(row_uri) == str(self._uri(str(wanted)))
+
+        if row["type"] != restriction_type:
+            return False
+        if not _same_entity(row["property_uri"], property_name):
+            return False
+        if not any(_same_entity(uri, class_name) for uri in row["applied_to_uris"]):
+            return False
+        if value is not None:
+            if row["value_uri"] is not None:
+                if not _same_entity(row["value_uri"], value):
+                    return False
+            elif str(row["value"]) != str(value):
+                return False
+        if on_class is not None and not _same_entity(row["on_class_uri"], on_class):
+            return False
+        return True
+
+    def _find_restriction(
+        self,
+        class_name: str,
+        property_name: str,
+        restriction_type: str,
+        value: Any = None,
+        on_class: Optional[str] = None,
+    ):
+        """Return the ``(node, row)`` for one restriction, or ``(None, None)``.
+
+        Passing ``value`` (and ``on_class`` where it applies) is what makes the
+        match exact: a class can carry several restrictions on the same property
+        with the same type, differing only in value, and without them the first
+        one wins — which used to delete the wrong one (issue #152).
+        """
+        for node, row in self._iter_restrictions():
+            if self._restriction_matches(
+                row, class_name, property_name, restriction_type, value, on_class
+            ):
+                return node, row
+        return None, None
+
+    def _detach_restriction(self, node: Node, class_name: str) -> None:
+        """Unlink a restriction from one class, dropping the node once nothing
+        else refers to it (a restriction can be shared by several classes)."""
+        self.graph.remove((self._uri(class_name), RDFS.subClassOf, node))
+        if not any(self.graph.subjects(RDFS.subClassOf, node)):
+            self.graph.remove((node, None, None))
 
     def delete_restriction(
-        self, class_name: str, property_name: str, restriction_type: str
-    ):
-        """Delete a restriction from a class."""
-        class_uri = self._uri(class_name)
-        prop_uri = self._uri(property_name)
+        self,
+        class_name: str,
+        property_name: str,
+        restriction_type: str,
+        value: Any = None,
+        on_class: Optional[str] = None,
+    ) -> bool:
+        """Delete a restriction from a class.
 
-        for restriction in self.graph.subjects(RDF.type, OWL.Restriction):
-            if self.graph.value(restriction, OWL.onProperty) == prop_uri:
-                # Check if this restriction is on the target class
-                if (class_uri, RDFS.subClassOf, restriction) in self.graph:
-                    # Check restriction type
-                    pred = self.RESTRICTION_TYPES.get(restriction_type)
-                    if pred and self.graph.value(restriction, pred) is not None:
-                        self.graph.remove((class_uri, RDFS.subClassOf, restriction))
-                        self.graph.remove((restriction, None, None))
-                        return True
-        return False
+        Give ``value`` (and ``on_class`` for a qualified cardinality) to name
+        exactly which one: a class may carry several restrictions on the same
+        property and type, and without a value the first is removed, which is
+        rarely the one on screen (issue #152). Returns whether one was removed.
+        """
+        node, row = self._find_restriction(
+            class_name, property_name, restriction_type, value, on_class
+        )
+        if node is None or row is None:
+            return False
+        self._detach_restriction(node, class_name)
+        return True
+
+    # Restriction types whose value is a count rather than a class or literal.
+    _CARDINALITY_TYPES = (
+        "minCardinality",
+        "maxCardinality",
+        "exactCardinality",
+        "minQualifiedCardinality",
+        "maxQualifiedCardinality",
+        "qualifiedCardinality",
+    )
+
+    @staticmethod
+    def _restriction_spec(spec: Dict[str, Any], label: str) -> tuple:
+        """Pull the three identifying fields out of an update spec.
+
+        Raises rather than letting a missing field resolve to something else:
+        a spec without a class would otherwise match by property and type alone,
+        which is the ambiguity this whole path exists to remove.
+        """
+        missing = [
+            key
+            for key in ("class_name", "property_name", "restriction_type")
+            if not spec.get(key)
+        ]
+        if missing:
+            raise ValueError(
+                f"The {label} restriction is missing {', '.join(missing)}."
+            )
+        return (
+            str(spec["class_name"]),
+            str(spec["property_name"]),
+            str(spec["restriction_type"]),
+        )
+
+    def update_restriction(self, old: Dict[str, Any], new: Dict[str, Any]) -> bool:
+        """Replace one restriction with an edited one (issue #152).
+
+        Both dicts take ``class_name``, ``property_name``, ``restriction_type``,
+        ``value`` and optional ``on_class``; ``old`` should carry the value too,
+        or a sibling restriction on the same property may be edited instead. The
+        replacement is validated before the original is removed, so a rejected
+        edit cannot destroy the restriction it was meant to change. Returns
+        False when ``old`` is no longer in the graph.
+        """
+        old_class, old_property, old_type = self._restriction_spec(old, "old")
+        new_class, new_property, new_type = self._restriction_spec(new, "new")
+
+        if new_type not in self.RESTRICTION_TYPES:
+            raise ValueError(f"Unknown restriction type: {new_type}")
+        if new_type in self._CARDINALITY_TYPES:
+            try:
+                int(new.get("value"))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"{new_type} needs a whole number, got {new.get('value')!r}"
+                ) from None
+
+        node, _row = self._find_restriction(
+            old_class,
+            old_property,
+            old_type,
+            old.get("value"),
+            old.get("on_class"),
+        )
+        if node is None:
+            return False
+
+        self._detach_restriction(node, old_class)
+        self.add_restriction(
+            new_class,
+            new_property,
+            new_type,
+            new.get("value"),
+            on_class=new.get("on_class"),
+        )
+        return True
 
     # ==================== ANNOTATION OPERATIONS ====================
 
