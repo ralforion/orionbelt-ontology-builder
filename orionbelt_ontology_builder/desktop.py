@@ -176,10 +176,12 @@ def _install_window_bridges(app_name: str):
     scripts: :data:`_TITLE_SYNC_JS` (a MutationObserver mirroring
     ``document.title`` onto the window, issue #90) and
     :data:`_CLIPBOARD_BRIDGE_JS` (route the page's clipboard writes through the
-    native writer, issue #120). Every step is defensive: any failure leaves the
-    window working without that enhancement rather than breaking the desktop
-    launch. Returns the original ``create_window`` for restoration, or ``None``
-    when there is nothing to hook (e.g. a stubbed webview in tests).
+    native writer, issue #120). It also mirrors native fullscreen exits back to
+    the page so the graph's fullscreen overlay can't outlive them (issue #177
+    follow-up). Every step is defensive: any failure leaves the window working
+    without that enhancement rather than breaking the desktop launch. Returns the
+    original ``create_window`` for restoration, or ``None`` when there is nothing
+    to hook (e.g. a stubbed webview in tests).
     """
     import webview
 
@@ -208,8 +210,65 @@ def _install_window_bridges(app_name: str):
             except Exception:
                 return False
 
+        def orionbelt_toggle_fullscreen():
+            # The embedded webview doesn't support the HTML Fullscreen API, so the
+            # graph's Fullscreen button routes here to toggle the native window
+            # instead (issue #177). Returns True once the toggle is away, or None
+            # if it couldn't be requested — deliberately not the resulting
+            # fullscreen state: pywebview keeps that on its platform window, and
+            # some backends (Qt) only flip it once the GUI thread catches up, so
+            # anything read here could be a lie. The page tracks its own overlay
+            # state and is told about native exits by _on_window_restored below.
+            try:
+                window.toggle_fullscreen()
+                return True
+            except Exception:
+                return None
+
         try:
-            window.expose(orionbelt_set_window_title, orionbelt_copy_to_clipboard)
+            window.expose(
+                orionbelt_set_window_title,
+                orionbelt_copy_to_clipboard,
+                orionbelt_toggle_fullscreen,
+            )
+        except Exception:
+            pass
+
+        def _clear_native_fullscreen_flag():
+            # pywebview decides which way toggle_fullscreen() goes purely from a
+            # flag it keeps on the platform window, so a fullscreen exit it didn't
+            # initiate (Esc) leaves that flag stale and the next toggle fails to
+            # re-enter. There is no public setter, hence reaching for the platform
+            # window; every step is optional so an unknown backend simply keeps
+            # today's behaviour.
+            try:
+                view = window.gui.BrowserView.instances.get(window.uid)
+            except Exception:
+                return
+            if view is not None and getattr(view, "is_fullscreen", False):
+                try:
+                    view.is_fullscreen = False
+                except Exception:
+                    pass
+
+        def _on_window_restored():
+            # macOS fires the window's "restored" event when it leaves fullscreen
+            # (Esc, the green button, the Window menu). The webview reports no
+            # fullscreenchange to the page, so the graph's desktop fullscreen
+            # overlay would stay stretched over the shrunken window and keep
+            # covering the whole app (issue #177 follow-up). Tell the page to drop
+            # it. The event runs on its own thread, so evaluate_js can't deadlock.
+            _clear_native_fullscreen_flag()
+            try:
+                window.evaluate_js(
+                    "window.__orionbeltNativeFullscreenExit &&"
+                    " window.__orionbeltNativeFullscreenExit()"
+                )
+            except Exception:
+                pass
+
+        try:
+            window.events.restored += _on_window_restored
         except Exception:
             pass
 
