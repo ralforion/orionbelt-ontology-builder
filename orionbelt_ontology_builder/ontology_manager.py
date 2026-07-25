@@ -1863,10 +1863,91 @@ class OntologyManager:
                     return URIRef(str(ns) + local)
         return self._uri(predicate)
 
+    def resolve_annotation_predicate(self, predicate: str) -> str:
+        """Return the URI an annotation type resolves to, as a string.
+
+        Public form of :meth:`_resolve_predicate_uri`, so callers can recognise
+        the same predicate however it was written: a known name, a new local
+        name, a ``prefix:local`` CURIE, or a full URI (issue #161).
+        """
+        return str(self._resolve_predicate_uri(predicate))
+
+    def invalid_annotation_predicate_reason(self, predicate: str) -> Optional[str]:
+        """Return a human-readable reason ``predicate`` can't be used as an
+        annotation type, or ``None`` if it can.
+
+        Companion to :meth:`invalid_name_reason` for the forms
+        :meth:`_resolve_predicate_uri` accepts: a full ``http(s)`` URI, a known
+        name (``comment``, ``prefLabel``, ...), a ``prefix:local`` CURIE whose
+        prefix is bound here, and a new local name minted in the base namespace.
+        An unbound prefix is named explicitly, because resolution would
+        otherwise fall through and mint a nonsense base-namespace URI containing
+        a colon (issue #161).
+        """
+        if predicate is None or not predicate.strip():
+            return "Annotation type cannot be empty."
+        predicate = predicate.strip()
+        if predicate.startswith("http://") or predicate.startswith("https://"):
+            if any(c.isspace() or c in self._INVALID_URI_CHARS for c in predicate):
+                return (
+                    "A full URI cannot contain spaces or any of the characters "
+                    '< > " { } | \\ ^ `.'
+                )
+            return None
+        if predicate in self._ANNOTATION_PREDICATES:
+            return None
+        if ":" in predicate:
+            prefix, _, local = predicate.partition(":")
+            bound = {p for p, _ns in self.graph.namespaces()}
+            known = ("" in bound) if prefix == "(default)" else (prefix in bound)
+            if not known:
+                return (
+                    f"Prefix '{prefix}' is not bound in this ontology. Add it "
+                    "under Namespaces first, or paste the full URI instead."
+                )
+            if not local:
+                return (
+                    f"'{predicate}' is missing a name after the prefix, for "
+                    "example 'wdt:P31'."
+                )
+            if not self._LOCAL_NAME_RE.match(local):
+                return (
+                    f"'{local}' is not a valid name after the prefix. Use "
+                    "letters, digits, '_', '-' and '.', for example 'wdt:P31'."
+                )
+            return None
+        if not self._LOCAL_NAME_RE.match(predicate):
+            return (
+                f"'{predicate}' is not a valid annotation type. Use a name like "
+                "'wikidataId', a bound prefix like 'wdt:P31', or a full URI."
+            )
+        return None
+
+    def _require_valid_annotation_predicate(self, predicate: str) -> None:
+        """Raise ``ValueError`` if ``predicate`` is unusable as an annotation type."""
+        reason = self.invalid_annotation_predicate_reason(predicate)
+        if reason:
+            raise ValueError(reason)
+
     def add_annotation(
         self, subject: str, predicate: str, value: str, lang: Optional[str] = None
     ):
         """Add an annotation to any resource.
+
+        A predicate that resolves into this ontology's own namespace is a
+        custom annotation type the user just invented (issue #161), so it is
+        declared as an ``owl:AnnotationProperty``. That keeps the ontology
+        well-formed OWL, so other tools list the annotation instead of seeing an
+        undeclared predicate. Vocabulary predicates (``rdfs:label``, ``skos:*``,
+        anything under a bound external prefix) are left alone, as is a URI that
+        already has a type here.
+
+        Raises ``ValueError`` if the predicate is unusable — an unbound prefix
+        above all, which would otherwise be minted as a base-namespace URI
+        containing a colon. The check lives here so every caller is covered, not
+        only the Annotations page: bulk edits reach this too, and report the
+        reason per row. ``delete_annotation`` deliberately stays unchecked, so an
+        oddly named predicate already in the graph can still be removed.
 
         Args:
             subject: The resource name to annotate
@@ -1874,8 +1955,20 @@ class OntologyManager:
             value: The annotation value
             lang: Optional language tag
         """
+        self._require_valid_annotation_predicate(predicate)
         subj_uri = self._uri(subject)
         pred_uri = self._resolve_predicate_uri(predicate)
+
+        if (
+            str(pred_uri).startswith(str(self.namespace))
+            and (
+                pred_uri,
+                RDF.type,
+                None,
+            )
+            not in self.graph
+        ):
+            self.graph.add((pred_uri, RDF.type, OWL.AnnotationProperty))
 
         if lang:
             literal = Literal(value, lang=lang)

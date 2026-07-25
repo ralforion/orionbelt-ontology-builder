@@ -4256,6 +4256,190 @@ def render_relations():
                         st.rerun()
 
 
+def resolve_annotation_predicate_choice(ont, choice, lookup) -> tuple:
+    """Map the "Annotation Type" picker's value to a ``(predicate, error)`` pair.
+
+    A listed type comes back through ``lookup`` as its URI and always resolves.
+    Anything else was typed into the picker to create a new annotation type
+    (issue #161), so it is validated first: an unbound prefix or an unusable name
+    is reported rather than minted into a broken URI. ``error`` is None when the
+    predicate is usable.
+    """
+    if choice in lookup:
+        return lookup[choice], None
+    text = (choice or "").strip()
+    return text, ont.invalid_annotation_predicate_reason(text)
+
+
+def annotation_option_for_predicate(ont, predicate_lookup, predicate_uri):
+    """Return the "Annotation Type" option that stands for ``predicate_uri``.
+
+    Options are matched on the URI they resolve to, so one predicate written as
+    a bare name, a CURIE or a full URI all find the same option (issue #161).
+    Returns None when no option covers it.
+    """
+    for display, predicate in predicate_lookup.items():
+        if ont.resolve_annotation_predicate(predicate) == predicate_uri:
+            return display
+    return None
+
+
+def render_add_annotation(ont, all_resources):
+    """Render the "Add Annotation" tab.
+
+    Split out of :func:`render_annotations` so the form can be driven
+    directly in tests: the page's tab picker is a ``segmented_control``, and
+    Streamlit's AppTest mis-serializes a single-select one, so any
+    interaction after switching tabs fails before reaching the form.
+    """
+    st.subheader("Add Annotation")
+
+    if not all_resources:
+        st.warning("Please create at least one resource first.")
+    else:
+        # Get predicates used in the ontology
+        used_predicates = ont.get_used_annotation_predicates()
+
+        # Build predicate options: standard ones + used from ontology
+        standard_predicates = [
+            {"local_name": "label", "uri": "label", "prefix": "rdfs"},
+            {"local_name": "comment", "uri": "comment", "prefix": "rdfs"},
+            {"local_name": "seeAlso", "uri": "seeAlso", "prefix": "rdfs"},
+            {"local_name": "isDefinedBy", "uri": "isDefinedBy", "prefix": "rdfs"},
+            {"local_name": "prefLabel", "uri": "prefLabel", "prefix": "skos"},
+            {"local_name": "altLabel", "uri": "altLabel", "prefix": "skos"},
+            {"local_name": "definition", "uri": "definition", "prefix": "skos"},
+            {"local_name": "example", "uri": "example", "prefix": "skos"},
+            {"local_name": "note", "uri": "note", "prefix": "skos"},
+            {"local_name": "title", "uri": "title", "prefix": "dcterms"},
+            {
+                "local_name": "description",
+                "uri": "description",
+                "prefix": "dcterms",
+            },
+            {"local_name": "creator", "uri": "creator", "prefix": "dcterms"},
+            {
+                "local_name": "contributor",
+                "uri": "contributor",
+                "prefix": "dcterms",
+            },
+            {"local_name": "date", "uri": "date", "prefix": "dcterms"},
+            {"local_name": "deprecated", "uri": "deprecated", "prefix": "owl"},
+        ]
+
+        # Combine and deduplicate (used predicates take priority as they have full URIs)
+        predicate_options = []
+        predicate_lookup = {}  # display -> uri
+
+        # Add used predicates first (from ontology)
+        seen_names = set()
+        for p in used_predicates:
+            display = (
+                f"{p['prefix']}:{p['local_name']}" if p["prefix"] else p["local_name"]
+            )
+            if display not in seen_names:
+                predicate_options.append(display)
+                predicate_lookup[display] = p["uri"]
+                seen_names.add(display)
+                seen_names.add(p["local_name"])  # Also mark local name as seen
+
+        # Add standard predicates that aren't already included
+        for p in standard_predicates:
+            display = f"{p['prefix']}:{p['local_name']}"
+            if p["local_name"] not in seen_names and display not in seen_names:
+                predicate_options.append(display)
+                predicate_lookup[display] = p["uri"]  # Use short name for standard ones
+
+        # Sort options
+        predicate_options.sort(key=lambda x: x.lower())
+
+        # Clear the value/language of the annotation just saved, on the run
+        # after it was added: a widget's state can't be changed once it has
+        # been instantiated, so the add flags it here instead. The type and
+        # the resource are left alone, so the same type can be applied to one
+        # resource after another without re-picking it.
+        if st.session_state.pop("_ann_clear_value", False):
+            st.session_state["ann_value"] = ""
+            st.session_state["ann_lang"] = ""
+
+        # Re-select the type just used. The picker holds whatever was typed
+        # ("wikidataId"), but once the annotation exists the options carry that
+        # predicate's canonical display ("ex:wikidataId") instead, and a value
+        # that is not among the options cannot be held: the widget would snap
+        # back to the first entry, and the stale typed value could reappear in a
+        # different case.
+        _ann_pending = st.session_state.pop("_ann_select_predicate", None)
+        if _ann_pending:
+            _ann_option = annotation_option_for_predicate(
+                ont, predicate_lookup, _ann_pending
+            )
+            if _ann_option:
+                st.session_state["ann_predicate"] = _ann_option
+
+        with st.form("add_annotation_form"):
+            # Use display format with label
+            resource_options = [f"{r['display']} [{r['type']}]" for r in all_resources]
+            selected = st.selectbox(
+                "Select Resource", options=resource_options, key="ann_resource"
+            )
+
+            # Typing a type that isn't listed creates it, so an ID with no
+            # standard predicate (a Wikidata item, an internal ticket) gets
+            # its own annotation type instead of going into Comment
+            # (issue #161). The explicit key matters: an unkeyed selectbox is
+            # identified by its arguments, so adding an annotation — which
+            # puts its type into the used-predicate options — would change
+            # the widget's identity and snap the selection back to the first
+            # entry.
+            predicate_display = st.selectbox(
+                "Annotation Type",
+                options=predicate_options,
+                accept_new_options=True,
+                key="ann_predicate",
+                help=(
+                    "Pick a type, or type your own to create it: a name like "
+                    "`wikidataId`, a bound prefix like `wdt:P31`, or a full "
+                    "URI. A new name of your own is declared as an "
+                    "annotation property in the ontology."
+                ),
+            )
+
+            value = st.text_area("Value", key="ann_value")
+
+            language = st.text_input(
+                "Language Tag (optional)",
+                placeholder="en, de, fr...",
+                key="ann_lang",
+            )
+
+            submitted = st.form_submit_button("Add Annotation")
+            if submitted:
+                predicate_uri, predicate_reason = resolve_annotation_predicate_choice(
+                    ont, predicate_display, predicate_lookup
+                )
+                if not value:
+                    show_message("Value is required!", "error")
+                elif predicate_reason:
+                    show_message(predicate_reason, "error")
+                else:
+                    # Find the resource by matching the option string
+                    idx = resource_options.index(selected)
+                    resource_name = all_resources[idx]["name"]
+                    ont.add_annotation(
+                        resource_name,
+                        predicate_uri,
+                        value,
+                        lang=language if language else None,
+                    )
+                    st.session_state["_ann_clear_value"] = True
+                    st.session_state["_ann_select_predicate"] = (
+                        ont.resolve_annotation_predicate(predicate_uri)
+                    )
+                    save_checkpoint("Add annotation")
+                    show_message("Annotation added!", "success")
+                    st.rerun()
+
+
 def render_annotations():
     """Render the annotations management page."""
     st.header("Annotations")
@@ -4411,108 +4595,7 @@ def render_annotations():
                                     st.rerun()
 
     if _ann_tab == "Add Annotation":
-        st.subheader("Add Annotation")
-
-        if not all_resources:
-            st.warning("Please create at least one resource first.")
-        else:
-            # Get predicates used in the ontology
-            used_predicates = ont.get_used_annotation_predicates()
-
-            # Build predicate options: standard ones + used from ontology
-            standard_predicates = [
-                {"local_name": "label", "uri": "label", "prefix": "rdfs"},
-                {"local_name": "comment", "uri": "comment", "prefix": "rdfs"},
-                {"local_name": "seeAlso", "uri": "seeAlso", "prefix": "rdfs"},
-                {"local_name": "isDefinedBy", "uri": "isDefinedBy", "prefix": "rdfs"},
-                {"local_name": "prefLabel", "uri": "prefLabel", "prefix": "skos"},
-                {"local_name": "altLabel", "uri": "altLabel", "prefix": "skos"},
-                {"local_name": "definition", "uri": "definition", "prefix": "skos"},
-                {"local_name": "example", "uri": "example", "prefix": "skos"},
-                {"local_name": "note", "uri": "note", "prefix": "skos"},
-                {"local_name": "title", "uri": "title", "prefix": "dcterms"},
-                {
-                    "local_name": "description",
-                    "uri": "description",
-                    "prefix": "dcterms",
-                },
-                {"local_name": "creator", "uri": "creator", "prefix": "dcterms"},
-                {
-                    "local_name": "contributor",
-                    "uri": "contributor",
-                    "prefix": "dcterms",
-                },
-                {"local_name": "date", "uri": "date", "prefix": "dcterms"},
-                {"local_name": "deprecated", "uri": "deprecated", "prefix": "owl"},
-            ]
-
-            # Combine and deduplicate (used predicates take priority as they have full URIs)
-            predicate_options = []
-            predicate_lookup = {}  # display -> uri
-
-            # Add used predicates first (from ontology)
-            seen_names = set()
-            for p in used_predicates:
-                display = (
-                    f"{p['prefix']}:{p['local_name']}"
-                    if p["prefix"]
-                    else p["local_name"]
-                )
-                if display not in seen_names:
-                    predicate_options.append(display)
-                    predicate_lookup[display] = p["uri"]
-                    seen_names.add(display)
-                    seen_names.add(p["local_name"])  # Also mark local name as seen
-
-            # Add standard predicates that aren't already included
-            for p in standard_predicates:
-                display = f"{p['prefix']}:{p['local_name']}"
-                if p["local_name"] not in seen_names and display not in seen_names:
-                    predicate_options.append(display)
-                    predicate_lookup[display] = p[
-                        "uri"
-                    ]  # Use short name for standard ones
-
-            # Sort options
-            predicate_options.sort(key=lambda x: x.lower())
-
-            with st.form("add_annotation_form"):
-                # Use display format with label
-                resource_options = [
-                    f"{r['display']} [{r['type']}]" for r in all_resources
-                ]
-                selected = st.selectbox("Select Resource", options=resource_options)
-
-                predicate_display = st.selectbox(
-                    "Annotation Type", options=predicate_options
-                )
-
-                value = st.text_area("Value")
-
-                language = st.text_input(
-                    "Language Tag (optional)", placeholder="en, de, fr..."
-                )
-
-                submitted = st.form_submit_button("Add Annotation")
-                if submitted:
-                    if not value:
-                        show_message("Value is required!", "error")
-                    else:
-                        # Find the resource by matching the option string
-                        idx = resource_options.index(selected)
-                        resource_name = all_resources[idx]["name"]
-                        predicate_uri = predicate_lookup.get(
-                            predicate_display, predicate_display
-                        )
-                        ont.add_annotation(
-                            resource_name,
-                            predicate_uri,
-                            value,
-                            lang=language if language else None,
-                        )
-                        save_checkpoint("Add annotation")
-                        show_message("Annotation added!", "success")
-                        st.rerun()
+        render_add_annotation(ont, all_resources)
 
     if _ann_tab == "Bulk Edit":
         st.subheader("Bulk Edit Annotations")
