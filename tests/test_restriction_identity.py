@@ -263,3 +263,34 @@ def test_a_rejected_add_leaves_no_orphan_restriction(rest_om):
             rest_om.add_restriction("Bicycle", "hasPart", restriction_type, value)
     assert len(rest_om.get_restrictions()) == before
     assert all(r["type"] is not None for r in rest_om.get_restrictions())
+
+
+def test_an_empty_value_is_rejected_on_add(rest_om):
+    """owl:someValuesFrom : is a restriction pointing at nothing."""
+    for restriction_type in ("someValuesFrom", "allValuesFrom", "hasValue"):
+        with pytest.raises(ValueError, match="needs a value"):
+            rest_om.add_restriction("Bicycle", "hasPart", restriction_type, "")
+        with pytest.raises(ValueError, match="needs a value"):
+            rest_om.add_restriction("Bicycle", "hasPart", restriction_type, None)
+
+
+def test_an_empty_value_is_rejected_on_edit(rest_om):
+    with pytest.raises(ValueError, match="needs a value"):
+        rest_om.update_restriction(
+            {
+                "class_name": "Bicycle",
+                "property_name": "hasPart",
+                "restriction_type": "someValuesFrom",
+                "value": "Wheel",
+            },
+            {
+                "class_name": "Bicycle",
+                "property_name": "hasPart",
+                "restriction_type": "someValuesFrom",
+                "value": "   ",
+            },
+        )
+    assert _rows(rest_om) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]

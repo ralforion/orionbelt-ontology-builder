@@ -3869,7 +3869,22 @@ def render_individuals():
                         st.rerun()
 
 
-def render_restriction_row(ont, rest, row_key, class_names, property_names):
+def _slot_options(entities: list, current_uri) -> tuple:
+    """Build ``(options, lookup)`` for an editor slot, keeping ``current_uri``.
+
+    Selecting by local name would resolve into the base namespace and rewrite an
+    imported entity (``other:Foo`` saved back as ``:Foo``), so options map to
+    full URIs and the row's own value is offered as itself when nothing local
+    holds it (review P2).
+    """
+    options, lookup = build_uri_options(entities)
+    if current_uri and current_uri not in lookup.values():
+        options = options + [str(current_uri)]
+        lookup = {**lookup, str(current_uri): str(current_uri)}
+    return options, lookup
+
+
+def render_restriction_row(ont, rest, row_key, classes, properties):
     """Render one restriction as a row, with edit and delete (issue #152).
 
     Mirrors the Relations lists: class, property, type and value across the row,
@@ -3926,10 +3941,10 @@ def render_restriction_row(ont, rest, row_key, class_names, property_names):
             else:
                 show_message("Could not delete this restriction.", "error")
 
-    render_restriction_editor(ont, rest, row_key, class_names, property_names)
+    render_restriction_editor(ont, rest, row_key, classes, properties)
 
 
-def render_restriction_editor(ont, rest, row_key, class_names, property_names):
+def render_restriction_editor(ont, rest, row_key, classes, properties):
     """Edit one restriction in place, inside its expander (issue #152).
 
     The row is identified by its whole spec, so a class carrying several
@@ -3943,21 +3958,34 @@ def render_restriction_editor(ont, rest, row_key, class_names, property_names):
         return
 
     types = list(ont.RESTRICTION_TYPES)
-    applied = rest["applied_to"][0]
+    applied_uris = rest.get("applied_to_uris") or rest["applied_to"]
+    cls_options, cls_lookup = _slot_options(classes, applied_uris[0])
+    prop_options, prop_lookup = _slot_options(
+        properties, rest.get("property_uri") or rest["property"]
+    )
+    on_options, on_lookup = _slot_options(classes, rest.get("on_class_uri"))
+
+    # The value stays free text: it can be a class, a cardinality or a literal,
+    # and a form cannot swap the widget when the type picker changes. An
+    # imported class is pre-filled as its full URI, so saving round-trips it
+    # instead of resolving the local name into the base namespace (review P2).
+    value_default = "" if rest["value"] is None else str(rest["value"])
+    _value_uri = rest.get("value_uri")
+    if _value_uri and not str(_value_uri).startswith(str(ont.namespace)):
+        value_default = str(_value_uri)
+
     with st.form(f"edit_rest_form_{row_key}"):
         new_class = st.selectbox(
             "Applies to Class",
-            class_names,
-            index=class_names.index(applied) if applied in class_names else 0,
+            cls_options,
+            index=_uri_option_index(cls_options, cls_lookup, applied_uris[0]),
             key=f"er_cls_{row_key}",
         )
         new_property = st.selectbox(
             "Property",
-            property_names,
-            index=(
-                property_names.index(rest["property"])
-                if rest["property"] in property_names
-                else 0
+            prop_options,
+            index=_uri_option_index(
+                prop_options, prop_lookup, rest.get("property_uri") or rest["property"]
             ),
             key=f"er_prop_{row_key}",
         )
@@ -3967,25 +3995,21 @@ def render_restriction_editor(ont, rest, row_key, class_names, property_names):
             index=types.index(rest["type"]) if rest["type"] in types else 0,
             key=f"er_type_{row_key}",
         )
-        # One text box for every value kind: a cardinality is a number, the
-        # others name a class or carry a literal, and the engine rejects a
-        # cardinality that isn't a whole number.
         new_value = st.text_input(
             "Value",
-            value="" if rest["value"] is None else str(rest["value"]),
+            value=value_default,
             key=f"er_val_{row_key}",
             help="A class name for someValuesFrom/allValuesFrom, a number for a "
-            "cardinality, or a literal for hasValue.",
+            "cardinality, or a literal for hasValue. A full URI is kept as it is.",
         )
         new_on_class = None
         if "Qualified" in new_type:
-            on_class_options = class_names or [""]
             new_on_class = st.selectbox(
                 "Qualified on Class",
-                on_class_options,
+                on_options,
                 index=(
-                    on_class_options.index(rest["on_class"])
-                    if rest["on_class"] in on_class_options
+                    _uri_option_index(on_options, on_lookup, rest["on_class_uri"])
+                    if rest.get("on_class_uri")
                     else 0
                 ),
                 key=f"er_onclass_{row_key}",
@@ -4001,7 +4025,6 @@ def render_restriction_editor(ont, rest, row_key, class_names, property_names):
             _close_entity(kind)
             st.rerun()
         if saved:
-            applied_uris = rest.get("applied_to_uris") or rest["applied_to"]
             try:
                 changed = ont.update_restriction(
                     {
@@ -4012,11 +4035,15 @@ def render_restriction_editor(ont, rest, row_key, class_names, property_names):
                         "on_class": rest.get("on_class_uri") or rest.get("on_class"),
                     },
                     {
-                        "class_name": new_class,
-                        "property_name": new_property,
+                        "class_name": cls_lookup.get(new_class, new_class),
+                        "property_name": prop_lookup.get(new_property, new_property),
                         "restriction_type": new_type,
                         "value": new_value,
-                        "on_class": new_on_class,
+                        "on_class": (
+                            on_lookup.get(new_on_class, new_on_class)
+                            if new_on_class
+                            else None
+                        ),
                     },
                 )
             except ValueError as exc:
@@ -4090,7 +4117,11 @@ def render_restrictions():
                 # the page is. (Keying by the restriction itself would collide
                 # when a class carries two identical ones.)
                 render_restriction_row(
-                    ont, rest, f"{_rest_page}_{_row_i}", class_names, all_props
+                    ont,
+                    rest,
+                    f"{_rest_page}_{_row_i}",
+                    classes,
+                    object_props + data_props,
                 )
 
     if _rest_tab == "Add Restriction":

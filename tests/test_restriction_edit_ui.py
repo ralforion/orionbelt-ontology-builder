@@ -29,11 +29,11 @@ def _script():
 
     ont = st.session_state.ontology
     rows = sorted(ont.get_restrictions(), key=lambda r: r["value"])
-    class_names = [c["name"] for c in ont.get_classes()]
-    props = [p["name"] for p in ont.get_object_properties()]
+    classes = ont.get_classes()
+    props = ont.get_object_properties()
     # Row 0 is Engine, row 1 is Wheel (sorted), so the test can address either.
     for index, rest in enumerate(rows):
-        app.render_restriction_row(ont, rest, str(index), class_names, props)
+        app.render_restriction_row(ont, rest, str(index), classes, props)
 
 
 def _click(at, label):
@@ -133,6 +133,80 @@ def test_a_negative_cardinality_is_reported_and_changes_nothing():
 
     assert not at.exception, at.exception
     assert any("negative" in e.value for e in at.error)
+    assert _rows(at.session_state["ontology"]) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]
+
+
+def _imported_script():
+    """A restriction whose class, property and value all live in an import."""
+    import streamlit as st
+
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        ttl = """
+        @prefix : <http://test.org/ont#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix other: <http://other.example/vocab#> .
+        :Local a owl:Class .
+        other:Foo a owl:Class . other:Bar a owl:Class .
+        other:relatedTo a owl:ObjectProperty .
+        other:Foo rdfs:subClassOf [ a owl:Restriction ;
+            owl:onProperty other:relatedTo ; owl:someValuesFrom other:Bar ] .
+        """
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.load_from_string(ttl, format="turtle")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+
+    from orionbelt_ontology_builder import app
+
+    ont = st.session_state.ontology
+    app.render_restriction_row(
+        ont,
+        ont.get_restrictions()[0],
+        "0",
+        ont.get_classes(),
+        ont.get_object_properties(),
+    )
+
+
+def test_an_imported_restriction_keeps_its_namespace_through_an_edit():
+    """Selecting by local name resolved into the base namespace, rewriting
+    other:Foo / other:relatedTo / other:Bar as :Foo / :relatedTo / :Bar."""
+    at = AppTest.from_function(_imported_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    assert not at.exception, at.exception
+    # The value is offered as its URI, so saving round-trips it.
+    assert at.text_input(key="er_val_0").value == "http://other.example/vocab#Bar"
+
+    at.selectbox(key="er_type_0").set_value("allValuesFrom")
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    row = at.session_state["ontology"].get_restrictions()[0]
+    assert row["type"] == "allValuesFrom"
+    assert row["applied_to_uris"] == ["http://other.example/vocab#Foo"]
+    assert row["property_uri"] == "http://other.example/vocab#relatedTo"
+    assert row["value_uri"] == "http://other.example/vocab#Bar"
+
+
+def test_an_empty_value_is_reported_and_changes_nothing():
+    """It used to write owl:someValuesFrom : and destroy the original."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    at.text_input(key="er_val_0").set_value("")
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    assert any("needs a value" in e.value for e in at.error)
     assert _rows(at.session_state["ontology"]) == [
         ("hasPart", "someValuesFrom", "Engine"),
         ("hasPart", "someValuesFrom", "Wheel"),

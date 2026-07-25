@@ -1696,6 +1696,10 @@ class OntologyManager:
             raise ValueError(f"Unknown restriction type: {restriction_type}")
         if restriction_type in self._CARDINALITY_TYPES:
             cardinality = self._cardinality_value(restriction_type, value)
+        elif value is None or not str(value).strip():
+            # An empty value would be written as the base namespace itself
+            # (owl:someValuesFrom :), a restriction pointing at nothing.
+            raise ValueError(f"{restriction_type} needs a value.")
 
         restriction = BNode()
         self.graph.add((restriction, RDF.type, OWL.Restriction))
@@ -1962,10 +1966,12 @@ class OntologyManager:
 
         if new_type not in self.RESTRICTION_TYPES:
             raise ValueError(f"Unknown restriction type: {new_type}")
+        # Checked here as well as in add_restriction, so a bad replacement is
+        # rejected before the original is detached.
         if new_type in self._CARDINALITY_TYPES:
-            # Checked here as well as in add_restriction, so a bad number is
-            # rejected before the original is detached.
             self._cardinality_value(new_type, new.get("value"))
+        elif new.get("value") is None or not str(new.get("value")).strip():
+            raise ValueError(f"{new_type} needs a value.")
 
         node, _row = self._find_restriction(
             old_class,
