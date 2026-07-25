@@ -223,3 +223,37 @@ def test_pointing_a_relation_at_itself_is_refused():
     assert rels == [("Capacitor", "disjointWith", "Inductor")]
     # The editor stays open so the mistake can be corrected in place.
     assert "active_crel" in at.session_state
+
+
+def test_the_object_can_be_retargeted_to_a_new_external_uri():
+    """Parity with the add forms, which offer an external-URI field (diff B)."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    uid = _open_editor(at)
+
+    at.text_input(key=f"eo_ext_{uid}").set_value("http://other.example/vocab#Thing")
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    om = at.session_state["ontology"]
+    rels = [
+        (r["subject"], r["relation"], r["object_uri"]) for r in om.get_class_relations()
+    ]
+    assert rels == [("Capacitor", "disjointWith", "http://other.example/vocab#Thing")]
+
+
+def test_a_malformed_external_uri_is_reported_and_changes_nothing():
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    uid = _open_editor(at)
+
+    at.text_input(key=f"eo_ext_{uid}").set_value("not-a-uri")
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    assert any("full http(s) URI" in e.value for e in at.error)
+    om = at.session_state["ontology"]
+    rels = [
+        (r["subject"], r["relation"], r["object"]) for r in om.get_class_relations()
+    ]
+    assert rels == [("Capacitor", "disjointWith", "Inductor")]

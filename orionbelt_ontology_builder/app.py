@@ -4046,7 +4046,9 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                         ),
                     },
                 )
-            except ValueError as exc:
+            except Exception as exc:
+                # As wide as the Add form's handler: a rejected edit must show
+                # up as a message, never as a page-breaking traceback.
                 show_message(str(exc), "error")
                 return
             if changed:
@@ -4062,16 +4064,93 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                 )
 
 
+def render_add_restriction(ont, classes, properties):
+    """Render the "Add Restriction" tab.
+
+    Split out of :func:`render_restrictions` for the same reason as the row
+    renderer: the page's tab picker is a ``segmented_control``, which
+    Streamlit's AppTest mis-serializes, so the form cannot be driven through
+    the page in tests.
+    """
+    st.subheader("Add Restriction")
+
+    if not classes:
+        st.warning("Please create at least one class first.")
+        return
+    if not properties:
+        st.warning("Please create at least one property first.")
+        return
+
+    with st.form("add_restriction_form"):
+        # Pick by URI, not by local name: a name resolves into the base
+        # namespace, so a restriction meant for an imported other:Foo
+        # was silently created on a base-namespace twin instead.
+        cls_opts, cls_lookup = build_uri_options(classes)
+        prop_opts, prop_lookup = build_uri_options(properties)
+        target_disp = st.selectbox("Apply to Class", options=cls_opts)
+        property_disp = st.selectbox("On Property", options=prop_opts)
+
+        # Straight from the engine, so a type can never be offered here
+        # that it doesn't understand, or omitted when it gains one.
+        restriction_type = st.selectbox(
+            "Restriction Type", options=list(ont.RESTRICTION_TYPES)
+        )
+
+        st.write("**Restriction Value:**")
+        value = None
+        if restriction_type in ["someValuesFrom", "allValuesFrom"]:
+            value = cls_lookup[
+                st.selectbox("Value (Class)", options=cls_opts, key="rest_class_value")
+            ]
+        elif restriction_type == "hasValue":
+            ind_opts, ind_lookup = build_uri_options(ont.get_individuals())
+            value_type = st.radio("Value Type", ["Literal", "Individual"])
+            if value_type == "Literal":
+                value = st.text_input("Literal Value")
+            elif ind_opts:
+                value = ind_lookup[st.selectbox("Individual", options=ind_opts)]
+            else:
+                # Offering a "No individuals" placeholder let that string
+                # be stored as the value.
+                st.info("No individuals yet — create one, or use a literal.")
+        else:
+            value = st.number_input("Cardinality", min_value=0, value=1)
+
+        on_class = None
+        if "Qualified" in restriction_type:
+            on_class = cls_lookup[
+                st.selectbox(
+                    "Qualified on Class",
+                    options=cls_opts,
+                    key="qualified_class",
+                )
+            ]
+
+        submitted = st.form_submit_button("Add Restriction")
+        if submitted:
+            try:
+                ont.add_restriction(
+                    cls_lookup[target_disp],
+                    prop_lookup[property_disp],
+                    restriction_type,
+                    value,
+                    on_class=on_class,
+                )
+                save_checkpoint("Add restriction")
+                show_message("Restriction added!", "success")
+                st.rerun()
+            except Exception as e:
+                show_message(f"Error adding restriction: {str(e)}", "error")
+
+
 def render_restrictions():
     """Render the restrictions management page."""
     st.header("Restrictions")
 
     ont = st.session_state.ontology
     classes = ont.get_classes()
-    class_names = [c["name"] for c in classes]
     object_props = ont.get_object_properties()
     data_props = ont.get_data_properties()
-    all_props = [p["name"] for p in object_props] + [p["name"] for p in data_props]
     restrictions = ont.get_restrictions()
 
     _rest_tab = st.segmented_control(
@@ -4125,71 +4204,7 @@ def render_restrictions():
                 )
 
     if _rest_tab == "Add Restriction":
-        st.subheader("Add Restriction")
-
-        if not class_names:
-            st.warning("Please create at least one class first.")
-        elif not all_props:
-            st.warning("Please create at least one property first.")
-        else:
-            with st.form("add_restriction_form"):
-                target_class = st.selectbox("Apply to Class", options=class_names)
-                property_name = st.selectbox("On Property", options=all_props)
-
-                restriction_types = [
-                    "someValuesFrom",
-                    "allValuesFrom",
-                    "hasValue",
-                    "minCardinality",
-                    "maxCardinality",
-                    "exactCardinality",
-                    "minQualifiedCardinality",
-                    "maxQualifiedCardinality",
-                    "qualifiedCardinality",
-                ]
-                restriction_type = st.selectbox(
-                    "Restriction Type", options=restriction_types
-                )
-
-                st.write("**Restriction Value:**")
-                if restriction_type in ["someValuesFrom", "allValuesFrom"]:
-                    value = st.selectbox(
-                        "Value (Class)", options=class_names, key="rest_class_value"
-                    )
-                elif restriction_type == "hasValue":
-                    value_type = st.radio("Value Type", ["Literal", "Individual"])
-                    if value_type == "Literal":
-                        value = st.text_input("Literal Value")
-                    else:
-                        ind_names = [i["name"] for i in ont.get_individuals()]
-                        value = st.selectbox(
-                            "Individual",
-                            options=ind_names if ind_names else ["No individuals"],
-                        )
-                else:
-                    value = st.number_input("Cardinality", min_value=0, value=1)
-
-                on_class = None
-                if "Qualified" in restriction_type:
-                    on_class = st.selectbox(
-                        "Qualified on Class", options=class_names, key="qualified_class"
-                    )
-
-                submitted = st.form_submit_button("Add Restriction")
-                if submitted:
-                    try:
-                        ont.add_restriction(
-                            target_class,
-                            property_name,
-                            restriction_type,
-                            value,
-                            on_class=on_class,
-                        )
-                        save_checkpoint("Add restriction")
-                        show_message("Restriction added!", "success")
-                        st.rerun()
-                    except Exception as e:
-                        show_message(f"Error adding restriction: {str(e)}", "error")
+        render_add_restriction(ont, classes, object_props + data_props)
 
 
 def render_relations():
@@ -4333,7 +4348,7 @@ def render_relations():
                 with col2:
                     relation_type = st.selectbox(
                         "Relation Type",
-                        options=["subClassOf", "equivalentClass", "disjointWith"],
+                        options=list(ont.CLASS_RELATIONS),
                         key="crel_type",
                     )
                 with col3:
@@ -4395,7 +4410,7 @@ def render_relations():
                 with col2:
                     relation_type = st.selectbox(
                         "Relation Type",
-                        options=["subPropertyOf", "equivalentProperty", "inverseOf"],
+                        options=list(ont.PROPERTY_RELATIONS),
                         key="prel_type",
                     )
                 with col3:
@@ -4456,7 +4471,7 @@ def render_relations():
                 with col2:
                     relation_type = st.selectbox(
                         "Relation Type",
-                        options=["sameAs", "differentFrom"],
+                        options=list(ont.INDIVIDUAL_RELATIONS),
                         key="irel_type",
                     )
                 with col3:
@@ -4582,6 +4597,15 @@ def render_relation_rows(ont, rows, spec):
             new_object = st.selectbox(
                 "Object", row_options, index=obj_default, key=f"eo_{rel_uid}"
             )
+            # The add forms can point an object at an entity in an ontology that
+            # was never imported; without this the editor could keep such a
+            # target but never set one.
+            ext_obj_uri, ext_err = _external_uri_target(
+                ont,
+                row_lookup[new_object],
+                key=f"eo_ext_{rel_uid}",
+                label="the object",
+            )
             save_col, cancel_col = st.columns(2)
             with save_col:
                 saved = st.form_submit_button("💾 Save", use_container_width=True)
@@ -4593,7 +4617,10 @@ def render_relation_rows(ont, rows, spec):
                 st.rerun()
             if saved:
                 new_subj_uri = row_lookup[new_subject]
-                new_obj_uri = row_lookup[new_object]
+                new_obj_uri = ext_obj_uri
+                if ext_err:
+                    show_message(ext_err, "error")
+                    return
                 if new_subj_uri == new_obj_uri:
                     # The add forms refuse this; the editor has to as well, or
                     # it becomes the way to assert "A disjointWith A"
