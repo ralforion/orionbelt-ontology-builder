@@ -53,8 +53,10 @@ jobs:
       - name: Format check (ruff)
         run: uv run ruff format --check orionbelt_ontology_builder tests app.py ontology_manager.py templates.py
 
+      # Same scope as ruff above: checking the package alone let a type error in
+      # tests/ sit unnoticed, since nothing ever looked at it.
       - name: Type check (mypy)
-        run: uv run mypy orionbelt_ontology_builder
+        run: uv run mypy orionbelt_ontology_builder tests app.py ontology_manager.py templates.py
 
       - name: Test (pytest)
         run: uv run pytest

@@ -202,12 +202,26 @@ def test_run_omits_theme_base_when_unset(monkeypatch, tmp_path):
     assert "theme.base" not in captured["options"]
 
 
-class _Event(list):
-    """Minimal stand-in for a pywebview event that supports ``+= handler``."""
+class _Event:
+    """Minimal stand-in for a pywebview event that supports ``+= handler``.
+
+    Holds its handlers rather than subclassing list: pywebview's Event isn't a
+    list either, and ``+=`` taking a single handler is incompatible with
+    ``list.__add__`` taking an iterable.
+    """
+
+    def __init__(self):
+        self.handlers = []
 
     def __iadd__(self, handler):
-        self.append(handler)
+        self.handlers.append(handler)
         return self
+
+    def __getitem__(self, index):
+        return self.handlers[index]
+
+    def __len__(self):
+        return len(self.handlers)
 
 
 class _FakeWindow:
