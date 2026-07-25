@@ -216,7 +216,9 @@ class _FakeWindow:
         self.title = None
         self.evaluated = []
         self.fullscreen = False
-        self.events = types.SimpleNamespace(loaded=_Event())
+        self.uid = "master"
+        self.gui = None
+        self.events = types.SimpleNamespace(loaded=_Event(), restored=_Event())
 
     def expose(self, *fns):
         self.exposed.extend(fns)
@@ -331,6 +333,50 @@ def test_window_bridges_wire_fullscreen_toggle(monkeypatch):
     assert window.fullscreen is True
     assert toggler() is False
     assert window.fullscreen is False
+
+
+def test_native_fullscreen_exit_notifies_page(monkeypatch):
+    """Leaving fullscreen outside our button (Esc) must reach the page and reset
+    pywebview's tracked flag, or the graph overlay keeps covering the shrunken
+    window (issue #177 follow-up)."""
+    window = _FakeWindow()
+    view = types.SimpleNamespace(is_fullscreen=True)
+    window.gui = types.SimpleNamespace(
+        BrowserView=types.SimpleNamespace(instances={window.uid: view})
+    )
+    fake_webview = types.ModuleType("webview")
+    fake_webview.create_window = lambda *a, **k: window
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    desktop._install_window_bridges("AppName")
+
+    import webview
+
+    webview.create_window("AppName", "http://localhost")
+
+    assert window.events.restored, "no restored handler registered"
+    window.events.restored[0]()
+
+    assert any("__orionbeltNativeFullscreenExit" in js for js in window.evaluated)
+    # The stale flag is cleared so the next Fullscreen click enters again.
+    assert view.is_fullscreen is False
+
+
+def test_native_fullscreen_exit_survives_unknown_backend(monkeypatch):
+    """A backend without the internals we poke at must still notify the page."""
+    window = _FakeWindow()  # gui is None: no BrowserView to reach
+    fake_webview = types.ModuleType("webview")
+    fake_webview.create_window = lambda *a, **k: window
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    desktop._install_window_bridges("AppName")
+
+    import webview
+
+    webview.create_window("AppName", "http://localhost")
+    window.events.restored[0]()
+
+    assert any("__orionbeltNativeFullscreenExit" in js for js in window.evaluated)
 
 
 def test_copy_to_clipboard_uses_platform_command(monkeypatch):

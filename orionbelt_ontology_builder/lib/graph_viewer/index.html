@@ -229,6 +229,19 @@ function afterReflow(fn) {
     }
 }
 
+// Name of the hook the native host (desktop.py) calls when its window leaves
+// fullscreen without going through our button — Esc, the macOS green button, the
+// Window menu. The webview surfaces no fullscreenchange for the native window,
+// so without this the overlay stays pinned at 100vw/100vh while the window
+// shrinks back, leaving the graph covering the whole app (issue #177 follow-up).
+// It lives
+// on the top window because that is the frame Python's evaluate_js runs in.
+var TOP_FS_EXIT_HOOK = '__orionbeltNativeFullscreenExit';
+
+function setNativeFsExitHook(fn) {
+    try { if (window.top) window.top[TOP_FS_EXIT_HOOK] = fn; } catch (e) {}
+}
+
 function enterPseudoFullscreen() {
     var fe = window.frameElement;
     if (!fe) return false;
@@ -245,6 +258,9 @@ function enterPseudoFullscreen() {
     fe.style.zIndex = '2147483647';
     fe.style.background = currentTheme.bg;
     desktopFsOn = true;
+    // The native window can leave fullscreen on its own; drop the overlay then
+    // (without toggling the window back, it has already left).
+    setNativeFsExitHook(function () { if (desktopFsOn) exitPseudoFullscreen(); });
     setFullscreenIcon(true);
     afterReflow(function () { if (desktopFsOn) scheduleFullscreenView(true); });
     return true;
@@ -254,6 +270,7 @@ function exitPseudoFullscreen() {
     var fe = window.frameElement;
     if (fe) fe.setAttribute('style', pseudoFsPrevStyle || '');
     desktopFsOn = false;
+    setNativeFsExitHook(null);
     setFullscreenIcon(false);
     scheduleFullscreenView(false);
 }
