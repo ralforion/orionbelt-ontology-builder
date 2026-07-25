@@ -1,7 +1,7 @@
 """Every graph mutation must checkpoint (issue #190 investigation).
 
 ``save_checkpoint()`` is the only place ``_ont_mutation_count`` is bumped, and
-three things hang off that counter:
+three things hang off that revision:
 
 * the undo history,
 * the Visualization's cache key, so the canvas redraws,
@@ -11,6 +11,14 @@ So a mutation that forgets it is not merely un-undoable: it leaves the graph on
 screen stale and is never written to disk or localStorage, surviving only in
 memory until some later checkpointed action sweeps it up. Six call sites did
 exactly that (imports, property chains, disjoint unions, AllDifferent, hasKey).
+
+The check is scope-aware rather than a line window: it asks whether the handler
+that performed the mutation goes on to move the revision, searching the
+statements after the call in its own block and then widening to each enclosing
+block up to the function. A line window was tried first and was wrong in both
+directions — it missed a checkpoint 42 lines below a rename, and exempting such
+false positives by method name blanket-exempted every other call site of that
+same method (review P3).
 """
 
 import ast
@@ -21,21 +29,19 @@ from orionbelt_ontology_builder.ontology_manager import OntologyManager
 
 APP = pathlib.Path(__file__).resolve().parents[1] / "orionbelt_ontology_builder/app.py"
 
-# Mutating calls whose bump happens elsewhere, with the reason it is correct:
-ALLOWED_WITHOUT_CHECKPOINT = {
-    # Replacing the whole graph bumps _ont_mutation_count directly, because
-    # there is no prior state worth a checkpoint (restore, import, New).
-    "load_from_file",
-    "load_from_string",
-    "set_ontology_metadata",
-    # Applied inside helpers that the page checkpoints around.
-    "update_class",
-    "update_property",
-    "update_individual",
-    "rename_property",
-    "rename_individual",
-    "rename_concept",
+# The only calls exempt from carrying their own bump, keyed by the function they
+# sit in: these helpers apply an edit on behalf of a page that checkpoints around
+# the call. Scoped to the enclosing function, so another call site of the same
+# engine method is still checked.
+CHECKPOINTED_BY_CALLER = {
+    "_apply_class_edit",
+    "_apply_property_edit",
+    "_apply_individual_edit",
 }
+
+# Either of these moves the revision: the checkpoint helper, or a direct bump
+# where the whole graph is replaced and there is no prior state to snapshot.
+BUMP_MARKERS = ("save_checkpoint", "_ont_mutation_count")
 
 
 def _mutating_methods() -> set:
@@ -63,29 +69,86 @@ def _mutating_methods() -> set:
     return {n for n in names if not n.startswith(("get_", "export_"))}
 
 
-def test_every_mutation_site_checkpoints():
-    """Fails with the file and line of any new mutation that skips the bump."""
-    source = APP.read_text()
-    lines = source.split("\n")
+def _bumps_revision(node: ast.AST) -> bool:
+    """Whether this statement contains a checkpoint or a direct revision bump."""
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Call):
+            func = inner.func
+            if isinstance(func, ast.Name) and func.id in BUMP_MARKERS:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr in BUMP_MARKERS:
+                return True
+        if isinstance(inner, ast.Subscript) and isinstance(inner.slice, ast.Constant):
+            if inner.slice.value == "_ont_mutation_count":
+                return True
+    return False
+
+
+def _parents(tree: ast.AST) -> dict:
+    return {
+        child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+    }
+
+
+def _handler_bumps(call: ast.Call, parents: dict) -> bool:
+    """True when the mutation's own handler goes on to move the revision.
+
+    Walks out from the call: in each enclosing block the statements that follow
+    the one holding the call are searched, then the search widens to the block
+    around it, stopping at the function containing it all.
+    """
+    node: ast.AST = call
+    while node in parents:
+        parent = parents[node]
+        # At the function's own body the search goes shallow: a page function
+        # holds many independent handlers, so only a bump written directly in
+        # the flow counts. A checkpoint nested inside a *different* handler's
+        # branch must not vouch for this mutation.
+        shallow = isinstance(parent, ast.FunctionDef)
+        for field in ("body", "orelse", "finalbody"):
+            block = getattr(parent, field, None)
+            if not isinstance(block, list) or node not in block:
+                continue
+            for statement in block[block.index(node) :]:
+                if shallow and not isinstance(statement, (ast.Expr, ast.Assign)):
+                    continue
+                if _bumps_revision(statement):
+                    return True
+        if shallow:
+            return False
+        node = parent
+    return False
+
+
+def _enclosing_function(node: ast.AST, parents: dict) -> str:
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, ast.FunctionDef):
+            return node.name
+    return "<module>"
+
+
+def test_every_mutation_site_moves_the_revision():
+    """Fails with the file and line of any mutation whose handler doesn't."""
+    tree = ast.parse(APP.read_text())
+    parents = _parents(tree)
     mutators = _mutating_methods()
 
     offenders = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
-        name = node.func.attr
-        if name not in mutators or name in ALLOWED_WITHOUT_CHECKPOINT:
+        if node.func.attr not in mutators:
             continue
-        # The checkpoint follows the call in the same handler; a generous window
-        # keeps this from tripping on formatting.
-        window = "\n".join(lines[max(0, node.lineno - 6) : node.lineno + 25])
-        if "save_checkpoint(" not in window:
-            offenders.append(f"app.py:{node.lineno} {name}()")
+        if _enclosing_function(node, parents) in CHECKPOINTED_BY_CALLER:
+            continue
+        if not _handler_bumps(node, parents):
+            offenders.append(f"app.py:{node.lineno} {node.func.attr}()")
 
     assert not offenders, (
-        "these mutations never bump _ont_mutation_count, so they cannot be "
+        "these mutations never move _ont_mutation_count, so they cannot be "
         "undone, leave the Visualization stale and are never autosaved:\n  "
-        + "\n  ".join(offenders)
+        + "\n  ".join(sorted(offenders))
     )
 
 
