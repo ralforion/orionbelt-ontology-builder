@@ -208,8 +208,22 @@ def _install_window_bridges(app_name: str):
             except Exception:
                 return False
 
+        def orionbelt_toggle_fullscreen():
+            # The embedded webview doesn't support the HTML Fullscreen API, so the
+            # graph's Fullscreen button routes here to toggle the native window
+            # instead (issue #177). Returns the resulting state, or None on error.
+            try:
+                window.toggle_fullscreen()
+                return bool(getattr(window, "fullscreen", False))
+            except Exception:
+                return None
+
         try:
-            window.expose(orionbelt_set_window_title, orionbelt_copy_to_clipboard)
+            window.expose(
+                orionbelt_set_window_title,
+                orionbelt_copy_to_clipboard,
+                orionbelt_toggle_fullscreen,
+            )
         except Exception:
             pass
 

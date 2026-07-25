@@ -177,21 +177,97 @@ function isFullscreen() {
     return !!(document.fullscreenElement || document.webkitFullscreenElement);
 }
 
+// Whether the HTML Fullscreen API is actually available here. The desktop
+// pywebview doesn't support it — requestFullscreen throws "Fullscreen is not
+// supported" (#177) — in which case we fall back to toggling the native window.
+function htmlFullscreenSupported() {
+    try {
+        var c = document.getElementById('container');
+        return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) &&
+            !!(c && (c.requestFullscreen || c.webkitRequestFullscreen));
+    } catch (e) {
+        return false;
+    }
+}
+
+// The native desktop window's fullscreen toggle, exposed by the pywebview host
+// (desktop.py). Reached via window.top since the graph is in a same-origin
+// iframe; returns null on the web (cross-origin access throws, or no pywebview).
+function desktopFullscreenToggle() {
+    try {
+        var api = window.top && window.top.pywebview && window.top.pywebview.api;
+        if (api && api.orionbelt_toggle_fullscreen) return api.orionbelt_toggle_fullscreen;
+    } catch (e) {}
+    return null;
+}
+
+// Offer the button when either the HTML API works (web) or the native desktop
+// toggle is available; hide it only where neither exists.
+function fullscreenSupported() {
+    return htmlFullscreenSupported() || !!desktopFullscreenToggle();
+}
+
+var desktopFsOn = false;  // tracked native-window state (no fullscreenchange fires)
+
+// Toggle the native desktop window's fullscreen via the pywebview bridge, and
+// swap the icon ourselves since no fullscreenchange event fires for it. Returns
+// true if a bridge was found and invoked.
+function tryDesktopFullscreen() {
+    var nativeToggle = desktopFullscreenToggle();
+    if (!nativeToggle) return false;
+    try {
+        var r = nativeToggle();
+        desktopFsOn = !desktopFsOn;
+        setFullscreenIcon(desktopFsOn);
+        if (r && r.catch) r.catch(function () {});
+    } catch (e) {}
+    return true;
+}
+
 // Enter/exit fullscreen for just the graph. The whole vis-network canvas lives
 // in this iframe, so fullscreening the container makes the graph fill the
-// physical screen — no sidebar, no toolbar, no black borders (issue #177).
-// Before entering, remember the current viewport so exiting can put it back.
+// physical screen — no sidebar, no toolbar, no black borders (issue #177). In
+// the desktop app the HTML API is unavailable, so we toggle the native window
+// instead (the whole window; with "Fit to window" on, the graph fills it) — used
+// both when the API is reported unsupported and if a requestFullscreen attempt
+// throws/rejects anyway. Before entering, remember the viewport so exiting
+// restores it.
 function toggleFullscreen() {
     var c = document.getElementById('container');
-    if (!isFullscreen()) {
-        if (network) {
-            try { fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()}; }
-            catch (e) { fsRestoreView = null; }
+    if (htmlFullscreenSupported()) {
+        try {
+            if (!isFullscreen()) {
+                if (network) {
+                    try {
+                        fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()};
+                    } catch (e) { fsRestoreView = null; }
+                }
+                var req = c.requestFullscreen || c.webkitRequestFullscreen;
+                var p = req && req.call(c);
+                // If the request rejects (e.g. a webview that claims support but
+                // refuses), fall back to the native toggle instead of no-op.
+                if (p && p.catch) p.catch(function () { tryDesktopFullscreen(); });
+            } else {
+                var exit = document.exitFullscreen || document.webkitExitFullscreen;
+                var pe = exit && exit.call(document);
+                if (pe && pe.catch) pe.catch(function () {});
+            }
+            return;
+        } catch (e) {
+            // Synchronous failure: fall through to the native toggle.
         }
-        (c.requestFullscreen || c.webkitRequestFullscreen || function () {}).call(c);
-    } else {
-        (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
     }
+    tryDesktopFullscreen();
+}
+
+// Swap the button glyph/hint between the "enter" and "exit" states.
+function setFullscreenIcon(on) {
+    var fsBtn = document.getElementById('fullscreen-btn');
+    if (!fsBtn) return;
+    fsBtn.title = on ? 'Exit fullscreen' : 'Fullscreen';
+    fsBtn.querySelector('svg').innerHTML = on
+        ? '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>'
+        : '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';
 }
 
 // Resize the graph to fill the screen on enter and back to the toolbar-driven
@@ -205,7 +281,6 @@ function toggleFullscreen() {
 // (which sticks) and detach after a window so we never fight the user later.
 function onFullscreenChange() {
     var el = document.getElementById('graph');
-    var fsBtn = document.getElementById('fullscreen-btn');
     var entering = isFullscreen();
     // Each transition gets a generation id; a deferred callback only acts if it
     // still matches, so a superseded transition (e.g. a quick enter/exit) can't
@@ -216,19 +291,10 @@ function onFullscreenChange() {
         var scale = entering ? fsRestoreView.scale * FS_ZOOM_OUT : fsRestoreView.scale;
         try { network.moveTo({scale: scale, position: fsRestoreView.position}); } catch (e) {}
     }
+    setFullscreenIcon(entering);
     if (entering) {
         el.style.height = window.innerHeight + 'px';
-        if (fsBtn) {
-            fsBtn.title = 'Exit fullscreen';
-            fsBtn.querySelector('svg').innerHTML =
-                '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>';
-        }
     } else {
-        if (fsBtn) {
-            fsBtn.title = 'Fullscreen';
-            fsBtn.querySelector('svg').innerHTML =
-                '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';
-        }
         var h = autofitOn ? (autofitHeight() || currentHeight) : currentHeight;
         el.style.height = h + 'px';
         sendToStreamlit("streamlit:setFrameHeight", {height: h});
@@ -405,7 +471,10 @@ function renderGraph(args) {
     var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
     document.getElementById('download-btn').style.display = 'flex';
-    document.getElementById('fullscreen-btn').style.display = 'flex';
+    // Only offer fullscreen where the API works — hidden in the desktop webview.
+    if (fullscreenSupported()) {
+        document.getElementById('fullscreen-btn').style.display = 'flex';
+    }
     // Restore selection + viewport after a genuine re-mount (e.g. the panel
     // toggled), so the node stays highlighted and the zoom/pan don't reset —
     // making the rebuild invisible. selectNodes() does not fire selectNode, so

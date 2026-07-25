@@ -215,6 +215,7 @@ class _FakeWindow:
         self.exposed = []
         self.title = None
         self.evaluated = []
+        self.fullscreen = False
         self.events = types.SimpleNamespace(loaded=_Event())
 
     def expose(self, *fns):
@@ -222,6 +223,9 @@ class _FakeWindow:
 
     def set_title(self, title):
         self.title = title
+
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
 
     def evaluate_js(self, js):
         self.evaluated.append(js)
@@ -303,6 +307,30 @@ def test_window_bridges_wire_clipboard(monkeypatch):
     # On load, the clipboard bridge script is injected.
     window.events.loaded[0]()
     assert any("__orionbeltClipboardBridge" in js for js in window.evaluated)
+
+
+def test_window_bridges_wire_fullscreen_toggle(monkeypatch):
+    """The bridge exposes a native fullscreen toggle for the graph button to call
+    when the webview lacks the HTML Fullscreen API (issue #177)."""
+    window = _FakeWindow()
+    fake_webview = types.ModuleType("webview")
+    fake_webview.create_window = lambda *a, **k: window
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    desktop._install_window_bridges("AppName")
+
+    import webview
+
+    webview.create_window("AppName", "http://localhost")
+
+    toggler = next(
+        fn for fn in window.exposed if fn.__name__ == "orionbelt_toggle_fullscreen"
+    )
+    assert window.fullscreen is False
+    assert toggler() is True  # returns the new state
+    assert window.fullscreen is True
+    assert toggler() is False
+    assert window.fullscreen is False
 
 
 def test_copy_to_clipboard_uses_platform_command(monkeypatch):
