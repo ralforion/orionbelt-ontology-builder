@@ -1923,6 +1923,12 @@ class OntologyManager:
             )
         return None
 
+    def _require_valid_annotation_predicate(self, predicate: str) -> None:
+        """Raise ``ValueError`` if ``predicate`` is unusable as an annotation type."""
+        reason = self.invalid_annotation_predicate_reason(predicate)
+        if reason:
+            raise ValueError(reason)
+
     def add_annotation(
         self, subject: str, predicate: str, value: str, lang: Optional[str] = None
     ):
@@ -1936,12 +1942,20 @@ class OntologyManager:
         anything under a bound external prefix) are left alone, as is a URI that
         already has a type here.
 
+        Raises ``ValueError`` if the predicate is unusable — an unbound prefix
+        above all, which would otherwise be minted as a base-namespace URI
+        containing a colon. The check lives here so every caller is covered, not
+        only the Annotations page: bulk edits reach this too, and report the
+        reason per row. ``delete_annotation`` deliberately stays unchecked, so an
+        oddly named predicate already in the graph can still be removed.
+
         Args:
             subject: The resource name to annotate
             predicate: Either a full URI, a common name (label, comment, etc.), or a local name
             value: The annotation value
             lang: Optional language tag
         """
+        self._require_valid_annotation_predicate(predicate)
         subj_uri = self._uri(subject)
         pred_uri = self._resolve_predicate_uri(predicate)
 

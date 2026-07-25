@@ -153,6 +153,60 @@ def test_empty_choice_reports_error(populated_om):
     assert error is not None
 
 
+# --- the guard covers every caller, not just the picker ---------------------
+
+
+def test_add_annotation_rejects_an_unbound_prefix(populated_om):
+    import pytest
+
+    with pytest.raises(ValueError, match="wdt"):
+        populated_om.add_annotation("Person", "wdt:P31", "Q5")
+    assert not any(a["value"] == "Q5" for a in populated_om.get_annotations("Person"))
+
+
+def test_bulk_add_reports_an_unbound_prefix_instead_of_minting_a_uri(populated_om):
+    """The Bulk Edit tab reaches add_annotation directly, so it must be guarded
+    too: an unbound CURIE used to be stored as <base#wdt:P31>."""
+    result = populated_om.bulk_update_annotations(
+        [{"resource": "Person", "predicate": "wdt:P31", "value": "Q5"}]
+    )
+    assert result["applied"] == 0
+    assert result["errors"] and "wdt" in result["errors"][0]["error"]
+    assert not any(
+        "wdt:P31" in str(p) for p in populated_om.graph.predicates(None, None)
+    )
+
+
+def test_bulk_add_still_creates_a_valid_custom_type(populated_om):
+    result = populated_om.bulk_update_annotations(
+        [{"resource": "Person", "predicate": "wikidataId", "value": "Q5"}]
+    )
+    assert result == {"applied": 1, "errors": []}
+    pred = URIRef("http://test.org/ont#wikidataId")
+    assert (pred, RDF.type, OWL.AnnotationProperty) in populated_om.graph
+
+
+def test_bulk_delete_can_still_remove_an_oddly_named_predicate(populated_om):
+    """Data minted before the guard has to stay removable."""
+    from rdflib import Literal
+
+    bad = URIRef("http://test.org/ont#wdt:P31")
+    populated_om.graph.add((URIRef("http://test.org/ont#Person"), bad, Literal("Q5")))
+
+    result = populated_om.bulk_update_annotations(
+        [
+            {
+                "resource": "Person",
+                "predicate": "http://test.org/ont#wdt:P31",
+                "value": "Q5",
+                "action": "delete",
+            }
+        ]
+    )
+    assert result["applied"] == 1, result
+    assert (URIRef("http://test.org/ont#Person"), bad, None) not in populated_om.graph
+
+
 # --- re-selecting the type just used ----------------------------------------
 #
 # After an add, the picker's value is the raw text that was typed while the
