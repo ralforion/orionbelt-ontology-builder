@@ -2681,6 +2681,52 @@ class OntologyManager:
         if relation:
             self.graph.remove((prop1_uri, relation, prop2_uri))
 
+    def _update_relation(
+        self,
+        relations: Dict[str, Any],
+        kind: str,
+        old: tuple,
+        new: tuple,
+    ) -> bool:
+        """Replace one relation triple with another (issue #152).
+
+        ``old`` and ``new`` are ``(subject, relation_type, object)`` local names
+        or URIs. Both relation types are resolved before anything is written, so
+        an unknown type raises instead of deleting the original and failing to
+        write the replacement. Returns False when ``old`` isn't asserted, which
+        is how a stale row (deleted in another tab, or already edited) is
+        reported rather than silently adding a second triple.
+        """
+        old_subj, old_type, old_obj = old
+        new_subj, new_type, new_obj = new
+        for relation_type in (old_type, new_type):
+            if relation_type not in relations:
+                raise ValueError(f"Unknown {kind} relation: {relation_type}")
+
+        old_triple = (
+            self._uri(old_subj),
+            relations[old_type],
+            self._uri(old_obj),
+        )
+        if old_triple not in self.graph:
+            return False
+
+        self.graph.remove(old_triple)
+        self.graph.add((self._uri(new_subj), relations[new_type], self._uri(new_obj)))
+        return True
+
+    def update_class_relation(self, old: tuple, new: tuple) -> bool:
+        """Replace a class relation with an edited one. See :meth:`_update_relation`."""
+        return self._update_relation(self.CLASS_RELATIONS, "class", old, new)
+
+    def update_property_relation(self, old: tuple, new: tuple) -> bool:
+        """Replace a property relation with an edited one."""
+        return self._update_relation(self.PROPERTY_RELATIONS, "property", old, new)
+
+    def update_individual_relation(self, old: tuple, new: tuple) -> bool:
+        """Replace an individual relation with an edited one."""
+        return self._update_relation(self.INDIVIDUAL_RELATIONS, "individual", old, new)
+
     def get_property_relations(
         self, prop_name: Optional[str] = None
     ) -> List[Dict[str, str]]:
