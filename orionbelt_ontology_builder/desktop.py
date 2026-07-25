@@ -213,10 +213,15 @@ def _install_window_bridges(app_name: str):
         def orionbelt_toggle_fullscreen():
             # The embedded webview doesn't support the HTML Fullscreen API, so the
             # graph's Fullscreen button routes here to toggle the native window
-            # instead (issue #177). Returns the resulting state, or None on error.
+            # instead (issue #177). Returns True once the toggle is away, or None
+            # if it couldn't be requested — deliberately not the resulting
+            # fullscreen state: pywebview keeps that on its platform window, and
+            # some backends (Qt) only flip it once the GUI thread catches up, so
+            # anything read here could be a lie. The page tracks its own overlay
+            # state and is told about native exits by _on_window_restored below.
             try:
                 window.toggle_fullscreen()
-                return bool(getattr(window, "fullscreen", False))
+                return True
             except Exception:
                 return None
 
@@ -231,11 +236,11 @@ def _install_window_bridges(app_name: str):
 
         def _clear_native_fullscreen_flag():
             # pywebview decides which way toggle_fullscreen() goes purely from a
-            # flag it flips itself, so a fullscreen exit it didn't initiate (Esc)
-            # leaves that flag stale and the next toggle fails to re-enter. There
-            # is no public setter, hence reaching for the platform window; every
-            # step is optional so an unknown backend simply keeps today's
-            # behaviour.
+            # flag it keeps on the platform window, so a fullscreen exit it didn't
+            # initiate (Esc) leaves that flag stale and the next toggle fails to
+            # re-enter. There is no public setter, hence reaching for the platform
+            # window; every step is optional so an unknown backend simply keeps
+            # today's behaviour.
             try:
                 view = window.gui.BrowserView.instances.get(window.uid)
             except Exception:

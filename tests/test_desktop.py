@@ -215,9 +215,12 @@ class _FakeWindow:
         self.exposed = []
         self.title = None
         self.evaluated = []
-        self.fullscreen = False
         self.uid = "master"
         self.gui = None
+        # Real pywebview keeps the fullscreen state on the platform window, not
+        # here, so the fake tracks toggles rather than exposing a state field the
+        # bridge could read (a stub that did would overstate the API).
+        self.toggle_fullscreen_calls = 0
         self.events = types.SimpleNamespace(loaded=_Event(), restored=_Event())
 
     def expose(self, *fns):
@@ -227,7 +230,7 @@ class _FakeWindow:
         self.title = title
 
     def toggle_fullscreen(self):
-        self.fullscreen = not self.fullscreen
+        self.toggle_fullscreen_calls += 1
 
     def evaluate_js(self, js):
         self.evaluated.append(js)
@@ -328,11 +331,20 @@ def test_window_bridges_wire_fullscreen_toggle(monkeypatch):
     toggler = next(
         fn for fn in window.exposed if fn.__name__ == "orionbelt_toggle_fullscreen"
     )
-    assert window.fullscreen is False
-    assert toggler() is True  # returns the new state
-    assert window.fullscreen is True
-    assert toggler() is False
-    assert window.fullscreen is False
+    # Each call reaches the native window and reports only that it got there:
+    # pywebview holds the resulting state on its platform window, and Qt flips it
+    # asynchronously, so the bridge deliberately doesn't claim to know it.
+    assert toggler() is True
+    assert window.toggle_fullscreen_calls == 1
+    assert toggler() is True
+    assert window.toggle_fullscreen_calls == 2
+
+    # A backend that can't toggle reports failure rather than raising into JS.
+    def _boom():
+        raise RuntimeError("no fullscreen here")
+
+    window.toggle_fullscreen = _boom
+    assert toggler() is None
 
 
 def test_native_fullscreen_exit_notifies_page(monkeypatch):
