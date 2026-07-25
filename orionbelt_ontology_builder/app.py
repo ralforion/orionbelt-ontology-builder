@@ -1249,6 +1249,11 @@ def _open_entity(kind: str, key: str, mode: str = "view") -> None:
     st.session_state[f"active_{kind}"] = (key, mode)
 
 
+def _close_entity(kind: str) -> None:
+    """Close whatever card of ``kind`` is open (Cancel, or a finished save)."""
+    st.session_state.pop(f"active_{kind}", None)
+
+
 def _get_active(kind: str):
     """Return ``(key, mode)`` for the open card of ``kind``, or ``None``."""
     value = st.session_state.get(f"active_{kind}")
@@ -3864,6 +3869,172 @@ def render_individuals():
                         st.rerun()
 
 
+def render_restriction_row(ont, rest, row_key, class_names, property_names):
+    """Render one restriction as a row, with edit and delete (issue #152).
+
+    Mirrors the Relations lists: class, property, type and value across the row,
+    so a page of restrictions can be scanned at a glance. The editor opens
+    underneath the row it belongs to.
+    """
+    value_text = "—" if rest["value"] is None else str(rest["value"])
+    if rest["on_class"]:
+        value_text = f"{value_text} (on {rest['on_class']})"
+
+    col_cls, col_prop, col_type, col_val, col_edit, col_del = st.columns(
+        [3, 2, 2, 3, 0.7, 0.7]
+    )
+    with col_cls:
+        st.write(f"📦 {', '.join(rest['applied_to']) or '—'}")
+    with col_prop:
+        st.write(f"🔗 {rest['property']}")
+    with col_type:
+        st.write(f"🔒 {rest['type'] or '—'}")
+    with col_val:
+        st.write(value_text)
+
+    # An orphaned restriction (applied to nothing) has no class to edit or
+    # delete against, so it is shown but not actionable.
+    if not rest["applied_to"]:
+        return
+
+    with col_edit:
+        st.button(
+            "✏️",
+            key=f"edit_rest_{row_key}",
+            help="Edit this restriction",
+            on_click=_cb_toggle_edit,
+            args=("rest", row_key),
+        )
+    with col_del:
+        if st.button("🗑️", key=f"del_rest_{row_key}", help="Delete this restriction"):
+            # Use full URIs so restrictions on external/imported properties or
+            # classes delete correctly, and the value (with the qualified class)
+            # so a sibling on the same property and type is not deleted instead
+            # of this row (issue #152).
+            applied_uri = rest.get("applied_to_uris") or rest["applied_to"]
+            removed = ont.delete_restriction(
+                applied_uri[0],
+                rest.get("property_uri") or rest["property"],
+                rest["type"],
+                value=rest.get("value_uri") or rest.get("value"),
+                on_class=rest.get("on_class_uri") or rest.get("on_class"),
+            )
+            if removed:
+                save_checkpoint("Delete restriction")
+                show_message("Restriction deleted!", "success")
+                st.rerun()
+            else:
+                show_message("Could not delete this restriction.", "error")
+
+    render_restriction_editor(ont, rest, row_key, class_names, property_names)
+
+
+def render_restriction_editor(ont, rest, row_key, class_names, property_names):
+    """Edit one restriction in place, inside its expander (issue #152).
+
+    The row is identified by its whole spec, so a class carrying several
+    restrictions on the same property and type edits the one on screen rather
+    than whichever the graph yields first. Keyed by the row's position in the
+    rendered list, which is what the delete button already does: two identical
+    restrictions would otherwise share a key.
+    """
+    kind = "rest"
+    if not _is_open(kind, row_key, "edit"):
+        return
+
+    types = list(ont.RESTRICTION_TYPES)
+    applied = rest["applied_to"][0]
+    with st.form(f"edit_rest_form_{row_key}"):
+        new_class = st.selectbox(
+            "Applies to Class",
+            class_names,
+            index=class_names.index(applied) if applied in class_names else 0,
+            key=f"er_cls_{row_key}",
+        )
+        new_property = st.selectbox(
+            "Property",
+            property_names,
+            index=(
+                property_names.index(rest["property"])
+                if rest["property"] in property_names
+                else 0
+            ),
+            key=f"er_prop_{row_key}",
+        )
+        new_type = st.selectbox(
+            "Restriction Type",
+            types,
+            index=types.index(rest["type"]) if rest["type"] in types else 0,
+            key=f"er_type_{row_key}",
+        )
+        # One text box for every value kind: a cardinality is a number, the
+        # others name a class or carry a literal, and the engine rejects a
+        # cardinality that isn't a whole number.
+        new_value = st.text_input(
+            "Value",
+            value="" if rest["value"] is None else str(rest["value"]),
+            key=f"er_val_{row_key}",
+            help="A class name for someValuesFrom/allValuesFrom, a number for a "
+            "cardinality, or a literal for hasValue.",
+        )
+        new_on_class = None
+        if "Qualified" in new_type:
+            on_class_options = class_names or [""]
+            new_on_class = st.selectbox(
+                "Qualified on Class",
+                on_class_options,
+                index=(
+                    on_class_options.index(rest["on_class"])
+                    if rest["on_class"] in on_class_options
+                    else 0
+                ),
+                key=f"er_onclass_{row_key}",
+            )
+
+        save_col, cancel_col = st.columns(2)
+        with save_col:
+            saved = st.form_submit_button("💾 Save", use_container_width=True)
+        with cancel_col:
+            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+        if cancelled:
+            _close_entity(kind)
+            st.rerun()
+        if saved:
+            applied_uris = rest.get("applied_to_uris") or rest["applied_to"]
+            try:
+                changed = ont.update_restriction(
+                    {
+                        "class_name": applied_uris[0],
+                        "property_name": rest.get("property_uri") or rest["property"],
+                        "restriction_type": rest["type"],
+                        "value": rest.get("value_uri") or rest.get("value"),
+                        "on_class": rest.get("on_class_uri") or rest.get("on_class"),
+                    },
+                    {
+                        "class_name": new_class,
+                        "property_name": new_property,
+                        "restriction_type": new_type,
+                        "value": new_value,
+                        "on_class": new_on_class,
+                    },
+                )
+            except ValueError as exc:
+                show_message(str(exc), "error")
+                return
+            if changed:
+                save_checkpoint("Edit restriction")
+                _close_entity(kind)
+                set_flash_message("Restriction updated!", "success")
+                st.rerun()
+            else:
+                show_message(
+                    "This restriction is no longer in the ontology, so it "
+                    "wasn't changed.",
+                    "error",
+                )
+
+
 def render_restrictions():
     """Render the restrictions management page."""
     st.header("Restrictions")
@@ -3908,44 +4079,19 @@ def render_restrictions():
                 _view_restrictions = _sort_restrictions(_view_restrictions)
             if not _view_restrictions:
                 st.caption("No restrictions match your search.")
-            # Key delete buttons by the row's position in the rendered list, which
-            # is unique per render. (list.index would collide when two identical
-            # restrictions exist, since it returns the first match for both.)
-            for _row_i, rest in enumerate(_view_restrictions):
-                with st.expander(f"🔒 {rest['type']} on {rest['property']}"):
-                    st.write(f"**Property:** {rest['property']}")
-                    st.write(f"**Restriction Type:** {rest['type']}")
-                    st.write(f"**Value:** {rest['value']}")
-                    if rest["on_class"]:
-                        st.write(f"**Qualified on Class:** {rest['on_class']}")
-                    st.write(f"**Applied to Classes:** {', '.join(rest['applied_to'])}")
-
-                    if rest["applied_to"]:
-                        if st.button("Delete", key=f"del_rest_{_row_i}"):
-                            # Use full URIs so restrictions on external/imported
-                            # properties or classes delete correctly.
-                            applied_uri = (
-                                rest.get("applied_to_uris") or rest["applied_to"]
-                            )
-                            # Pass the value (and qualified class) as well, or a
-                            # sibling restriction on the same property and type
-                            # is deleted instead of this row (issue #152).
-                            removed = ont.delete_restriction(
-                                applied_uri[0],
-                                rest.get("property_uri") or rest["property"],
-                                rest["type"],
-                                value=rest.get("value_uri") or rest.get("value"),
-                                on_class=rest.get("on_class_uri")
-                                or rest.get("on_class"),
-                            )
-                            if removed:
-                                save_checkpoint("Delete restriction")
-                                show_message("Restriction deleted!", "success")
-                                st.rerun()
-                            else:
-                                show_message(
-                                    "Could not delete this restriction.", "error"
-                                )
+            # Rows rather than one expander each: a long list reads as a table
+            # of class / property / type / value instead of a wall of collapsed
+            # boxes, and it paginates like the Relations lists do.
+            _rest_page = st.session_state.get("rest_page", 1)
+            for _row_i, rest in enumerate(
+                _paginate_rows(_view_restrictions, "rest_page", "restrictions")
+            ):
+                # Key by page and position: unique per render, and stable while
+                # the page is. (Keying by the restriction itself would collide
+                # when a class carries two identical ones.)
+                render_restriction_row(
+                    ont, rest, f"{_rest_page}_{_row_i}", class_names, all_props
+                )
 
     if _rest_tab == "Add Restriction":
         st.subheader("Add Restriction")
@@ -4067,25 +4213,19 @@ def render_relations():
             st.write("**Class Relations:**")
             if not class_relations:
                 st.caption("No class relations match your search.")
-            for rel in _paginate_rows(
-                class_relations, "rel_class_page", "class relations"
-            ):
-                subj_uri = rel.get("subject_uri", rel["subject"])
-                obj_uri = rel.get("object_uri", rel["object"])
-                rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
-                col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
-                with col1:
-                    st.write(f"📦 {rel['subject']}")
-                with col2:
-                    st.write(f"➡️ {rel['relation']}")
-                with col3:
-                    st.write(f"📦 {rel['object']}")
-                with col4:
-                    if st.button("🗑️", key=f"del_crel_{rel_uid}"):
-                        ont.remove_class_relation(subj_uri, rel["relation"], obj_uri)
-                        save_checkpoint("Delete class relation")
-                        show_message("Relation deleted!", "success")
-                        st.rerun()
+            render_relation_rows(
+                ont,
+                _paginate_rows(class_relations, "rel_class_page", "class relations"),
+                {
+                    "icon": "📦",
+                    "kind": "crel",
+                    "label": "class relation",
+                    "entities": classes,
+                    "relation_types": ont.CLASS_RELATIONS,
+                    "remove": ont.remove_class_relation,
+                    "update": ont.update_class_relation,
+                },
+            )
         else:
             st.info("No class relations defined.")
 
@@ -4098,25 +4238,19 @@ def render_relations():
             st.write("**Property Relations:**")
             if not prop_relations:
                 st.caption("No property relations match your search.")
-            for rel in _paginate_rows(
-                prop_relations, "rel_prop_page", "property relations"
-            ):
-                col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
-                with col1:
-                    st.write(f"🔗 {rel['subject']}")
-                with col2:
-                    st.write(f"➡️ {rel['relation']}")
-                with col3:
-                    st.write(f"🔗 {rel['object']}")
-                with col4:
-                    subj_uri = rel.get("subject_uri", rel["subject"])
-                    obj_uri = rel.get("object_uri", rel["object"])
-                    rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
-                    if st.button("🗑️", key=f"del_prel_{rel_uid}"):
-                        ont.remove_property_relation(subj_uri, rel["relation"], obj_uri)
-                        save_checkpoint("Delete property relation")
-                        show_message("Relation deleted!", "success")
-                        st.rerun()
+            render_relation_rows(
+                ont,
+                _paginate_rows(prop_relations, "rel_prop_page", "property relations"),
+                {
+                    "icon": "🔗",
+                    "kind": "prel",
+                    "label": "property relation",
+                    "entities": object_props + data_props,
+                    "relation_types": ont.PROPERTY_RELATIONS,
+                    "remove": ont.remove_property_relation,
+                    "update": ont.update_property_relation,
+                },
+            )
         else:
             st.info("No property relations defined.")
 
@@ -4129,27 +4263,19 @@ def render_relations():
             st.write("**Individual Relations:**")
             if not ind_relations:
                 st.caption("No individual relations match your search.")
-            for rel in _paginate_rows(
-                ind_relations, "rel_ind_page", "individual relations"
-            ):
-                col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
-                with col1:
-                    st.write(f"👤 {rel['subject']}")
-                with col2:
-                    st.write(f"➡️ {rel['relation']}")
-                with col3:
-                    st.write(f"👤 {rel['object']}")
-                with col4:
-                    subj_uri = rel.get("subject_uri", rel["subject"])
-                    obj_uri = rel.get("object_uri", rel["object"])
-                    rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
-                    if st.button("🗑️", key=f"del_irel_{rel_uid}"):
-                        ont.remove_individual_relation(
-                            subj_uri, rel["relation"], obj_uri
-                        )
-                        save_checkpoint("Delete individual relation")
-                        show_message("Relation deleted!", "success")
-                        st.rerun()
+            render_relation_rows(
+                ont,
+                _paginate_rows(ind_relations, "rel_ind_page", "individual relations"),
+                {
+                    "icon": "👤",
+                    "kind": "irel",
+                    "label": "individual relation",
+                    "entities": individuals,
+                    "relation_types": ont.INDIVIDUAL_RELATIONS,
+                    "remove": ont.remove_individual_relation,
+                    "update": ont.update_individual_relation,
+                },
+            )
         else:
             st.info("No individual relations defined.")
 
@@ -4350,6 +4476,105 @@ def resolve_annotation_predicate_choice(ont, choice, lookup) -> tuple:
         return lookup[choice], None
     text = (choice or "").strip()
     return text, ont.invalid_annotation_predicate_reason(text)
+
+
+def render_relation_rows(ont, rows, spec):
+    """Render one relation section: a row each, with edit and delete.
+
+    ``spec`` carries what differs between the class, property and individual
+    lists: the icon, the entities that can fill a slot, the relation types, the
+    active-card kind and the engine calls. Editing rewrites the triple in place
+    rather than asking the user to delete and re-add it (issue #152).
+    """
+    options, lookup = build_uri_options(spec["entities"])
+    for rel in rows:
+        subj_uri = rel.get("subject_uri", rel["subject"])
+        obj_uri = rel.get("object_uri", rel["object"])
+        rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
+        icon = spec["icon"]
+
+        col1, col2, col3, col_edit, col_del = st.columns([3, 2, 3, 0.7, 0.7])
+        with col1:
+            st.write(f"{icon} {rel['subject']}")
+        with col2:
+            st.write(f"➡️ {rel['relation']}")
+        with col3:
+            st.write(f"{icon} {rel['object']}")
+        with col_edit:
+            st.button(
+                "✏️",
+                key=f"edit_{spec['kind']}_{rel_uid}",
+                help="Edit this relation",
+                on_click=_cb_toggle_edit,
+                args=(spec["kind"], rel_uid),
+            )
+        with col_del:
+            if st.button(
+                "🗑️", key=f"del_{spec['kind']}_{rel_uid}", help="Delete this relation"
+            ):
+                spec["remove"](subj_uri, rel["relation"], obj_uri)
+                save_checkpoint(f"Delete {spec['label']}")
+                show_message("Relation deleted!", "success")
+                st.rerun()
+
+        if not _is_open(spec["kind"], rel_uid, "edit"):
+            continue
+
+        with st.form(f"edit_form_{spec['kind']}_{rel_uid}"):
+            # Slots are pre-set to the row's own values, so an edit that touches
+            # one part leaves the rest exactly as asserted.
+            subj_default = _uri_option_index(options, lookup, subj_uri)
+            obj_default = _uri_option_index(options, lookup, obj_uri)
+            types = list(spec["relation_types"])
+            new_subject = st.selectbox(
+                "Subject", options, index=subj_default, key=f"es_{rel_uid}"
+            )
+            new_type = st.selectbox(
+                "Relation",
+                types,
+                index=types.index(rel["relation"]) if rel["relation"] in types else 0,
+                key=f"et_{rel_uid}",
+            )
+            new_object = st.selectbox(
+                "Object", options, index=obj_default, key=f"eo_{rel_uid}"
+            )
+            save_col, cancel_col = st.columns(2)
+            with save_col:
+                saved = st.form_submit_button("💾 Save", use_container_width=True)
+            with cancel_col:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+            if cancelled:
+                _close_entity(spec["kind"])
+                st.rerun()
+            if saved:
+                changed = spec["update"](
+                    (subj_uri, rel["relation"], obj_uri),
+                    (lookup[new_subject], new_type, lookup[new_object]),
+                )
+                if changed:
+                    save_checkpoint(f"Edit {spec['label']}")
+                    _close_entity(spec["kind"])
+                    set_flash_message("Relation updated!", "success")
+                    st.rerun()
+                else:
+                    # The row was deleted or edited elsewhere since this list
+                    # was drawn; re-adding it under the new values would
+                    # resurrect a relation the user already removed.
+                    show_message(
+                        "This relation is no longer in the ontology, so it "
+                        "wasn't changed. Close the editor to refresh the list.",
+                        "error",
+                    )
+
+
+def _uri_option_index(options: list, lookup: dict, uri: str) -> int:
+    """Index of the option standing for ``uri``, or 0 when it isn't listed
+    (an external URI with no entity of its own)."""
+    for i, option in enumerate(options):
+        if lookup.get(option) == uri:
+            return i
+    return 0
 
 
 def annotation_option_for_predicate(ont, predicate_lookup, predicate_uri):

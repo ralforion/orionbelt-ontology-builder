@@ -2,7 +2,9 @@
 
 Two identical restrictions produce two equal dicts from get_restrictions(), so
 keying delete buttons by list.index() collided (both del_rest_0). The view keys
-by rendered-row position instead; this guards that it renders cleanly.
+by page and rendered-row position instead; this guards that it renders cleanly.
+The assertion is on uniqueness, not on the key strings, so the keying scheme can
+change (it gained a page prefix in #152) without a false failure.
 """
 
 from streamlit.testing.v1 import AppTest
@@ -35,4 +37,5 @@ def test_duplicate_restrictions_render_without_key_clash():
     at.run(timeout=120)
     assert not at.exception, at.exception
     del_buttons = [b for b in at.button if b.key and b.key.startswith("del_rest_")]
-    assert {b.key for b in del_buttons} == {"del_rest_0", "del_rest_1"}
+    assert len(del_buttons) == 2, del_buttons
+    assert len({b.key for b in del_buttons}) == 2, "delete keys collided"
