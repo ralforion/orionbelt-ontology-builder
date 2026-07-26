@@ -7187,9 +7187,15 @@ def render_visualization():
             or st.session_state.last_graph_data is None
         )
 
+        # Reserve the status slot on every render, not only when rebuilding: this
+        # placeholder sits above the graph component, so an element that comes and
+        # goes shifts the component's position in Streamlit's element tree and
+        # makes Streamlit re-create its iframe — which drops graph fullscreen and
+        # reloads the viewer (issue #189).
+        status = st.empty()
+
         if needs_rebuild:
             # Build the graph using lightweight dicts (no pyvis overhead)
-            status = st.empty()
             status.info("Building graph...")
 
             class _GraphBuilder:
