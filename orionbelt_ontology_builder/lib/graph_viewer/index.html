@@ -221,6 +221,27 @@ function fullscreenSupported() {
 var desktopFsOn = false;   // tracked pseudo-fullscreen state (no fullscreenchange)
 var pseudoFsPrevStyle = null;  // saved inline style of this iframe in the parent
 
+// While the graph is fullscreen, selections stay client-side. Sending one to
+// Streamlit reruns the app, which repaints the details panel / status bar that
+// nobody can see behind the fullscreen graph — and it was that rerun's rebuild
+// of this component that dropped fullscreen altogether (issue #189). vis still
+// highlights the clicked node locally, so the feedback is immediate; the last
+// selection is flushed on exit, so the panel comes back showing the node the
+// user left selected.
+var pendingSelection = null;
+
+function sendSelection(value) {
+    if (isFullscreen() || desktopFsOn) { pendingSelection = value; return; }
+    sendToStreamlit("streamlit:setComponentValue", {value: value});
+}
+
+function flushPendingSelection() {
+    if (!pendingSelection) return;
+    var value = pendingSelection;
+    pendingSelection = null;
+    sendToStreamlit("streamlit:setComponentValue", {value: value});
+}
+
 // Desktop graph-only fullscreen. The webview has no HTML Fullscreen API and the
 // native-window toggle alone fullscreens the whole app (sidebar + toolbar), not
 // the graph (issue #177 follow-up). So promote this same-origin iframe to a
@@ -284,6 +305,7 @@ function exitPseudoFullscreen() {
     unwatchFullscreenBox();
     setFullscreenIcon(false);
     scheduleFullscreenView(false);
+    flushPendingSelection();
 }
 
 // Toggle desktop fullscreen: the overlay (graph-only) plus, when available, the
@@ -457,6 +479,8 @@ function onFullscreenChange() {
         watchFullscreenBox();
     } else {
         unwatchFullscreenBox();
+        // Hand the panel/status bar the node the user left selected (issue #189).
+        flushPendingSelection();
     }
 }
 document.addEventListener('fullscreenchange', onFullscreenChange);
@@ -620,8 +644,16 @@ function renderGraph(args) {
     // toggled), so the node stays highlighted and the zoom/pan don't reset —
     // making the rebuild invisible. selectNodes() does not fire selectNode, so
     // this doesn't loop back to Streamlit.
-    if (args.selected_node !== null && args.selected_node !== undefined) {
-        try { network.selectNodes([args.selected_node]); } catch (e) {}
+    // A selection made while fullscreen hasn't reached Streamlit yet (it is
+    // flushed on exit), so args.selected_node is stale for the rebuilds that do
+    // still happen in fullscreen — a Ctrl/Cmd-click focus expand. Restore what
+    // the user actually has selected instead (issue #189).
+    var restoreNode = args.selected_node;
+    if (pendingSelection) {
+        restoreNode = pendingSelection.selected ? (pendingSelection.nodeId || null) : null;
+    }
+    if (restoreNode !== null && restoreNode !== undefined) {
+        try { network.selectNodes([restoreNode]); } catch (e) {}
     }
     // --- Find & centre (issue #144) ---------------------------------------
     // Python sends focus_node (the entity picked in "Find entity", present on
@@ -775,23 +807,19 @@ function renderGraph(args) {
 
     network.on('selectNode', function(params) {
         var nd = nodes.get(params.nodes[0]);
-        sendToStreamlit("streamlit:setComponentValue", {
-            value: {nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, title: nd.title || '', selected: true}
-        });
+        sendSelection({nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, title: nd.title || '', selected: true});
     });
     network.on('selectEdge', function(params) {
         if (params.nodes.length === 0 && params.edges.length > 0) {
             var ed = edges.get(params.edges[0]);
-            sendToStreamlit("streamlit:setComponentValue", {
-                value: {ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true}
-            });
+            sendSelection({ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true});
         }
     });
     network.on('deselectNode', function() {
-        sendToStreamlit("streamlit:setComponentValue", {value: {selected: false}});
+        sendSelection({selected: false});
     });
     network.on('deselectEdge', function() {
-        sendToStreamlit("streamlit:setComponentValue", {value: {selected: false}});
+        sendSelection({selected: false});
     });
 
     // Ctrl/Cmd-click a node to add it to the "Focus on one node" selection, so
