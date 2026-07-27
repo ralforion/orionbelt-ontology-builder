@@ -722,6 +722,15 @@ function renderGraph(args) {
     }
     network.on('dragStart', _releaseFindPin);
     network.on('click', _releaseFindPin);
+    // Is this render's pin still the live one? Deferred centring (below) runs a
+    // second or more after the render, by which time the user may have taken
+    // control or picked something else, so it has to re-read the shared state
+    // instead of trusting the pin captured at render time.
+    function _findPinLive() {
+        var f = {};
+        try { f = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {}; } catch (e) {}
+        return !f.released && f.seq === args.focus_seq;
+    }
     // Cache the layout AND viewport so re-mounts restore both instantly. Save
     // after the settle animation has frozen (not on stabilizationIterationsDone,
     // which fires ~500ms before the freeze while nodes still move), and after any
@@ -756,10 +765,13 @@ function renderGraph(args) {
                 }
                 // The nodes have settled and vis's auto-fit was suppressed for
                 // this pass, so this is the point at which the Find pick can be
-                // centred accurately (issue #195). Cache the viewport only once
-                // the camera animation has finished, or we'd store a mid-flight
-                // frame.
-                if (_pin) {
+                // centred accurately (issue #195). Re-read the pin rather than
+                // trusting the one captured at render time: the user may have
+                // clicked or dragged while physics was still running, and
+                // centring now would yank the camera back off whatever they
+                // just navigated to. Cache the viewport only once the camera
+                // animation has finished, or we'd store a mid-flight frame.
+                if (_pin && _findPinLive()) {
                     try {
                         network.focus(_pin, {
                             scale: 1.1,
