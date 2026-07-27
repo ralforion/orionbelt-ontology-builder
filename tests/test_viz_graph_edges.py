@@ -70,13 +70,20 @@ def _script():
         ):
             st.session_state[f"_viz_cfg_{key}"] = True
 
-        if os.environ.get("HIDE_CLASSES"):
-            hidden = set(os.environ["HIDE_CLASSES"].split(","))
-            entries = app.build_class_filter_entries(om.get_classes())
-            st.session_state["_viz_cfg_selected_class_uris"] = [
+        for env, kind, items in (
+            ("HIDE_CLASSES", "class", om.get_classes()),
+            ("HIDE_INDS", "ind", om.get_individuals()),
+        ):
+            if not os.environ.get(env):
+                continue
+            hidden = set(os.environ[env].split(","))
+            entries = app.build_filter_entries(items)
+            st.session_state[f"_viz_cfg_selected_{kind}_uris"] = [
                 e["uri"] for e in entries if e["display"] not in hidden
             ]
-            st.session_state["_viz_cfg_known_class_uris"] = {e["uri"] for e in entries}
+            st.session_state[f"_viz_cfg_known_{kind}_uris"] = {
+                e["uri"] for e in entries
+            }
             st.session_state["_viz_cfg_seen_mutation"] = st.session_state.get(
                 "_ont_mutation_count", 0
             )
@@ -84,9 +91,10 @@ def _script():
     app.render_visualization()
 
 
-def _graph(hide_classes=None):
+def _graph(hide_classes=None, hide_inds=None):
     """Render the visualization once and return its (nodes, edges)."""
     os.environ["HIDE_CLASSES"] = ",".join(hide_classes or [])
+    os.environ["HIDE_INDS"] = ",".join(hide_inds or [])
     at = AppTest.from_function(_script)
     at.run(timeout=120)
     assert not at.exception, at.exception
@@ -165,3 +173,113 @@ def test_hiding_one_of_two_same_named_classes_keeps_the_other_linked():
     person_id = persons[0]["id"]
     assert any(e["to"] == person_id and e.get("label") == "subClassOf" for e in edges)
     assert any(e["from"] == person_id and e["to"].startswith("ann_") for e in edges)
+
+
+# --- Individuals filter (issue #196) ---------------------------------------
+
+
+def _labels(nodes, ntype):
+    return sorted(str(n.get("label")) for n in nodes if n.get("ntype") == ntype)
+
+
+def test_individuals_all_shown_by_default(graph):
+    nodes, _ = graph
+    assert _labels(nodes, "Individual") == ["acme", "alice"]
+
+
+def test_hiding_an_individual_removes_only_that_node():
+    nodes, edges = _graph(hide_inds=["acme"])
+    assert _labels(nodes, "Individual") == ["alice"]
+    assert _dangling(nodes, edges) == []
+    # alice's worksFor assertion pointed at acme, so the individual-to-individual
+    # edge has to go with it. (The Triples view still draws its own edge to a
+    # generic triple node for the same statement — that is its job.)
+    ind_ids = {n["id"] for n in nodes if n["id"].startswith("ind_")}
+    assert not any(
+        e["from"] in ind_ids and e["to"] in ind_ids and e.get("label") == "worksFor"
+        for e in edges
+    )
+    # Her own type edge and annotation survive.
+    assert any(e["from"].startswith("ind_") and e.get("label") == "type" for e in edges)
+    assert any(
+        e["from"].startswith("ind_") and e["to"].startswith("ann_") for e in edges
+    )
+
+
+def test_hiding_every_individual_leaves_the_classes_intact():
+    nodes, edges = _graph(hide_inds=["alice", "acme"])
+    assert _labels(nodes, "Individual") == []
+    assert _dangling(nodes, edges) == []
+    assert _labels(nodes, "Class")
+
+
+def test_class_and_individual_filters_are_independent():
+    nodes, edges = _graph(hide_classes=["Organization"], hide_inds=["alice"])
+    assert _labels(nodes, "Individual") == ["acme"]
+    assert "Organization" not in _labels(nodes, "Class")
+    assert _dangling(nodes, edges) == []
+
+
+# --- Same-named individuals across namespaces (PR #202 review) --------------
+
+
+def _twin_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_prefix("other", "http://other.example.org/ns#")
+        om.add_class("Person")
+        om.add_individual("alice", "Person")
+        om.add_individual("bob", "Person")
+        # A second bob, same local name, different namespace.
+        om.add_individual("bob", "Person", namespace="http://other.example.org/ns#")
+        # alice knows the *base* bob.
+        om.add_individual_property("alice", "knows", "bob")
+
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+        for key in ("show_classes", "show_individuals", "show_ind_edges"):
+            st.session_state[f"_viz_cfg_{key}"] = True
+
+    app.render_visualization()
+
+
+def _twin_graph():
+    at = AppTest.from_function(_twin_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    data = at.session_state["last_graph_data"]
+    assert data, "the visualization built no graph"
+    return json.loads(data["nodes"]), json.loads(data["edges"])
+
+
+def test_same_named_individuals_are_separate_nodes():
+    nodes, _ = _twin_graph()
+    labels = _labels(nodes, "Individual")
+    assert labels[0] == "alice"
+    # Both bobs are present and namespace-tagged apart. The second one shows its
+    # bound prefix; the base namespace has none, so it falls back to the
+    # namespace itself.
+    bobs = labels[1:]
+    assert len(bobs) == 2 and all(b.startswith("bob (") for b in bobs)
+    assert sum(1 for b in bobs if b == "bob (other)") == 1
+
+
+def test_knows_edge_targets_the_right_namespace():
+    """Regression: the target was resolved by local name, so the edge could
+    land on whichever same-named individual was seen last."""
+    nodes, edges = _twin_graph()
+    assert _dangling(nodes, edges) == []
+    by_id = {n["id"]: n for n in nodes}
+    knows = [e for e in edges if e.get("label") == "knows"]
+    assert len(knows) == 1
+    assert by_id[knows[0]["from"]]["label"] == "alice"
+    # The base-namespace bob, not the one from the other namespace.
+    target = by_id[knows[0]["to"]]["label"]
+    assert target.startswith("bob (")
+    assert target != "bob (other)"
