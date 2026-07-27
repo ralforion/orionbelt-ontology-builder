@@ -595,6 +595,26 @@ function renderGraph(args) {
         return h;
     }
     var nodeHash = _hash(nodeArr.map(function(n) { return n.id; }).sort().join('|'));
+
+    // --- Find & centre pin (issues #144, #195) ----------------------------
+    // Resolve the pin *before* the physics options are built: when a pick is
+    // active the camera belongs to that node, so vis's post-stabilization
+    // auto-fit (stabilization.fit, on by default) has to be switched off — it
+    // frames the whole graph and undoes the centring. That is why picking an
+    // entity that was hidden by the class filter appeared to do nothing: the
+    // reveal changes the node set, which forces a stabilization pass, whereas
+    // picking an already-visible entity reuses the cached layout with physics
+    // off and no fit (issue #195).
+    var _findIds = {};
+    nodeArr.forEach(function(n) { _findIds[n.id] = true; });
+    var _find = {};
+    try { _find = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {}; } catch (e) {}
+    if (_find.seq !== args.focus_seq) {
+        _find = {seq: args.focus_seq, released: false, centred: false};
+    }
+    var _pin = (!_find.released && args.focus_node && _findIds[args.focus_node])
+        ? args.focus_node : null;
+
     var savedPos = null, savedView = null, pinnedIds = [];
     var _raw = null;
     try { _raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null'); } catch (e) {}
@@ -625,13 +645,13 @@ function renderGraph(args) {
             }
         });
         var iters2 = Math.min(Math.max(nCount * 3, 150), 500);
-        options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50 };
+        options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50, fit: !_pin };
     } else {
         // Fresh layout (Render, or nothing cached): deterministic thanks to the
         // pinned randomSeed set in Python (issue #141).
         var iters = Math.min(Math.max(nCount * 3, 150), 500);
         var batchIters = Math.max(iters - 40, 80);
-        options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50 };
+        options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50, fit: !_pin };
     }
     var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
@@ -664,14 +684,9 @@ function renderGraph(args) {
     // While a pick is active we "pin" the camera on the node and keep it
     // selected across rebuilds instead of restoring the (now stale) saved
     // viewport; the pin is released the moment the user clicks or drags, so we
-    // never fight them, and a fresh pick (new seq) re-arms it.
-    var _find = {};
-    try { _find = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {}; } catch (e) {}
-    if (_find.seq !== args.focus_seq) {
-        _find = {seq: args.focus_seq, released: false, centred: false};
-    }
-    var _pin = (!_find.released && args.focus_node && nodes.get(args.focus_node))
-        ? args.focus_node : null;
+    // never fight them, and a fresh pick (new seq) re-arms it. _find and _pin
+    // are resolved further up, before the physics options are built.
+    //
     // Hold the camera on the pinned node across this rebuild instead of
     // restoring the (now stale) saved viewport; otherwise use the saved view.
     if (savedView && !_pin) {
@@ -680,12 +695,18 @@ function renderGraph(args) {
     if (_pin) {
         var _findFresh = !_find.centred;
         try { network.selectNodes([_pin]); } catch (e) {}
-        try {
-            network.focus(_pin, {
-                scale: 1.1,
-                animation: _find.centred ? false : {duration: 700, easingFunction: 'easeInOutQuad'}
-            });
-        } catch (e) {}
+        // Centre now only when the layout is already final. When physics still
+        // has to run, the node is still moving, so centring on its current
+        // position would land in the wrong place — the stabilization handler
+        // below does it once the nodes have settled (issue #195).
+        if (usedSaved) {
+            try {
+                network.focus(_pin, {
+                    scale: 1.1,
+                    animation: _find.centred ? false : {duration: 700, easingFunction: 'easeInOutQuad'}
+                });
+            } catch (e) {}
+        }
         if (_findFresh) sendFindSelection(_pin);
         _find.centred = true;
     }
@@ -701,6 +722,15 @@ function renderGraph(args) {
     }
     network.on('dragStart', _releaseFindPin);
     network.on('click', _releaseFindPin);
+    // Is this render's pin still the live one? Deferred centring (below) runs a
+    // second or more after the render, by which time the user may have taken
+    // control or picked something else, so it has to re-read the shared state
+    // instead of trusting the pin captured at render time.
+    function _findPinLive() {
+        var f = {};
+        try { f = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {}; } catch (e) {}
+        return !f.released && f.seq === args.focus_seq;
+    }
     // Cache the layout AND viewport so re-mounts restore both instantly. Save
     // after the settle animation has frozen (not on stabilizationIterationsDone,
     // which fires ~500ms before the freeze while nodes still move), and after any
@@ -733,7 +763,25 @@ function renderGraph(args) {
                         }));
                     } catch (e) {}
                 }
-                savePositions();
+                // The nodes have settled and vis's auto-fit was suppressed for
+                // this pass, so this is the point at which the Find pick can be
+                // centred accurately (issue #195). Re-read the pin rather than
+                // trusting the one captured at render time: the user may have
+                // clicked or dragged while physics was still running, and
+                // centring now would yank the camera back off whatever they
+                // just navigated to. Cache the viewport only once the camera
+                // animation has finished, or we'd store a mid-flight frame.
+                if (_pin && _findPinLive()) {
+                    try {
+                        network.focus(_pin, {
+                            scale: 1.1,
+                            animation: {duration: 600, easingFunction: 'easeInOutQuad'}
+                        });
+                    } catch (e) {}
+                    setTimeout(savePositions, 700);
+                } else {
+                    savePositions();
+                }
             }, 500);
         });
     }
