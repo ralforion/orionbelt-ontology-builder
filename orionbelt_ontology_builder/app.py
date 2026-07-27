@@ -6,6 +6,7 @@ and managing OWL ontologies.
 import hashlib
 import json
 import logging
+import re
 import streamlit as st
 import time
 import traceback
@@ -6713,6 +6714,126 @@ def reconcile_class_filter(all_class_names, selected, known, replaced=False):
     return ordered, all_class_set
 
 
+# Pasted class lists are split on whitespace, commas and semicolons, so any of
+# the ways a list gets copied around (one per line, comma-separated, the token
+# string the filter itself prints) parses the same way.
+_CLASS_TOKEN_SEPARATORS = re.compile(r"[\s,;]+")
+# Collapse "Person (foaf)" to "Person(foaf)" so the display form the multiselect
+# shows survives whitespace splitting and stays one token.
+_CLASS_DISPLAY_GAP = re.compile(r"\s+\(")
+
+
+def build_class_filter_entries(classes):
+    """Describe each class for the Visualization "Filter Classes" controls.
+
+    Returns a list of dicts with the class ``name``/``uri``, whether that local
+    name is ``ambiguous`` (carried by more than one URI), the bound ``prefix``
+    when it is, and the ``display`` string the filter lists — the same
+    namespace-tagged form used everywhere else in the app, so two classes named
+    ``zero`` show as ``zero (fn)`` / ``zero (ex)`` instead of two identical
+    entries (issue #179). Order follows the class list.
+    """
+    collisions = _build_name_collision_set(classes)
+    entries = []
+    for c in classes:
+        name = c.get("name") or ""
+        uri = c.get("uri") or ""
+        ambiguous = name in collisions
+        entries.append(
+            {
+                "name": name,
+                "uri": uri,
+                "ambiguous": ambiguous,
+                "prefix": _prefix_for_uri(uri) if ambiguous else "",
+                "display": _disambiguated_name(c, collisions),
+            }
+        )
+    return entries
+
+
+def class_filter_token(entry):
+    """Round-trippable token for one class-filter entry.
+
+    An unambiguous class is just its local name; an ambiguous one is written
+    ``prefix:Name`` (the syntax issue #179 asks for), falling back to the full
+    URI when its namespace has no bound prefix. Tokens are what the filter
+    prints for copying and what :func:`parse_class_filter_text` reads back.
+    """
+    if not entry["ambiguous"]:
+        return entry["name"]
+    if entry["prefix"]:
+        return f"{entry['prefix']}:{entry['name']}"
+    return entry["uri"] or entry["name"]
+
+
+def parse_class_filter_text(text, entries):
+    """Resolve pasted class names against the current classes.
+
+    Accepts whitespace-, comma- or semicolon-separated tokens in any of the
+    forms the app shows a class in: a plain local name (``Person``), a prefixed
+    name (``fn:zero``), the disambiguated display form (``zero (fn)``) or a full
+    URI, optionally wrapped in ``<>`` or quotes. Matching is exact first, then
+    case-insensitive. A plain local name shared by several namespaces selects
+    all of them — the prefixed form picks just one.
+
+    Returns ``(displays, unmatched)``: the matched display names in class-list
+    order without repeats, and the tokens nothing matched, in input order.
+    """
+    if not text or not text.strip():
+        return [], []
+
+    exact: dict[str, list[str]] = {}
+    lowered: dict[str, list[str]] = {}
+    order: dict[str, int] = {}
+
+    def _register(key, display):
+        for table, k in ((exact, key), (lowered, key.lower())):
+            if not k:
+                continue
+            bucket = table.setdefault(k, [])
+            if display not in bucket:
+                bucket.append(display)
+
+    for index, entry in enumerate(entries):
+        display = entry["display"]
+        order.setdefault(display, index)
+        _register(entry["name"], display)
+        _register(display, display)
+        _register(_CLASS_DISPLAY_GAP.sub("(", display), display)
+        _register(entry["uri"], display)
+        if entry["prefix"]:
+            _register(f"{entry['prefix']}:{entry['name']}", display)
+
+    matched: list[str] = []
+    unmatched: list[str] = []
+    seen: set[str] = set()
+    for raw in _CLASS_TOKEN_SEPARATORS.split(_CLASS_DISPLAY_GAP.sub("(", text)):
+        token = raw.strip().strip("\"'")
+        if token.startswith("<") and token.endswith(">"):
+            token = token[1:-1]
+        if not token:
+            continue
+        hits = exact.get(token) or lowered.get(token.lower())
+        if not hits:
+            if token not in unmatched:
+                unmatched.append(token)
+            continue
+        for display in hits:
+            if display not in seen:
+                seen.add(display)
+                matched.append(display)
+
+    matched.sort(key=lambda d: order.get(d, 0))
+    return matched, unmatched
+
+
+def _fmt_unknown(tokens, limit=20):
+    """Render unmatched paste tokens for a warning, capped so a wholly wrong
+    paste doesn't fill the panel."""
+    shown = ", ".join(tokens[:limit])
+    return f"{shown} (+{len(tokens) - limit} more)" if len(tokens) > limit else shown
+
+
 def render_visualization():
     """Render the visualization page."""
     st.header("Visualization")
@@ -6952,7 +7073,11 @@ def render_visualization():
         # A mutation-counter jump not matched by the edit counter means the whole
         # ontology was replaced (load/import/new/undo), so reset to "all" rather
         # than diffing against a now-unrelated ontology that may reuse names.
-        all_class_names = [c["name"] for c in classes] if classes else []
+        # Options are the namespace-tagged display names, so two classes sharing
+        # a local name are separately selectable rather than showing as one
+        # duplicated entry that toggles both (issue #179).
+        class_entries = build_class_filter_entries(classes) if classes else []
+        all_class_names = [e["display"] for e in class_entries]
         all_class_set = set(all_class_names)
         mutation = st.session_state.get("_ont_mutation_count", 0)
         edits = st.session_state.get("_ont_edit_count", 0)
@@ -6980,8 +7105,8 @@ def render_visualization():
         # to the same node ids the graph builder assigns.
         focus_targets: dict[str, str] = {}
         if show_classes:
-            for c in classes:
-                focus_targets[f"Class: {c['name']}"] = _uid(c["uri"])
+            for e in class_entries:
+                focus_targets[f"Class: {e['display']}"] = _uid(e["uri"])
         if show_individuals:
             for ind in individuals:
                 focus_targets[f"Individual: {ind['name']}"] = f"ind_{_uid(ind['uri'])}"
@@ -7139,6 +7264,55 @@ def render_visualization():
                         )
                         st.rerun()
 
+                # Picking a handful of classes out of a long multiselect is slow,
+                # and the selection is worth keeping — so the filter can also be
+                # driven by a pasted list, and prints the current one back in the
+                # same syntax to copy and restore later (issue #179).
+                _paste_text = st.text_area(
+                    "Or paste a class list",
+                    key="viz_class_paste",
+                    height=80,
+                    placeholder="Person Organization fn:zero",
+                    help="Separate names with spaces, commas or line breaks. "
+                    "Applying replaces the selection above. Names shared by "
+                    "several namespaces select all of them — write 'fn:zero' "
+                    "(or paste the full URI) to pick just one.",
+                )
+                if st.button(
+                    "Apply pasted list",
+                    key="viz_apply_class_paste",
+                    help="Show exactly the pasted classes.",
+                ):
+                    _pasted, _unknown = parse_class_filter_text(
+                        _paste_text, class_entries
+                    )
+                    if _pasted:
+                        # The warning has to outlive the rerun that applies the
+                        # selection, so a partly matching paste still reports
+                        # what it dropped.
+                        st.session_state["_viz_class_paste_unknown"] = _unknown
+                        st.session_state["_viz_cfg_selected_classes"] = _pasted
+                        st.rerun()
+                    elif _unknown:
+                        st.warning(f"No class matched: {_fmt_unknown(_unknown)}")
+                    else:
+                        st.info("Paste one or more class names first.")
+                _unknown_last = st.session_state.pop("_viz_class_paste_unknown", None)
+                if _unknown_last:
+                    st.warning(f"Ignored, no such class: {_fmt_unknown(_unknown_last)}")
+                if selected_classes:
+                    _selected_set = set(selected_classes)
+                    st.caption("Current selection — copy to restore it later:")
+                    st.code(
+                        " ".join(
+                            class_filter_token(e)
+                            for e in class_entries
+                            if e["display"] in _selected_set
+                        ),
+                        language=None,
+                        wrap_lines=True,
+                    )
+
         # Persist the display preferences (entity toggles, spacing, fit, ...) so
         # they survive a reload (#142). Runs after every control has synced its
         # value; no-ops when nothing changed.
@@ -7258,7 +7432,12 @@ def render_visualization():
 
             # Build sets for node existence checks (URI-keyed for cross-namespace safety)
             cls_collisions = _build_name_collision_set(classes)
-            selected_class_names = set(selected_classes) if selected_classes else set()
+            # The filter selects display names; resolve them to URIs so hiding
+            # one of two same-named classes hides only that one (issue #179).
+            _selected_displays = set(selected_classes) if selected_classes else set()
+            selected_class_uris = {
+                e["uri"] for e in class_entries if e["display"] in _selected_displays
+            }
             displayed_class_uris: set = set()
 
             # Add classes as nodes (only selected classes)
@@ -7266,7 +7445,7 @@ def render_visualization():
                 for cls in classes:
                     if node_count >= max_nodes:
                         break
-                    if cls["name"] not in selected_class_names:
+                    if cls["uri"] not in selected_class_uris:
                         continue
                     cls_node_id = _uid(cls["uri"])
                     disp_cls_name = _disambiguated_name(cls, cls_collisions)
@@ -7692,8 +7871,8 @@ def render_visualization():
                 _uri_to_node = {}
                 if show_classes and selected_classes:
                     for cls in classes:
-                        if cls["name"] in selected_classes:
-                            _uri_to_node[cls["uri"]] = cls["name"]
+                        if cls["uri"] in selected_class_uris:
+                            _uri_to_node[cls["uri"]] = _uid(cls["uri"])
                 if show_individuals and individuals:
                     for ind in individuals:
                         _uri_to_node[ind["uri"]] = f"ind_{ind['name']}"
