@@ -7360,6 +7360,13 @@ def render_visualization():
                     # format_func, so a narrowing that rewrites the caption never
                     # invalidates the widget's stored value.
                     _prev = st.session_state.get("_viz_cfg_filter_kind")
+                    # A kind can vanish under the selector — its entity-type
+                    # checkbox is turned off, or its last entity is deleted. The
+                    # widget's own stored value is validated against the options
+                    # too, so a stale one raises rather than falling back to the
+                    # default; drop it and let `default` re-seed the control.
+                    if st.session_state.get("viz_filter_kind") not in _by_key:
+                        st.session_state.pop("viz_filter_kind", None)
                     _picked = st.segmented_control(
                         "Filter kind",
                         options=list(_by_key),
@@ -7833,17 +7840,18 @@ def render_visualization():
                                     arrows="to",
                                 )
 
-                # Add edges between individuals (object property assertions)
+                # Add edges between individuals (object property assertions).
+                # Keyed on the assertion's target URI, not its local name: two
+                # individuals in different namespaces can share a name, and a
+                # name lookup would draw the edge to whichever of them happened
+                # to be seen last (PR #202 review).
                 if show_ind_edges:
-                    ind_uri_by_name: dict[str, str] = {
-                        ind["name"]: ind["uri"] for ind in individuals
-                    }
                     for ind in individuals:
                         src_node = f"ind_{_uid(ind['uri'])}"
                         if src_node not in displayed_ind_ids:
                             continue
                         for prop in ind.get("properties", []):
-                            target_uri = ind_uri_by_name.get(prop["value"])
+                            target_uri = prop.get("value_uri")
                             tgt_node = f"ind_{_uid(target_uri)}" if target_uri else ""
                             if tgt_node in displayed_ind_ids:
                                 net.add_edge(

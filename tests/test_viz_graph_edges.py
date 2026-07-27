@@ -218,3 +218,68 @@ def test_class_and_individual_filters_are_independent():
     assert _labels(nodes, "Individual") == ["acme"]
     assert "Organization" not in _labels(nodes, "Class")
     assert _dangling(nodes, edges) == []
+
+
+# --- Same-named individuals across namespaces (PR #202 review) --------------
+
+
+def _twin_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_prefix("other", "http://other.example.org/ns#")
+        om.add_class("Person")
+        om.add_individual("alice", "Person")
+        om.add_individual("bob", "Person")
+        # A second bob, same local name, different namespace.
+        om.add_individual("bob", "Person", namespace="http://other.example.org/ns#")
+        # alice knows the *base* bob.
+        om.add_individual_property("alice", "knows", "bob")
+
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+        for key in ("show_classes", "show_individuals", "show_ind_edges"):
+            st.session_state[f"_viz_cfg_{key}"] = True
+
+    app.render_visualization()
+
+
+def _twin_graph():
+    at = AppTest.from_function(_twin_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    data = at.session_state["last_graph_data"]
+    assert data, "the visualization built no graph"
+    return json.loads(data["nodes"]), json.loads(data["edges"])
+
+
+def test_same_named_individuals_are_separate_nodes():
+    nodes, _ = _twin_graph()
+    labels = _labels(nodes, "Individual")
+    assert labels[0] == "alice"
+    # Both bobs are present and namespace-tagged apart. The second one shows its
+    # bound prefix; the base namespace has none, so it falls back to the
+    # namespace itself.
+    bobs = labels[1:]
+    assert len(bobs) == 2 and all(b.startswith("bob (") for b in bobs)
+    assert sum(1 for b in bobs if b == "bob (other)") == 1
+
+
+def test_knows_edge_targets_the_right_namespace():
+    """Regression: the target was resolved by local name, so the edge could
+    land on whichever same-named individual was seen last."""
+    nodes, edges = _twin_graph()
+    assert _dangling(nodes, edges) == []
+    by_id = {n["id"]: n for n in nodes}
+    knows = [e for e in edges if e.get("label") == "knows"]
+    assert len(knows) == 1
+    assert by_id[knows[0]["from"]]["label"] == "alice"
+    # The base-namespace bob, not the one from the other namespace.
+    target = by_id[knows[0]["to"]]["label"]
+    assert target.startswith("bob (")
+    assert target != "bob (other)"

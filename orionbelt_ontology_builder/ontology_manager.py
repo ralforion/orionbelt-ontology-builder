@@ -1633,16 +1633,21 @@ class OntologyManager:
                     ind_info["classes"].append(self._local_name(class_uri))
                     ind_info["class_uris"].append(str(class_uri))
 
-            # Get property assertions
+            # Get property assertions. ``value`` is the local name for display;
+            # ``value_uri`` carries the full URI of an object value (empty for a
+            # literal) so callers can resolve the target unambiguously — two
+            # individuals in different namespaces can share a local name.
             for pred, obj in self.graph.predicate_objects(ind_uri):
                 if pred not in [RDF.type, RDFS.label, RDFS.comment]:
                     prop_name = self._local_name(pred)
-                    if isinstance(obj, URIRef):
-                        value = self._local_name(obj)
-                    else:
-                        value = str(obj)
+                    is_ref = isinstance(obj, URIRef)
+                    value = self._local_name(obj) if is_ref else str(obj)
                     ind_info["properties"].append(
-                        {"property": prop_name, "value": value}
+                        {
+                            "property": prop_name,
+                            "value": value,
+                            "value_uri": str(obj) if is_ref else "",
+                        }
                     )
 
             individuals.append(ind_info)
