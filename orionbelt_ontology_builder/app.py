@@ -7356,7 +7356,7 @@ def render_visualization():
         selected_classes_key = (
             "_".join(sorted(selected_classes)) if selected_classes else "none"
         )
-        _graph_ver = 16  # Bump to invalidate cached graph data after code changes
+        _graph_ver = 17  # Bump to invalidate cached graph data after code changes
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -7474,7 +7474,15 @@ def render_visualization():
             visible_class_uris = {
                 e["uri"] for e in class_entries if e["display"] in _selected_displays
             }
+            # Which nodes actually made it into the graph. Every edge endpoint
+            # has to be one of these: the builder does not validate endpoints, so
+            # an edge naming a node that was never emitted is silently dropped by
+            # vis-network and the relation just never draws (issue #200). Nodes
+            # go missing both because a filter excluded them and because the
+            # max_nodes cap cut the loop short.
             displayed_class_uris: set = set()
+            displayed_ind_ids: set = set()
+            skos_node_ids: set = set()
 
             # Add classes as nodes (only selected classes)
             if show_classes and selected_classes:
@@ -7672,6 +7680,7 @@ def render_visualization():
                         ntype="Individual",
                         ename=_uid(ind["uri"]),
                     )
+                    displayed_ind_ids.add(ind_node_id)
                     node_count += 1
 
                     # Connect to classes via URI so the edge points to the
@@ -7700,12 +7709,16 @@ def render_visualization():
                         ind["name"]: ind["uri"] for ind in individuals
                     }
                     for ind in individuals:
+                        src_node = f"ind_{_uid(ind['uri'])}"
+                        if src_node not in displayed_ind_ids:
+                            continue
                         for prop in ind.get("properties", []):
                             target_uri = ind_uri_by_name.get(prop["value"])
-                            if target_uri:
+                            tgt_node = f"ind_{_uid(target_uri)}" if target_uri else ""
+                            if tgt_node in displayed_ind_ids:
                                 net.add_edge(
-                                    f"ind_{_uid(ind['uri'])}",
-                                    f"ind_{_uid(target_uri)}",
+                                    src_node,
+                                    tgt_node,
                                     label=prop["property"],
                                     title=f"{prop['property']}:\n{ind['name']} → {prop['value']}",
                                     color="#FF9800",
@@ -7751,8 +7764,14 @@ def render_visualization():
                     for cls in classes:
                         if node_count >= max_nodes:
                             break
+                        # Annotating a class the filter hid (or the node cap cut)
+                        # would hang the annotation off a node that isn't there.
+                        if cls["uri"] not in displayed_class_uris:
+                            continue
                         try:
-                            annotations = ont.get_annotations(cls["name"])
+                            # By URI, not local name: two classes sharing a name
+                            # would otherwise each show the other's annotations.
+                            annotations = ont.get_annotations(cls["uri"])
                             for ann in annotations:
                                 if node_count >= max_nodes:
                                     break
@@ -7785,7 +7804,7 @@ def render_visualization():
                                 )
                                 node_count += 1
                                 net.add_edge(
-                                    cls["name"],
+                                    _uid(cls["uri"]),
                                     ann_id,
                                     title=f"Annotation: {pred_display}",
                                     color="#A1887F",
@@ -7800,8 +7819,11 @@ def render_visualization():
                     for ind in individuals:
                         if node_count >= max_nodes:
                             break
+                        ind_node_id = f"ind_{_uid(ind['uri'])}"
+                        if ind_node_id not in displayed_ind_ids:
+                            continue
                         try:
-                            annotations = ont.get_annotations(ind["name"])
+                            annotations = ont.get_annotations(ind["uri"])
                             for ann in annotations:
                                 if node_count >= max_nodes:
                                     break
@@ -7831,7 +7853,7 @@ def render_visualization():
                                 )
                                 node_count += 1
                                 net.add_edge(
-                                    f"ind_{ind['name']}",
+                                    ind_node_id,
                                     ann_id,
                                     title=f"Annotation: {pred_display}",
                                     color="#A1887F",
@@ -7844,7 +7866,6 @@ def render_visualization():
             # Add SKOS concepts and relations
             if show_skos and node_count < max_nodes:
                 concepts = ont.get_concepts()
-                skos_node_ids = set()
                 for concept in concepts:
                     if node_count >= max_nodes:
                         break
@@ -7903,19 +7924,23 @@ def render_visualization():
             if show_triples and node_count < max_nodes:
                 from rdflib import URIRef as _URIRef, Literal as _Literal
 
-                # Build URI → node_id mapping from all visible nodes
+                # Build URI → node_id mapping over the nodes actually emitted,
+                # so a triple edge always has a real subject to hang off.
                 _uri_to_node = {}
-                if show_classes and selected_classes:
+                if show_classes:
                     for cls in classes:
-                        if cls["uri"] in visible_class_uris:
+                        if cls["uri"] in displayed_class_uris:
                             _uri_to_node[cls["uri"]] = _uid(cls["uri"])
                 if show_individuals and individuals:
                     for ind in individuals:
-                        _uri_to_node[ind["uri"]] = f"ind_{ind['name']}"
+                        _ind_node = f"ind_{_uid(ind['uri'])}"
+                        if _ind_node in displayed_ind_ids:
+                            _uri_to_node[ind["uri"]] = _ind_node
                 if show_skos:
                     for concept in ont.get_concepts():
-                        if concept.get("uri"):
-                            _uri_to_node[concept["uri"]] = f"skos_{concept['name']}"
+                        _skos_node = f"skos_{concept['name']}"
+                        if concept.get("uri") and _skos_node in skos_node_ids:
+                            _uri_to_node[concept["uri"]] = _skos_node
 
                 # Query only triples with visible subjects (avoid full graph scan)
                 _triple_new = 0
