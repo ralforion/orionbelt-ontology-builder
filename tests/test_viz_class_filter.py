@@ -9,7 +9,7 @@ from orionbelt_ontology_builder import app
 
 def _reconcile(all_names, selected, known):
     """Run one render's reconciliation, returning the new (selected, known)."""
-    return app.reconcile_class_filter(all_names, selected, known)
+    return app.reconcile_filter_selection(all_names, selected, known)
 
 
 def test_first_render_selects_everything():
@@ -65,13 +65,15 @@ def test_overlapping_replacement_would_hide_classes_without_the_flag():
     # inherit that hidden state (review of #180). Diffing alone returns []...
     assert _reconcile(["B"], [], {"A", "B"})[0] == []
     # ...so the replacement flag forces "show everything".
-    selected, known = app.reconcile_class_filter(["B"], [], {"A", "B"}, replaced=True)
+    selected, known = app.reconcile_filter_selection(
+        ["B"], [], {"A", "B"}, replaced=True
+    )
     assert selected == ["B"]
     assert known == {"B"}
 
 
 def test_replaced_flag_ignores_prior_narrowing():
-    selected, _ = app.reconcile_class_filter(
+    selected, _ = app.reconcile_filter_selection(
         ["Person", "Org"], ["Org"], {"Person", "Org"}, replaced=True
     )
     assert selected == ["Person", "Org"]
