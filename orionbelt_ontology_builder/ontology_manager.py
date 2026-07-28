@@ -958,7 +958,7 @@ class OntologyManager:
                     continue
                 try:
                     self._require_valid_name(parent)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                     result["errors"].append({"name": name, "error": str(e)})
                     continue
                 class_ref = self._uri(name, namespace)
@@ -981,7 +981,7 @@ class OntologyManager:
                 existing.add(uri)
                 if parent:
                     referenced_parents.add(str(self._uri(parent)))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": name, "error": str(e)})
 
         # Backfill: any referenced parent that no successful row declared as a
@@ -991,7 +991,7 @@ class OntologyManager:
                 created_uri = self.add_class(parent_uri)
                 existing.add(parent_uri)
                 result["created"].append(self._local_name(created_uri))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": parent_uri, "error": str(e)})
 
         return result
@@ -1043,7 +1043,7 @@ class OntologyManager:
                     )
                 result["created"].append(name)
                 existing.add(uri)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": name, "error": str(e)})
 
         return result
@@ -1081,7 +1081,7 @@ class OntologyManager:
                 )
                 result["created"].append(name)
                 existing.add(uri)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": name, "error": str(e)})
 
         return result
@@ -1093,7 +1093,7 @@ class OntologyManager:
             try:
                 self.delete_class(name)
                 result["deleted"].append(name)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": name, "error": str(e)})
         return result
 
@@ -1104,7 +1104,7 @@ class OntologyManager:
             try:
                 self.delete_property(name)
                 result["deleted"].append(name)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": name, "error": str(e)})
         return result
 
@@ -1115,7 +1115,7 @@ class OntologyManager:
             try:
                 self.delete_individual(name)
                 result["deleted"].append(name)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append({"name": name, "error": str(e)})
         return result
 
@@ -1160,7 +1160,7 @@ class OntologyManager:
                         continue
                     self.add_annotation(resource, predicate, value, lang=lang)
                 result["applied"] += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad row must not abort the batch
                 result["errors"].append(
                     {
                         "resource": resource,
