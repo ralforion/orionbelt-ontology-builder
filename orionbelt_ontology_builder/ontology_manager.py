@@ -2,6 +2,7 @@
 OntologyManager - Core class for managing OWL ontologies using rdflib.
 """
 
+import logging
 import os
 import re
 import tempfile
@@ -13,6 +14,8 @@ from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
 from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 from rdflib.term import Node
+
+logger = logging.getLogger(__name__)
 
 #: RDF serialization format for a file, keyed by lower-case extension. Used so a
 #: linked working file can be a format other than Turtle (e.g. .owl/.rdf).
@@ -3078,7 +3081,12 @@ class OntologyManager:
                                 if isinstance(m, URIRef)
                             ]
                         except Exception:
-                            pass
+                            logger.debug(
+                                "Skipping malformed RDF list in a %s expression on %s",
+                                expr_type,
+                                subj_name,
+                                exc_info=True,
+                            )
 
                     if expr["members"]:
                         expressions.append(expr)
@@ -3107,7 +3115,9 @@ class OntologyManager:
                         [self._local_name(m) for m in members if isinstance(m, URIRef)]
                     )
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Skipping malformed owl:distinctMembers list", exc_info=True
+                    )
         return all_diffs
 
     def add_has_key(self, class_name: str, properties: list[str]):
@@ -3140,7 +3150,7 @@ class OntologyManager:
                         }
                     )
                 except Exception:
-                    pass
+                    logger.debug("Skipping malformed owl:hasKey list", exc_info=True)
         return keys
 
     def add_disjoint_union(self, class_name: str, disjoint_classes: list[str]):
@@ -3170,7 +3180,9 @@ class OntologyManager:
                         }
                     )
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Skipping malformed owl:disjointUnionOf list", exc_info=True
+                    )
         return unions
 
     # ==================== IMPORT/EXPORT OPERATIONS ====================

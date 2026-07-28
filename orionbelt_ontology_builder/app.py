@@ -274,7 +274,9 @@ def _configure_page() -> None:
         if st.context.theme.get("type") == "dark":
             st.markdown(_DARK_CSS, unsafe_allow_html=True)
     except Exception:
-        pass
+        logger.debug(
+            "Dark-theme CSS skipped: st.context.theme unavailable", exc_info=True
+        )
     if "app_started" not in st.session_state:
         st.session_state.app_started = True
         logger.info(f"{APP_NAME} v{APP_VERSION}")
@@ -7969,7 +7971,9 @@ def render_visualization():
                                     dashes=True,
                                 )
                         except Exception:
-                            pass  # Skip problematic annotations
+                            logger.debug(
+                                "Skipping a class annotation node", exc_info=True
+                            )
 
                 # Annotations for individuals
                 if show_individuals and individuals:
@@ -8018,7 +8022,9 @@ def render_visualization():
                                     dashes=True,
                                 )
                         except Exception:
-                            pass  # Skip problematic annotations
+                            logger.debug(
+                                "Skipping an individual annotation node", exc_info=True
+                            )
 
             # Add SKOS concepts and relations
             if show_skos and node_count < max_nodes:
@@ -8298,7 +8304,10 @@ def render_visualization():
             try:
                 _gv_dark = st.context.theme.get("type") == "dark"
             except Exception:
-                pass
+                logger.debug(
+                    "Graph theme defaulting to light: st.context.theme unavailable",
+                    exc_info=True,
+                )
             _gv_theme = (
                 {"bg": "#0e1117", "panel": "#262730", "text": "#fafafa"}
                 if _gv_dark
@@ -8611,7 +8620,10 @@ def main():
     try:
         _theme_type = st.context.theme.type
     except Exception:
-        pass
+        logger.debug(
+            "Sidebar logo defaulting to colour: st.context.theme unavailable",
+            exc_info=True,
+        )
     # st.context.theme is stale on the first render of a session — it reports the
     # default ("light") until the browser tells the server the active theme, so
     # only trust it from the second render on (issues #70, #78).
