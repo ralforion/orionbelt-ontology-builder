@@ -157,7 +157,7 @@ def detect_system_base() -> str | None:
         import darkdetect
 
         detected = darkdetect.theme()  # "Dark" / "Light" / None
-    except Exception:
+    except Exception:  # noqa: BLE001 - darkdetect is optional and platform-specific
         return None
     if isinstance(detected, str) and detected.lower() in ("light", "dark"):
         return detected.lower()

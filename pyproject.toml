@@ -83,17 +83,10 @@ Demo = "https://orionbelt.streamlit.app"
 # No `select`: we lint against ruff's own default rule set. Up to 0.15.x that
 # was just E4/E7/E9/F; 0.16.0 widened it to roughly 35 families (UP, SIM, RUF,
 # PERF, PTH, ...) and we adopt that rather than pinning back to the old four.
-ignore = [
-    # Optional or degradable paths — graph rendering, theme detection, the
-    # desktop webview hooks — are wrapped in `except Exception` so a failure
-    # downgrades the UI instead of killing the Streamlit session. The specific
-    # type genuinely is not knowable there: it varies by pywebview backend and
-    # by Streamlit version. Every such handler logs at debug level with a
-    # traceback (so nothing is swallowed silently, which is what S110 guards
-    # against), and errors the user must see go through log_error() /
-    # show_message().
-    "BLE001", # blind `except Exception`
-]
+# Nothing is ignored project-wide. The broad `except Exception` handlers this
+# app genuinely needs — resilience boundaries around user-supplied ontologies,
+# bulk rows, page dispatch and the pywebview backends — carry an inline
+# `# noqa: BLE001` naming the reason, so a *new* blind except still fails CI.
 
 [tool.mypy]
 python_version = "3.12"

@@ -210,7 +210,7 @@ def _install_window_bridges(app_name: str):
             # reaches their real clipboard (issue #120).
             try:
                 return _copy_to_clipboard("" if text is None else str(text))
-            except Exception:
+            except Exception:  # noqa: BLE001 - clipboard bridge is best-effort across backends
                 return False
 
         def orionbelt_toggle_fullscreen():
@@ -225,7 +225,7 @@ def _install_window_bridges(app_name: str):
             try:
                 window.toggle_fullscreen()
                 return True
-            except Exception:
+            except Exception:  # noqa: BLE001 - pywebview backends differ on toggle_fullscreen
                 return None
 
         try:
@@ -248,7 +248,7 @@ def _install_window_bridges(app_name: str):
             # today's behaviour.
             try:
                 view = window.gui.BrowserView.instances.get(window.uid)
-            except Exception:
+            except Exception:  # noqa: BLE001 - platform window internals vary by backend
                 return
             if view is not None and getattr(view, "is_fullscreen", False):
                 try:

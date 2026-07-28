@@ -230,7 +230,7 @@ def _page_title() -> str:
     if ont is not None:
         try:
             name = (ont.get_ontology_metadata().get("label") or "").strip()
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort label read; falls back to the URI
             name = ""
         if not name:
             base = ont.base_uri.rstrip("#/")
@@ -356,7 +356,8 @@ def _get_local_storage():
             from streamlit_local_storage import LocalStorage
 
             st.session_state["_local_storage"] = LocalStorage()
-        except Exception as e:  # pragma: no cover - depends on browser/runtime
+        # Optional dependency; failure mode depends on browser/runtime.
+        except Exception as e:  # noqa: BLE001  # pragma: no cover
             logger.warning(f"localStorage autosave unavailable: {e}")
             st.session_state["_local_storage"] = None
     ls = st.session_state["_local_storage"]
@@ -472,7 +473,7 @@ def _restore_autosave_from_disk(ont):
     fmt = "turtle" if label == "recovery file" else _rdf_format_for_path(path)
     try:
         ont.load_from_file(str(path), format=fmt)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - autosave restore must never break startup
         log_error(e, context="Autosave restore (disk)")
         _block_disk_persist(
             f"The {label} couldn't be read or parsed. Disk autosave is paused so "
@@ -538,7 +539,7 @@ def maybe_restore_autosave():
 
     try:
         ont.load_from_string(saved, format="turtle")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - autosave restore must never break startup
         log_error(e, context="Autosave restore")
         st.session_state["_autosave_restored"] = True
         return
@@ -654,7 +655,7 @@ def _persist_autosave_to_localstorage():
 
     try:
         ttl = st.session_state.ontology.export_to_string(format="turtle")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - autosave export must never break the session
         log_error(e, context="Autosave export")
         return
 
@@ -706,7 +707,7 @@ def persist_autosave():
             _persist_autosave_to_disk()
         else:
             _persist_autosave_to_localstorage()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - autosave must never break the session
         log_error(e, context="Autosave")
         if local_store.local_persist_enabled():
             _block_disk_persist(
@@ -832,7 +833,7 @@ def _load_linked_file(target) -> bool:
         OntologyManager = get_ontology_manager_class()
         new_ont = OntologyManager()
         new_ont.load_from_file(str(target), format=_rdf_format_for_path(target))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a bad linked file must not break the session
         log_error(e, context="Linked file load")
         return False
     st.session_state.ontology = new_ont
@@ -4072,7 +4073,7 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                         ),
                     },
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - a rejected edit must show as a message, not a traceback
                 # As wide as the Add form's handler: a rejected edit must show
                 # up as a message, never as a page-breaking traceback.
                 show_message(str(exc), "error")
@@ -4165,7 +4166,7 @@ def render_add_restriction(ont, classes, properties):
                 save_checkpoint("Add restriction")
                 show_message("Restriction added!", "success")
                 st.rerun()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a rejected edit must show as a message, not a traceback
                 show_message(f"Error adding restriction: {e!s}", "error")
 
 
@@ -5730,7 +5731,7 @@ def render_import_export():
                     st.session_state.get("import_uploader_key", 0) + 1
                 )
                 st.rerun()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - malformed import must show as a message, not a traceback
                 show_message(f"Error importing ontology: {e!s}", "error")
 
         # Step 1: Source selection (only when no preview active)
@@ -5777,7 +5778,7 @@ def render_import_export():
                                 st.session_state.import_content = content
                                 st.session_state.import_format = format_
                                 st.rerun()
-                        except Exception as e:
+                        except Exception as e:  # noqa: BLE001 - malformed import must show as a message, not a traceback
                             show_message(f"Error parsing file: {e!s}", "error")
 
             else:
@@ -5800,7 +5801,7 @@ def render_import_export():
                                 st.session_state.import_content = content
                                 st.session_state.import_format = format_
                                 st.rerun()
-                        except Exception as e:
+                        except Exception as e:  # noqa: BLE001 - malformed import must show as a message, not a traceback
                             show_message(f"Error parsing content: {e!s}", "error")
 
         # Step 2: Review panel
@@ -5891,7 +5892,7 @@ def render_import_export():
                             "success",
                         )
                         st.rerun()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - malformed import must show as a message, not a traceback
                         show_message(f"Error applying import: {e!s}", "error")
             with col_cancel:
                 if st.button("Cancel"):
@@ -5992,7 +5993,7 @@ def render_import_export():
                     format=format_
                 )
                 st.session_state["_export_ext"] = ext
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - export failure must show as a message, not a traceback
                 st.session_state.pop("_export_content", None)
                 show_message(f"Error exporting ontology: {e!s}", "error")
 
@@ -6143,7 +6144,7 @@ def render_import_export():
                     f"— {s['classes']} classes, {s['object_properties']} obj props, "
                     f"{s['data_properties']} data props, {s['content_triples']} triples"
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a bad upper ontology must show as a message
                 st.session_state["_upper_onto_err"] = (
                     f"Error loading upper ontology: {e!s}"
                 )
@@ -6237,7 +6238,7 @@ def render_import_export():
                     f"— {s['classes']} classes, {s['object_properties']} obj props, "
                     f"{s['data_properties']} data props, {s['content_triples']} triples"
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a bad reference ontology must show as a message
                 st.session_state["_ref_onto_err"] = (
                     f"Error loading reference ontology: {e!s}"
                 )
@@ -6648,7 +6649,7 @@ def render_validation():
                     "success",
                 )
                 st.write(f"New triple count: {len(ont.graph)}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - reasoner failure must show as a message, not a traceback
                 show_message(f"Error during reasoning: {e!s}", "error")
 
 
@@ -8267,7 +8268,7 @@ def render_visualization():
                 # PR review). seq is now bumped only for a real re-layout below.
                 status.empty()
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a graph build failure must not break the page
                 status.empty()
                 st.error(f"Error building graph: {e!s}")
 
@@ -8601,7 +8602,7 @@ def render_source():
     try:
         turtle_src = ont.export_to_string(format="turtle")
         st.code(turtle_src, language="turtle", line_numbers=True)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - serialization failure must show as a message
         st.error(f"Error serializing ontology: {e}")
 
 
@@ -8874,7 +8875,7 @@ def main():
     # Render selected page
     try:
         pages[selection]()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a crash in any page must not kill the app
         log_error(e, context=f"Page: {selection}")
         st.error(f"An error occurred: {e}")
         st.caption(f"[Report this issue on GitHub]({GITHUB_ISSUES_URL}/new)")

@@ -42,3 +42,10 @@ Thumbs.db
 
 # Screenshot artifacts written to the repo root during browser-driven verification
 /*.png
+
+# Coverage.py artifacts (pytest --cov); the .coverage database embeds absolute
+# local paths, so it must never be committed.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
