@@ -78,9 +78,12 @@ def _bumps_revision(node: ast.AST) -> bool:
                 return True
             if isinstance(func, ast.Attribute) and func.attr in BUMP_MARKERS:
                 return True
-        if isinstance(inner, ast.Subscript) and isinstance(inner.slice, ast.Constant):
-            if inner.slice.value == "_ont_mutation_count":
-                return True
+        if (
+            isinstance(inner, ast.Subscript)
+            and isinstance(inner.slice, ast.Constant)
+            and inner.slice.value == "_ont_mutation_count"
+        ):
+            return True
     return False
 
 

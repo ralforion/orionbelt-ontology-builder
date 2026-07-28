@@ -79,6 +79,20 @@ Repository = "https://github.com/ralforion/orionbelt-ontology-builder"
 Issues = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 Demo = "https://orionbelt.streamlit.app"
 
+[tool.ruff.lint]
+# No `select`: we lint against ruff's own default rule set. Up to 0.15.x that
+# was just E4/E7/E9/F; 0.16.0 widened it to roughly 35 families (UP, SIM, RUF,
+# PERF, PTH, ...) and we adopt that rather than pinning back to the old four.
+ignore = [
+    # Both of these encode the same deliberate choice: optional or degradable
+    # paths — graph rendering, theme detection, the desktop webview hooks —
+    # are wrapped in broad handlers so a failure downgrades the UI instead of
+    # killing the Streamlit session. Errors that the user needs to see are
+    # surfaced explicitly through log_error() / show_message().
+    "BLE001", # blind `except Exception`
+    "S110",   # try-except-pass
+]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

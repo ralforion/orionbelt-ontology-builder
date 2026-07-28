@@ -1,4 +1,5 @@
 import pytest
+
 from ontology_manager import OntologyManager
 
 

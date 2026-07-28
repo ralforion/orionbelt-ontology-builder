@@ -44,7 +44,7 @@ def test_missing_domain_range(om):
 
 def test_no_missing_domain_when_domain_includes_present(om):
     """Properties with schema:domainIncludes or gist:domainIncludes should not warn (issue #2)."""
-    from ontology_manager import _SCHEMA, _GIST
+    from ontology_manager import _GIST, _SCHEMA
 
     om.add_class("Person")
     om.add_object_property("schemaProp")
@@ -64,7 +64,7 @@ def test_no_missing_domain_when_domain_includes_present(om):
 
 def test_no_missing_range_when_range_includes_present(om):
     """Properties with schema:rangeIncludes or gist:rangeIncludes should not warn (issue #2)."""
-    from ontology_manager import _SCHEMA, _GIST
+    from ontology_manager import _GIST, _SCHEMA
 
     om.add_class("Person")
     om.add_object_property("schemaProp", domain="Person")

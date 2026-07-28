@@ -7,11 +7,12 @@ import hashlib
 import json
 import logging
 import re
-import streamlit as st
 import time
 import traceback
 from datetime import datetime
 from pathlib import Path as _Path
+
+import streamlit as st
 
 from . import local_store
 
@@ -1038,7 +1039,8 @@ def save_checkpoint(label: str = "Edit"):
 def log_error(error: Exception, context: str = ""):
     """Log a runtime error to session state for display."""
     entry = {
-        "time": datetime.now().strftime("%H:%M:%S"),
+        # Local wall-clock time: the log is read by whoever is at the app.
+        "time": datetime.now().astimezone().strftime("%H:%M:%S"),
         "context": context,
         "error": str(error),
         "traceback": traceback.format_exc(),
@@ -1500,7 +1502,7 @@ def _external_uri_target(ont, default_uri, key, label):
     ).strip()
     if not ext:
         return default_uri, None
-    if not (ext.startswith("http://") or ext.startswith("https://")):
+    if not ext.startswith(("http://", "https://")):
         return default_uri, "External URI must be a full http(s) URI."
     if reason := ont.invalid_name_reason(ext):
         return default_uri, reason
@@ -1527,10 +1529,13 @@ def _apply_class_edit(
     without a namespace selector). Shows an error and returns False if the target
     URI is already taken. The caller owns the undo checkpoint and rerun.
     """
-    if new_name and new_name != class_info["name"]:
-        if reason := ont.invalid_name_reason(new_name):
-            show_message(reason, "error")
-            return False
+    if (
+        new_name
+        and new_name != class_info["name"]
+        and (reason := ont.invalid_name_reason(new_name))
+    ):
+        show_message(reason, "error")
+        return False
     ok, current_ref = _rename_or_move(
         ont,
         ont.rename_class,
@@ -1839,12 +1844,11 @@ def render_dashboard():
         new_import = st.text_input(
             "Import URI", placeholder="http://example.org/other-ontology"
         )
-        if st.button("Add Import"):
-            if new_import:
-                ont.add_import(new_import)
-                save_checkpoint("Add import")
-                show_message(f"Import added: {new_import}", "success")
-                st.rerun()
+        if st.button("Add Import") and new_import:
+            ont.add_import(new_import)
+            save_checkpoint("Add import")
+            show_message(f"Import added: {new_import}", "success")
+            st.rerun()
 
     # Prefixes section
     st.subheader("Namespace Prefixes")
@@ -2901,10 +2905,13 @@ def render_properties():
                                 )
 
                             if st.form_submit_button("Save Changes"):
-                                if new_name and new_name != prop["name"]:
-                                    if reason := ont.invalid_name_reason(new_name):
-                                        show_message(reason, "error")
-                                        st.rerun()
+                                if (
+                                    new_name
+                                    and new_name != prop["name"]
+                                    and (reason := ont.invalid_name_reason(new_name))
+                                ):
+                                    show_message(reason, "error")
+                                    st.rerun()
                                 # Rename/move first so later updates hit the new URI.
                                 ok, current_ref = _rename_or_move(
                                     ont,
@@ -3106,10 +3113,13 @@ def render_properties():
                                 )
 
                             if st.form_submit_button("Save Changes"):
-                                if new_name and new_name != prop["name"]:
-                                    if reason := ont.invalid_name_reason(new_name):
-                                        show_message(reason, "error")
-                                        st.rerun()
+                                if (
+                                    new_name
+                                    and new_name != prop["name"]
+                                    and (reason := ont.invalid_name_reason(new_name))
+                                ):
+                                    show_message(reason, "error")
+                                    st.rerun()
                                 # Rename/move first so later updates hit the new URI.
                                 ok, current_ref = _rename_or_move(
                                     ont,
@@ -3644,10 +3654,13 @@ def render_individuals():
                                 )
 
                             if st.form_submit_button("Save Changes"):
-                                if new_name and new_name != ind["name"]:
-                                    if reason := ont.invalid_name_reason(new_name):
-                                        show_message(reason, "error")
-                                        st.rerun()
+                                if (
+                                    new_name
+                                    and new_name != ind["name"]
+                                    and (reason := ont.invalid_name_reason(new_name))
+                                ):
+                                    show_message(reason, "error")
+                                    st.rerun()
                                 # Rename/move first so later updates hit the new URI.
                                 ok, current_ref = _rename_or_move(
                                     ont,
@@ -4151,7 +4164,7 @@ def render_add_restriction(ont, classes, properties):
                 show_message("Restriction added!", "success")
                 st.rerun()
             except Exception as e:
-                show_message(f"Error adding restriction: {str(e)}", "error")
+                show_message(f"Error adding restriction: {e!s}", "error")
 
 
 def render_restrictions():
@@ -4919,7 +4932,7 @@ def render_annotations():
             # Filter by resource type
             col1, col2 = st.columns([1, 3])
             with col1:
-                filter_types = ["All"] + list(set(r["type"] for r in all_resources))
+                filter_types = ["All"] + list({r["type"] for r in all_resources})
                 selected_type = st.selectbox(
                     "Filter by Type", options=filter_types, key="filter_type"
                 )
@@ -5188,10 +5201,13 @@ def render_skos_vocabulary():
                                 key=f"custom_uri_scheme_{_sk}",
                             )
                             if st.form_submit_button("Save Changes"):
-                                if new_name and new_name != scheme["name"]:
-                                    if reason := ont.invalid_name_reason(new_name):
-                                        show_message(reason, "error")
-                                        st.rerun()
+                                if (
+                                    new_name
+                                    and new_name != scheme["name"]
+                                    and (reason := ont.invalid_name_reason(new_name))
+                                ):
+                                    show_message(reason, "error")
+                                    st.rerun()
                                 renamed = bool(new_name and new_name != scheme["name"])
                                 # Address the scheme by its actual URI so a scheme
                                 # in a non-base namespace resolves; target is the
@@ -5469,10 +5485,13 @@ def render_skos_vocabulary():
                             if st.form_submit_button("Save Changes"):
                                 # Rename first (updates all references) so the
                                 # rest of the update targets the new name.
-                                if new_name and new_name != concept["name"]:
-                                    if reason := ont.invalid_name_reason(new_name):
-                                        show_message(reason, "error")
-                                        st.rerun()
+                                if (
+                                    new_name
+                                    and new_name != concept["name"]
+                                    and (reason := ont.invalid_name_reason(new_name))
+                                ):
+                                    show_message(reason, "error")
+                                    st.rerun()
                                 renamed = bool(new_name and new_name != concept["name"])
                                 # Address the concept by its actual URI so a
                                 # concept in a non-base namespace (e.g. moved via
@@ -5512,12 +5531,12 @@ def render_skos_vocabulary():
                                         else None
                                     )
 
-                                    _update_kwargs = dict(
-                                        new_pref_label=new_pref,
-                                        new_definition=new_def,
-                                        add_scheme=add_s,
-                                        remove_scheme=remove_s,
-                                    )
+                                    _update_kwargs = {
+                                        "new_pref_label": new_pref,
+                                        "new_definition": new_def,
+                                        "add_scheme": add_s,
+                                        "remove_scheme": remove_s,
+                                    }
                                     if broader_changed:
                                         _update_kwargs["new_broader"] = broader_val
                                     ont.update_concept(target, **_update_kwargs)
@@ -5710,7 +5729,7 @@ def render_import_export():
                 )
                 st.rerun()
             except Exception as e:
-                show_message(f"Error importing ontology: {str(e)}", "error")
+                show_message(f"Error importing ontology: {e!s}", "error")
 
         # Step 1: Source selection (only when no preview active)
         if st.session_state.import_preview is None:
@@ -5757,7 +5776,7 @@ def render_import_export():
                                 st.session_state.import_format = format_
                                 st.rerun()
                         except Exception as e:
-                            show_message(f"Error parsing file: {str(e)}", "error")
+                            show_message(f"Error parsing file: {e!s}", "error")
 
             else:
                 content = st.text_area("Paste Ontology Content", height=300)
@@ -5780,7 +5799,7 @@ def render_import_export():
                                 st.session_state.import_format = format_
                                 st.rerun()
                         except Exception as e:
-                            show_message(f"Error parsing content: {str(e)}", "error")
+                            show_message(f"Error parsing content: {e!s}", "error")
 
         # Step 2: Review panel
         else:
@@ -5794,9 +5813,9 @@ def render_import_export():
 
             # Import mode selector
             from .ontology_manager import (
-                IMPORT_REPLACE,
                 IMPORT_MERGE,
                 IMPORT_MERGE_OVERWRITE,
+                IMPORT_REPLACE,
             )
 
             strategy = st.radio(
@@ -5871,7 +5890,7 @@ def render_import_export():
                         )
                         st.rerun()
                     except Exception as e:
-                        show_message(f"Error applying import: {str(e)}", "error")
+                        show_message(f"Error applying import: {e!s}", "error")
             with col_cancel:
                 if st.button("Cancel"):
                     st.session_state.import_preview = None
@@ -5973,7 +5992,7 @@ def render_import_export():
                 st.session_state["_export_ext"] = ext
             except Exception as e:
                 st.session_state.pop("_export_content", None)
-                show_message(f"Error exporting ontology: {str(e)}", "error")
+                show_message(f"Error exporting ontology: {e!s}", "error")
 
         # Kept in session_state so the save/download controls (which each cause a
         # rerun) still have the generated content.
@@ -6031,7 +6050,7 @@ def render_import_export():
                     st.rerun()
 
     if _ie_tab == "Templates":
-        from .templates import get_template_names, get_template, render_template
+        from .templates import get_template, get_template_names, render_template
 
         def _on_apply_template():
             selected = st.session_state.template_select
@@ -6088,8 +6107,8 @@ def render_import_export():
 
     if _ie_tab == "Upper Ontologies":
         from .templates import (
-            get_upper_ontology_names,
             get_upper_ontology,
+            get_upper_ontology_names,
             load_upper_ontology_module,
         )
 
@@ -6124,7 +6143,7 @@ def render_import_export():
                 )
             except Exception as e:
                 st.session_state["_upper_onto_err"] = (
-                    f"Error loading upper ontology: {str(e)}"
+                    f"Error loading upper ontology: {e!s}"
                 )
 
         st.subheader("Upper Ontologies")
@@ -6180,8 +6199,8 @@ def render_import_export():
 
     if _ie_tab == "Reference Ontologies":
         from .templates import (
-            get_reference_ontology_names,
             get_reference_ontology,
+            get_reference_ontology_names,
             load_reference_ontology_module,
         )
 
@@ -6218,7 +6237,7 @@ def render_import_export():
                 )
             except Exception as e:
                 st.session_state["_ref_onto_err"] = (
-                    f"Error loading reference ontology: {str(e)}"
+                    f"Error loading reference ontology: {e!s}"
                 )
 
         st.subheader("Reference Ontologies")
@@ -6628,7 +6647,7 @@ def render_validation():
                 )
                 st.write(f"New triple count: {len(ont.graph)}")
             except Exception as e:
-                show_message(f"Error during reasoning: {str(e)}", "error")
+                show_message(f"Error during reasoning: {e!s}", "error")
 
 
 def build_class_hierarchy_text(classes):
@@ -7539,7 +7558,7 @@ def render_visualization():
             class _GraphBuilder:
                 """Minimal replacement for pyvis.Network — just collects nodes/edges."""
 
-                __slots__ = ("nodes", "edges", "_node_ids", "options")
+                __slots__ = ("_node_ids", "edges", "nodes", "options")
 
                 def __init__(self):
                     self.nodes = []
@@ -8060,7 +8079,8 @@ def render_visualization():
 
             # Add raw RDF triples for visible nodes
             if show_triples and node_count < max_nodes:
-                from rdflib import URIRef as _URIRef, Literal as _Literal
+                from rdflib import Literal as _Literal
+                from rdflib import URIRef as _URIRef
 
                 # Build URI → node_id mapping over the nodes actually emitted,
                 # so a triple edge always has a real subject to hang off.
@@ -8243,7 +8263,7 @@ def render_visualization():
 
             except Exception as e:
                 status.empty()
-                st.error(f"Error building graph: {str(e)}")
+                st.error(f"Error building graph: {e!s}")
 
         # Always display the graph component (even on rerun after selection)
         gdata = st.session_state.get("last_graph_data")
@@ -8260,9 +8280,10 @@ def render_visualization():
             import hashlib as _hashlib
 
             try:
-                _gv_src = open(
+                with open(
                     _os.path.join(_component_path, "index.html"), encoding="utf-8"
-                ).read()
+                ) as _gv_fh:
+                    _gv_src = _gv_fh.read()
                 _gv_ver = _hashlib.md5(_gv_src.encode("utf-8")).hexdigest()[:8]
             except OSError:
                 _gv_ver = "0"
@@ -8459,13 +8480,12 @@ def render_visualization():
                             data_props,
                             individuals,
                         )
-                        if show_view:
-                            if st.button(
-                                "Open full editor" if ntype == "Class" else "Open",
-                                key="panel_open_editor",
-                                use_container_width=True,
-                            ):
-                                _open_full_editor(ntype, ename)
+                        if show_view and st.button(
+                            "Open full editor" if ntype == "Class" else "Open",
+                            key="panel_open_editor",
+                            use_container_width=True,
+                        ):
+                            _open_full_editor(ntype, ename)
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
@@ -8827,11 +8847,12 @@ def main():
     # Visualization panel / status bar (issue #80).
     if selection == "Visualization":
         st.session_state.pop("_back_to_viz", None)
-    elif st.session_state.get("_back_to_viz"):
-        if st.button("← Back to graph", key="back_to_viz"):
-            st.session_state.pop("_back_to_viz", None)
-            st.session_state.search_navigate_to = "Visualization"
-            st.rerun()
+    elif st.session_state.get("_back_to_viz") and st.button(
+        "← Back to graph", key="back_to_viz"
+    ):
+        st.session_state.pop("_back_to_viz", None)
+        st.session_state.search_navigate_to = "Visualization"
+        st.rerun()
 
     # Show any flash message from a previous action (set_flash_message), for
     # every page rather than only Import/Export, so bulk-add results and delete

@@ -16,9 +16,8 @@ import time
 
 import pytest
 
-import orionbelt_ontology_builder.app as app
-from orionbelt_ontology_builder import local_store
 from ontology_manager import OntologyManager, rdf_format_for_path
+from orionbelt_ontology_builder import app, local_store
 
 
 class _FakeSessionState(dict):

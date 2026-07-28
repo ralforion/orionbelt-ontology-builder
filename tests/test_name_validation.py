@@ -1,8 +1,8 @@
 """Tests for entity name validation (issue #93)."""
 
 import pytest
-from ontology_manager import OntologyManager
 
+from ontology_manager import OntologyManager
 
 VALID = [
     "OutputTable",

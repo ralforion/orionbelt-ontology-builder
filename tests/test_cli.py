@@ -5,7 +5,7 @@ import sys
 from importlib.metadata import entry_points
 from pathlib import Path
 
-import orionbelt_ontology_builder.cli as cli
+from orionbelt_ontology_builder import cli
 from orionbelt_ontology_builder.local_store import BRAND_PRIMARY_COLOR, ENV_FLAG
 
 

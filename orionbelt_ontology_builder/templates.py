@@ -4,7 +4,6 @@ import hashlib
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional
 
 TEMPLATES = [
     {
@@ -324,7 +323,7 @@ def get_template_names() -> list:
     return [t["name"] for t in TEMPLATES]
 
 
-def get_template(name: str) -> Optional[dict]:
+def get_template(name: str) -> dict | None:
     """Return a template by name, or None if not found."""
     for t in TEMPLATES:
         if t["name"] == name:
@@ -417,7 +416,7 @@ def get_upper_ontology_names() -> list:
     return sorted((o["name"] for o in UPPER_ONTOLOGIES), key=str.lower)
 
 
-def get_upper_ontology(name: str) -> Optional[dict]:
+def get_upper_ontology(name: str) -> dict | None:
     """Return an upper ontology definition by name, or None if not found."""
     for o in UPPER_ONTOLOGIES:
         if o["name"] == name:
@@ -507,7 +506,7 @@ def get_reference_ontology_names() -> list:
     return sorted((o["name"] for o in REFERENCE_ONTOLOGIES), key=str.lower)
 
 
-def get_reference_ontology(name: str) -> Optional[dict]:
+def get_reference_ontology(name: str) -> dict | None:
     """Return a reference ontology definition by name, or None if not found."""
     for o in REFERENCE_ONTOLOGIES:
         if o["name"] == name:

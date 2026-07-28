@@ -65,7 +65,8 @@ class TestCrossNamespaceDuplicates:
     """
 
     def _make_two_orgs(self):
-        from rdflib import RDF, OWL, RDFS, Literal, URIRef
+        from rdflib import OWL, RDF, RDFS, Literal, URIRef
+
         from ontology_manager import OntologyManager
 
         om = OntologyManager(base_uri="http://example.org/myont#")
@@ -98,7 +99,7 @@ class TestCrossNamespaceDuplicates:
         assert remaining[0]["uri"] == gist_uri
 
     def test_rename_by_uri_only_affects_one(self):
-        om, foaf_uri, gist_uri = self._make_two_orgs()
+        om, foaf_uri, _gist_uri = self._make_two_orgs()
         result = om.rename_class(foaf_uri, "SocialOrganization")
         assert result is True
         names = sorted(c["name"] for c in om.get_classes())
@@ -108,7 +109,7 @@ class TestCrossNamespaceDuplicates:
 
     def test_class_relations_expose_uris(self):
         """Regression for Relations tab key collisions."""
-        from rdflib import URIRef, OWL
+        from rdflib import OWL, URIRef
 
         om, foaf_uri, gist_uri = self._make_two_orgs()
         om.graph.add((URIRef(foaf_uri), OWL.equivalentClass, URIRef(gist_uri)))
@@ -138,7 +139,7 @@ class TestCrossNamespaceDuplicates:
     def test_add_class_relation_with_uris_targets_correct_resources(self):
         """Regression: Add Class Relation must place the triple between the
         URIs the user picked, not synthesise new base-namespace classes."""
-        from rdflib import URIRef, OWL
+        from rdflib import OWL, URIRef
 
         om, foaf_uri, gist_uri = self._make_two_orgs()
         om.add_class_relation(foaf_uri, "equivalentClass", gist_uri)
@@ -154,7 +155,7 @@ class TestCrossNamespaceDuplicates:
     def test_individuals_expose_class_uris(self):
         """Regression: get_individuals must expose class_uris so the graph
         viewer can target the correct duplicate-named class."""
-        from rdflib import URIRef, RDF, OWL
+        from rdflib import OWL, RDF, URIRef
 
         om, foaf_uri, _gist_uri = self._make_two_orgs()
         alice = om.namespace["alice"]

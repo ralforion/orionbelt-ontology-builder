@@ -5,15 +5,15 @@ keeps working. New code should prefer
 `from orionbelt_ontology_builder.ontology_manager import ...`.
 """
 
-from orionbelt_ontology_builder.ontology_manager import *  # noqa: F401, F403
+from orionbelt_ontology_builder.ontology_manager import *
 from orionbelt_ontology_builder.ontology_manager import (  # noqa: F401
-    IMPORT_REPLACE,
+    _DOMAIN_INCLUDES,
+    _GIST,
+    _RANGE_INCLUDES,
+    _SCHEMA,
     IMPORT_MERGE,
     IMPORT_MERGE_OVERWRITE,
+    IMPORT_REPLACE,
     OntologyManager,
     UndoManager,
-    _SCHEMA,
-    _GIST,
-    _DOMAIN_INCLUDES,
-    _RANGE_INCLUDES,
 )

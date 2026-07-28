@@ -1,8 +1,9 @@
 """Tests for the diff engine (compare_graphs, summaries, reports)."""
 
 import pytest
-from rdflib import Graph, URIRef, Literal, BNode
-from rdflib.namespace import RDF, RDFS, OWL
+from rdflib import BNode, Graph, Literal, URIRef
+from rdflib.namespace import OWL, RDF, RDFS
+
 from ontology_manager import OntologyManager
 
 

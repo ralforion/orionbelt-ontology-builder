@@ -5,20 +5,21 @@ from unittest.mock import patch
 
 import pytest
 from rdflib import Graph
+
+from ontology_manager import OntologyManager
 from orionbelt_ontology_builder import templates as templates_module
 from orionbelt_ontology_builder.templates import (
-    get_template_names,
-    get_template,
-    render_template,
-    get_upper_ontology_names,
-    get_upper_ontology,
-    load_upper_ontology_module,
-    get_reference_ontology_names,
-    get_reference_ontology,
-    load_reference_ontology_module,
     _fetch_with_cache,
+    get_reference_ontology,
+    get_reference_ontology_names,
+    get_template,
+    get_template_names,
+    get_upper_ontology,
+    get_upper_ontology_names,
+    load_reference_ontology_module,
+    load_upper_ontology_module,
+    render_template,
 )
-from ontology_manager import OntologyManager
 
 
 class TestTemplateDefinitions:
@@ -250,12 +251,14 @@ class TestReferenceOntologies:
             def read(self):
                 return payload
 
-        with patch(
-            "orionbelt_ontology_builder.templates.urllib.request.urlopen",
-            return_value=_Resp(),
+        with (
+            patch(
+                "orionbelt_ontology_builder.templates.urllib.request.urlopen",
+                return_value=_Resp(),
+            ),
+            pytest.raises(RuntimeError, match="SHA256 mismatch"),
         ):
-            with pytest.raises(RuntimeError, match="SHA256 mismatch"):
-                _fetch_with_cache("https://example.invalid/x", wrong_sha)
+            _fetch_with_cache("https://example.invalid/x", wrong_sha)
 
         # Mismatched fetch must NOT poison the cache
         assert not (tmp_path / f"{wrong_sha}.dat").exists()

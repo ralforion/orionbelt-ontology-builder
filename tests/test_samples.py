@@ -6,7 +6,9 @@ using ontologies from samples/ directory.
 
 import os
 import subprocess
+
 import pytest
+
 from ontology_manager import OntologyManager
 
 SAMPLES_DIR = os.path.join(
