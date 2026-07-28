@@ -79,6 +79,13 @@ Repository = "https://github.com/ralforion/orionbelt-ontology-builder"
 Issues = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 Demo = "https://orionbelt.streamlit.app"
 
+[tool.ruff.lint]
+# The rule set the project has always linted against. Ruff up to 0.15.x applied
+# exactly these by default, so this was implicit; 0.16.0 widened the default to
+# ~35 rule families, which would have changed what CI enforces as a side effect
+# of a Dependabot bump. Pinning it keeps lint scope a deliberate choice.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
