@@ -20,6 +20,7 @@ This reuses the same in-package Streamlit entry script as the console launcher
 """
 
 import importlib.util
+import logging
 import os
 import subprocess
 import sys
@@ -27,6 +28,8 @@ from pathlib import Path
 
 from .app import APP_NAME
 from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, data_dir, resolved_startup_base
+
+logger = logging.getLogger(__name__)
 
 
 def _preferred_gui() -> str | None:
@@ -198,7 +201,7 @@ def _install_window_bridges(app_name: str):
             try:
                 window.set_title(title if title and title != "Streamlit" else app_name)
             except Exception:
-                pass
+                logger.debug("Backend rejected set_title()", exc_info=True)
             return True
 
         def orionbelt_copy_to_clipboard(text):
@@ -232,7 +235,9 @@ def _install_window_bridges(app_name: str):
                 orionbelt_toggle_fullscreen,
             )
         except Exception:
-            pass
+            logger.debug(
+                "JS bridge not exposed; backend has no window.expose()", exc_info=True
+            )
 
         def _clear_native_fullscreen_flag():
             # pywebview decides which way toggle_fullscreen() goes purely from a
@@ -249,7 +254,9 @@ def _install_window_bridges(app_name: str):
                 try:
                     view.is_fullscreen = False
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Could not clear the native fullscreen flag", exc_info=True
+                    )
 
         def _on_window_restored():
             # macOS fires the window's "restored" event when it leaves fullscreen
@@ -265,24 +272,32 @@ def _install_window_bridges(app_name: str):
                     " window.__orionbeltNativeFullscreenExit()"
                 )
             except Exception:
-                pass
+                logger.debug(
+                    "Fullscreen-exit notice not delivered to the page", exc_info=True
+                )
 
         try:
             window.events.restored += _on_window_restored
         except Exception:
-            pass
+            logger.debug(
+                "Backend has no 'restored' event; fullscreen-exit sync disabled",
+                exc_info=True,
+            )
 
         def _inject():
             for script in (_TITLE_SYNC_JS, _CLIPBOARD_BRIDGE_JS):
                 try:
                     window.evaluate_js(script)
                 except Exception:
-                    pass
+                    logger.debug("Startup script injection failed", exc_info=True)
 
         try:
             window.events.loaded += _inject
         except Exception:
-            pass
+            logger.debug(
+                "Backend has no 'loaded' event; script injection disabled",
+                exc_info=True,
+            )
         return window
 
     webview.create_window = _create

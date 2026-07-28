@@ -84,13 +84,15 @@ Demo = "https://orionbelt.streamlit.app"
 # was just E4/E7/E9/F; 0.16.0 widened it to roughly 35 families (UP, SIM, RUF,
 # PERF, PTH, ...) and we adopt that rather than pinning back to the old four.
 ignore = [
-    # Both of these encode the same deliberate choice: optional or degradable
-    # paths — graph rendering, theme detection, the desktop webview hooks —
-    # are wrapped in broad handlers so a failure downgrades the UI instead of
-    # killing the Streamlit session. Errors that the user needs to see are
-    # surfaced explicitly through log_error() / show_message().
+    # Optional or degradable paths — graph rendering, theme detection, the
+    # desktop webview hooks — are wrapped in `except Exception` so a failure
+    # downgrades the UI instead of killing the Streamlit session. The specific
+    # type genuinely is not knowable there: it varies by pywebview backend and
+    # by Streamlit version. Every such handler logs at debug level with a
+    # traceback (so nothing is swallowed silently, which is what S110 guards
+    # against), and errors the user must see go through log_error() /
+    # show_message().
     "BLE001", # blind `except Exception`
-    "S110",   # try-except-pass
 ]
 
 [tool.mypy]
