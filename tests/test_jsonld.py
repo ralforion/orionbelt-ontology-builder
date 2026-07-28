@@ -1,8 +1,8 @@
 """Tests for JSON-LD import support."""
 
 import pytest
-from ontology_manager import OntologyManager
 
+from ontology_manager import OntologyManager
 
 JSONLD_MINIMAL = """{
   "@context": {

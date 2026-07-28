@@ -2,7 +2,6 @@
 
 from ontology_manager import OntologyManager
 
-
 TURTLE_WITH_ONTOLOGY = """\
 @prefix : <http://imported.org/ont#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .

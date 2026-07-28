@@ -1,8 +1,9 @@
 """Tests for bulk operations."""
 
 import pytest
-from ontology_manager import OntologyManager
 from rdflib.namespace import RDFS
+
+from ontology_manager import OntologyManager
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ from importlib.metadata import entry_points
 
 import pytest
 
-import orionbelt_ontology_builder.desktop as desktop
+from orionbelt_ontology_builder import desktop
 from orionbelt_ontology_builder.app import APP_NAME
 from orionbelt_ontology_builder.local_store import BRAND_PRIMARY_COLOR, ENV_FLAG
 
@@ -409,7 +409,7 @@ def test_copy_to_clipboard_uses_platform_command(monkeypatch):
     """Each platform writes stdin to its native clipboard tool (issue #120)."""
     calls = {}
 
-    def _fake_run(command, input, check):  # noqa: A002 - mirror subprocess.run
+    def _fake_run(command, input, check):
         calls["command"] = command
         calls["input"] = input
         return types.SimpleNamespace(returncode=0)
@@ -430,7 +430,7 @@ def test_copy_to_clipboard_falls_back_across_linux_tools(monkeypatch):
     """On Linux, an unavailable tool is skipped for the next candidate."""
     tried = []
 
-    def _fake_run(command, input, check):  # noqa: A002 - mirror subprocess.run
+    def _fake_run(command, input, check):
         tried.append(command[0])
         if command[0] == "wl-copy":
             raise FileNotFoundError("wl-copy")
@@ -447,7 +447,7 @@ def test_copy_to_clipboard_returns_false_when_unavailable(monkeypatch):
     """With no working clipboard tool, it reports failure instead of raising."""
     monkeypatch.setattr(sys, "platform", "linux")
 
-    def _fake_run(command, input, check):  # noqa: A002 - mirror subprocess.run
+    def _fake_run(command, input, check):
         raise FileNotFoundError(command[0])
 
     monkeypatch.setattr(desktop.subprocess, "run", _fake_run)

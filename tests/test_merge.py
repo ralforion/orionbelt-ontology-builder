@@ -3,13 +3,13 @@
 import pytest
 from rdflib import Graph, URIRef
 from rdflib.namespace import RDFS
+
 from ontology_manager import (
-    OntologyManager,
-    IMPORT_REPLACE,
     IMPORT_MERGE,
     IMPORT_MERGE_OVERWRITE,
+    IMPORT_REPLACE,
+    OntologyManager,
 )
-
 
 SECOND_ONT_TTL = """
 @prefix owl: <http://www.w3.org/2002/07/owl#> .

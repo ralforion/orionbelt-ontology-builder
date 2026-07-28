@@ -29,7 +29,7 @@ class _FakeLS:
     def getItem(self, _key):
         return self._value
 
-    def setItem(self, _key, value, key=None):  # noqa: A002 - mirrors the real API
+    def setItem(self, _key, value, key=None):
         self.saved = value
 
 

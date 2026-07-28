@@ -11,7 +11,6 @@ import pytest
 
 from orionbelt_ontology_builder import app
 
-
 BASE = "http://ex.org/base#"
 FN = "http://ex.org/fn#"
 MATH = "http://ex.org/math#"
