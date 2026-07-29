@@ -1139,10 +1139,27 @@ def confirm_delete(resource_name: str, resource_type: str, key_suffix: str) -> b
     return False
 
 
+# Separates the local name from the label in display strings. Neither the order
+# nor the separator is cosmetic.
+#
+# Streamlit filters selectboxes client-side with fzy, which awards a match a
+# word-boundary bonus taken from the character *preceding* it: 0.9 after '/',
+# 0.8 after a space (or '-', '_'), 0.7 for a camelCase hump, and 0.0 after '('.
+# The old 'Label (name)' format gave the local name no bonus at all, so an
+# unrelated camelCase compound could outscore an exact match — searching
+# 'HamTopping' in pizza.owl ranked 'ParmaHamTopping' first (issue #210). Leading
+# with the name, behind a separator that ends in a space, restores the bonus.
+#
+# Name-first also keeps the option list sorted consistently: a resource whose
+# label matches its name renders as the bare name, so a label-first format would
+# sort part of the list by label and the rest by name.
+LABEL_NAME_SEPARATOR = " · "
+
+
 def format_label_name(name: str, label: str) -> str:
-    """Format display string as 'Label (name)' if label exists and differs from name."""
+    """Format display string as 'name · Label' if label exists and differs from name."""
     if label and label != name:
-        return f"{label} ({name})"
+        return f"{name}{LABEL_NAME_SEPARATOR}{label}"
     return name
 
 
@@ -1343,7 +1360,7 @@ def build_uri_options(items: list, include_none: bool = False) -> tuple:
 
 
 def build_class_options(classes: list, include_none: bool = False) -> tuple:
-    """Build class dropdown options with 'Label (disambiguated name)' format.
+    """Build class dropdown options with 'disambiguated name · Label' format.
 
     Thin wrapper around :func:`build_uri_options` kept for clarity at call
     sites that work specifically with classes.
@@ -2463,7 +2480,7 @@ def render_classes():
         if not classes:
             st.info("No classes to edit.")
         else:
-            # Build options with Label (disambiguated name) format; lookup is by URI
+            # Build options with disambiguated name · Label format; lookup is by URI
             class_options, class_lookup = build_class_options(classes)
             selected_display = st.selectbox(
                 "Select Class", options=class_options, key="edit_class_select"
@@ -4864,16 +4881,10 @@ def render_annotations():
     data_props = ont.get_data_properties()
     individuals = ont.get_individuals()
 
-    # Build resources with labels for display: "Label (name)" format
-    def format_resource(name, label, res_type):
-        if label and label != name:
-            return f"{label} ({name})"
-        return name
-
     # Combine all resources with their labels
     all_resources = []
     for c in classes:
-        display = format_resource(c["name"], c.get("label"), "Class")
+        display = format_label_name(c["name"], c.get("label"))
         all_resources.append(
             {
                 "name": c["name"],
@@ -4883,7 +4894,7 @@ def render_annotations():
             }
         )
     for p in object_props:
-        display = format_resource(p["name"], p.get("label"), "Object Property")
+        display = format_label_name(p["name"], p.get("label"))
         all_resources.append(
             {
                 "name": p["name"],
@@ -4893,7 +4904,7 @@ def render_annotations():
             }
         )
     for p in data_props:
-        display = format_resource(p["name"], p.get("label"), "Data Property")
+        display = format_label_name(p["name"], p.get("label"))
         all_resources.append(
             {
                 "name": p["name"],
@@ -4903,7 +4914,7 @@ def render_annotations():
             }
         )
     for i in individuals:
-        display = format_resource(i["name"], i.get("label"), "Individual")
+        display = format_label_name(i["name"], i.get("label"))
         all_resources.append(
             {
                 "name": i["name"],
