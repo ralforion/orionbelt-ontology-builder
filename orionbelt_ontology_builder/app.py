@@ -35,9 +35,9 @@ AUTOSAVE_MAX_BYTES = 4_000_000
 # Visualization display preferences persisted across sessions (issue #142), so a
 # user's Fit-to-window / entity-type / spacing etc. choices survive a reload.
 # Stored in the same backends as the ontology autosave (browser localStorage on
-# the cloud, config.json on desktop). Only ontology-INDEPENDENT settings are
-# persisted; the class filter and focus seeds reference entity names and are
-# left to their own per-ontology reset logic.
+# the cloud, config.json on desktop). Only ontology-INDEPENDENT settings belong
+# here; the node filters and focus seeds reference entity names, so they are
+# saved per linked file instead (see VIZ_FILE_STATE_KEY, issue #164).
 VIZ_SETTINGS_KEY = "orionbelt_viz_settings"
 _VIZ_PERSIST_KEYS = (
     "show_classes",
@@ -63,6 +63,17 @@ _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
     "focus_depth": (1, 5),
 }
+# Per-linked-file Visualization state (issue #164). The node filters and focus
+# seeds name specific entities, which is why #142 left them out of the settings
+# above: restoring "Class: Person" into a different ontology is meaningless. The
+# desktop app's linked working file removes that objection, since it identifies
+# the ontology and its path already lives in config.json. So this state is saved
+# per linked path and only restored while that same file is still linked; a
+# cloud session has no linked file and keeps resetting per session.
+VIZ_FILE_STATE_KEY = "viz_file_state"
+# Bound config.json's growth. Dicts keep insertion order, so the entry rewritten
+# longest ago is the one evicted.
+VIZ_FILE_STATE_MAX_FILES = 20
 # Disk autosave (local/desktop) is gated on the mutation counter and debounced:
 # the graph is only serialized when it actually changed and edits have settled,
 # so normal UI reruns do no work even for large ontologies. Important actions
@@ -820,6 +831,219 @@ def _persist_viz_settings() -> None:
             VIZ_SETTINGS_KEY, payload, key=f"orionbelt_viz_settings_set_{h[:12]}"
         )
     st.session_state["_viz_settings_saved_json"] = payload
+
+
+def _viz_file_state_id() -> str | None:
+    """Identity of the ontology the per-file viz state belongs to, else ``None``.
+
+    The linked working file's path (issue #164). Cloud sessions have no linked
+    file and no disk, so they get ``None`` and keep the per-session reset.
+    """
+    if not local_store.local_persist_enabled():
+        return None
+    path = local_store.get_linked_path()
+    return str(path) if path else None
+
+
+def _str_list(value) -> list[str]:
+    """Coerce a persisted value to a list of strings, dropping anything else."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str)]
+
+
+def viz_drop_focus_seeds() -> None:
+    """Forget the focus seeds so they re-derive from the current selection."""
+    st.session_state.pop("_viz_cfg_focus_seeds", None)
+    st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
+
+
+def prune_reused_focus_seeds(seeds, seen_ids_by_label, focus_targets):
+    """Drop seeds whose label has come to name a different entity.
+
+    Seeds are held as the labels the multiselect shows, and the focus block
+    prunes them by label alone — but a label does not identify anything. Import
+    an ontology that also has a ``Person`` over one that had it and the stale
+    seed passes that prune, silently re-pointing the focus at an unrelated class
+    and (since #164) persisting it as that class.
+
+    Comparing each label against the node id it resolved to last render catches
+    that, whatever caused it. The replacement counters do not: an import goes
+    through ``save_checkpoint``, which bumps the edit counter alongside the
+    mutation counter, so it is deliberately *not* a "replacement" (issue #180).
+
+    A label with no recorded id is one the user just picked, so it is kept.
+    """
+    if not seeds or not seen_ids_by_label:
+        return list(seeds or [])
+    return [
+        s
+        for s in seeds
+        if s not in seen_ids_by_label or seen_ids_by_label[s] == focus_targets.get(s)
+    ]
+
+
+def _clear_viz_file_session_state() -> None:
+    """Drop the session keys that belong to one specific ontology.
+
+    The filter selections and focus seeds name entities of the file they were
+    made against, so they must not survive a switch to another one: they would
+    both suppress the new file's saved state (a selection already in session
+    wins over it) and then be written back out under the new file's key.
+    """
+    for kind in _FILTER_KINDS:
+        st.session_state.pop(f"_viz_cfg_selected_{kind['key']}_uris", None)
+        st.session_state.pop(f"_viz_cfg_known_{kind['key']}_uris", None)
+    viz_drop_focus_seeds()
+    st.session_state.pop("_viz_pending_focus_seed_ids", None)
+    # The mutation counters seen on the last render belong to the file we just
+    # left, and loading the new one bumps the ontology's counter without a
+    # matching edit. Left in place they would read as "the ontology was
+    # replaced", which resets the filter to everything shown and so discards the
+    # state we are about to restore. Nothing can leak across the switch anyway:
+    # the selection itself was just cleared, so the only thing the reconcile has
+    # to diff against is the new file's own saved state.
+    st.session_state.pop("_viz_cfg_seen_mutation", None)
+    st.session_state.pop("_viz_cfg_seen_edits", None)
+
+
+def _restore_viz_file_state() -> dict:
+    """Return the linked file's saved viz state, once per file (issue #164).
+
+    Yields the saved entry on the first Visualization render for a given linked
+    path and ``{}`` afterwards, since session state then holds the reconciled
+    selection. Linking a different file mid-session clears the previous file's
+    per-ontology state first, so the new file's own state is what applies.
+    """
+    file_id = _viz_file_state_id()
+    marker = "_viz_file_state_for"
+    if marker in st.session_state:
+        if st.session_state[marker] == file_id:
+            return {}
+        # A switch, not the first render: the state in session belongs to the
+        # file we just left.
+        _clear_viz_file_session_state()
+    st.session_state[marker] = file_id
+    if file_id is None:
+        return {}
+    store = local_store.load_config().get(VIZ_FILE_STATE_KEY)
+    entry = store.get(file_id) if isinstance(store, dict) else None
+    return entry if isinstance(entry, dict) else {}
+
+
+def viz_ontology_was_replaced() -> bool:
+    """Whether the whole ontology was swapped since the last graph render.
+
+    A mutation-counter jump not matched by the edit counter means a
+    load/import/new/undo rather than an incremental edit, so the node filters
+    reset to "everything shown" instead of diffing against an ontology that may
+    reuse URIs for unrelated entities.
+
+    Must be evaluated *after* :func:`_restore_viz_file_state`, which clears the
+    counters when the linked file changed: loading the new file bumps the
+    ontology counter, and treating that as a replacement would throw away the
+    state being restored for it (issue #164).
+    """
+    mutation = st.session_state.get("_ont_mutation_count", 0)
+    edits = st.session_state.get("_ont_edit_count", 0)
+    prev_mutation = st.session_state.get("_viz_cfg_seen_mutation")
+    prev_edits = st.session_state.get("_viz_cfg_seen_edits", 0)
+    return prev_mutation is not None and (mutation - prev_mutation) != (
+        edits - prev_edits
+    )
+
+
+def viz_mark_ontology_seen() -> None:
+    """Record the counters this render reconciled against.
+
+    The counterpart to :func:`viz_ontology_was_replaced`, which compares the
+    next render's counters with these.
+    """
+    st.session_state["_viz_cfg_seen_mutation"] = st.session_state.get(
+        "_ont_mutation_count", 0
+    )
+    st.session_state["_viz_cfg_seen_edits"] = st.session_state.get("_ont_edit_count", 0)
+
+
+def seed_filter_from_saved(all_uris, hidden, selected, known):
+    """Reconcile inputs for a node filter, seeded from saved per-file state.
+
+    Returns ``(selected, known)`` unchanged once the session has a selection of
+    its own. On the first render of a linked file it turns the saved hidden set
+    into the equivalent pair, so the saved state goes *through*
+    :func:`reconcile_filter_selection` rather than around it: an entity added to
+    the file since the last session is absent from the hidden set and therefore
+    shows up, the way new content always does.
+    """
+    if not hidden or selected is not None:
+        return selected, known
+    return [uri for uri in all_uris if uri not in hidden], set(all_uris)
+
+
+def _viz_file_state_payload(filters: dict, focus_targets: dict) -> dict:
+    """The per-file viz state worth saving: hidden entities and focus seeds.
+
+    Stores what the user *hid* rather than what is selected. Everything is shown
+    by default, so the hidden set is normally empty or tiny, which keeps
+    config.json small for an ontology with thousands of entities. It also
+    restores identically: an entity added to the file since the last session is
+    absent from the hidden set and so shows up, exactly as
+    :func:`reconcile_filter_selection` would have decided.
+    """
+    data: dict[str, list[str]] = {}
+    for key, entry in filters.items():
+        selected = set(entry["selected_uris"])
+        hidden = [uri for uri in entry["uris"] if uri not in selected]
+        if hidden:
+            data[f"hidden_{key}_uris"] = hidden
+    # Seeds are stored as the graph's node ids, not the labels the multiselect
+    # shows. A label picks up a namespace tag the moment a second entity takes
+    # the same local name, so a saved label would stop matching a file that
+    # gained one while the app was closed (the lesson of issue #179). Node ids
+    # for classes, individuals and data properties derive from the URI instead.
+    seeds = st.session_state.get("_viz_cfg_focus_seeds") or []
+    seed_ids = [focus_targets[s] for s in seeds if s in focus_targets]
+    if seed_ids:
+        data["focus_seed_ids"] = seed_ids
+    return data
+
+
+def _persist_viz_file_state(filters: dict, focus_targets: dict) -> None:
+    """Save the linked file's node filters and focus seeds (issue #164).
+
+    No-ops when nothing changed since the last render, and when the state
+    already on disk matches, so ordinary reruns don't rewrite config.json.
+    """
+    file_id = _viz_file_state_id()
+    if file_id is None:
+        return
+    payload = _viz_file_state_payload(filters, focus_targets)
+    fingerprint = json.dumps([file_id, payload], sort_keys=True)
+    if fingerprint == st.session_state.get("_viz_file_state_fingerprint"):
+        return
+    try:
+        cfg = local_store.load_config()
+        store = cfg.get(VIZ_FILE_STATE_KEY)
+        if not isinstance(store, dict):
+            store = {}
+        existing = store.get(file_id)
+        if payload != existing and (payload or existing is not None):
+            # Re-insert so this file counts as the most recently changed: dicts
+            # keep insertion order and JSON preserves it, so eviction drops the
+            # stalest.
+            store.pop(file_id, None)
+            if payload:
+                store[file_id] = payload
+            while len(store) > VIZ_FILE_STATE_MAX_FILES:
+                store.pop(next(iter(store)))
+            cfg[VIZ_FILE_STATE_KEY] = store
+            local_store.save_config(cfg)
+    except OSError as e:
+        # Leave the fingerprint unset so an unwritable config.json is retried on
+        # a later rerun instead of being silently given up on.
+        log_error(e, context="Viz per-file state save")
+        return
+    st.session_state["_viz_file_state_fingerprint"] = fingerprint
 
 
 def _load_linked_file(target) -> bool:
@@ -7164,22 +7388,32 @@ def render_visualization():
         # Every filterable kind is reconciled the same way, so the per-kind state
         # lives in one dict keyed by the kind's key rather than a parallel set of
         # variables per kind (issue #196).
-        mutation = st.session_state.get("_ont_mutation_count", 0)
-        edits = st.session_state.get("_ont_edit_count", 0)
-        prev_mutation = st.session_state.get("_viz_cfg_seen_mutation")
-        prev_edits = st.session_state.get("_viz_cfg_seen_edits", 0)
-        replaced = prev_mutation is not None and (mutation - prev_mutation) != (
-            edits - prev_edits
-        )
         _kind_items = {"class": classes, "ind": individuals}
+        # Filters and focus seeds the user left behind for this linked file
+        # (issue #164). Empty on the cloud, and after the first render. Runs
+        # before the replacement check below, which reads counters it clears.
+        _file_state = _restore_viz_file_state()
+        replaced = viz_ontology_was_replaced()
+        _saved_seed_ids = _str_list(_file_state.get("focus_seed_ids"))
+        if _saved_seed_ids and "_viz_cfg_focus_seeds" not in st.session_state:
+            # Held until focus_targets exists further down — that's the map from
+            # node id back to the label the multiselect shows.
+            st.session_state["_viz_pending_focus_seed_ids"] = _saved_seed_ids
         filters: dict[str, dict] = {}
         for _kind in _FILTER_KINDS:
             _key = _kind["key"]
             _entries = build_filter_entries(_kind_items.get(_key) or [])
-            _sel_uris, _known_uris = reconcile_filter_selection(
-                [e["uri"] for e in _entries],
+            _all_uris = [e["uri"] for e in _entries]
+            _prev_sel, _prev_known = seed_filter_from_saved(
+                _all_uris,
+                set(_str_list(_file_state.get(f"hidden_{_key}_uris"))),
                 st.session_state.get(f"_viz_cfg_selected_{_key}_uris"),
                 st.session_state.get(f"_viz_cfg_known_{_key}_uris"),
+            )
+            _sel_uris, _known_uris = reconcile_filter_selection(
+                _all_uris,
+                _prev_sel,
+                _prev_known,
                 replaced=replaced,
             )
             st.session_state[f"_viz_cfg_selected_{_key}_uris"] = _sel_uris
@@ -7199,8 +7433,7 @@ def render_visualization():
                 "selected_uris": _sel_uris,
                 "selected_displays": _selected_displays,
             }
-        st.session_state["_viz_cfg_seen_mutation"] = mutation
-        st.session_state["_viz_cfg_seen_edits"] = edits
+        viz_mark_ontology_seen()
 
         class_entries = filters["class"]["entries"]
         all_class_names = filters["class"]["displays"]
@@ -7232,6 +7465,29 @@ def render_visualization():
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
+
+        # Seeds whose label now names a *different* entity than it did last
+        # render belong to an ontology that has since been swapped out, so drop
+        # them before anything reads or persists them.
+        if "_viz_cfg_focus_seeds" in st.session_state:
+            st.session_state["_viz_cfg_focus_seeds"] = prune_reused_focus_seeds(
+                st.session_state["_viz_cfg_focus_seeds"],
+                st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
+                focus_targets,
+            )
+
+        # Seeds saved for this linked file are stored as node ids (#164); turn
+        # them back into the labels the multiselect works in. An id whose entity
+        # is gone — or whose type is toggled off, and so isn't in focus_targets —
+        # simply drops out, the same pruning the focus block does below.
+        _pending_seed_ids = st.session_state.pop("_viz_pending_focus_seed_ids", None)
+        if _pending_seed_ids and "_viz_cfg_focus_seeds" not in st.session_state:
+            _label_by_id = {node_id: label for label, node_id in focus_targets.items()}
+            _restored_seeds = [
+                _label_by_id[i] for i in _pending_seed_ids if i in _label_by_id
+            ]
+            if _restored_seeds:
+                st.session_state["_viz_cfg_focus_seeds"] = _restored_seeds
 
         # Find & centre on a specific entity (issue #144). Independent of focus
         # mode: picking an entity here selects and camera-centres it in the graph
@@ -7328,6 +7584,12 @@ def render_visualization():
                     saved_seeds = [focus_labels[0]]
                 st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
                 st.session_state["viz_focus_seeds"] = saved_seeds
+                # Remember what each label resolved to, so the next render can
+                # tell a label that has come to name a different entity from one
+                # that still names the same (see prune_reused_focus_seeds).
+                st.session_state["_viz_cfg_focus_seed_ids_by_label"] = {
+                    s: focus_targets.get(s) for s in saved_seeds
+                }
                 fcol1, fcol2 = st.columns([3, 1])
                 with fcol1:
                     focus_seeds = st.multiselect(
@@ -7510,6 +7772,9 @@ def render_visualization():
         # they survive a reload (#142). Runs after every control has synced its
         # value; no-ops when nothing changed.
         _persist_viz_settings()
+        # The entity-naming state (node filters, focus seeds) is saved separately,
+        # against the linked working file it belongs to (#164).
+        _persist_viz_file_state(filters, focus_targets)
 
         # Store graph settings in session state for caching
         selected_classes_key = (
