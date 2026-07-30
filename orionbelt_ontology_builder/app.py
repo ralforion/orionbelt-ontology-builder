@@ -865,6 +865,15 @@ def _clear_viz_file_session_state() -> None:
         st.session_state.pop(f"_viz_cfg_known_{kind['key']}_uris", None)
     st.session_state.pop("_viz_cfg_focus_seeds", None)
     st.session_state.pop("_viz_pending_focus_seed_ids", None)
+    # The mutation counters seen on the last render belong to the file we just
+    # left, and loading the new one bumps the ontology's counter without a
+    # matching edit. Left in place they would read as "the ontology was
+    # replaced", which resets the filter to everything shown and so discards the
+    # state we are about to restore. Nothing can leak across the switch anyway:
+    # the selection itself was just cleared, so the only thing the reconcile has
+    # to diff against is the new file's own saved state.
+    st.session_state.pop("_viz_cfg_seen_mutation", None)
+    st.session_state.pop("_viz_cfg_seen_edits", None)
 
 
 def _restore_viz_file_state() -> dict:
@@ -889,6 +898,40 @@ def _restore_viz_file_state() -> dict:
     store = local_store.load_config().get(VIZ_FILE_STATE_KEY)
     entry = store.get(file_id) if isinstance(store, dict) else None
     return entry if isinstance(entry, dict) else {}
+
+
+def viz_ontology_was_replaced() -> bool:
+    """Whether the whole ontology was swapped since the last graph render.
+
+    A mutation-counter jump not matched by the edit counter means a
+    load/import/new/undo rather than an incremental edit, so the node filters
+    reset to "everything shown" instead of diffing against an ontology that may
+    reuse URIs for unrelated entities.
+
+    Must be evaluated *after* :func:`_restore_viz_file_state`, which clears the
+    counters when the linked file changed: loading the new file bumps the
+    ontology counter, and treating that as a replacement would throw away the
+    state being restored for it (issue #164).
+    """
+    mutation = st.session_state.get("_ont_mutation_count", 0)
+    edits = st.session_state.get("_ont_edit_count", 0)
+    prev_mutation = st.session_state.get("_viz_cfg_seen_mutation")
+    prev_edits = st.session_state.get("_viz_cfg_seen_edits", 0)
+    return prev_mutation is not None and (mutation - prev_mutation) != (
+        edits - prev_edits
+    )
+
+
+def viz_mark_ontology_seen() -> None:
+    """Record the counters this render reconciled against.
+
+    The counterpart to :func:`viz_ontology_was_replaced`, which compares the
+    next render's counters with these.
+    """
+    st.session_state["_viz_cfg_seen_mutation"] = st.session_state.get(
+        "_ont_mutation_count", 0
+    )
+    st.session_state["_viz_cfg_seen_edits"] = st.session_state.get("_ont_edit_count", 0)
 
 
 def seed_filter_from_saved(all_uris, hidden, selected, known):
@@ -7314,17 +7357,12 @@ def render_visualization():
         # Every filterable kind is reconciled the same way, so the per-kind state
         # lives in one dict keyed by the kind's key rather than a parallel set of
         # variables per kind (issue #196).
-        mutation = st.session_state.get("_ont_mutation_count", 0)
-        edits = st.session_state.get("_ont_edit_count", 0)
-        prev_mutation = st.session_state.get("_viz_cfg_seen_mutation")
-        prev_edits = st.session_state.get("_viz_cfg_seen_edits", 0)
-        replaced = prev_mutation is not None and (mutation - prev_mutation) != (
-            edits - prev_edits
-        )
         _kind_items = {"class": classes, "ind": individuals}
         # Filters and focus seeds the user left behind for this linked file
-        # (issue #164). Empty on the cloud, and after the first render.
+        # (issue #164). Empty on the cloud, and after the first render. Runs
+        # before the replacement check below, which reads counters it clears.
         _file_state = _restore_viz_file_state()
+        replaced = viz_ontology_was_replaced()
         _saved_seed_ids = _str_list(_file_state.get("focus_seed_ids"))
         if _saved_seed_ids and "_viz_cfg_focus_seeds" not in st.session_state:
             # Held until focus_targets exists further down — that's the map from
@@ -7364,8 +7402,7 @@ def render_visualization():
                 "selected_uris": _sel_uris,
                 "selected_displays": _selected_displays,
             }
-        st.session_state["_viz_cfg_seen_mutation"] = mutation
-        st.session_state["_viz_cfg_seen_edits"] = edits
+        viz_mark_ontology_seen()
 
         class_entries = filters["class"]["entries"]
         all_class_names = filters["class"]["displays"]

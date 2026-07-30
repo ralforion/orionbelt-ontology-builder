@@ -238,6 +238,76 @@ def test_relinking_mid_session_clears_the_previous_files_state(monkeypatch, tmp_
     assert known == {NS + "A", NS + "B"}
 
 
+def test_relinking_does_not_read_the_new_file_as_a_replaced_ontology(
+    monkeypatch, tmp_path
+):
+    """Regression: loading the newly linked file looked like an ontology swap.
+
+    ``_load_linked_file`` bumps the mutation counter without a matching edit, so
+    the counters left over from the previous file made ``replaced`` true. That
+    resets the filter to everything shown, which both discards the state being
+    restored for the new file and then writes that empty result back over it.
+    """
+    _desktop(monkeypatch, tmp_path, linked=FILE_A)
+    session = _Session(
+        {
+            "_viz_file_state_for": FILE_B,
+            # Seen on the last render, while FILE_B was linked.
+            "_viz_cfg_seen_mutation": 4,
+            "_viz_cfg_seen_edits": 0,
+            # Loading FILE_A bumped the ontology counter, with no user edit.
+            "_ont_mutation_count": 5,
+            "_ont_edit_count": 0,
+        }
+    )
+    monkeypatch.setattr(app.st, "session_state", session)
+    assert app.viz_ontology_was_replaced() is True  # before the switch is seen
+
+    app._restore_viz_file_state()
+
+    assert app.viz_ontology_was_replaced() is False
+    # So the new file's saved hidden set survives the reconcile.
+    selected, known = app.seed_filter_from_saved(
+        [NS + "A", NS + "B"], {NS + "B"}, None, None
+    )
+    result, _ = app.reconcile_filter_selection(
+        [NS + "A", NS + "B"], selected, known, replaced=app.viz_ontology_was_replaced()
+    )
+    assert result == [NS + "A"]
+
+
+def test_a_real_ontology_swap_still_resets_the_filter(monkeypatch, tmp_path):
+    # Importing over the same linked file is a genuine replacement: the saved
+    # hidden set names entities that may be gone, so everything shows again.
+    _desktop(monkeypatch, tmp_path, linked=FILE_A)
+    session = _Session(
+        {
+            "_viz_file_state_for": FILE_A,  # same file, no switch
+            "_viz_cfg_seen_mutation": 4,
+            "_viz_cfg_seen_edits": 0,
+            "_ont_mutation_count": 5,
+            "_ont_edit_count": 0,
+        }
+    )
+    monkeypatch.setattr(app.st, "session_state", session)
+    app._restore_viz_file_state()
+    assert app.viz_ontology_was_replaced() is True
+
+
+def test_an_ordinary_edit_is_not_a_replacement(monkeypatch):
+    monkeypatch.setattr(
+        app.st,
+        "session_state",
+        {
+            "_viz_cfg_seen_mutation": 4,
+            "_viz_cfg_seen_edits": 1,
+            "_ont_mutation_count": 5,
+            "_ont_edit_count": 2,
+        },
+    )
+    assert app.viz_ontology_was_replaced() is False
+
+
 def test_relinking_does_not_write_the_old_files_seeds_under_the_new_file(
     monkeypatch, tmp_path
 ):
