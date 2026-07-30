@@ -294,6 +294,66 @@ def test_a_real_ontology_swap_still_resets_the_filter(monkeypatch, tmp_path):
     assert app.viz_ontology_was_replaced() is True
 
 
+def test_a_reused_label_naming_a_different_entity_is_dropped():
+    """Regression: a seed label outlived the ontology it named.
+
+    Seeds are pruned by label, and a label does not identify an entity. Import
+    an ontology that also has a Person over the linked file and the stale
+    ``Class: Person`` survives that prune, silently re-pointing the focus at an
+    unrelated class — and persisting it as that class's node id.
+    """
+    seeds = ["Class: Person"]
+    seen = {"Class: Person": app._uid(NS + "Person")}
+    successor = {"Class: Person": app._uid("http://elsewhere#Person")}
+    assert app.prune_reused_focus_seeds(seeds, seen, successor) == []
+
+
+def test_a_label_still_naming_the_same_entity_is_kept():
+    seeds = ["Class: Person"]
+    seen = {"Class: Person": app._uid(NS + "Person")}
+    # Same entity, even though a namespace tag appeared alongside it.
+    assert app.prune_reused_focus_seeds(seeds, seen, FOCUS_TARGETS) == seeds
+
+
+def test_a_freshly_picked_seed_has_no_recorded_id_and_survives():
+    assert app.prune_reused_focus_seeds(
+        ["Class: Org"], {"Class: Person": "whatever"}, FOCUS_TARGETS
+    ) == ["Class: Org"]
+
+
+def test_pruning_is_a_noop_before_anything_was_recorded():
+    assert app.prune_reused_focus_seeds(["Class: Person"], None, FOCUS_TARGETS) == [
+        "Class: Person"
+    ]
+    assert app.prune_reused_focus_seeds(None, None, FOCUS_TARGETS) == []
+
+
+def test_dropped_seeds_are_not_persisted(monkeypatch):
+    session = _Session({"_viz_cfg_focus_seeds": ["Class: Person"]})
+    monkeypatch.setattr(app.st, "session_state", session)
+    successor = {"Class: Person": app._uid("http://elsewhere#Person")}
+    # What it would have written with the stale label left in place.
+    assert app._viz_file_state_payload(_filters(), successor) == {
+        "focus_seed_ids": [app._uid("http://elsewhere#Person")]
+    }
+    session["_viz_cfg_focus_seeds"] = app.prune_reused_focus_seeds(
+        session["_viz_cfg_focus_seeds"],
+        {"Class: Person": app._uid(NS + "Person")},
+        successor,
+    )
+    assert app._viz_file_state_payload(_filters(), successor) == {}
+
+
+def test_switching_files_also_forgets_the_focus_seeds(monkeypatch, tmp_path):
+    _desktop(monkeypatch, tmp_path, linked=FILE_A)
+    session = _Session(
+        {"_viz_file_state_for": FILE_B, "_viz_cfg_focus_seeds": ["Class: Person"]}
+    )
+    monkeypatch.setattr(app.st, "session_state", session)
+    app._restore_viz_file_state()
+    assert "_viz_cfg_focus_seeds" not in session
+
+
 def test_an_ordinary_edit_is_not_a_replacement(monkeypatch):
     monkeypatch.setattr(
         app.st,

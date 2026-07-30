@@ -852,6 +852,37 @@ def _str_list(value) -> list[str]:
     return [v for v in value if isinstance(v, str)]
 
 
+def viz_drop_focus_seeds() -> None:
+    """Forget the focus seeds so they re-derive from the current selection."""
+    st.session_state.pop("_viz_cfg_focus_seeds", None)
+    st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
+
+
+def prune_reused_focus_seeds(seeds, seen_ids_by_label, focus_targets):
+    """Drop seeds whose label has come to name a different entity.
+
+    Seeds are held as the labels the multiselect shows, and the focus block
+    prunes them by label alone — but a label does not identify anything. Import
+    an ontology that also has a ``Person`` over one that had it and the stale
+    seed passes that prune, silently re-pointing the focus at an unrelated class
+    and (since #164) persisting it as that class.
+
+    Comparing each label against the node id it resolved to last render catches
+    that, whatever caused it. The replacement counters do not: an import goes
+    through ``save_checkpoint``, which bumps the edit counter alongside the
+    mutation counter, so it is deliberately *not* a "replacement" (issue #180).
+
+    A label with no recorded id is one the user just picked, so it is kept.
+    """
+    if not seeds or not seen_ids_by_label:
+        return list(seeds or [])
+    return [
+        s
+        for s in seeds
+        if s not in seen_ids_by_label or seen_ids_by_label[s] == focus_targets.get(s)
+    ]
+
+
 def _clear_viz_file_session_state() -> None:
     """Drop the session keys that belong to one specific ontology.
 
@@ -863,7 +894,7 @@ def _clear_viz_file_session_state() -> None:
     for kind in _FILTER_KINDS:
         st.session_state.pop(f"_viz_cfg_selected_{kind['key']}_uris", None)
         st.session_state.pop(f"_viz_cfg_known_{kind['key']}_uris", None)
-    st.session_state.pop("_viz_cfg_focus_seeds", None)
+    viz_drop_focus_seeds()
     st.session_state.pop("_viz_pending_focus_seed_ids", None)
     # The mutation counters seen on the last render belong to the file we just
     # left, and loading the new one bumps the ontology's counter without a
@@ -7435,6 +7466,16 @@ def render_visualization():
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
 
+        # Seeds whose label now names a *different* entity than it did last
+        # render belong to an ontology that has since been swapped out, so drop
+        # them before anything reads or persists them.
+        if "_viz_cfg_focus_seeds" in st.session_state:
+            st.session_state["_viz_cfg_focus_seeds"] = prune_reused_focus_seeds(
+                st.session_state["_viz_cfg_focus_seeds"],
+                st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
+                focus_targets,
+            )
+
         # Seeds saved for this linked file are stored as node ids (#164); turn
         # them back into the labels the multiselect works in. An id whose entity
         # is gone — or whose type is toggled off, and so isn't in focus_targets —
@@ -7543,6 +7584,12 @@ def render_visualization():
                     saved_seeds = [focus_labels[0]]
                 st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
                 st.session_state["viz_focus_seeds"] = saved_seeds
+                # Remember what each label resolved to, so the next render can
+                # tell a label that has come to name a different entity from one
+                # that still names the same (see prune_reused_focus_seeds).
+                st.session_state["_viz_cfg_focus_seed_ids_by_label"] = {
+                    s: focus_targets.get(s) for s in saved_seeds
+                }
                 fcol1, fcol2 = st.columns([3, 1])
                 with fcol1:
                     focus_seeds = st.multiselect(
