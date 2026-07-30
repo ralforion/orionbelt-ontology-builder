@@ -35,9 +35,9 @@ AUTOSAVE_MAX_BYTES = 4_000_000
 # Visualization display preferences persisted across sessions (issue #142), so a
 # user's Fit-to-window / entity-type / spacing etc. choices survive a reload.
 # Stored in the same backends as the ontology autosave (browser localStorage on
-# the cloud, config.json on desktop). Only ontology-INDEPENDENT settings are
-# persisted; the class filter and focus seeds reference entity names and are
-# left to their own per-ontology reset logic.
+# the cloud, config.json on desktop). Only ontology-INDEPENDENT settings belong
+# here; the node filters and focus seeds reference entity names, so they are
+# saved per linked file instead (see VIZ_FILE_STATE_KEY, issue #164).
 VIZ_SETTINGS_KEY = "orionbelt_viz_settings"
 _VIZ_PERSIST_KEYS = (
     "show_classes",
@@ -63,6 +63,17 @@ _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
     "focus_depth": (1, 5),
 }
+# Per-linked-file Visualization state (issue #164). The node filters and focus
+# seeds name specific entities, which is why #142 left them out of the settings
+# above: restoring "Class: Person" into a different ontology is meaningless. The
+# desktop app's linked working file removes that objection, since it identifies
+# the ontology and its path already lives in config.json. So this state is saved
+# per linked path and only restored while that same file is still linked; a
+# cloud session has no linked file and keeps resetting per session.
+VIZ_FILE_STATE_KEY = "viz_file_state"
+# Bound config.json's growth. Dicts keep insertion order, so the entry rewritten
+# longest ago is the one evicted.
+VIZ_FILE_STATE_MAX_FILES = 20
 # Disk autosave (local/desktop) is gated on the mutation counter and debounced:
 # the graph is only serialized when it actually changed and edits have settled,
 # so normal UI reruns do no work even for large ontologies. Important actions
@@ -820,6 +831,117 @@ def _persist_viz_settings() -> None:
             VIZ_SETTINGS_KEY, payload, key=f"orionbelt_viz_settings_set_{h[:12]}"
         )
     st.session_state["_viz_settings_saved_json"] = payload
+
+
+def _viz_file_state_id() -> str | None:
+    """Identity of the ontology the per-file viz state belongs to, else ``None``.
+
+    The linked working file's path (issue #164). Cloud sessions have no linked
+    file and no disk, so they get ``None`` and keep the per-session reset.
+    """
+    if not local_store.local_persist_enabled():
+        return None
+    path = local_store.get_linked_path()
+    return str(path) if path else None
+
+
+def _str_list(value) -> list[str]:
+    """Coerce a persisted value to a list of strings, dropping anything else."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str)]
+
+
+def _restore_viz_file_state() -> dict:
+    """Return the linked file's saved viz state, once per file (issue #164).
+
+    Yields the saved entry on the first Visualization render for a given linked
+    path and ``{}`` afterwards, since session state then holds the reconciled
+    selection. Linking a different file mid-session re-runs, so the new file's
+    state applies instead of the previous one's.
+    """
+    file_id = _viz_file_state_id()
+    marker = "_viz_file_state_for"
+    if marker in st.session_state and st.session_state[marker] == file_id:
+        return {}
+    st.session_state[marker] = file_id
+    if file_id is None:
+        return {}
+    store = local_store.load_config().get(VIZ_FILE_STATE_KEY)
+    entry = store.get(file_id) if isinstance(store, dict) else None
+    return entry if isinstance(entry, dict) else {}
+
+
+def seed_filter_from_saved(all_uris, hidden, selected, known):
+    """Reconcile inputs for a node filter, seeded from saved per-file state.
+
+    Returns ``(selected, known)`` unchanged once the session has a selection of
+    its own. On the first render of a linked file it turns the saved hidden set
+    into the equivalent pair, so the saved state goes *through*
+    :func:`reconcile_filter_selection` rather than around it: an entity added to
+    the file since the last session is absent from the hidden set and therefore
+    shows up, the way new content always does.
+    """
+    if not hidden or selected is not None:
+        return selected, known
+    return [uri for uri in all_uris if uri not in hidden], set(all_uris)
+
+
+def _viz_file_state_payload(filters: dict) -> dict:
+    """The per-file viz state worth saving: hidden entities and focus seeds.
+
+    Stores what the user *hid* rather than what is selected. Everything is shown
+    by default, so the hidden set is normally empty or tiny, which keeps
+    config.json small for an ontology with thousands of entities. It also
+    restores identically: an entity added to the file since the last session is
+    absent from the hidden set and so shows up, exactly as
+    :func:`reconcile_filter_selection` would have decided.
+    """
+    data: dict[str, list[str]] = {}
+    for key, entry in filters.items():
+        selected = set(entry["selected_uris"])
+        hidden = [uri for uri in entry["uris"] if uri not in selected]
+        if hidden:
+            data[f"hidden_{key}_uris"] = hidden
+    seeds = st.session_state.get("_viz_cfg_focus_seeds") or []
+    if seeds:
+        data["focus_seeds"] = list(seeds)
+    return data
+
+
+def _persist_viz_file_state(filters: dict) -> None:
+    """Save the linked file's node filters and focus seeds (issue #164).
+
+    No-ops when nothing changed since the last render, and when the state
+    already on disk matches, so ordinary reruns don't rewrite config.json.
+    """
+    file_id = _viz_file_state_id()
+    if file_id is None:
+        return
+    payload = _viz_file_state_payload(filters)
+    fingerprint = json.dumps([file_id, payload], sort_keys=True)
+    if fingerprint == st.session_state.get("_viz_file_state_fingerprint"):
+        return
+    st.session_state["_viz_file_state_fingerprint"] = fingerprint
+    try:
+        cfg = local_store.load_config()
+        store = cfg.get(VIZ_FILE_STATE_KEY)
+        if not isinstance(store, dict):
+            store = {}
+        existing = store.get(file_id)
+        if payload == existing or (not payload and existing is None):
+            return
+        # Re-insert so this file counts as the most recently changed: dicts keep
+        # insertion order and JSON preserves it, so eviction drops the stalest.
+        store.pop(file_id, None)
+        if payload:
+            store[file_id] = payload
+        while len(store) > VIZ_FILE_STATE_MAX_FILES:
+            store.pop(next(iter(store)))
+        cfg[VIZ_FILE_STATE_KEY] = store
+        local_store.save_config(cfg)
+    except OSError as e:
+        log_error(e, context="Viz per-file state save")
 
 
 def _load_linked_file(target) -> bool:
@@ -7172,14 +7294,29 @@ def render_visualization():
             edits - prev_edits
         )
         _kind_items = {"class": classes, "ind": individuals}
+        # Filters and focus seeds the user left behind for this linked file
+        # (issue #164). Empty on the cloud, and after the first render.
+        _file_state = _restore_viz_file_state()
+        _saved_seeds = _str_list(_file_state.get("focus_seeds"))
+        if _saved_seeds and "_viz_cfg_focus_seeds" not in st.session_state:
+            # The focus-mode block prunes seeds the ontology no longer has, so a
+            # file edited outside the app degrades instead of breaking.
+            st.session_state["_viz_cfg_focus_seeds"] = _saved_seeds
         filters: dict[str, dict] = {}
         for _kind in _FILTER_KINDS:
             _key = _kind["key"]
             _entries = build_filter_entries(_kind_items.get(_key) or [])
-            _sel_uris, _known_uris = reconcile_filter_selection(
-                [e["uri"] for e in _entries],
+            _all_uris = [e["uri"] for e in _entries]
+            _prev_sel, _prev_known = seed_filter_from_saved(
+                _all_uris,
+                set(_str_list(_file_state.get(f"hidden_{_key}_uris"))),
                 st.session_state.get(f"_viz_cfg_selected_{_key}_uris"),
                 st.session_state.get(f"_viz_cfg_known_{_key}_uris"),
+            )
+            _sel_uris, _known_uris = reconcile_filter_selection(
+                _all_uris,
+                _prev_sel,
+                _prev_known,
                 replaced=replaced,
             )
             st.session_state[f"_viz_cfg_selected_{_key}_uris"] = _sel_uris
@@ -7510,6 +7647,9 @@ def render_visualization():
         # they survive a reload (#142). Runs after every control has synced its
         # value; no-ops when nothing changed.
         _persist_viz_settings()
+        # The entity-naming state (node filters, focus seeds) is saved separately,
+        # against the linked working file it belongs to (#164).
+        _persist_viz_file_state(filters)
 
         # Store graph settings in session state for caching
         selected_classes_key = (
