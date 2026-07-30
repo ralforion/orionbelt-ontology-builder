@@ -852,18 +852,37 @@ def _str_list(value) -> list[str]:
     return [v for v in value if isinstance(v, str)]
 
 
+def _clear_viz_file_session_state() -> None:
+    """Drop the session keys that belong to one specific ontology.
+
+    The filter selections and focus seeds name entities of the file they were
+    made against, so they must not survive a switch to another one: they would
+    both suppress the new file's saved state (a selection already in session
+    wins over it) and then be written back out under the new file's key.
+    """
+    for kind in _FILTER_KINDS:
+        st.session_state.pop(f"_viz_cfg_selected_{kind['key']}_uris", None)
+        st.session_state.pop(f"_viz_cfg_known_{kind['key']}_uris", None)
+    st.session_state.pop("_viz_cfg_focus_seeds", None)
+    st.session_state.pop("_viz_pending_focus_seed_ids", None)
+
+
 def _restore_viz_file_state() -> dict:
     """Return the linked file's saved viz state, once per file (issue #164).
 
     Yields the saved entry on the first Visualization render for a given linked
     path and ``{}`` afterwards, since session state then holds the reconciled
-    selection. Linking a different file mid-session re-runs, so the new file's
-    state applies instead of the previous one's.
+    selection. Linking a different file mid-session clears the previous file's
+    per-ontology state first, so the new file's own state is what applies.
     """
     file_id = _viz_file_state_id()
     marker = "_viz_file_state_for"
-    if marker in st.session_state and st.session_state[marker] == file_id:
-        return {}
+    if marker in st.session_state:
+        if st.session_state[marker] == file_id:
+            return {}
+        # A switch, not the first render: the state in session belongs to the
+        # file we just left.
+        _clear_viz_file_session_state()
     st.session_state[marker] = file_id
     if file_id is None:
         return {}
@@ -887,7 +906,7 @@ def seed_filter_from_saved(all_uris, hidden, selected, known):
     return [uri for uri in all_uris if uri not in hidden], set(all_uris)
 
 
-def _viz_file_state_payload(filters: dict) -> dict:
+def _viz_file_state_payload(filters: dict, focus_targets: dict) -> dict:
     """The per-file viz state worth saving: hidden entities and focus seeds.
 
     Stores what the user *hid* rather than what is selected. Everything is shown
@@ -903,13 +922,19 @@ def _viz_file_state_payload(filters: dict) -> dict:
         hidden = [uri for uri in entry["uris"] if uri not in selected]
         if hidden:
             data[f"hidden_{key}_uris"] = hidden
+    # Seeds are stored as the graph's node ids, not the labels the multiselect
+    # shows. A label picks up a namespace tag the moment a second entity takes
+    # the same local name, so a saved label would stop matching a file that
+    # gained one while the app was closed (the lesson of issue #179). Node ids
+    # for classes, individuals and data properties derive from the URI instead.
     seeds = st.session_state.get("_viz_cfg_focus_seeds") or []
-    if seeds:
-        data["focus_seeds"] = list(seeds)
+    seed_ids = [focus_targets[s] for s in seeds if s in focus_targets]
+    if seed_ids:
+        data["focus_seed_ids"] = seed_ids
     return data
 
 
-def _persist_viz_file_state(filters: dict) -> None:
+def _persist_viz_file_state(filters: dict, focus_targets: dict) -> None:
     """Save the linked file's node filters and focus seeds (issue #164).
 
     No-ops when nothing changed since the last render, and when the state
@@ -918,30 +943,33 @@ def _persist_viz_file_state(filters: dict) -> None:
     file_id = _viz_file_state_id()
     if file_id is None:
         return
-    payload = _viz_file_state_payload(filters)
+    payload = _viz_file_state_payload(filters, focus_targets)
     fingerprint = json.dumps([file_id, payload], sort_keys=True)
     if fingerprint == st.session_state.get("_viz_file_state_fingerprint"):
         return
-    st.session_state["_viz_file_state_fingerprint"] = fingerprint
     try:
         cfg = local_store.load_config()
         store = cfg.get(VIZ_FILE_STATE_KEY)
         if not isinstance(store, dict):
             store = {}
         existing = store.get(file_id)
-        if payload == existing or (not payload and existing is None):
-            return
-        # Re-insert so this file counts as the most recently changed: dicts keep
-        # insertion order and JSON preserves it, so eviction drops the stalest.
-        store.pop(file_id, None)
-        if payload:
-            store[file_id] = payload
-        while len(store) > VIZ_FILE_STATE_MAX_FILES:
-            store.pop(next(iter(store)))
-        cfg[VIZ_FILE_STATE_KEY] = store
-        local_store.save_config(cfg)
+        if payload != existing and (payload or existing is not None):
+            # Re-insert so this file counts as the most recently changed: dicts
+            # keep insertion order and JSON preserves it, so eviction drops the
+            # stalest.
+            store.pop(file_id, None)
+            if payload:
+                store[file_id] = payload
+            while len(store) > VIZ_FILE_STATE_MAX_FILES:
+                store.pop(next(iter(store)))
+            cfg[VIZ_FILE_STATE_KEY] = store
+            local_store.save_config(cfg)
     except OSError as e:
+        # Leave the fingerprint unset so an unwritable config.json is retried on
+        # a later rerun instead of being silently given up on.
         log_error(e, context="Viz per-file state save")
+        return
+    st.session_state["_viz_file_state_fingerprint"] = fingerprint
 
 
 def _load_linked_file(target) -> bool:
@@ -7297,11 +7325,11 @@ def render_visualization():
         # Filters and focus seeds the user left behind for this linked file
         # (issue #164). Empty on the cloud, and after the first render.
         _file_state = _restore_viz_file_state()
-        _saved_seeds = _str_list(_file_state.get("focus_seeds"))
-        if _saved_seeds and "_viz_cfg_focus_seeds" not in st.session_state:
-            # The focus-mode block prunes seeds the ontology no longer has, so a
-            # file edited outside the app degrades instead of breaking.
-            st.session_state["_viz_cfg_focus_seeds"] = _saved_seeds
+        _saved_seed_ids = _str_list(_file_state.get("focus_seed_ids"))
+        if _saved_seed_ids and "_viz_cfg_focus_seeds" not in st.session_state:
+            # Held until focus_targets exists further down — that's the map from
+            # node id back to the label the multiselect shows.
+            st.session_state["_viz_pending_focus_seed_ids"] = _saved_seed_ids
         filters: dict[str, dict] = {}
         for _kind in _FILTER_KINDS:
             _key = _kind["key"]
@@ -7369,6 +7397,19 @@ def render_visualization():
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
                 focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
+
+        # Seeds saved for this linked file are stored as node ids (#164); turn
+        # them back into the labels the multiselect works in. An id whose entity
+        # is gone — or whose type is toggled off, and so isn't in focus_targets —
+        # simply drops out, the same pruning the focus block does below.
+        _pending_seed_ids = st.session_state.pop("_viz_pending_focus_seed_ids", None)
+        if _pending_seed_ids and "_viz_cfg_focus_seeds" not in st.session_state:
+            _label_by_id = {node_id: label for label, node_id in focus_targets.items()}
+            _restored_seeds = [
+                _label_by_id[i] for i in _pending_seed_ids if i in _label_by_id
+            ]
+            if _restored_seeds:
+                st.session_state["_viz_cfg_focus_seeds"] = _restored_seeds
 
         # Find & centre on a specific entity (issue #144). Independent of focus
         # mode: picking an entity here selects and camera-centres it in the graph
@@ -7649,7 +7690,7 @@ def render_visualization():
         _persist_viz_settings()
         # The entity-naming state (node filters, focus seeds) is saved separately,
         # against the linked working file it belongs to (#164).
-        _persist_viz_file_state(filters)
+        _persist_viz_file_state(filters, focus_targets)
 
         # Store graph settings in session state for caching
         selected_classes_key = (
