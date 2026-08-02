@@ -858,6 +858,82 @@ def viz_drop_focus_seeds() -> None:
     st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
 
 
+# The Visualization page's widget callbacks. They live at module level so they
+# can be exercised directly — as nested functions they were unreachable from a
+# test, which is how the crash below went unnoticed.
+#
+# Streamlit runs an ``on_change`` callback *before* the script reruns, and a
+# widget key is dropped from session_state once a run goes by without that
+# widget being rendered. This page mounts and unmounts widgets constantly (tab
+# switches, the Filter Nodes expander, focus mode swapping the filter controls
+# for the seed picker), so a callback can fire for a key that is no longer
+# there. Reading it outright killed the session with a KeyError (issue #219).
+#
+# A dropped widget has no value to persist, so these skip. The change is lost
+# for that one interaction — the next render puts the widget back from the
+# stored config — which is a glitch the user can simply repeat, rather than a
+# dead page they have to reload.
+
+
+def _viz_widget_missing(wid_key: str) -> bool:
+    """Whether ``wid_key``'s widget is gone, so its callback has nothing to do.
+
+    Presence, not truthiness: an unticked checkbox and an empty multiselect are
+    values the user chose, and must not be mistaken for an absent widget.
+    """
+    return wid_key not in st.session_state
+
+
+def viz_sync(cfg_key, wid_key):
+    """Persist a viz display setting when its widget changes."""
+    if _viz_widget_missing(wid_key):
+        return
+    st.session_state[cfg_key] = st.session_state[wid_key]
+    # A change to a persisted setting lifts the cross-session save gate
+    # (issue #142); changes to per-ontology filters do not.
+    if cfg_key.removeprefix("_viz_cfg_") in _VIZ_PERSIST_KEYS:
+        st.session_state["_viz_settings_dirty"] = True
+
+
+def viz_filter_changed(kind_key, uri_by_display):
+    """Persist a node filter by URI. The widget holds display labels, which gain
+    a namespace tag as soon as a second entity takes the same local name —
+    storing those would make the next render read the renamed entries as newly
+    created and re-show hidden ones (#179)."""
+    wid_key = f"viz_selected_{kind_key}"
+    if _viz_widget_missing(wid_key):
+        # Not merely a crash to avoid: reading the absent key as "nothing
+        # picked" would store an empty filter, hiding every node of this kind
+        # and persisting that (issue #219).
+        return
+    picked = st.session_state[wid_key] or []
+    st.session_state[f"_viz_cfg_selected_{kind_key}_uris"] = [
+        uri_by_display[d] for d in picked if d in uri_by_display
+    ]
+
+
+def viz_focus_toggle():
+    """Persist the focus toggle and, when it turns on, seed the focus nodes from
+    the classes selected in the multiselect — so the neighbourhood grows from
+    exactly what the user had picked (one class or several). An empty selection
+    falls back to the first node."""
+    if _viz_widget_missing("viz_focus_mode"):
+        return
+    on = st.session_state["viz_focus_mode"]
+    st.session_state["_viz_cfg_focus_mode"] = on
+    st.session_state["_viz_settings_dirty"] = True
+    if on:
+        sel = st.session_state.get("_viz_cfg_selected_classes") or []
+        st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
+
+
+def viz_find_changed():
+    """Bump a sequence so the graph re-centres on the picked entity only when the
+    Find selection changes — not on every rerun or drag, which would keep yanking
+    the camera back (issue #144)."""
+    st.session_state["_viz_find_seq"] = st.session_state.get("_viz_find_seq", 0) + 1
+
+
 def prune_reused_focus_seeds(seeds, seen_ids_by_label, focus_targets):
     """Drop seeds whose label has come to name a different entity.
 
@@ -7565,44 +7641,6 @@ def render_visualization():
             # Restore widget key from persisted config
             st.session_state[wid_key] = st.session_state[cfg_key]
 
-        def _viz_sync(cfg_key, wid_key):
-            """Callback to persist widget value when changed."""
-            st.session_state[cfg_key] = st.session_state[wid_key]
-            # A change to a persisted setting lifts the cross-session save gate
-            # (issue #142); changes to per-ontology filters do not.
-            if cfg_key.removeprefix("_viz_cfg_") in _VIZ_PERSIST_KEYS:
-                st.session_state["_viz_settings_dirty"] = True
-
-        def _viz_filter_changed(kind_key, uri_by_display):
-            """Persist a node filter by URI. The widget holds display labels,
-            which gain a namespace tag as soon as a second entity takes the same
-            local name — storing those would make the next render read the
-            renamed entries as newly created and re-show hidden ones (#179)."""
-            picked = st.session_state.get(f"viz_selected_{kind_key}") or []
-            st.session_state[f"_viz_cfg_selected_{kind_key}_uris"] = [
-                uri_by_display[d] for d in picked if d in uri_by_display
-            ]
-
-        def _viz_focus_toggle():
-            """Persist the focus toggle and, when it turns on, seed the focus
-            nodes from the classes selected in the multiselect — so the
-            neighbourhood grows from exactly what the user had picked (one class
-            or several). An empty selection falls back to the first node."""
-            on = st.session_state["viz_focus_mode"]
-            st.session_state["_viz_cfg_focus_mode"] = on
-            st.session_state["_viz_settings_dirty"] = True
-            if on:
-                sel = st.session_state.get("_viz_cfg_selected_classes") or []
-                st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
-
-        def _viz_find_changed():
-            """Bump a sequence so the graph re-centres on the picked entity only
-            when the Find selection changes — not on every rerun or drag, which
-            would keep yanking the camera back (issue #144)."""
-            st.session_state["_viz_find_seq"] = (
-                st.session_state.get("_viz_find_seq", 0) + 1
-            )
-
         _cols = (
             st.columns([1, 1, 1, 1, 1, 1, 1, 1])
             if _has_skos
@@ -7612,35 +7650,35 @@ def render_visualization():
             show_classes = st.checkbox(
                 "Classes",
                 key="viz_show_classes",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_show_classes", "viz_show_classes"),
             )
         with _cols[1]:
             show_properties = st.checkbox(
                 "Obj Props",
                 key="viz_show_obj_props",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_show_obj_props", "viz_show_obj_props"),
             )
         with _cols[2]:
             show_data_props = st.checkbox(
                 "Data Props",
                 key="viz_show_data_props",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_show_data_props", "viz_show_data_props"),
             )
         with _cols[3]:
             show_annotations = st.checkbox(
                 "Annotations",
                 key="viz_show_annotations",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_show_annotations", "viz_show_annotations"),
             )
         with _cols[4]:
             show_individuals = st.checkbox(
                 "Individuals",
                 key="viz_show_individuals",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_show_individuals", "viz_show_individuals"),
             )
         if _has_skos:
@@ -7648,14 +7686,14 @@ def render_visualization():
                 show_skos = st.checkbox(
                     "SKOS",
                     key="viz_show_skos",
-                    on_change=_viz_sync,
+                    on_change=viz_sync,
                     args=("_viz_cfg_show_skos", "viz_show_skos"),
                 )
             with _cols[6]:
                 show_ind_edges = st.checkbox(
                     "Ind. Edges",
                     key="viz_show_ind_edges",
-                    on_change=_viz_sync,
+                    on_change=viz_sync,
                     args=("_viz_cfg_show_ind_edges", "viz_show_ind_edges"),
                     help="Show property edges between individuals",
                 )
@@ -7663,7 +7701,7 @@ def render_visualization():
                 show_triples = st.checkbox(
                     "Triples",
                     key="viz_show_triples",
-                    on_change=_viz_sync,
+                    on_change=viz_sync,
                     args=("_viz_cfg_show_triples", "viz_show_triples"),
                     help="Show all RDF triples for visible nodes",
                 )
@@ -7673,7 +7711,7 @@ def render_visualization():
                 show_ind_edges = st.checkbox(
                     "Ind. Edges",
                     key="viz_show_ind_edges",
-                    on_change=_viz_sync,
+                    on_change=viz_sync,
                     args=("_viz_cfg_show_ind_edges", "viz_show_ind_edges"),
                     help="Show property edges between individuals",
                 )
@@ -7681,7 +7719,7 @@ def render_visualization():
                 show_triples = st.checkbox(
                     "Triples",
                     key="viz_show_triples",
-                    on_change=_viz_sync,
+                    on_change=viz_sync,
                     args=("_viz_cfg_show_triples", "viz_show_triples"),
                     help="Show all RDF triples for visible nodes",
                 )
@@ -7695,7 +7733,7 @@ def render_visualization():
                 1200,
                 step=10,
                 key="viz_graph_height",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_graph_height", "viz_graph_height"),
                 disabled=st.session_state.get("_viz_cfg_fit", True),
                 help="Used when 'Fit to window' is off.",
@@ -7707,7 +7745,7 @@ def render_visualization():
                 300,
                 help="Distance between nodes. Increase for less overlap.",
                 key="viz_node_spacing",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_node_spacing", "viz_node_spacing"),
             )
         with col3:
@@ -7716,14 +7754,14 @@ def render_visualization():
                 help="Resize the graph to fill the window height. "
                 "Turn off to use the Graph Height slider.",
                 key="viz_fit",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_fit", "viz_fit"),
             )
         with col4:
             highlight_issues = st.checkbox(
                 "Highlight Issues",
                 key="viz_highlight_issues",
-                on_change=_viz_sync,
+                on_change=viz_sync,
                 args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
             )
         with col5:
@@ -7876,7 +7914,7 @@ def render_visualization():
                     placeholder="🔍 Find and centre on an entity…",
                     label_visibility="collapsed",
                     key="viz_find_entity",
-                    on_change=_viz_find_changed,
+                    on_change=viz_find_changed,
                     help="Jump to and highlight an entity so it's easy to spot "
                     "in a large graph. Lists the entity types enabled above.",
                 )
@@ -7925,7 +7963,7 @@ def render_visualization():
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
-                on_change=_viz_focus_toggle,
+                on_change=viz_focus_toggle,
                 help=(
                     "Show only a chosen node plus everything linked to it within "
                     "N hops, across all node types — handy for large ontologies "
@@ -7964,7 +8002,7 @@ def render_visualization():
                         "Focus node(s)",
                         options=focus_labels,
                         key="viz_focus_seeds",
-                        on_change=_viz_sync,
+                        on_change=viz_sync,
                         args=("_viz_cfg_focus_seeds", "viz_focus_seeds"),
                         help="Classes, individuals or SKOS concepts to centre on. "
                         "The neighbourhood grows from all of them. Toggle the "
@@ -7976,7 +8014,7 @@ def render_visualization():
                         1,
                         5,
                         key="viz_focus_depth",
-                        on_change=_viz_sync,
+                        on_change=viz_sync,
                         args=("_viz_cfg_focus_depth", "viz_focus_depth"),
                         help="1 = direct neighbours only; higher pulls in further links.",
                     )
@@ -8052,7 +8090,7 @@ def render_visualization():
                         help=f"Choose which {_plural} to show in the graph. Empty "
                         f"shows none; use 'Select all' to bring them back.",
                         key=f"viz_selected_{_key}",
-                        on_change=_viz_filter_changed,
+                        on_change=viz_filter_changed,
                         args=(_key, active["uri_by_display"]),
                         label_visibility="collapsed",
                         placeholder=f"No {_plural} shown — pick some, or Select all",
