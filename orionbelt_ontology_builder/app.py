@@ -1387,6 +1387,40 @@ def format_label_name(name: str, label: str) -> str:
     return name
 
 
+# fzy also subtracts 0.005 for every character *after* the last matched one, so
+# a longer option scores lower purely for being longer. A resource with a short
+# name therefore lost to a longer one whenever its own label pushed the display
+# string past the competitor's: searching 'n' ranked 'node' above 'n · number'
+# (issue #214), because both matched at position 0 with the same 0.9 bonus and
+# only length separated them.
+#
+# Padding every option to one width makes that trailing penalty identical for
+# all of them, so length stops counting and the score reflects the match alone.
+# Equal scores keep the order the app supplied (Streamlit sorts with a stable
+# lodash sortBy), which is the builders' alphabetical sort — and for a prefix
+# query that puts the shortest name first.
+#
+# The width is a constant rather than the longest option in the list: padding is
+# applied through ``format_func``, so it never touches the option values the
+# rest of the app stores and looks up, but a width that moved with the option
+# set would still change a rendered label under a selection. 120 covers every
+# display string in the bundled ontologies (the longest is 103); anything past
+# it simply keeps today's behaviour. Well under fzy's 1024-character cutoff,
+# beyond which it stops scoring entirely.
+SEARCH_PAD_WIDTH = 120
+
+
+def _pad_option(display: object) -> str:
+    """Pad a dropdown option to :data:`SEARCH_PAD_WIDTH` for search ranking.
+
+    Pass as ``format_func`` to any selectbox fed by :func:`build_uri_options` or
+    :func:`build_class_options`. The padding is invisible (HTML collapses the
+    trailing spaces) and stays out of the widget's value, which remains the
+    unpadded display string every lookup is keyed by.
+    """
+    return str(display).ljust(SEARCH_PAD_WIDTH)
+
+
 def _uid(uri: str) -> str:
     """Stable short identifier for a URI — used as Streamlit key suffix.
 
@@ -1927,6 +1961,7 @@ def _render_panel_entity_editor(
                 "Domain",
                 cls_opts,
                 index=cls_opts.index(cur_dom) if cur_dom in cls_opts else 0,
+                format_func=_pad_option,
             )
             if ntype == "Object Property":
                 cur_rng = next(
@@ -1941,6 +1976,7 @@ def _render_panel_entity_editor(
                     "Range",
                     cls_opts,
                     index=cls_opts.index(cur_rng) if cur_rng in cls_opts else 0,
+                    format_func=_pad_option,
                 )
                 # Only apply when changed, so a range/domain that can't be shown
                 # in the dropdown (e.g. a class outside this ontology) isn't
@@ -2668,6 +2704,7 @@ def render_classes():
                 "Parent Class",
                 options=parent_options,
                 help="Select a parent class for hierarchy",
+                format_func=_pad_option,
             )
             ns_options, ns_lookup = build_namespace_options(ont)
             ns_display = st.selectbox(
@@ -2707,7 +2744,10 @@ def render_classes():
             # Build options with disambiguated name · Label format; lookup is by URI
             class_options, class_lookup = build_class_options(classes)
             selected_display = st.selectbox(
-                "Select Class", options=class_options, key="edit_class_select"
+                "Select Class",
+                options=class_options,
+                key="edit_class_select",
+                format_func=_pad_option,
             )
             selected_uri = class_lookup.get(selected_display)
             class_info = (
@@ -3137,6 +3177,7 @@ def render_properties():
                                     if cur_dom_disp in cls_opts
                                     else 0,
                                     key=f"objp_dom_{prop_uid}",
+                                    format_func=_pad_option,
                                 )
                             with col2:
                                 rng_disp = st.selectbox(
@@ -3146,6 +3187,7 @@ def render_properties():
                                     if cur_rng_disp in cls_opts
                                     else 0,
                                     key=f"objp_rng_{prop_uid}",
+                                    format_func=_pad_option,
                                 )
 
                             if st.form_submit_button("Save Changes"):
@@ -3340,6 +3382,7 @@ def render_properties():
                                     if cur_dom_disp in cls_opts
                                     else 0,
                                     key=f"dp_dom_{prop_uid}",
+                                    format_func=_pad_option,
                                 )
                             with col2:
                                 current_range = (
@@ -3428,14 +3471,22 @@ def render_properties():
                 )
                 with st.form("reuse_obj_prop_form"):
                     reuse_opts, reuse_lookup = build_uri_options(object_props)
-                    prop_disp = st.selectbox("Existing property *", options=reuse_opts)
+                    prop_disp = st.selectbox(
+                        "Existing property *",
+                        options=reuse_opts,
+                        format_func=_pad_option,
+                    )
 
                     cls_opts, cls_lookup = build_class_options(classes)
                     col1, col2 = st.columns(2)
                     with col1:
-                        source_disp = st.selectbox("Source class *", options=cls_opts)
+                        source_disp = st.selectbox(
+                            "Source class *", options=cls_opts, format_func=_pad_option
+                        )
                     with col2:
-                        target_disp = st.selectbox("Target class *", options=cls_opts)
+                        target_disp = st.selectbox(
+                            "Target class *", options=cls_opts, format_func=_pad_option
+                        )
 
                     link_disp = st.radio(
                         "Link type",
@@ -3491,9 +3542,13 @@ def render_properties():
                 )
                 col1, col2 = st.columns(2)
                 with col1:
-                    domain_disp = st.selectbox("Domain (Class)", options=cls_opts)
+                    domain_disp = st.selectbox(
+                        "Domain (Class)", options=cls_opts, format_func=_pad_option
+                    )
                 with col2:
-                    range_disp = st.selectbox("Range (Class)", options=cls_opts)
+                    range_disp = st.selectbox(
+                        "Range (Class)", options=cls_opts, format_func=_pad_option
+                    )
 
                 st.write("**Property Characteristics:**")
                 col1, col2, col3, col4 = st.columns(4)
@@ -3509,7 +3564,9 @@ def render_properties():
                 with col4:
                     symmetric = st.checkbox("Symmetric")
 
-                inverse_disp = st.selectbox("Inverse Of", options=obj_prop_opts)
+                inverse_disp = st.selectbox(
+                    "Inverse Of", options=obj_prop_opts, format_func=_pad_option
+                )
                 ns_options, ns_lookup = build_namespace_options(ont)
                 ns_display = st.selectbox(
                     "Namespace",
@@ -3562,7 +3619,10 @@ def render_properties():
             col1, col2 = st.columns(2)
             with col1:
                 domain_disp = st.selectbox(
-                    "Domain (Class)", options=cls_opts, key="data_prop_domain"
+                    "Domain (Class)",
+                    options=cls_opts,
+                    key="data_prop_domain",
+                    format_func=_pad_option,
                 )
             with col2:
                 datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())
@@ -4248,6 +4308,7 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
             cls_options,
             index=_uri_option_index(cls_options, cls_lookup, applied_uris[0]),
             key=f"er_cls_{row_key}",
+            format_func=_pad_option,
         )
         new_property = st.selectbox(
             "Property",
@@ -4256,6 +4317,7 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                 prop_options, prop_lookup, rest.get("property_uri") or rest["property"]
             ),
             key=f"er_prop_{row_key}",
+            format_func=_pad_option,
         )
         new_type = st.selectbox(
             "Restriction Type",
@@ -4281,6 +4343,7 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                     else 0
                 ),
                 key=f"er_onclass_{row_key}",
+                format_func=_pad_option,
             )
 
         save_col, cancel_col = st.columns(2)
@@ -4355,8 +4418,12 @@ def render_add_restriction(ont, classes, properties):
         # was silently created on a base-namespace twin instead.
         cls_opts, cls_lookup = build_uri_options(classes)
         prop_opts, prop_lookup = build_uri_options(properties)
-        target_disp = st.selectbox("Apply to Class", options=cls_opts)
-        property_disp = st.selectbox("On Property", options=prop_opts)
+        target_disp = st.selectbox(
+            "Apply to Class", options=cls_opts, format_func=_pad_option
+        )
+        property_disp = st.selectbox(
+            "On Property", options=prop_opts, format_func=_pad_option
+        )
 
         # Straight from the engine, so a type can never be offered here
         # that it doesn't understand, or omitted when it gains one.
@@ -4368,7 +4435,12 @@ def render_add_restriction(ont, classes, properties):
         value = None
         if restriction_type in ["someValuesFrom", "allValuesFrom"]:
             value = cls_lookup[
-                st.selectbox("Value (Class)", options=cls_opts, key="rest_class_value")
+                st.selectbox(
+                    "Value (Class)",
+                    options=cls_opts,
+                    key="rest_class_value",
+                    format_func=_pad_option,
+                )
             ]
         elif restriction_type == "hasValue":
             ind_opts, ind_lookup = build_uri_options(ont.get_individuals())
@@ -4376,7 +4448,11 @@ def render_add_restriction(ont, classes, properties):
             if value_type == "Literal":
                 value = st.text_input("Literal Value")
             elif ind_opts:
-                value = ind_lookup[st.selectbox("Individual", options=ind_opts)]
+                value = ind_lookup[
+                    st.selectbox(
+                        "Individual", options=ind_opts, format_func=_pad_option
+                    )
+                ]
             else:
                 # Offering a "No individuals" placeholder let that string
                 # be stored as the value.
@@ -4391,6 +4467,7 @@ def render_add_restriction(ont, classes, properties):
                     "Qualified on Class",
                     options=cls_opts,
                     key="qualified_class",
+                    format_func=_pad_option,
                 )
             ]
 
@@ -4611,7 +4688,10 @@ def render_relations():
 
                 with col1:
                     class1_disp = st.selectbox(
-                        "Class 1", options=cls_opts, key="crel_class1"
+                        "Class 1",
+                        options=cls_opts,
+                        key="crel_class1",
+                        format_func=_pad_option,
                     )
                 with col2:
                     relation_type = st.selectbox(
@@ -4621,7 +4701,10 @@ def render_relations():
                     )
                 with col3:
                     class2_disp = st.selectbox(
-                        "Class 2", options=cls_opts, key="crel_class2"
+                        "Class 2",
+                        options=cls_opts,
+                        key="crel_class2",
+                        format_func=_pad_option,
                     )
 
                 st.caption("""
@@ -4673,7 +4756,10 @@ def render_relations():
 
                 with col1:
                     prop1_disp = st.selectbox(
-                        "Property 1", options=prop_opts, key="prel_prop1"
+                        "Property 1",
+                        options=prop_opts,
+                        key="prel_prop1",
+                        format_func=_pad_option,
                     )
                 with col2:
                     relation_type = st.selectbox(
@@ -4683,7 +4769,10 @@ def render_relations():
                     )
                 with col3:
                     prop2_disp = st.selectbox(
-                        "Property 2", options=prop_opts, key="prel_prop2"
+                        "Property 2",
+                        options=prop_opts,
+                        key="prel_prop2",
+                        format_func=_pad_option,
                     )
 
                 st.caption("""
@@ -4734,7 +4823,10 @@ def render_relations():
 
                 with col1:
                     ind1_disp = st.selectbox(
-                        "Individual 1", options=ind_opts, key="irel_ind1"
+                        "Individual 1",
+                        options=ind_opts,
+                        key="irel_ind1",
+                        format_func=_pad_option,
                     )
                 with col2:
                     relation_type = st.selectbox(
@@ -4744,7 +4836,10 @@ def render_relations():
                     )
                 with col3:
                     ind2_disp = st.selectbox(
-                        "Individual 2", options=ind_opts, key="irel_ind2"
+                        "Individual 2",
+                        options=ind_opts,
+                        key="irel_ind2",
+                        format_func=_pad_option,
                     )
 
                 st.caption("""
@@ -4854,7 +4949,11 @@ def render_relation_rows(ont, rows, spec):
             obj_default = _uri_option_index(row_options, row_lookup, obj_uri)
             types = list(spec["relation_types"])
             new_subject = st.selectbox(
-                "Subject", row_options, index=subj_default, key=f"es_{rel_uid}"
+                "Subject",
+                row_options,
+                index=subj_default,
+                key=f"es_{rel_uid}",
+                format_func=_pad_option,
             )
             new_type = st.selectbox(
                 "Relation",
@@ -4863,7 +4962,11 @@ def render_relation_rows(ont, rows, spec):
                 key=f"et_{rel_uid}",
             )
             new_object = st.selectbox(
-                "Object", row_options, index=obj_default, key=f"eo_{rel_uid}"
+                "Object",
+                row_options,
+                index=obj_default,
+                key=f"eo_{rel_uid}",
+                format_func=_pad_option,
             )
             # The add forms can point an object at an entity in an ontology that
             # was never imported; without this the editor could keep such a
@@ -5035,7 +5138,10 @@ def render_add_annotation(ont, all_resources):
             # Use display format with label
             resource_options = [f"{r['display']} [{r['type']}]" for r in all_resources]
             selected = st.selectbox(
-                "Select Resource", options=resource_options, key="ann_resource"
+                "Select Resource",
+                options=resource_options,
+                key="ann_resource",
+                format_func=_pad_option,
             )
 
             # Typing a type that isn't listed creates it, so an ID with no
@@ -5057,6 +5163,7 @@ def render_add_annotation(ont, all_resources):
                     "URI. A new name of your own is declared as an "
                     "annotation property in the ontology."
                 ),
+                format_func=_pad_option,
             )
 
             value = st.text_area("Value", key="ann_value")
@@ -5508,7 +5615,10 @@ def render_skos_vocabulary():
         else:
             # Filter by scheme
             filter_scheme = st.selectbox(
-                "Filter by Scheme", ["All"] + scheme_opts, key="concept_filter_scheme"
+                "Filter by Scheme",
+                ["All"] + scheme_opts,
+                key="concept_filter_scheme",
+                format_func=_pad_option,
             )
             filtered = (
                 concepts
@@ -5609,6 +5719,7 @@ def render_skos_vocabulary():
                                 "Target Concept",
                                 _rel_opts,
                                 key=f"rel_target_{_ck}",
+                                format_func=_pad_option,
                             )
                             if st.button("Add", key=f"add_rel_{_ck}") and rel_target:
                                 # Address both concepts by their actual URIs: a
@@ -5689,6 +5800,7 @@ def render_skos_vocabulary():
                                 if _cur_broader_disp in broader_options
                                 else 0,
                                 key=f"broader_{_ck}",
+                                format_func=_pad_option,
                             )
 
                             # Scheme — URI-keyed for the same reason.
@@ -5713,6 +5825,7 @@ def render_skos_vocabulary():
                                 if _cur_scheme_disp in scheme_options
                                 else 0,
                                 key=f"scheme_{_ck}",
+                                format_func=_pad_option,
                             )
                             new_name = _custom_uri_field(
                                 concept["uri"],
@@ -5795,13 +5908,17 @@ def render_skos_vocabulary():
             c_pref = st.text_input("Preferred Label")
             c_def = st.text_area("Definition")
             c_scheme = st.selectbox(
-                "Scheme", ["None"] + scheme_opts, key="concept_scheme_select"
+                "Scheme",
+                ["None"] + scheme_opts,
+                key="concept_scheme_select",
+                format_func=_pad_option,
             )
             _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
             c_broader = st.selectbox(
                 "Broader Concept",
                 ["None"] + _add_broader_opts,
                 key="concept_broader_select",
+                format_func=_pad_option,
             )
             c_lang = st.text_input("Language Tag (e.g., en, de)", key="concept_lang")
             if st.form_submit_button("Add Concept"):
@@ -5833,7 +5950,10 @@ def render_skos_vocabulary():
             st.info("No concepts to display.")
         else:
             h_scheme = st.selectbox(
-                "Scheme", ["All"] + scheme_opts, key="hierarchy_scheme_select"
+                "Scheme",
+                ["All"] + scheme_opts,
+                key="hierarchy_scheme_select",
+                format_func=_pad_option,
             )
             hierarchy = ont.get_concept_hierarchy(
                 scheme=scheme_lookup.get(h_scheme) if h_scheme != "All" else None
