@@ -2378,6 +2378,27 @@ def render_dashboard():
 # every per-item list view shares this cap (issue #146).
 LIST_PAGE_SIZE = 50
 
+# How many nodes the Visualization graph may draw. vis-network (and the desktop
+# webview especially) bogs down well before a large ontology's worth of them.
+GRAPH_MAX_NODES = 500
+
+# How many it may *assemble* in focus mode, where the drawn graph is the pruned
+# neighbourhood of the seeds rather than everything built. Assembly is cheap —
+# plain dicts — so this can be far larger than what is drawn, which is what lets
+# a class deep into a big ontology be focused on at all (issue #216).
+FOCUS_BUILD_MAX_NODES = 5000
+
+
+def graph_node_cap(focus_pruning: bool) -> int:
+    """How many nodes a graph build may assemble (issue #216).
+
+    Going past what can be drawn is only safe because focus mode prunes back to
+    the seeds' neighbourhood afterwards, so the allowance is tied to that prune
+    actually running — not to focus mode being on. With the mode on but every
+    seed cleared nothing prunes, and the browser would be handed the lot.
+    """
+    return FOCUS_BUILD_MAX_NODES if focus_pruning else GRAPH_MAX_NODES
+
 
 def _page_bounds(total: int, page: int, page_size: int) -> tuple[int, int, int, int]:
     """Resolve a 1-based ``page`` over ``total`` items into slice bounds.
@@ -7491,10 +7512,13 @@ def render_visualization():
         )
         return
 
+    # Seeded in session_state rather than passed as ``default=``, the way the
+    # Classes, Relations and Restrictions pages do it.
+    if "viz_active_tab" not in st.session_state:
+        st.session_state["viz_active_tab"] = "Interactive Graph"
     _viz_tab = st.segmented_control(
         "Section",
         ["Interactive Graph", "Class Hierarchy", "Statistics"],
-        default="Interactive Graph",
         key="viz_active_tab",
         label_visibility="collapsed",
     )
@@ -8232,9 +8256,21 @@ def render_visualization():
                 },
             }
 
-            # Limit total nodes to prevent browser hanging
-            max_nodes = 500
+            # Focus mode assembles the whole graph and prunes it to the seeds'
+            # neighbourhood afterwards, so the browser only ever sees the prune —
+            # only that has to respect the render cap. Assembling under it
+            # instead cut the very nodes a focus needs: a class past the cap
+            # could not be focused on at all, and the graph came out empty with
+            # nothing said about why (issue #216).
+            #
+            # One flag drives both the allowance and the prune, so the two can't
+            # drift apart — see :func:`graph_node_cap` for why that matters.
+            focus_pruning = bool(focus_mode and focus_seed_ids)
+            max_nodes = graph_node_cap(focus_pruning)
             node_count = 0
+            # Why the graph is smaller than the ontology, shown above it. Empty
+            # when nothing was left out.
+            graph_notice = ""
 
             # Build sets for node existence checks (URI-keyed for cross-namespace safety)
             cls_collisions = _build_name_collision_set(classes)
@@ -8821,11 +8857,25 @@ def render_visualization():
                                 arrows="to",
                             )
 
+            # Classes that passed the filter but never got a node: the cap cut
+            # the loop short. This used to be silent, so a class simply went
+            # missing — along with every edge that needed it, which reads as
+            # unrelated classes losing their connections (issue #216). The focus
+            # block below replaces this with something more specific when it has
+            # it, since a focus that finds nothing is the sharper symptom.
+            _cut_classes = len(visible_class_uris) - len(displayed_class_uris)
+            if show_classes and _cut_classes > 0:
+                graph_notice = (
+                    f"{_cut_classes} of {len(visible_class_uris)} classes are not "
+                    f"drawn: the graph stops at {max_nodes} nodes. Hide some in "
+                    f"Filter Nodes, or focus on one node, to see the rest."
+                )
+
             # Focus mode: keep only the seed nodes' neighbourhood within
             # focus_depth hops over the assembled edges (BFS over all node
             # types, so depth counts real graph links rather than class hops).
             # Several seeds grow the neighbourhood from all of them at once.
-            if focus_mode and focus_seed_ids:
+            if focus_pruning:
                 present_ids = {n["id"] for n in net.nodes}
                 seeds = {sid for sid in focus_seed_ids if sid in present_ids}
                 if seeds:
@@ -8833,25 +8883,49 @@ def render_visualization():
                     for edge in net.edges:
                         adj.setdefault(edge["from"], set()).add(edge["to"])
                         adj.setdefault(edge["to"], set()).add(edge["from"])
-                    keep = set(seeds)
-                    frontier = set(seeds)
-                    for _ in range(focus_depth):
-                        nxt = set()
-                        for nid in frontier:
-                            nxt |= adj.get(nid, set()) - keep
-                        if not nxt:
+                    # Ring by ring, starting with the seeds themselves, and never
+                    # past what can be drawn — the assembly was allowed over that
+                    # only because this holds the line. The seeds alone can
+                    # already overflow it: they default to every selected class.
+                    # Truncating mid-ring keeps the nearer hops, which are the
+                    # ones that were asked for.
+                    keep: set = set()
+                    ring = set(seeds)
+                    for _ in range(focus_depth + 1):
+                        if not ring:
                             break
-                        keep |= nxt
-                        frontier = nxt
+                        room = GRAPH_MAX_NODES - len(keep)
+                        if len(ring) > room:
+                            keep |= set(sorted(ring)[:room])
+                            graph_notice = (
+                                f"This focus covers more than the "
+                                f"{GRAPH_MAX_NODES} nodes the graph can draw, so "
+                                f"only part of it is shown. Pick fewer focus "
+                                f"nodes, or a lower depth, to see it in full."
+                            )
+                            break
+                        keep |= ring
+                        nxt: set = set()
+                        for nid in ring:
+                            nxt |= adj.get(nid, set())
+                        ring = nxt - keep
                     net.nodes = [n for n in net.nodes if n["id"] in keep]
                     net.edges = [
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
                     ]
                 else:
-                    # No seed was built (e.g. beyond the node cap) — show nothing
-                    # rather than the whole graph, which would be misleading.
+                    # No seed was built (past the assembly cap, or its type
+                    # toggled off) — show nothing rather than the whole graph,
+                    # which would be misleading. Say why, or the empty graph
+                    # looks like the focus itself is broken (issue #216).
                     net.nodes = []
                     net.edges = []
+                    graph_notice = (
+                        f"Nothing to focus on: this ontology is past the "
+                        f"{max_nodes} nodes the graph builds at once, and the "
+                        f"node you picked is not among them. Hide some classes "
+                        f"or individuals in Filter Nodes to bring it into range."
+                    )
 
             # Spread parallel edges so they don't overlap
             from collections import defaultdict as _defaultdict
@@ -8897,6 +8971,9 @@ def render_visualization():
                     "nodes": nodes_json,
                     "edges": edges_json,
                     "options": options_json,
+                    # Cached with the graph so it survives the reruns that reuse
+                    # it, rather than flashing once on the build that found it.
+                    "notice": graph_notice,
                 }
                 # NB: don't bump viz_render_seq here. The component re-renders on
                 # its own whenever nodes/edges change, and seq is the layout-cache
@@ -8912,6 +8989,12 @@ def render_visualization():
 
         # Always display the graph component (even on rerun after selection)
         gdata = st.session_state.get("last_graph_data")
+        # Why the graph is smaller than the ontology, in the slot the build
+        # status used. Written on every render, not only on a rebuild: the slot
+        # is reserved either way (issue #189), and the reason still holds while
+        # the cached graph is reused.
+        if gdata and gdata.get("notice"):
+            status.warning(gdata["notice"], icon="⚠️")
         if gdata:
             import os as _os
 
