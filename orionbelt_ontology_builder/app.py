@@ -1560,6 +1560,60 @@ _NAV_KIND_BY_TYPE = {
     "SKOS Concept": "skos",
 }
 
+# Which page holds the editor for a graph selection. Relations and restrictions
+# are edges rather than nodes, so they have no URI of their own — see
+# ``_edge_id`` for how the graph names them (issue #152).
+_PAGE_BY_TYPE = {
+    "Class": "Classes",
+    "Object Property": "Properties",
+    "Data Property": "Properties",
+    "Individual": "Individuals",
+    "SKOS Concept": "SKOS Vocabulary",
+    "Class Relation": "Relations",
+    "Restriction": "Restrictions",
+}
+
+# Types whose "Open" lands on the row's own editor rather than just the page.
+_PRECISE_NAV_TYPES = {"Class", "Class Relation", "Restriction"}
+
+# A relation or restriction edge carries its whole identity in ``ename``, since
+# there is no URI to look it up by. The unit separator cannot occur in a URI or
+# a local name, so the parts are unambiguous however they are spelled.
+_EDGE_ID_SEP = "\x1f"
+
+
+def _edge_id(*parts) -> str:
+    """Name a graph edge that stands for a relation or restriction (issue #152)."""
+    return _EDGE_ID_SEP.join("" if p is None else str(p) for p in parts)
+
+
+def _edge_id_parts(ename: str, count: int) -> tuple | None:
+    """Split an edge id back into its ``count`` parts, or None if it isn't one.
+
+    A selection can outlive the graph payload that produced it (a settings
+    change rebuilds the graph while the panel still holds the last click), so a
+    name that doesn't decode reads as "gone" rather than resolving to something
+    else.
+    """
+    parts = tuple((ename or "").split(_EDGE_ID_SEP))
+    return parts if len(parts) == count else None
+
+
+def _restriction_matches_edge(rest: dict, parts: tuple) -> bool:
+    """Whether ``rest`` is the restriction a graph edge stands for (issue #152).
+
+    Matched on the class the edge starts at, plus the property, type and value —
+    the same fields that identify a row on the Restrictions page, so a class
+    carrying several restrictions on one property resolves to the clicked one.
+    """
+    src_uri, prop_uri, rtype, value_uri = parts
+    return (
+        src_uri in (rest.get("applied_to_uris") or [])
+        and (rest.get("property_uri") or rest.get("property")) == prop_uri
+        and rest.get("type") == rtype
+        and (rest.get("value_uri") or "") == value_uri
+    )
+
 
 def _nav_open_entity(display_type: str, uid: str, uri: str | None = None) -> None:
     """Open the card for a navigation target (graph-click, search, "Open full
@@ -1898,6 +1952,68 @@ def _apply_individual_edit(
     return True
 
 
+def _render_panel_relation_editor(ont, ename, classes):
+    """Edit the class relation behind a graph edge, in the Details panel (#152).
+
+    The edge names the whole triple, which is looked up in the live ontology: a
+    selection can outlive the axiom it points at (deleted here, undone, edited on
+    the Relations page, or edited in this very panel — a triple that changes is a
+    different edge), and that has to say so rather than rewrite whatever is at
+    hand.
+    """
+    parts = _edge_id_parts(ename, 3)
+    rel = None
+    if parts is not None:
+        rel = next(
+            (
+                r
+                for r in ont.get_class_relations()
+                if (r.get("subject_uri"), r["relation"], r.get("object_uri")) == parts
+            ),
+            None,
+        )
+    if rel is None:
+        st.caption("This relation was edited or removed. Click an edge to pick one up.")
+        return
+    # Keyed by the edge, so switching selections doesn't hand the new relation
+    # the widget state of the one edited before it.
+    render_relation_form(
+        ont, rel, f"panel_{_uid(ename)}", _relation_spec("crel", ont, classes)
+    )
+
+
+def _render_panel_restriction_editor(ont, ename, classes, properties):
+    """Edit the restriction behind a graph edge, in the Details panel (#152).
+
+    Only restrictions drawn as their own edge (someValuesFrom / allValuesFrom
+    onto a visible class) can be selected here; the rest of them have no element
+    in the graph to click. Resolved from the live ontology for the same reason as
+    the relation editor above.
+    """
+    parts = _edge_id_parts(ename, 4)
+    rest = None
+    if parts is not None:
+        rest = next(
+            (r for r in ont.get_restrictions() if _restriction_matches_edge(r, parts)),
+            None,
+        )
+    if rest is None:
+        st.caption(
+            "This restriction was edited or removed. Click an edge to pick one up."
+        )
+        return
+    # One restriction node can hang off several classes, and the editor acts on
+    # the first of them — narrow it to the class whose edge was clicked.
+    src_uri = parts[0]
+    index = list(rest["applied_to_uris"]).index(src_uri)
+    row = {
+        **rest,
+        "applied_to": [rest["applied_to"][index]],
+        "applied_to_uris": [src_uri],
+    }
+    render_restriction_form(ont, row, f"panel_{_uid(ename)}", classes, properties)
+
+
 def _render_panel_entity_editor(
     ont, ntype, ename, sel, classes, object_props, data_props, individuals
 ):
@@ -1905,13 +2021,21 @@ def _render_panel_entity_editor(
     node in the Visualization side panel (issue #80).
 
     Resolves the entity from its node id (``_uid(uri)``) and shows a compact edit
-    form for classes, object/data properties and individuals; for anything else
-    (edges, unresolved) it falls back to the tooltip text. Returns the entity
-    dict or None.
+    form for classes, object/data properties and individuals; class relations and
+    restrictions are edges with no URI of their own and resolve from the edge id
+    instead (issue #152). Anything else falls back to the tooltip text. Returns
+    the entity dict, or None for the edge-borne kinds and unresolved selections.
     """
+    if ntype == "Class Relation":
+        _render_panel_relation_editor(ont, ename, classes)
+        return None
+    if ntype == "Restriction":
+        _render_panel_restriction_editor(ont, ename, classes, object_props + data_props)
+        return None
+
     # Object properties are drawn as edges (so selecting one is a selectEdge with
     # isEdge=True), but they're still editable — resolve by type, not by node vs
-    # edge. Structural edges (subClassOf, type, ...) have no entry in the pool and
+    # edge. Structural edges (type, domain, ...) have no entry in the pool and
     # fall through to the read-only tooltip.
     entity = None
     if ename:
@@ -4273,10 +4397,23 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
     rendered list, which is what the delete button already does: two identical
     restrictions would otherwise share a key.
     """
-    kind = "rest"
-    if not _is_open(kind, row_key, "edit"):
+    if not _is_open("rest", row_key, "edit"):
         return
+    render_restriction_form(
+        ont, rest, row_key, classes, properties, on_close=lambda: _close_entity("rest")
+    )
 
+
+def render_restriction_form(ont, rest, form_key, classes, properties, on_close=None):
+    """Render the edit form for one restriction (issue #152).
+
+    Shared by the Restrictions page rows and the Visualization details panel, so
+    both rewrite the axiom through the same guards. ``form_key`` makes the widget
+    keys unique — the page passes the row's position, the panel the selected
+    edge's id. ``on_close`` is what dismissing the editor means; the panel has no
+    such thing (it follows the graph selection), so it passes None and gets no
+    Cancel button.
+    """
     types = list(ont.RESTRICTION_TYPES)
     applied_uris = rest.get("applied_to_uris") or rest["applied_to"]
     cls_options, cls_lookup = _slot_options(classes, applied_uris[0])
@@ -4302,12 +4439,12 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
     ):
         value_default = str(_value_uri)
 
-    with st.form(f"edit_rest_form_{row_key}"):
+    with st.form(f"edit_rest_form_{form_key}"):
         new_class = st.selectbox(
             "Applies to Class",
             cls_options,
             index=_uri_option_index(cls_options, cls_lookup, applied_uris[0]),
-            key=f"er_cls_{row_key}",
+            key=f"er_cls_{form_key}",
             format_func=_pad_option,
         )
         new_property = st.selectbox(
@@ -4316,19 +4453,19 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
             index=_uri_option_index(
                 prop_options, prop_lookup, rest.get("property_uri") or rest["property"]
             ),
-            key=f"er_prop_{row_key}",
+            key=f"er_prop_{form_key}",
             format_func=_pad_option,
         )
         new_type = st.selectbox(
             "Restriction Type",
             types,
             index=types.index(rest["type"]) if rest["type"] in types else 0,
-            key=f"er_type_{row_key}",
+            key=f"er_type_{form_key}",
         )
         new_value = st.text_input(
             "Value",
             value=value_default,
-            key=f"er_val_{row_key}",
+            key=f"er_val_{form_key}",
             help="A class name for someValuesFrom/allValuesFrom, a number for a "
             "cardinality, or a literal for hasValue. A full URI is kept as it is.",
         )
@@ -4342,18 +4479,22 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                     if rest.get("on_class_uri")
                     else 0
                 ),
-                key=f"er_onclass_{row_key}",
+                key=f"er_onclass_{form_key}",
                 format_func=_pad_option,
             )
 
-        save_col, cancel_col = st.columns(2)
-        with save_col:
+        cancelled = False
+        if on_close is None:
             saved = st.form_submit_button("💾 Save", use_container_width=True)
-        with cancel_col:
-            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+        else:
+            save_col, cancel_col = st.columns(2)
+            with save_col:
+                saved = st.form_submit_button("💾 Save", use_container_width=True)
+            with cancel_col:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
 
         if cancelled:
-            _close_entity(kind)
+            on_close()
             st.rerun()
         if saved:
             try:
@@ -4384,7 +4525,8 @@ def render_restriction_editor(ont, rest, row_key, classes, properties):
                 return
             if changed:
                 save_checkpoint("Edit restriction")
-                _close_entity(kind)
+                if on_close is not None:
+                    on_close()
                 set_flash_message("Restriction updated!", "success")
                 st.rerun()
             else:
@@ -4498,10 +4640,14 @@ def render_restrictions():
     data_props = ont.get_data_properties()
     restrictions = ont.get_restrictions()
 
+    # Seeded in session_state rather than passed as ``default=``, the way the
+    # Classes page already does it: the graph's "Open full editor" pre-sets this
+    # key, and Streamlit warns when a keyed widget gets both (issue #152).
+    if "rest_active_tab" not in st.session_state:
+        st.session_state["rest_active_tab"] = "View Restrictions"
     _rest_tab = st.segmented_control(
         "Section",
         ["View Restrictions", "Add Restriction"],
-        default="View Restrictions",
         key="rest_active_tab",
         label_visibility="collapsed",
     )
@@ -4530,13 +4676,34 @@ def render_restrictions():
                 _view_restrictions = _sort_restrictions(_view_restrictions)
             if not _view_restrictions:
                 st.caption("No restrictions match your search.")
+            # A restriction edge in the graph asks for its row's editor here
+            # (issue #152). Row keys are positional, so the row has to be found
+            # in the list first — and the list paged to it.
+            _open_edge = st.session_state.pop("_rest_open_edge", None)
+            if _open_edge:
+                _hit = next(
+                    (
+                        i
+                        for i, r in enumerate(_view_restrictions)
+                        if _restriction_matches_edge(r, tuple(_open_edge))
+                    ),
+                    None,
+                )
+                if _hit is not None:
+                    _page = st.session_state.get("rest_page", 1)
+                    if len(_view_restrictions) > LIST_PAGE_SIZE:
+                        _page = _hit // LIST_PAGE_SIZE + 1
+                        st.session_state["rest_page"] = _page
+                        _hit %= LIST_PAGE_SIZE
+                    _open_entity("rest", f"{_page}_{_hit}", "edit")
             # Rows rather than one expander each: a long list reads as a table
             # of class / property / type / value instead of a wall of collapsed
             # boxes, and it paginates like the Relations lists do.
+            _rest_rows = _paginate_rows(_view_restrictions, "rest_page", "restrictions")
+            # Read after paging, so the key the row gets is the page the selector
+            # settled on rather than a stale one.
             _rest_page = st.session_state.get("rest_page", 1)
-            for _row_i, rest in enumerate(
-                _paginate_rows(_view_restrictions, "rest_page", "restrictions")
-            ):
+            for _row_i, rest in enumerate(_rest_rows):
                 # Key by page and position: unique per render, and stable while
                 # the page is. (Keying by the restriction itself would collide
                 # when a class carries two identical ones.)
@@ -4562,6 +4729,10 @@ def render_relations():
     data_props = ont.get_data_properties()
     individuals = ont.get_individuals()
 
+    # Seeded in session_state rather than passed as ``default=``, for the same
+    # reason as the Restrictions page above (issue #152).
+    if "rel_active_tab" not in st.session_state:
+        st.session_state["rel_active_tab"] = "View Relations"
     _rel_tab = st.segmented_control(
         "Section",
         [
@@ -4570,7 +4741,6 @@ def render_relations():
             "Property Relations",
             "Individual Relations",
         ],
-        default="View Relations",
         key="rel_active_tab",
         label_visibility="collapsed",
     )
@@ -4600,6 +4770,25 @@ def render_relations():
         # Class relations
         _raw_class_relations = ont.get_class_relations()
         class_relations = _prep_rels(_raw_class_relations)
+        # A relation edge in the graph asks for its row's editor here (issue
+        # #152). The row key is URI-derived, so only the page has to be found;
+        # the request is dropped either way, or a deleted relation would keep
+        # asking to be opened.
+        _open_edge = st.session_state.pop("_rel_open_edge", None)
+        if _open_edge:
+            _hit = next(
+                (
+                    i
+                    for i, r in enumerate(class_relations)
+                    if (r.get("subject_uri"), r["relation"], r.get("object_uri"))
+                    == tuple(_open_edge)
+                ),
+                None,
+            )
+            if _hit is not None:
+                if len(class_relations) > LIST_PAGE_SIZE:
+                    st.session_state["rel_class_page"] = _hit // LIST_PAGE_SIZE + 1
+                _open_entity("crel", _uid("|".join(_open_edge)), "edit")
         if _raw_class_relations:
             st.write("**Class Relations:**")
             if not class_relations:
@@ -4607,16 +4796,7 @@ def render_relations():
             render_relation_rows(
                 ont,
                 _paginate_rows(class_relations, "rel_class_page", "class relations"),
-                {
-                    "icon": "📦",
-                    "kind": "crel",
-                    "noun": "classes",
-                    "label": "class relation",
-                    "entities": classes,
-                    "relation_types": ont.CLASS_RELATIONS,
-                    "remove": ont.remove_class_relation,
-                    "update": ont.update_class_relation,
-                },
+                _relation_spec("crel", ont, classes),
             )
         else:
             st.info("No class relations defined.")
@@ -4633,16 +4813,7 @@ def render_relations():
             render_relation_rows(
                 ont,
                 _paginate_rows(prop_relations, "rel_prop_page", "property relations"),
-                {
-                    "icon": "🔗",
-                    "kind": "prel",
-                    "noun": "properties",
-                    "label": "property relation",
-                    "entities": object_props + data_props,
-                    "relation_types": ont.PROPERTY_RELATIONS,
-                    "remove": ont.remove_property_relation,
-                    "update": ont.update_property_relation,
-                },
+                _relation_spec("prel", ont, object_props + data_props),
             )
         else:
             st.info("No property relations defined.")
@@ -4659,16 +4830,7 @@ def render_relations():
             render_relation_rows(
                 ont,
                 _paginate_rows(ind_relations, "rel_ind_page", "individual relations"),
-                {
-                    "icon": "👤",
-                    "kind": "irel",
-                    "noun": "individuals",
-                    "label": "individual relation",
-                    "entities": individuals,
-                    "relation_types": ont.INDIVIDUAL_RELATIONS,
-                    "remove": ont.remove_individual_relation,
-                    "update": ont.update_individual_relation,
-                },
+                _relation_spec("irel", ont, individuals),
             )
         else:
             st.info("No individual relations defined.")
@@ -4890,15 +5052,56 @@ def resolve_annotation_predicate_choice(ont, choice, lookup) -> tuple:
     return text, ont.invalid_annotation_predicate_reason(text)
 
 
+def _relation_spec(kind: str, ont, entities: list) -> dict:
+    """Per-list settings for a relation row: the icon, the entities that can
+    fill a slot, the relation types, the active-card kind and the engine calls.
+
+    Keyed by the active-card kind — ``crel`` for class relations, ``prel`` for
+    property ones, ``irel`` for individual ones. Built here rather than at each
+    call site so the Visualization panel edits a class relation through exactly
+    the settings the Relations page uses (issue #152).
+    """
+    return {
+        "crel": {
+            "icon": "📦",
+            "kind": "crel",
+            "noun": "classes",
+            "label": "class relation",
+            "entities": entities,
+            "relation_types": ont.CLASS_RELATIONS,
+            "remove": ont.remove_class_relation,
+            "update": ont.update_class_relation,
+        },
+        "prel": {
+            "icon": "🔗",
+            "kind": "prel",
+            "noun": "properties",
+            "label": "property relation",
+            "entities": entities,
+            "relation_types": ont.PROPERTY_RELATIONS,
+            "remove": ont.remove_property_relation,
+            "update": ont.update_property_relation,
+        },
+        "irel": {
+            "icon": "👤",
+            "kind": "irel",
+            "noun": "individuals",
+            "label": "individual relation",
+            "entities": entities,
+            "relation_types": ont.INDIVIDUAL_RELATIONS,
+            "remove": ont.remove_individual_relation,
+            "update": ont.update_individual_relation,
+        },
+    }[kind]
+
+
 def render_relation_rows(ont, rows, spec):
     """Render one relation section: a row each, with edit and delete.
 
-    ``spec`` carries what differs between the class, property and individual
-    lists: the icon, the entities that can fill a slot, the relation types, the
-    active-card kind and the engine calls. Editing rewrites the triple in place
-    rather than asking the user to delete and re-add it (issue #152).
+    See :func:`_relation_spec` for what ``spec`` carries. Editing rewrites the
+    triple in place rather than asking the user to delete and re-add it
+    (issue #152).
     """
-    options, lookup = build_uri_options(spec["entities"])
     for rel in rows:
         subj_uri = rel.get("subject_uri", rel["subject"])
         obj_uri = rel.get("object_uri", rel["object"])
@@ -4932,92 +5135,113 @@ def render_relation_rows(ont, rows, spec):
         if not _is_open(spec["kind"], rel_uid, "edit"):
             continue
 
-        # A relation may point at an entity this list doesn't hold — the add
-        # forms accept an external URI. Offer it as its own option, or the
-        # editor would silently rewrite it to the first local entity when the
-        # user only meant to change the relation type (review P2).
-        row_options, row_lookup = list(options), dict(lookup)
-        for endpoint in (subj_uri, obj_uri):
-            if endpoint not in row_lookup.values():
-                row_options.append(endpoint)
-                row_lookup[endpoint] = endpoint
+        render_relation_form(
+            ont, rel, rel_uid, spec, on_close=lambda: _close_entity(spec["kind"])
+        )
 
-        with st.form(f"edit_form_{spec['kind']}_{rel_uid}"):
-            # Slots are pre-set to the row's own values, so an edit that touches
-            # one part leaves the rest exactly as asserted.
-            subj_default = _uri_option_index(row_options, row_lookup, subj_uri)
-            obj_default = _uri_option_index(row_options, row_lookup, obj_uri)
-            types = list(spec["relation_types"])
-            new_subject = st.selectbox(
-                "Subject",
-                row_options,
-                index=subj_default,
-                key=f"es_{rel_uid}",
-                format_func=_pad_option,
-            )
-            new_type = st.selectbox(
-                "Relation",
-                types,
-                index=types.index(rel["relation"]) if rel["relation"] in types else 0,
-                key=f"et_{rel_uid}",
-            )
-            new_object = st.selectbox(
-                "Object",
-                row_options,
-                index=obj_default,
-                key=f"eo_{rel_uid}",
-                format_func=_pad_option,
-            )
-            # The add forms can point an object at an entity in an ontology that
-            # was never imported; without this the editor could keep such a
-            # target but never set one.
-            ext_obj_uri, ext_err = _external_uri_target(
-                ont,
-                row_lookup[new_object],
-                key=f"eo_ext_{rel_uid}",
-                label="the object",
-            )
+
+def render_relation_form(ont, rel, form_key, spec, on_close=None):
+    """Render the edit form for one relation triple (issue #152).
+
+    Shared by the Relations page rows and the Visualization details panel, so
+    both write the same triple through the same guards. ``form_key`` makes the
+    widget keys unique — the page passes the row's URI-derived id, the panel the
+    selected edge's. ``on_close`` is what dismissing the editor means; the panel
+    has no such thing (it follows the graph selection), so it passes None and
+    gets no Cancel button.
+    """
+    subj_uri = rel.get("subject_uri", rel["subject"])
+    obj_uri = rel.get("object_uri", rel["object"])
+
+    # A relation may point at an entity this list doesn't hold — the add
+    # forms accept an external URI. Offer it as its own option, or the
+    # editor would silently rewrite it to the first local entity when the
+    # user only meant to change the relation type (review P2).
+    row_options, row_lookup = build_uri_options(spec["entities"])
+    for endpoint in (subj_uri, obj_uri):
+        if endpoint not in row_lookup.values():
+            row_options.append(endpoint)
+            row_lookup[endpoint] = endpoint
+
+    with st.form(f"edit_form_{spec['kind']}_{form_key}"):
+        # Slots are pre-set to the row's own values, so an edit that touches
+        # one part leaves the rest exactly as asserted.
+        subj_default = _uri_option_index(row_options, row_lookup, subj_uri)
+        obj_default = _uri_option_index(row_options, row_lookup, obj_uri)
+        types = list(spec["relation_types"])
+        new_subject = st.selectbox(
+            "Subject",
+            row_options,
+            index=subj_default,
+            key=f"es_{form_key}",
+            format_func=_pad_option,
+        )
+        new_type = st.selectbox(
+            "Relation",
+            types,
+            index=types.index(rel["relation"]) if rel["relation"] in types else 0,
+            key=f"et_{form_key}",
+        )
+        new_object = st.selectbox(
+            "Object",
+            row_options,
+            index=obj_default,
+            key=f"eo_{form_key}",
+            format_func=_pad_option,
+        )
+        # The add forms can point an object at an entity in an ontology that
+        # was never imported; without this the editor could keep such a
+        # target but never set one.
+        ext_obj_uri, ext_err = _external_uri_target(
+            ont,
+            row_lookup[new_object],
+            key=f"eo_ext_{form_key}",
+            label="the object",
+        )
+        cancelled = False
+        if on_close is None:
+            saved = st.form_submit_button("💾 Save", use_container_width=True)
+        else:
             save_col, cancel_col = st.columns(2)
             with save_col:
                 saved = st.form_submit_button("💾 Save", use_container_width=True)
             with cancel_col:
                 cancelled = st.form_submit_button("Cancel", use_container_width=True)
 
-            if cancelled:
-                _close_entity(spec["kind"])
+        if cancelled:
+            on_close()
+            st.rerun()
+        if saved:
+            new_subj_uri = row_lookup[new_subject]
+            new_obj_uri = ext_obj_uri
+            if ext_err:
+                show_message(ext_err, "error")
+                return
+            if new_subj_uri == new_obj_uri:
+                # The add forms refuse this; the editor has to as well, or
+                # it becomes the way to assert "A disjointWith A"
+                # (review P2).
+                show_message(f"Please select two different {spec['noun']}!", "error")
+                return
+            changed = spec["update"](
+                (subj_uri, rel["relation"], obj_uri),
+                (new_subj_uri, new_type, new_obj_uri),
+            )
+            if changed:
+                save_checkpoint(f"Edit {spec['label']}")
+                if on_close is not None:
+                    on_close()
+                set_flash_message("Relation updated!", "success")
                 st.rerun()
-            if saved:
-                new_subj_uri = row_lookup[new_subject]
-                new_obj_uri = ext_obj_uri
-                if ext_err:
-                    show_message(ext_err, "error")
-                    return
-                if new_subj_uri == new_obj_uri:
-                    # The add forms refuse this; the editor has to as well, or
-                    # it becomes the way to assert "A disjointWith A"
-                    # (review P2).
-                    show_message(
-                        f"Please select two different {spec['noun']}!", "error"
-                    )
-                    return
-                changed = spec["update"](
-                    (subj_uri, rel["relation"], obj_uri),
-                    (new_subj_uri, new_type, new_obj_uri),
+            else:
+                # The row was deleted or edited elsewhere since this list
+                # was drawn; re-adding it under the new values would
+                # resurrect a relation the user already removed.
+                show_message(
+                    "This relation is no longer in the ontology, so it "
+                    "wasn't changed. Close the editor to refresh the list.",
+                    "error",
                 )
-                if changed:
-                    save_checkpoint(f"Edit {spec['label']}")
-                    _close_entity(spec["kind"])
-                    set_flash_message("Relation updated!", "success")
-                    st.rerun()
-                else:
-                    # The row was deleted or edited elsewhere since this list
-                    # was drawn; re-adding it under the new values would
-                    # resurrect a relation the user already removed.
-                    show_message(
-                        "This relation is no longer in the ontology, so it "
-                        "wasn't changed. Close the editor to refresh the list.",
-                        "error",
-                    )
 
 
 def _uri_option_index(options: list, lookup: dict, uri: str) -> int:
@@ -8090,6 +8314,8 @@ def render_visualization():
                                 title=f"Subclass relation:\n{cls['name']} is a subclass of {parent_uri.rsplit('#', 1)[-1].rsplit('/', 1)[-1]}",
                                 color="#81C784",
                                 arrows="to",
+                                ntype="Class Relation",
+                                ename=_edge_id(cls["uri"], "subClassOf", parent_uri),
                             )
 
             # Add object properties as labeled edges between domain and range
@@ -8134,19 +8360,28 @@ def render_visualization():
                     for src_uri in rest.get("applied_to_uris", []):
                         if src_uri not in displayed_class_uris:
                             continue
+                        # Typed as the restriction it stands for, not as the
+                        # property it uses: clicking it used to open the property
+                        # definition rather than the axiom on screen (issue #152).
                         net.add_edge(
                             _uid(src_uri),
                             _uid(value_uri),
                             label=rest["property"],
                             title=(
-                                f"Object Property: {rest['property']}"
-                                f"\nRestriction: {rest['type']}"
+                                f"Restriction: {rest['type']}"
+                                f"\nProperty: {rest['property']}"
+                                f"\nValue: {rest['value']}"
                             ),
                             color="#2196F3",
                             arrows="to",
                             dashes=True,
-                            ntype="Object Property",
-                            ename=_uid(rest["property_uri"]),
+                            ntype="Restriction",
+                            ename=_edge_id(
+                                src_uri,
+                                rest.get("property_uri") or rest["property"],
+                                rest["type"],
+                                value_uri,
+                            ),
                         )
 
             # Add data properties (connected to displayed classes, or standalone if no domain)
@@ -8293,6 +8528,9 @@ def render_visualization():
                     ):
                         subj_node = _uid(subj_uri)
                         obj_node = _uid(obj_uri)
+                        # Tagged so a click resolves back to this exact triple and
+                        # opens its editor (issue #152).
+                        rel_ename = _edge_id(subj_uri, rel["relation"], obj_uri)
                         if rel["relation"] == "equivalentClass":
                             net.add_edge(
                                 subj_node,
@@ -8301,6 +8539,8 @@ def render_visualization():
                                 title=f"Equivalent classes:\n{rel['subject']} and {rel['object']} represent the same concept",
                                 color="#9C27B0",
                                 arrows="to",
+                                ntype="Class Relation",
+                                ename=rel_ename,
                             )
                         elif rel["relation"] == "disjointWith":
                             net.add_edge(
@@ -8310,6 +8550,8 @@ def render_visualization():
                                 title=f"Disjoint classes:\n{rel['subject']} and {rel['object']} cannot share instances",
                                 color="#F44336",
                                 arrows="to",
+                                ntype="Class Relation",
+                                ename=rel_ename,
                             )
 
             # Add annotations for classes and individuals
@@ -8820,13 +9062,6 @@ def render_visualization():
                         )
 
             # Status bar outside iframe — dark styled
-            _type_to_page = {
-                "Class": "Classes",
-                "Object Property": "Properties",
-                "Data Property": "Properties",
-                "Individual": "Individuals",
-                "SKOS Concept": "SKOS Vocabulary",
-            }
             # The selection was already captured (from the component's current
             # value) before the component call above, so just read it here.
             _sel = st.session_state.get("_viz_last_selection")
@@ -8835,14 +9070,16 @@ def render_visualization():
             has_selection = isinstance(_sel, dict) and _sel.get("selected")
             ntype = _sel.get("ntype") if has_selection else None
             ename = _sel.get("ename") if has_selection else None
-            show_view = has_selection and ntype and ename and ntype in _type_to_page
+            show_view = has_selection and ntype and ename and ntype in _PAGE_BY_TYPE
 
             def _open_full_editor(_ntype, _ename):
                 """Open the entity in its editor. Classes land directly in the
-                Edit/Delete tab with the entity preselected (no scrolling); other
-                types fall back to the inline-view jump for now (issue #80)."""
+                Edit/Delete tab with the entity preselected (no scrolling);
+                relations and restrictions hand their list the edge's identity so
+                it opens that row (issue #152); other types fall back to the
+                inline-view jump for now (issue #80)."""
                 st.session_state["_back_to_viz"] = True
-                st.session_state.search_navigate_to = _type_to_page[_ntype]
+                st.session_state.search_navigate_to = _PAGE_BY_TYPE[_ntype]
                 if _ntype == "Class":
                     _target = next(
                         (c for c in classes if _uid(c["uri"]) == _ename), None
@@ -8854,6 +9091,18 @@ def render_visualization():
                             st.session_state["cls_active_tab"] = "Edit/Delete Class"
                             st.session_state["edit_class_select"] = _disp
                             st.rerun()
+                if _ntype == "Class Relation":
+                    # The search is cleared so the row is in the list the page
+                    # searches for it in — a leftover filter would hide it.
+                    st.session_state["_rel_open_edge"] = _edge_id_parts(_ename, 3)
+                    st.session_state["rel_search"] = ""
+                    st.session_state["rel_active_tab"] = "View Relations"
+                    st.rerun()
+                if _ntype == "Restriction":
+                    st.session_state["_rest_open_edge"] = _edge_id_parts(_ename, 4)
+                    st.session_state["rest_search"] = ""
+                    st.session_state["rest_active_tab"] = "View Restrictions"
+                    st.rerun()
                 _nav_open_entity(_ntype, _ename)
                 if _ntype == "SKOS Concept":
                     st.session_state["_skos_navigate_to_concept"] = True
@@ -8875,7 +9124,10 @@ def render_visualization():
                         )
                     else:
                         st.markdown(f"**{_sel.get('label', '')}**")
-                        st.caption("Edge" if _sel.get("isEdge") else (ntype or "Node"))
+                        # What was selected, not merely that it was an edge:
+                        # relations, restrictions and object properties are all
+                        # drawn as edges and want telling apart (issue #152).
+                        st.caption(ntype or ("Edge" if _sel.get("isEdge") else "Node"))
                         _render_panel_entity_editor(
                             ont,
                             ntype,
@@ -8887,7 +9139,9 @@ def render_visualization():
                             individuals,
                         )
                         if show_view and st.button(
-                            "Open full editor" if ntype == "Class" else "Open",
+                            "Open full editor"
+                            if ntype in _PRECISE_NAV_TYPES
+                            else "Open",
                             key="panel_open_editor",
                             use_container_width=True,
                         ):
@@ -8939,7 +9193,11 @@ def render_visualization():
                             unsafe_allow_html=True,
                         )
                     with col_btn:
-                        _btn_label = "Open full editor" if ntype == "Class" else "View"
+                        _btn_label = (
+                            "Open full editor"
+                            if ntype in _PRECISE_NAV_TYPES
+                            else "View"
+                        )
                         if st.button(
                             _btn_label, key="graph_view_btn", use_container_width=True
                         ):
@@ -9091,14 +9349,7 @@ def main():
     if "graph_view_type" in _qp and "graph_view_name" in _qp:
         _gv_type = _qp["graph_view_type"]
         _gv_name = _qp["graph_view_name"]
-        _type_to_page = {
-            "Class": "Classes",
-            "Object Property": "Properties",
-            "Data Property": "Properties",
-            "Individual": "Individuals",
-            "SKOS Concept": "SKOS Vocabulary",
-        }
-        _nav_page = _type_to_page.get(_gv_type)
+        _nav_page = _PAGE_BY_TYPE.get(_gv_type)
         if _nav_page:
             st.session_state.search_navigate_to = _nav_page
             _nav_open_entity(_gv_type, _gv_name)
