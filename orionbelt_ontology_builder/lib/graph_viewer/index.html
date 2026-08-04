@@ -111,6 +111,103 @@ function applyHeight(h) {
     sendToStreamlit("streamlit:setFrameHeight", {height: h});
 }
 
+// --- Neighbour highlight (issue #224) ---------------------------------------
+// Selecting a node rings the nodes at the other end of its edges. vis already
+// styles the clicked node and thickens its connected edges, but leaves those
+// neighbours looking like every other node, so "what does this class actually
+// link to?" stays hard to answer on a large ontology — which is what the focus
+// mode was being over-used for.
+//
+// Direction is carried by the border *dash*, not by a colour: the fills already
+// spend the palette on entity type (green class, purple object property, orange
+// individual, brown annotation, teal data property, two blue-greys), and a red
+// ring at width 3 already means "has validation issues". The ring colour is the
+// theme's text colour, which is maximum-contrast against its own background by
+// construction and reads against every mid-luminance fill in that palette, so it
+// works in light and dark without the node colours having to change.
+var HL_WIDTH = 2;             // 3 stays reserved for the validation-issue ring
+var HL_DASH = [6, 4];         // incoming; outgoing stays solid
+var hlSource = null;          // node whose neighbourhood is currently ringed
+var hlSaved = null;           // id -> styling we overwrote, for an exact restore
+var hlJustSelected = false;   // this tap changed the selection (see the click handler)
+
+// Restore every ringed node to exactly what it looked like before.
+//
+// The saved values are written back explicitly rather than by passing the
+// originals straight through: a DataSet update ignores an undefined field, so a
+// node that never carried `borderWidth` or `shapeProperties` (only classes and
+// individuals set the former, and Python never sets the latter) would silently
+// keep the ring. The fallbacks are vis's own defaults for those two options.
+function clearNeighbourHighlight() {
+    var ds = network && network.body && network.body.data && network.body.data.nodes;
+    if (ds && hlSaved) {
+        var undo = [];
+        for (var id in hlSaved) {
+            if (!Object.prototype.hasOwnProperty.call(hlSaved, id)) continue;
+            if (!ds.get(id)) continue;  // node has since left the graph
+            var s = hlSaved[id];
+            undo.push({
+                id: id,
+                color: s.color,
+                borderWidth: s.borderWidth === undefined ? 1 : s.borderWidth,
+                shapeProperties: s.shapeProperties === undefined
+                    ? {borderDashes: false} : s.shapeProperties
+            });
+        }
+        if (undo.length) { try { ds.update(undo); } catch (e) {} }
+    }
+    hlSource = null;
+    hlSaved = null;
+}
+
+// Ring `id`'s neighbours: dashed for the ones pointing at it, solid for the ones
+// it points at. A node on both sides of the relation ends up solid, because the
+// outgoing pass is applied second.
+function applyNeighbourHighlight(id) {
+    clearNeighbourHighlight();
+    var ds = network && network.body && network.body.data && network.body.data.nodes;
+    if (!ds || id === null || id === undefined || !ds.get(id)) return;
+    var incoming = [], outgoing = [];
+    try {
+        incoming = network.getConnectedNodes(id, 'from') || [];
+        outgoing = network.getConnectedNodes(id, 'to') || [];
+    } catch (e) { return; }
+
+    var ring = (currentTheme && currentTheme.text) || '#333333';
+    hlSource = id;
+    hlSaved = {};
+    var updates = [];
+
+    function ringNode(nid, dashed) {
+        if (nid === id) return;                 // self-loop: the source is not its own neighbour
+        var nd = ds.get(nid);
+        if (!nd) return;
+        if (!Object.prototype.hasOwnProperty.call(hlSaved, nid)) {
+            hlSaved[nid] = {
+                color: nd.color,
+                borderWidth: nd.borderWidth,
+                shapeProperties: nd.shapeProperties
+            };
+        }
+        // Keep the fill (it encodes the entity type) and override only the
+        // border, for the selected and unselected states alike — the neighbour
+        // itself is not selected, but a restore-selection rebuild can make it so.
+        var base = (nd.color && typeof nd.color === 'object') ? nd.color : {};
+        var color = Object.assign({}, base, {border: ring});
+        color.highlight = Object.assign({}, base.highlight, {border: ring});
+        updates.push({
+            id: nid,
+            color: color,
+            borderWidth: HL_WIDTH,
+            shapeProperties: {borderDashes: dashed ? HL_DASH : false}
+        });
+    }
+
+    incoming.forEach(function(nid) { ringNode(nid, true); });
+    outgoing.forEach(function(nid) { ringNode(nid, false); });
+    if (updates.length) { try { ds.update(updates); } catch (e) {} }
+}
+
 // Apply theme colours without rebuilding the graph, so a theme change (or the
 // first-render theme settling) doesn't reset the user's zoom/pan. Node colours
 // encode type, not theme, so only the background, overlays and edge labels change.
@@ -137,6 +234,9 @@ function applyTheme(theme) {
     if (network) {
         network.setOptions({edges: {font: {color: theme.text, strokeColor: theme.bg, strokeWidth: 4}}});
     }
+    // The neighbour ring is drawn in the theme's text colour, so a theme change
+    // under a live selection has to redraw it or it keeps the old theme's colour.
+    if (hlSource !== null && hlSource !== undefined) applyNeighbourHighlight(hlSource);
 }
 
 function autofitApply() {
@@ -520,6 +620,7 @@ function renderGraph(args) {
             var _spin = (args.focus_node && _sds && _sds.get(args.focus_node)) ? args.focus_node : null;
             if (_spin) {
                 try { network.selectNodes([_spin]); } catch (e) {}
+                applyNeighbourHighlight(_spin);
                 try { network.focus(_spin, {scale: 1.1, animation: {duration: 700, easingFunction: 'easeInOutQuad'}}); } catch (e) {}
                 sendFindSelection(_spin);
             }
@@ -655,6 +756,11 @@ function renderGraph(args) {
     }
     var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
+    // Fresh DataSet: whatever the previous network had ringed is gone with it,
+    // so drop the bookkeeping rather than letting it undo styling on new nodes.
+    hlSource = null;
+    hlSaved = null;
+    hlJustSelected = false;
     document.getElementById('download-btn').style.display = 'flex';
     // Only offer fullscreen where the API works — hidden in the desktop webview.
     if (fullscreenSupported()) {
@@ -674,6 +780,7 @@ function renderGraph(args) {
     }
     if (restoreNode !== null && restoreNode !== undefined) {
         try { network.selectNodes([restoreNode]); } catch (e) {}
+        applyNeighbourHighlight(restoreNode);
     }
     // --- Find & centre (issue #144) ---------------------------------------
     // Python sends focus_node (the entity picked in "Find entity", present on
@@ -695,6 +802,7 @@ function renderGraph(args) {
     if (_pin) {
         var _findFresh = !_find.centred;
         try { network.selectNodes([_pin]); } catch (e) {}
+        applyNeighbourHighlight(_pin);
         // Centre now only when the layout is already final. When physics still
         // has to run, the node is still moving, so centring on its current
         // position would land in the wrong place — the stabilization handler
@@ -855,15 +963,21 @@ function renderGraph(args) {
 
     network.on('selectNode', function(params) {
         var nd = nodes.get(params.nodes[0]);
+        hlJustSelected = true;
+        applyNeighbourHighlight(params.nodes[0]);
         sendSelection({nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, title: nd.title || '', selected: true});
     });
     network.on('selectEdge', function(params) {
         if (params.nodes.length === 0 && params.edges.length > 0) {
+            // An edge-only selection means no node is selected, and vis does not
+            // fire deselectNode on the way there.
+            clearNeighbourHighlight();
             var ed = edges.get(params.edges[0]);
             sendSelection({ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true});
         }
     });
     network.on('deselectNode', function() {
+        clearNeighbourHighlight();
         sendSelection({selected: false});
     });
     network.on('deselectEdge', function() {
@@ -876,12 +990,28 @@ function renderGraph(args) {
     // the Python side applies it once. Sent after the normal selectNode value,
     // so this is the value Streamlit keeps for this interaction.
     network.on('click', function(params) {
+        var wasFresh = hlJustSelected;
+        hlJustSelected = false;
         if (!params.nodes.length) return;
         var ev = params.event && params.event.srcEvent;
-        if (!ev || !(ev.ctrlKey || ev.metaKey)) return;
-        sendToStreamlit("streamlit:setComponentValue", {
-            value: {focusRequest: true, reqId: Date.now(), nodeId: params.nodes[0]}
-        });
+        if (ev && (ev.ctrlKey || ev.metaKey)) {
+            sendToStreamlit("streamlit:setComponentValue", {
+                value: {focusRequest: true, reqId: Date.now(), nodeId: params.nodes[0]}
+            });
+            return;
+        }
+        // Clicking the already-selected node again clears it, so the ring can be
+        // dismissed on the node that raised it instead of having to find empty
+        // canvas to click. vis emits selectNode only when the selection actually
+        // changes, so no event fires on that second click — hlJustSelected tells
+        // the two clicks apart, and vis's own unselectAll() is silent too, so the
+        // deselect has to be published here.
+        if (!wasFresh && params.nodes[0] === hlSource) {
+            clearNeighbourHighlight();
+            try { network.unselectAll(); } catch (e) {}
+            try { network.redraw(); } catch (e) {}
+            sendSelection({selected: false});
+        }
     });
 }
 
