@@ -8127,8 +8127,14 @@ def render_visualization():
                     # An empty (or narrowed) filter hides nodes and there is no
                     # native way back — offer a one-click restore (issue B3).
                     with _bcol1:
+                        # The count says what the button would restore you to, so
+                        # its greyed-out state reads as "you already have all 4"
+                        # rather than as an arbitrary disable. Its only other
+                        # signal is the shown/total on the segmented control
+                        # above, which is easy to miss and sits on a different
+                        # widget.
                         if st.button(
-                            "Select all",
+                            f"Select all ({len(_entries)})",
                             key=f"viz_select_all_{_key}",
                             disabled=not _narrowed,
                             use_container_width=True,
