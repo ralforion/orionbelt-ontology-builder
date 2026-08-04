@@ -912,10 +912,29 @@ def viz_filter_changed(kind_key, uri_by_display):
     ]
 
 
+def focus_seeds_from_selection(selected_classes, class_count):
+    """The focus seeds a fresh switch into focus mode should start from (#224).
+
+    A class selection that is a genuine narrowing carries intent — the user
+    filtered down to what they care about — so the neighbourhood grows from all
+    of it. "Everything selected" is the default state and carries no intent at
+    all, and seeding from *that* opened "Focus on one node" on every class at
+    once: the post-build prune had nothing to narrow, so the mode did least on
+    exactly the large ontologies it exists for. Start from a single class there
+    instead, which is what the control is named after; the multiselect is right
+    there to add more.
+    """
+    labels = [f"Class: {c}" for c in selected_classes]
+    if class_count and len(labels) >= class_count:
+        return labels[:1]
+    return labels
+
+
 def viz_focus_toggle():
     """Persist the focus toggle and, when it turns on, seed the focus nodes from
     the classes selected in the multiselect — so the neighbourhood grows from
-    exactly what the user had picked (one class or several). An empty selection
+    exactly what the user had narrowed to, or from one class when they had
+    narrowed to nothing (see focus_seeds_from_selection). An empty selection
     falls back to the first node."""
     if _viz_widget_missing("viz_focus_mode"):
         return
@@ -923,8 +942,10 @@ def viz_focus_toggle():
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
     if on:
-        sel = st.session_state.get("_viz_cfg_selected_classes") or []
-        st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
+        st.session_state["_viz_cfg_focus_seeds"] = focus_seeds_from_selection(
+            st.session_state.get("_viz_cfg_selected_classes") or [],
+            st.session_state.get("_viz_cfg_class_count") or 0,
+        )
 
 
 def viz_find_changed():
@@ -7848,8 +7869,11 @@ def render_visualization():
         selected_ind_uris = set(filters["ind"]["selected_uris"])
         # Display mirror of the class selection, refreshed here on every render
         # and never written to elsewhere. The focus-mode controls below read it
-        # to seed themselves from the current selection.
+        # to seed themselves from the current selection. The total rides along so
+        # they can tell a real narrowing from the everything-selected default
+        # (see focus_seeds_from_selection); neither is a persisted setting.
         st.session_state["_viz_cfg_selected_classes"] = selected_classes_list
+        st.session_state["_viz_cfg_class_count"] = len(all_class_names)
 
         # Focus mode: centre the view on one node (class, individual or SKOS
         # concept) and show only its neighbourhood within N hops. The pruning
@@ -7975,16 +7999,14 @@ def render_visualization():
                 label_set = set(focus_labels)
                 # Default the focus seeds to the classes selected in the
                 # multiselect, so the neighbourhood grows from exactly what the
-                # user had picked (one class or several).
+                # user had narrowed to — or from one class when they had narrowed
+                # to nothing (see focus_seeds_from_selection).
                 saved_seeds = st.session_state.get("_viz_cfg_focus_seeds")
                 if saved_seeds is None:
-                    saved_seeds = [
-                        f"Class: {c}"
-                        for c in (
-                            st.session_state.get("_viz_cfg_selected_classes") or []
-                        )
-                        if f"Class: {c}" in label_set
-                    ]
+                    saved_seeds = focus_seeds_from_selection(
+                        st.session_state.get("_viz_cfg_selected_classes") or [],
+                        len(all_class_names),
+                    )
                 saved_seeds = [s for s in saved_seeds if s in label_set]
                 if not saved_seeds:
                     saved_seeds = [focus_labels[0]]
@@ -8005,8 +8027,10 @@ def render_visualization():
                         on_change=viz_sync,
                         args=("_viz_cfg_focus_seeds", "viz_focus_seeds"),
                         help="Classes, individuals or SKOS concepts to centre on. "
-                        "The neighbourhood grows from all of them. Toggle the "
-                        "entity-type checkboxes above to list more.",
+                        "The neighbourhood grows from all of them. Starts from "
+                        "the classes you had filtered down to, or from one when "
+                        "you hadn't filtered. Toggle the entity-type checkboxes "
+                        "above to list more.",
                     )
                 with fcol2:
                     focus_depth = st.slider(

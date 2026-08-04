@@ -58,6 +58,12 @@ def _script():
         app.viz_focus_toggle()
     elif scenario == "focus_turned_on":
         st.session_state["_viz_cfg_selected_classes"] = ["Person"]
+        st.session_state["_viz_cfg_class_count"] = 3
+        st.session_state["viz_focus_mode"] = True
+        app.viz_focus_toggle()
+    elif scenario == "focus_turned_on_unfiltered":
+        st.session_state["_viz_cfg_selected_classes"] = ["Person", "Org", "Role"]
+        st.session_state["_viz_cfg_class_count"] = 3
         st.session_state["viz_focus_mode"] = True
         app.viz_focus_toggle()
     elif scenario == "find_changed":
@@ -126,6 +132,14 @@ def test_turning_focus_on_persists_it_and_seeds_from_the_selection():
     assert state["_viz_cfg_focus_mode"] is True
     assert state["_viz_cfg_focus_seeds"] == ["Class: Person"]
     assert state["_viz_settings_dirty"] is True
+
+
+def test_turning_focus_on_with_nothing_filtered_seeds_one_class():
+    """Every class "selected" is the default state, not a choice, so focus opens
+    on one node rather than on the whole ontology (issue #224)."""
+    state = _run("focus_turned_on_unfiltered")
+    assert state["_viz_cfg_focus_mode"] is True
+    assert state["_viz_cfg_focus_seeds"] == ["Class: Person"]
 
 
 def test_the_find_sequence_bumps():
