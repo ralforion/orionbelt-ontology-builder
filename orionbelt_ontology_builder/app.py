@@ -1990,6 +1990,24 @@ def _apply_class_edit(
     return True
 
 
+def _apply_class_relation_add(ont, subj_uri, rel_type, obj_uri, subj_show, obj_show):
+    """Write one class relation. Returns True on success.
+
+    Shared by the Relations page and the Visualization panel (issue #221), so
+    both refuse the same nonsense triple. The caller owns the rerun.
+    """
+    if not subj_uri or not obj_uri:
+        show_message("Pick both classes first!", "error")
+        return False
+    if subj_uri == obj_uri:
+        show_message("Please select two different classes!", "error")
+        return False
+    ont.add_class_relation(subj_uri, rel_type, obj_uri)
+    save_checkpoint("Add class relation")
+    show_message(f"Relation added: {subj_show} {rel_type} {obj_show}", "success")
+    return True
+
+
 def parent_option_index(parent_options, parent_lookup, parent_uri) -> int:
     """Where ``parent_uri`` sits in a class dropdown, or 0 ("None") (issue #221).
 
@@ -2199,14 +2217,42 @@ def _render_panel_restriction_editor(ont, ename, classes, properties):
     render_restriction_form(ont, row, f"panel_{_uid(ename)}", classes, properties)
 
 
-def _panel_adding() -> bool:
-    """Is the Visualization panel currently showing an add form? (issue #221)
+def _panel_add_kind():
+    """Which add form the Visualization panel is showing, or None (issue #221).
 
-    Which one is open is held as a single ``_viz_add_kind`` value rather than a
-    flag per kind, so the relation and individual forms this grows to host cannot
-    end up open at the same time.
+    One ``_viz_add_kind`` value rather than a flag per kind, so the class and
+    relation forms (and the individual one this grows to host) cannot end up open
+    at the same time.
     """
-    return st.session_state.get("_viz_add_kind") == "class"
+    return st.session_state.get("_viz_add_kind")
+
+
+def _panel_close_add() -> None:
+    """Close whatever add form is open, and disarm any pending pick."""
+    for key in ("_viz_add_kind", "_viz_crel_subject", "_viz_crel_object"):
+        st.session_state.pop(key, None)
+
+
+def resolve_picked_object(subject_id, selected_ntype, selected_ename):
+    """What an armed "pick the object" click means (issue #221).
+
+    Returns ``("pick", node_id)`` to take it as the object, ``("cancel", None)``
+    to abandon the add, or ``("wait", None)`` to keep waiting.
+
+    The subject stays selected on the graph when the pick is armed, so its own id
+    has to read as "still waiting" rather than as a relation from a class to
+    itself. Losing the selection is the cancel: clicking empty canvas clears it,
+    and so does clicking the subject again, which is the gesture people reach for
+    to undo a click. Anything that is not a class keeps waiting instead of
+    cancelling, since misclicking a property should not throw the pairing away.
+    """
+    if not selected_ename:
+        return ("cancel", None)
+    if selected_ename == subject_id:
+        return ("wait", None)
+    if selected_ntype != "Class":
+        return ("wait", None)
+    return ("pick", selected_ename)
 
 
 def _panel_add_parent(classes, ntype, ename):
@@ -2259,9 +2305,108 @@ def _render_panel_add_class_form(ont, classes, ntype, ename):
         classes,
         "panel_add_class_form",
         parent_uri=parent_uri,
-        on_close=lambda: st.session_state.pop("_viz_add_kind", None),
+        on_close=_panel_close_add,
     ):
-        st.session_state.pop("_viz_add_kind", None)
+        _panel_close_add()
+        st.rerun()
+
+
+def _render_panel_add_relation_button(classes, ntype, ename):
+    """The button that arms a relation add, at the foot of the panel (issue #221).
+
+    Only offered with a class selected: a relation needs a subject, and pressing
+    this is what fixes the selected class as one.
+    """
+    if _panel_add_parent(classes, ntype, ename) is None:
+        return
+    if st.button(
+        "Add relation",
+        key="panel_add_rel_open",
+        use_container_width=True,
+        help="Then click the class this one points at.",
+    ):
+        st.session_state["_viz_add_kind"] = "crel"
+        st.session_state["_viz_crel_subject"] = ename
+        st.rerun()
+
+
+def _render_panel_add_relation_form(ont, classes, ntype, ename):
+    """Add a class relation by clicking its two ends on the graph (issue #221).
+
+    Pressing "Add relation" fixes the selected class as the subject and waits for
+    the next class click to be the object, which keeps the direction explicit:
+    these are arrows, not lines, so the order the two ends are given in is the
+    content of the triple, not a detail. Both ends stay editable in the form
+    afterwards, so a misclick is corrected here rather than by starting over.
+    """
+    by_id = {_uid(c["uri"]): c for c in classes}
+    subject = by_id.get(st.session_state.get("_viz_crel_subject"))
+    if subject is None:
+        # The subject was deleted or renamed while the pick was armed.
+        _panel_close_add()
+        st.rerun()
+
+    obj_id = st.session_state.get("_viz_crel_object")
+    if not obj_id:
+        st.markdown(f"**Relation from {subject['name']}**")
+        st.info("Now click the class it points at.")
+        action, picked = resolve_picked_object(
+            st.session_state["_viz_crel_subject"], ntype, ename
+        )
+        if action == "pick":
+            st.session_state["_viz_crel_object"] = picked
+            st.rerun()
+        if action == "cancel":
+            _panel_close_add()
+            st.rerun()
+        if st.button("Cancel", key="panel_add_rel_cancel", use_container_width=True):
+            _panel_close_add()
+            st.rerun()
+        return
+
+    obj = by_id.get(obj_id)
+    if obj is None:
+        st.session_state.pop("_viz_crel_object", None)
+        st.rerun()
+
+    st.markdown("**New relation**")
+    options, lookup = build_class_options(classes)
+    # Not parent_option_index: that falls back to index 0 for a URI it cannot
+    # find, which is "None" in a parent dropdown but a real class here. Both ends
+    # were just resolved out of `classes`, so both are present.
+    display_by_uri = {u: d for d, u in lookup.items()}
+    with st.form("panel_add_rel_form"):
+        subj_disp = st.selectbox(
+            "Subject",
+            options=options,
+            index=options.index(display_by_uri[subject["uri"]]),
+            format_func=_pad_option,
+        )
+        rel_type = st.selectbox("Relation Type", options=list(ont.CLASS_RELATIONS))
+        obj_disp = st.selectbox(
+            "Object",
+            options=options,
+            index=options.index(display_by_uri[obj["uri"]]),
+            format_func=_pad_option,
+        )
+        st.caption(f"Reads as: {subject['name']} → {obj['name']}")
+        add_col, cancel_col = st.columns(2)
+        with add_col:
+            submitted = st.form_submit_button("Add relation", use_container_width=True)
+        with cancel_col:
+            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+    if cancelled:
+        _panel_close_add()
+        st.rerun()
+    if submitted and _apply_class_relation_add(
+        ont,
+        lookup.get(subj_disp),
+        rel_type,
+        lookup.get(obj_disp),
+        subj_disp,
+        obj_disp,
+    ):
+        _panel_close_add()
         st.rerun()
 
 
@@ -5113,7 +5258,6 @@ def render_relations():
                 )
                 submitted = st.form_submit_button("Add Class Relation")
                 if submitted:
-                    class1_uri = cls_lookup.get(class1_disp)
                     class2_show = (
                         class2_disp
                         if class2_uri == cls_lookup.get(class2_disp)
@@ -5121,15 +5265,14 @@ def render_relations():
                     )
                     if ext_err:
                         show_message(ext_err, "error")
-                    elif class1_uri == class2_uri:
-                        show_message("Please select two different classes!", "error")
-                    else:
-                        ont.add_class_relation(class1_uri, relation_type, class2_uri)
-                        save_checkpoint("Add class relation")
-                        show_message(
-                            f"Relation added: {class1_disp} {relation_type} {class2_show}",
-                            "success",
-                        )
+                    elif _apply_class_relation_add(
+                        ont,
+                        cls_lookup.get(class1_disp),
+                        relation_type,
+                        class2_uri,
+                        class1_disp,
+                        class2_show,
+                    ):
                         st.rerun()
 
     if _rel_tab == "Property Relations":
@@ -9383,10 +9526,18 @@ def render_visualization():
                             st.rerun()
                     _sel_ntype = ntype if has_selection else None
                     _sel_ename = ename if has_selection else None
-                    if _panel_adding():
+                    _add_kind = _panel_add_kind()
+                    if _add_kind == "class":
                         # The add form owns the whole panel while it is open, so
                         # its fields can't be confused with the editor's.
                         _render_panel_add_class_form(
+                            ont, classes, _sel_ntype, _sel_ename
+                        )
+                    elif _add_kind == "crel":
+                        # Owns the panel for the same reason, and because while
+                        # the pick is armed a graph click means "this is the
+                        # object", not "show me this node".
+                        _render_panel_add_relation_form(
                             ont, classes, _sel_ntype, _sel_ename
                         )
                     elif not has_selection:
@@ -9419,6 +9570,7 @@ def render_visualization():
                         ):
                             _open_full_editor(ntype, ename)
                         _render_panel_add_class_button(classes, ntype, ename)
+                        _render_panel_add_relation_button(classes, ntype, ename)
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
@@ -9651,6 +9803,13 @@ def main():
     selection = st.sidebar.radio(
         "Navigation", _page_names, index=_default_idx, key="nav_radio"
     )
+
+    # An add form in the graph panel belongs to the Visualization page. Leaving
+    # abandons it, so a half-armed "now click the object" state can't be waiting
+    # when you come back and read a later, unrelated click as the second end
+    # (issue #221).
+    if selection != "Visualization":
+        _panel_close_add()
 
     # Undo / Redo controls
     um = st.session_state.undo_manager
