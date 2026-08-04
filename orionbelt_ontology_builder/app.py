@@ -1990,6 +1990,94 @@ def _apply_class_edit(
     return True
 
 
+def parent_option_index(parent_options, parent_lookup, parent_uri) -> int:
+    """Where ``parent_uri`` sits in a class dropdown, or 0 ("None") (issue #221).
+
+    The preselection is addressed by URI, not by name, since local names collide
+    across namespaces and picking by name could parent a new class onto the wrong
+    one. A URI that is no longer in the list falls back to "None" rather than to
+    whatever now sits at that index: the panel seeds this from the graph
+    selection, and that class can be deleted or filtered out from under it.
+    """
+    if not parent_uri:
+        return 0
+    display = next((d for d, u in parent_lookup.items() if u == parent_uri), None)
+    if display is not None and display in parent_options:
+        return parent_options.index(display)
+    return 0
+
+
+def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None):
+    """Render the "add a class" form. Returns True when a class was created.
+
+    Shared by the Classes page and the Visualization details panel, so both
+    create through the same guards (issue #221). ``form_key`` makes the widget
+    keys unique. ``parent_uri`` preselects the parent, which is how the panel
+    seeds a new class from the class you had selected on the graph; the field
+    stays editable, so the graph offers a starting point rather than deciding
+    for you. ``on_close`` is what dismissing the form means; the page has no such
+    thing (the tab is the form) so it passes None and gets no Cancel button.
+
+    The caller owns the rerun: the panel has to drop its open flag first.
+    """
+    parent_options, parent_lookup = build_class_options(classes, include_none=True)
+    parent_index = parent_option_index(parent_options, parent_lookup, parent_uri)
+
+    with st.form(form_key):
+        name = st.text_input(
+            "Class Name *", help="Local name for the class (e.g., 'Person')"
+        )
+        label = st.text_input("Label", help="Human-readable label")
+        comment = st.text_area("Comment", help="Description of the class")
+        parent_display = st.selectbox(
+            "Parent Class",
+            options=parent_options,
+            index=parent_index,
+            help="Select a parent class for hierarchy",
+            format_func=_pad_option,
+        )
+        ns_options, ns_lookup = build_namespace_options(ont)
+        ns_display = st.selectbox(
+            "Namespace",
+            options=ns_options,
+            help="Namespace the class is created in (default is the base URI)",
+        )
+
+        cancelled = False
+        if on_close is None:
+            submitted = st.form_submit_button("Add Class")
+        else:
+            add_col, cancel_col = st.columns(2)
+            with add_col:
+                submitted = st.form_submit_button("Add Class", use_container_width=True)
+            with cancel_col:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+        if cancelled:
+            on_close()
+            st.rerun()
+        if submitted:
+            ns_val = ns_lookup.get(ns_display)
+            if not name:
+                show_message("Class name is required!", "error")
+            elif reason := ont.invalid_name_reason(name):
+                show_message(reason, "error")
+            elif str(ont._uri(name, ns_val)) in {c["uri"] for c in classes}:
+                show_message(f"Class '{name}' already exists!", "error")
+            else:
+                ont.add_class(
+                    name,
+                    parent=parent_lookup.get(parent_display),
+                    label=label,
+                    comment=comment,
+                    namespace=ns_val,
+                )
+                save_checkpoint("Add class")
+                show_message(f"Class '{name}' added successfully!", "success")
+                return True
+    return False
+
+
 def _apply_property_edit(
     ont, prop, new_name, new_label, new_comment, new_domain, new_range
 ):
@@ -2109,6 +2197,72 @@ def _render_panel_restriction_editor(ont, ename, classes, properties):
         "applied_to_uris": [src_uri],
     }
     render_restriction_form(ont, row, f"panel_{_uid(ename)}", classes, properties)
+
+
+def _panel_adding() -> bool:
+    """Is the Visualization panel currently showing an add form? (issue #221)
+
+    Which one is open is held as a single ``_viz_add_kind`` value rather than a
+    flag per kind, so the relation and individual forms this grows to host cannot
+    end up open at the same time.
+    """
+    return st.session_state.get("_viz_add_kind") == "class"
+
+
+def _panel_add_parent(classes, ntype, ename):
+    """The class a new one should hang under: the selected node, if it is a class."""
+    if ntype == "Class" and ename:
+        return next((c["uri"] for c in classes if _uid(c["uri"]) == ename), None)
+    return None
+
+
+def _render_panel_add_class_button(classes, ntype, ename):
+    """The button that opens the add form, at the foot of the panel (issue #221)."""
+    parent_uri = _panel_add_parent(classes, ntype, ename)
+    parent_name = next((c["name"] for c in classes if c["uri"] == parent_uri), None)
+    if st.button(
+        "Add subclass" if parent_uri else "Add class",
+        key="panel_add_class_open",
+        use_container_width=True,
+        help=(
+            f"Add a class under '{parent_name}'."
+            if parent_uri
+            else "Add a class. Select a class first to make it the parent."
+        ),
+    ):
+        st.session_state["_viz_add_kind"] = "class"
+        st.rerun()
+
+
+def _render_panel_add_class_form(ont, classes, ntype, ename):
+    """The add-a-class form, shown *instead of* the panel's usual contents.
+
+    It replaces them rather than joining them: the entity editor already has its
+    own Name, Label and Comment fields, and two sets of those stacked in a narrow
+    column is a good way to fill in the wrong one. Replacing also keeps the form
+    at the top of the panel, where it is visible without scrolling.
+
+    A selected class becomes the new class's parent, which is the point of adding
+    from the graph at all: you hang a class where it belongs by clicking there,
+    instead of finding the parent again in a dropdown of every class. With
+    anything else selected, or nothing, it still adds a class, just parentless.
+    """
+    parent_uri = _panel_add_parent(classes, ntype, ename)
+    parent_name = next((c["name"] for c in classes if c["uri"] == parent_uri), None)
+    st.markdown(
+        f"**New subclass of {parent_name}**" if parent_name else "**New class**"
+    )
+    if parent_name:
+        st.caption("Change the parent below to hang it somewhere else.")
+    if render_add_class_form(
+        ont,
+        classes,
+        "panel_add_class_form",
+        parent_uri=parent_uri,
+        on_close=lambda: st.session_state.pop("_viz_add_kind", None),
+    ):
+        st.session_state.pop("_viz_add_kind", None)
+        st.rerun()
 
 
 def _render_panel_entity_editor(
@@ -2932,50 +3086,8 @@ def render_classes():
 
     if _cls_tab == "Add Class":
         st.subheader("Add New Class")
-
-        with st.form("add_class_form"):
-            name = st.text_input(
-                "Class Name *", help="Local name for the class (e.g., 'Person')"
-            )
-            label = st.text_input("Label", help="Human-readable label")
-            comment = st.text_area("Comment", help="Description of the class")
-            parent_options, parent_lookup = build_class_options(
-                classes, include_none=True
-            )
-            parent_display = st.selectbox(
-                "Parent Class",
-                options=parent_options,
-                help="Select a parent class for hierarchy",
-                format_func=_pad_option,
-            )
-            ns_options, ns_lookup = build_namespace_options(ont)
-            ns_display = st.selectbox(
-                "Namespace",
-                options=ns_options,
-                help="Namespace the class is created in (default is the base URI)",
-            )
-
-            submitted = st.form_submit_button("Add Class")
-            if submitted:
-                ns_val = ns_lookup.get(ns_display)
-                if not name:
-                    show_message("Class name is required!", "error")
-                elif reason := ont.invalid_name_reason(name):
-                    show_message(reason, "error")
-                elif str(ont._uri(name, ns_val)) in {c["uri"] for c in classes}:
-                    show_message(f"Class '{name}' already exists!", "error")
-                else:
-                    parent_val = parent_lookup.get(parent_display)
-                    ont.add_class(
-                        name,
-                        parent=parent_val,
-                        label=label,
-                        comment=comment,
-                        namespace=ns_val,
-                    )
-                    save_checkpoint("Add class")
-                    show_message(f"Class '{name}' added successfully!", "success")
-                    st.rerun()
+        if render_add_class_form(ont, classes, "add_class_form"):
+            st.rerun()
 
     if _cls_tab == "Edit/Delete Class":
         st.subheader("Edit or Delete Class")
@@ -9269,10 +9381,19 @@ def render_visualization():
                             st.session_state["_viz_cfg_details_panel"] = False
                             st.session_state["_viz_settings_dirty"] = True
                             st.rerun()
-                    if not has_selection:
+                    _sel_ntype = ntype if has_selection else None
+                    _sel_ename = ename if has_selection else None
+                    if _panel_adding():
+                        # The add form owns the whole panel while it is open, so
+                        # its fields can't be confused with the editor's.
+                        _render_panel_add_class_form(
+                            ont, classes, _sel_ntype, _sel_ename
+                        )
+                    elif not has_selection:
                         st.caption(
                             "Click a node to see details. Ctrl/Cmd-click focuses on it."
                         )
+                        _render_panel_add_class_button(classes, None, None)
                     else:
                         st.markdown(f"**{_sel.get('label', '')}**")
                         # What was selected, not merely that it was an edge:
@@ -9297,6 +9418,7 @@ def render_visualization():
                             use_container_width=True,
                         ):
                             _open_full_editor(ntype, ename)
+                        _render_panel_add_class_button(classes, ntype, ename)
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
