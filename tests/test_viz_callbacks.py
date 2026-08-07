@@ -66,6 +66,21 @@ def _script():
         st.session_state["_viz_cfg_class_count"] = 3
         st.session_state["viz_focus_mode"] = True
         app.viz_focus_toggle()
+    elif scenario == "focus_turned_on_again":
+        # The user narrowed the focus to one class, then toggled the mode off
+        # and on again. Their pick must survive the round trip (issue #235).
+        st.session_state["_viz_cfg_selected_classes"] = ["Person", "Org", "Role"]
+        st.session_state["_viz_cfg_class_count"] = 3
+        st.session_state["_viz_cfg_focus_seeds"] = ["Class: Org"]
+        st.session_state["viz_focus_mode"] = True
+        app.viz_focus_toggle()
+    elif scenario == "focus_turned_on_after_clearing":
+        # Nothing left to restore, so the derived seeding still applies.
+        st.session_state["_viz_cfg_selected_classes"] = ["Person"]
+        st.session_state["_viz_cfg_class_count"] = 3
+        st.session_state["_viz_cfg_focus_seeds"] = []
+        st.session_state["viz_focus_mode"] = True
+        app.viz_focus_toggle()
     elif scenario == "find_changed":
         app.viz_find_changed()
 
@@ -139,6 +154,23 @@ def test_turning_focus_on_with_nothing_filtered_seeds_one_class():
     on one node rather than on the whole ontology (issue #224)."""
     state = _run("focus_turned_on_unfiltered")
     assert state["_viz_cfg_focus_mode"] is True
+    assert state["_viz_cfg_focus_seeds"] == ["Class: Person"]
+
+
+def test_switching_focus_off_and_on_keeps_the_chosen_nodes():
+    """Re-deriving the seeds on every switch-on threw away the user's pick.
+
+    Narrowing "Focus node(s)" to the one class you want never survived toggling
+    the mode off and on again (issue #235). The derived seeding is a first-use
+    starting point, not something reapplied over a choice already made.
+    """
+    state = _run("focus_turned_on_again")
+    assert state["_viz_cfg_focus_seeds"] == ["Class: Org"]
+
+
+def test_turning_focus_on_with_no_seeds_left_still_derives_them():
+    """The first-use seeding must still happen when there is nothing to keep."""
+    state = _run("focus_turned_on_after_clearing")
     assert state["_viz_cfg_focus_seeds"] == ["Class: Person"]
 
 

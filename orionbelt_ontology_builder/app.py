@@ -931,17 +931,25 @@ def focus_seeds_from_selection(selected_classes, class_count):
 
 
 def viz_focus_toggle():
-    """Persist the focus toggle and, when it turns on, seed the focus nodes from
-    the classes selected in the multiselect — so the neighbourhood grows from
-    exactly what the user had narrowed to, or from one class when they had
-    narrowed to nothing (see focus_seeds_from_selection). An empty selection
-    falls back to the first node."""
+    """Persist the focus toggle, seeding the focus nodes on first use.
+
+    Turning focus on derives seeds from the class selection only when there are
+    none to restore (see focus_seeds_from_selection). Deriving them on *every*
+    switch-on threw away whatever you had picked the moment you toggled the mode
+    off and on again, so narrowing "Focus node(s)" to the one class you wanted
+    never survived (issue #235). The derived seeding is a starting point for the
+    first use, not something reapplied over a choice you have already made.
+
+    That also decouples the two controls: after you have expressed a preference,
+    the focus seeds are their own list rather than a function of Filter Nodes.
+    An empty selection still falls back to the first node, downstream.
+    """
     if _viz_widget_missing("viz_focus_mode"):
         return
     on = st.session_state["viz_focus_mode"]
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
-    if on:
+    if on and not st.session_state.get("_viz_cfg_focus_seeds"):
         st.session_state["_viz_cfg_focus_seeds"] = focus_seeds_from_selection(
             st.session_state.get("_viz_cfg_selected_classes") or [],
             st.session_state.get("_viz_cfg_class_count") or 0,
