@@ -37,6 +37,11 @@ CHECKPOINTED_BY_CALLER = {
     "_apply_class_edit",
     "_apply_property_edit",
     "_apply_individual_edit",
+    # Rewrites an annotation as a delete plus an add, and puts the original back
+    # when the add is rejected. The panel checkpoints on the True return; the
+    # rollback path returns False having restored the graph, so there is nothing
+    # to checkpoint there either (issue #223).
+    "_apply_annotation_edit",
 }
 
 # Either of these moves the revision: the checkpoint helper, or a direct bump

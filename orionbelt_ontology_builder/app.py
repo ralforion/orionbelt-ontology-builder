@@ -1704,6 +1704,45 @@ def _edge_id_parts(ename: str, count: int) -> tuple | None:
     return parts if len(parts) == count else None
 
 
+#: How many parts an annotation's identity has (see :func:`annotation_ename`).
+_ANN_ID_PARTS = 5
+
+
+def _uri_local_name(uri: str) -> str:
+    """The local part of a URI, for naming the resource something hangs off."""
+    if not uri:
+        return ""
+    return uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1] or uri
+
+
+def annotation_ename(subject_uri: str, ann: dict) -> str:
+    """Name the annotation a graph node stands for (issue #223).
+
+    An annotation has no URI of its own — it *is* a triple — so like the
+    relations and restrictions drawn as edges it is identified by its parts:
+    subject, predicate, value, and the language or datatype that tells two
+    otherwise identical literals apart. That is exactly the key
+    ``delete_annotation`` matches on, so a node resolves back to the one triple
+    it was drawn from.
+
+    Derived from content rather than counted, so the id survives a rebuild. The
+    nodes used to be numbered in iteration order, which meant a node id changed
+    whenever anything before it did, and a click could not be resolved at all.
+    """
+    return _edge_id(
+        subject_uri,
+        ann.get("predicate_uri") or ann["predicate"],
+        ann["value"],
+        ann.get("language") or "",
+        ann.get("datatype") or "",
+    )
+
+
+def annotation_matches_ename(subject_uri: str, ann: dict, parts: tuple) -> bool:
+    """Whether ``ann`` on ``subject_uri`` is the annotation ``parts`` names."""
+    return annotation_ename(subject_uri, ann) == _edge_id(*parts)
+
+
 def _restriction_matches_edge(rest: dict, parts: tuple) -> bool:
     """Whether ``rest`` is the restriction a graph edge stands for (issue #152).
 
@@ -2032,6 +2071,54 @@ def restriction_references_class(restriction_type: str) -> bool:
     )
 
 
+def _apply_annotation_edit(ont, subject_uri, ann, new_pred, new_value, new_lang):
+    """Rewrite one annotation. Returns True when the graph changed (issue #223).
+
+    An annotation is a triple, and the engine has no update for one, so an edit
+    is a delete followed by an add. That order can fail halfway: ``add`` rejects
+    an unusable predicate (an unbound prefix above all), and by then the original
+    is already gone. So a failed add puts the original back before reporting,
+    rather than leaving the user with neither.
+
+    The datatype rides along unchanged. Without it the re-add would store a
+    plain string and quietly drop a ``^^xsd:date`` that the user never touched.
+    """
+    datatype = ann.get("datatype")
+    if (
+        new_pred == (ann.get("predicate_uri") or ann["predicate"])
+        and new_value == ann["value"]
+        and (new_lang or None) == (ann.get("language") or None)
+    ):
+        return False
+
+    ont.delete_annotation(
+        subject_uri,
+        ann.get("predicate_uri") or ann["predicate"],
+        ann["value"],
+        lang=ann.get("language"),
+        datatype=datatype,
+    )
+    try:
+        ont.add_annotation(
+            subject_uri,
+            new_pred,
+            new_value,
+            lang=new_lang or None,
+            datatype=None if new_lang else datatype,
+        )
+    except Exception as e:  # noqa: BLE001 - a rejected predicate must not eat the annotation
+        ont.add_annotation(
+            subject_uri,
+            ann.get("predicate_uri") or ann["predicate"],
+            ann["value"],
+            lang=ann.get("language"),
+            datatype=datatype,
+        )
+        show_message(f"Annotation unchanged: {e!s}", "error")
+        return False
+    return True
+
+
 def _apply_restriction_add(ont, target_uri, prop_uri, rtype, value, on_class=None):
     """Write one restriction. Returns True on success.
 
@@ -2212,6 +2299,82 @@ def _apply_individual_edit(
         remove_class=remove_class if remove_class and remove_class != "None" else None,
     )
     return True
+
+
+def _render_panel_annotation_editor(ont, ename):
+    """Edit the annotation behind a graph node, in the Details panel (#223).
+
+    The node names the whole triple, which is looked up in the live ontology for
+    the same reason the relation and restriction editors do it: a selection can
+    outlive what it points at, and an annotation that has changed is a different
+    annotation, so this has to say so rather than rewrite whatever is at hand.
+    """
+    parts = _edge_id_parts(ename, _ANN_ID_PARTS)
+    ann = None
+    subject_uri = ""
+    if parts:
+        subject_uri = parts[0]
+        try:
+            ann = next(
+                (
+                    a
+                    for a in ont.get_annotations(subject_uri)
+                    if annotation_matches_ename(subject_uri, a, parts)
+                ),
+                None,
+            )
+        except Exception:  # noqa: BLE001 - a subject that has gone reads as "gone"
+            ann = None
+    if ann is None:
+        st.caption(
+            "This annotation was edited or removed. Click a node to pick one up."
+        )
+        return
+
+    st.caption(f"On {_uri_local_name(subject_uri)}")
+    with st.form(f"panel_edit_ann_{_uid(ename)}"):
+        new_pred = st.text_input(
+            "Predicate",
+            value=ann.get("predicate_uri") or ann["predicate"],
+            help="A full URI, a prefixed name (dcterms:created), or a common "
+            "name like label.",
+        )
+        new_value = st.text_input("Value", value=ann["value"])
+        new_lang = st.text_input(
+            "Language",
+            value=ann.get("language") or "",
+            help="Optional BCP 47 tag such as en or de. Leave empty for none.",
+        )
+        if ann.get("datatype"):
+            # Not editable here, but say it is there: it is carried through the
+            # rewrite untouched, and a silent one would look like data loss.
+            st.caption(f"Datatype: {ann['datatype']} (kept)")
+        save_col, del_col = st.columns(2)
+        with save_col:
+            saved = st.form_submit_button("Save", use_container_width=True)
+        with del_col:
+            deleted = st.form_submit_button("Delete", use_container_width=True)
+
+    if deleted:
+        ont.delete_annotation(
+            subject_uri,
+            ann.get("predicate_uri") or ann["predicate"],
+            ann["value"],
+            lang=ann.get("language"),
+            datatype=ann.get("datatype"),
+        )
+        save_checkpoint("Delete annotation")
+        show_message("Annotation deleted!", "success")
+        st.rerun()
+    if saved:
+        if not new_value.strip():
+            show_message("Annotation value is required!", "error")
+        elif _apply_annotation_edit(
+            ont, subject_uri, ann, new_pred, new_value, new_lang
+        ):
+            save_checkpoint("Update annotation")
+            show_message("Annotation updated!", "success")
+            st.rerun()
 
 
 def _render_panel_relation_editor(ont, ename, classes):
@@ -2617,6 +2780,11 @@ def _render_panel_entity_editor(
         return None
     if ntype == "Restriction":
         _render_panel_restriction_editor(ont, ename, classes, object_props + data_props)
+        return None
+    if ntype == "Annotation":
+        # Like the two above, an annotation has no URI of its own: it resolves
+        # from the identity its node carries, not from an entity pool (#223).
+        _render_panel_annotation_editor(ont, ename)
         return None
 
     # Object properties are drawn as edges (so selecting one is a selectEdge with
@@ -9100,7 +9268,6 @@ def render_visualization():
 
             # Add annotations for classes and individuals
             if show_annotations and node_count < max_nodes:
-                annotation_counter = 0
                 # Annotations for classes
                 if show_classes and classes:
                     for cls in classes:
@@ -9120,8 +9287,8 @@ def render_visualization():
                                 # Skip label and comment as they're already shown in tooltip
                                 if ann["predicate"] in ["label", "comment"]:
                                     continue
-                                annotation_counter += 1
-                                ann_id = f"ann_{annotation_counter}"
+                                ann_ename = annotation_ename(cls["uri"], ann)
+                                ann_id = f"ann_{_uid(ann_ename)}"
                                 # Use prefixed predicate name
                                 pred_display = ann.get(
                                     "predicate_prefixed", ann["predicate"]
@@ -9143,6 +9310,8 @@ def render_visualization():
                                     shape="box",
                                     size=8,
                                     font={"size": 10, "color": "#f0f0f0"},
+                                    ntype="Annotation",
+                                    ename=ann_ename,
                                 )
                                 node_count += 1
                                 net.add_edge(
@@ -9173,8 +9342,8 @@ def render_visualization():
                                     break
                                 if ann["predicate"] in ["label", "comment"]:
                                     continue
-                                annotation_counter += 1
-                                ann_id = f"ann_{annotation_counter}"
+                                ann_ename = annotation_ename(ind["uri"], ann)
+                                ann_id = f"ann_{_uid(ann_ename)}"
                                 pred_display = ann.get(
                                     "predicate_prefixed", ann["predicate"]
                                 )
@@ -9194,6 +9363,8 @@ def render_visualization():
                                     shape="box",
                                     size=8,
                                     font={"size": 10, "color": "#f0f0f0"},
+                                    ntype="Annotation",
+                                    ename=ann_ename,
                                 )
                                 node_count += 1
                                 net.add_edge(

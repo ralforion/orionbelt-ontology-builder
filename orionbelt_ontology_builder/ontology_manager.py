@@ -2118,7 +2118,12 @@ class OntologyManager:
             raise ValueError(reason)
 
     def add_annotation(
-        self, subject: str, predicate: str, value: str, lang: str | None = None
+        self,
+        subject: str,
+        predicate: str,
+        value: str,
+        lang: str | None = None,
+        datatype: str | None = None,
     ):
         """Add an annotation to any resource.
 
@@ -2142,6 +2147,13 @@ class OntologyManager:
             predicate: Either a full URI, a common name (label, comment, etc.), or a local name
             value: The annotation value
             lang: Optional language tag
+            datatype: Optional datatype, as the local name of an XSD type or a
+                full URI, resolved the same way :meth:`delete_annotation`
+                resolves it so an annotation can be removed and re-added without
+                changing. Ignored when ``lang`` is given, since RDF literals
+                carry a language tag or a datatype, never both. Without it an
+                edit that rewrote a value would silently drop its ``^^xsd:date``
+                and store a plain string (issue #223).
         """
         self._require_valid_annotation_predicate(predicate)
         subj_uri = self._uri(subject)
@@ -2160,6 +2172,10 @@ class OntologyManager:
 
         if lang:
             literal = Literal(value, lang=lang)
+        elif datatype:
+            literal = Literal(
+                value, datatype=self.XSD_DATATYPES.get(datatype, URIRef(datatype))
+            )
         else:
             literal = Literal(value)
 
