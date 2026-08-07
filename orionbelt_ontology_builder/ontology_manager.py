@@ -392,6 +392,24 @@ class OntologyManager:
     _INVALID_URI_CHARS = frozenset('<>"{}|\\^`')
 
     @classmethod
+    def invalid_uri_reason(cls, uri: str) -> str | None:
+        """Why ``uri`` cannot be stored as a resource, or None if it can.
+
+        rdflib takes any string as a ``URIRef`` and only objects when asked to
+        serialize, so an unusable one is accepted silently and then breaks every
+        export of the whole ontology. Callers writing a resource-valued object
+        check here first, while there is still something to refuse.
+        """
+        if uri is None or not uri.strip():
+            return "A resource value cannot be empty."
+        if any(c.isspace() or c in cls._INVALID_URI_CHARS for c in uri):
+            return (
+                "A resource value must be a URI: no spaces, and none of the "
+                'characters < > " { } | \\ ^ `.'
+            )
+        return None
+
+    @classmethod
     def invalid_name_reason(cls, name: str) -> str | None:
         """Return a human-readable reason ``name`` is not a valid entity name,
         or ``None`` if it is valid.
@@ -2179,6 +2197,13 @@ class OntologyManager:
             # Keep a resource-valued annotation a resource. Writing it back as a
             # literal would leave the original triple in place beside a string
             # copy of the same IRI.
+            #
+            # Checked before it is stored, because rdflib accepts any string as a
+            # URIRef and only refuses at serialization: one bad edit would make
+            # the whole ontology unexportable, long after the edit that did it.
+            # Raising instead lets the caller's rollback put the original back.
+            if reason := self.invalid_uri_reason(value):
+                raise ValueError(reason)
             obj: Node = URIRef(value)
         elif lang:
             obj = Literal(value, lang=lang)
@@ -2364,10 +2389,15 @@ class OntologyManager:
             self.graph.remove((subj_uri, pred_uri, Literal(value, datatype=dt_uri)))
             return
 
-        # No lang/datatype specified: remove any literal whose string value matches
+        # Nothing said about the object: remove any whose string value matches,
+        # resource or literal alike. Matching only literals here meant a caller
+        # that did not know the difference — the bulk editor, whose table has no
+        # column for it — deleted nothing and reported success (issue #223
+        # review). An exact object kind is still available through
+        # ``value_is_uri``.
         to_remove = []
         for obj in self.graph.objects(subj_uri, pred_uri):
-            if isinstance(obj, Literal) and str(obj) == value:
+            if isinstance(obj, (Literal, URIRef)) and str(obj) == value:
                 to_remove.append(obj)
         for obj in to_remove:
             self.graph.remove((subj_uri, pred_uri, obj))

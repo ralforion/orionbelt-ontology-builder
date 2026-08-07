@@ -277,3 +277,95 @@ def test_a_resource_and_a_literal_spelling_the_same_iri_are_different_annotation
         a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
     ]
     assert len({annotation_ename(NS + "Person", a) for a in anns}) == 2
+
+
+# --- an IRI object has to be storable ---------------------------------------
+
+
+def test_an_unusable_iri_is_refused_rather_than_stored():
+    """rdflib takes any string as a URIRef and only objects at serialization, so
+    one bad edit would break every export of the whole ontology, long after the
+    edit that caused it."""
+    from rdflib import URIRef
+
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ann = next(
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    )
+
+    assert not _apply_annotation_edit(
+        ont, NS + "Person", ann, SEE_ALSO, "not a uri with spaces", ""
+    )
+    objs = list(ont.graph.objects(ont._uri("Person"), URIRef(SEE_ALSO)))
+    assert [str(o) for o in objs] == ["http://docs.example/person"]
+
+
+def test_the_ontology_still_serializes_after_a_refused_iri_edit():
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ann = next(
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    )
+    _apply_annotation_edit(ont, NS + "Person", ann, SEE_ALSO, "has spaces", "")
+    assert "docs.example/person" in ont.export_to_string("turtle")
+
+
+@pytest.mark.parametrize(
+    "bad", ["has spaces", "angle<brackets>", 'quote"mark', "brace{s}", "", "   "]
+)
+def test_add_annotation_rejects_an_unserializable_resource_value(bad):
+    ont = _ont()
+    with pytest.raises(ValueError):
+        ont.add_annotation(NS + "Person", SEE_ALSO, bad, value_is_uri=True)
+
+
+@pytest.mark.parametrize(
+    "good", ["http://a.example/x", "urn:isbn:0451450523", "mailto:a@b.example"]
+)
+def test_a_usable_iri_is_still_accepted(good):
+    ont = _ont()
+    ont.add_annotation(NS + "Person", SEE_ALSO, good, value_is_uri=True)
+    assert ont.export_to_string("turtle")
+
+
+# --- deleting without knowing the object kind -------------------------------
+
+
+def test_a_delete_that_does_not_say_the_kind_matches_a_resource_too():
+    """The bulk editor's table has no column for it, so it deleted nothing and
+    reported success."""
+    from rdflib import URIRef
+
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ont.delete_annotation(NS + "Person", SEE_ALSO, "http://docs.example/person")
+    assert not list(ont.graph.objects(ont._uri("Person"), URIRef(SEE_ALSO)))
+
+
+def test_bulk_delete_removes_a_resource_valued_annotation():
+    from rdflib import URIRef
+
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    result = ont.bulk_update_annotations(
+        [
+            {
+                "resource": "Person",
+                "predicate": SEE_ALSO,
+                "value": "http://docs.example/person",
+                "action": "delete",
+            }
+        ]
+    )
+    assert result == {"applied": 1, "errors": []}
+    assert not list(ont.graph.objects(ont._uri("Person"), URIRef(SEE_ALSO)))
+
+
+def test_a_literal_delete_is_unaffected_by_the_widened_match():
+    ont = _ont()
+    ont.add_annotation(NS + "Person", DCT + "source", "plain")
+    ont.delete_annotation(NS + "Person", DCT + "source", "plain")
+    assert not [
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "source"
+    ]
