@@ -2986,8 +2986,13 @@ def prioritise_find_target(items, node_id_of, find_id):
     asked for was missing: movement, and no result, which is exactly what the
     issue describes.
 
-    Reordering rather than exempting keeps the cap honest — the same number of
-    nodes is drawn, and the one the user named is simply not the one sacrificed.
+    Ordering alone is enough for classes, which are built first and so still fit
+    inside the budget. It is not enough for the kinds after them: by the time
+    those loops run the budget is spent, so each also lets the target itself past
+    its own cap check. That costs at most one node over the cap, since only the
+    single entity the user named is let through. One extra node is immaterial to
+    the browser the cap protects; a graph silently missing what you asked for is
+    not.
     """
     if not find_id:
         return items
@@ -8972,7 +8977,9 @@ def render_visualization():
                 for prop in prioritise_find_target(
                     data_props, lambda p: f"dprop_{_uid(p['uri'])}", _find_id
                 ):
-                    if node_count >= max_nodes:
+                    if node_count >= max_nodes and (
+                        f"dprop_{_uid(prop['uri'])}" != _find_id
+                    ):
                         break
                     # Skip if domain is set but the class node isn't displayed
                     dom_uri = prop.get("domain_uri", "")
@@ -9023,7 +9030,10 @@ def render_visualization():
                 for ind in prioritise_find_target(
                     individuals, lambda i: f"ind_{_uid(i['uri'])}", _find_id
                 ):
-                    if node_count >= max_nodes:
+                    if (
+                        node_count >= max_nodes
+                        and f"ind_{_uid(ind['uri'])}" != _find_id
+                    ):
                         break
                     # Individuals filter (issue #196). Focus mode builds the full
                     # graph and prunes afterwards, so it ignores the filter the
@@ -9262,7 +9272,10 @@ def render_visualization():
                 for concept in prioritise_find_target(
                     concepts, lambda c: f"skos_{c['name']}", _find_id
                 ):
-                    if node_count >= max_nodes:
+                    if (
+                        node_count >= max_nodes
+                        and f"skos_{concept['name']}" != _find_id
+                    ):
                         break
                     c_id = f"skos_{concept['name']}"
                     label = concept.get("pref_label") or concept["name"]

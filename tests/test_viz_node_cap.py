@@ -43,6 +43,21 @@ def _script():
             om.add_class("Hub")
             for i in range(int(os.environ["N_CLASSES"])):
                 om.add_class(f"C{i:04d}", parent="Hub")
+        # One entity of another kind, to check that a Find target which is not
+        # a class is reachable too. Those loops run after classes, so the budget
+        # is already spent by the time they start (issue #234 review).
+        extra = os.environ.get("EXTRA", "")
+        if extra == "dprop":
+            om.add_data_property("findMe")
+            # Data properties and individuals are off by default, and Find only
+            # lists the types that are shown, so the toggle has to be on for the
+            # entity to be findable at all.
+            st.session_state["_viz_cfg_show_data_props"] = True
+        elif extra == "ind":
+            om.add_individual("findMe", "C0000")
+            st.session_state["_viz_cfg_show_individuals"] = True
+        elif extra == "skos":
+            om.add_concept("findMe")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
         # The cross-session settings restore mounts the localStorage component,
@@ -64,7 +79,7 @@ def _script():
     app.render_visualization()
 
 
-def _graph(n_classes, seed="", shape="chain", depth=1, find=""):
+def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra=""):
     """Render once and return ``(nodes, edges, notice)``. An empty seed means
     focus mode off; ``find`` is an entity picked in "Find and centre"."""
     os.environ["N_CLASSES"] = str(n_classes)
@@ -72,6 +87,7 @@ def _graph(n_classes, seed="", shape="chain", depth=1, find=""):
     os.environ["SHAPE"] = shape
     os.environ["DEPTH"] = str(depth)
     os.environ["FIND"] = find
+    os.environ["EXTRA"] = extra
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -209,3 +225,36 @@ def test_without_a_find_target_the_class_past_the_cap_is_still_dropped():
     over = app.GRAPH_MAX_NODES + 20
     nodes, _, _ = _graph(over)
     assert f"C{over - 1:04d}" not in {n.get("label") for n in nodes}
+
+
+@pytest.mark.parametrize(
+    ("extra", "find"),
+    [
+        ("dprop", "Data Property: findMe"),
+        ("ind", "Individual: findMe"),
+        ("skos", "Concept: findMe"),
+    ],
+)
+def test_a_non_class_find_target_is_drawn_after_classes_fill_the_budget(extra, find):
+    """Classes are built first, so by the time these loops run the budget is
+    already spent. Letting their block run is not enough on its own: the loop
+    still has to get past its own cap check to add the prioritised entity."""
+    nodes, _, _ = _graph(app.GRAPH_MAX_NODES + 20, find=find, extra=extra)
+    assert "findMe" in {n.get("label") for n in nodes}
+
+
+@pytest.mark.parametrize(
+    ("extra", "find"),
+    [
+        ("dprop", "Data Property: findMe"),
+        ("ind", "Individual: findMe"),
+        ("skos", "Concept: findMe"),
+    ],
+)
+def test_a_non_class_find_target_costs_at_most_one_node_over_the_cap(extra, find):
+    """Classes are built first and fill the budget, so a target of a later kind
+    cannot be swapped for one of them: it is added past the cap instead. One
+    extra node is immaterial to the browser, which is what the cap protects; a
+    graph silently missing what you asked for is not."""
+    nodes, _, _ = _graph(app.GRAPH_MAX_NODES + 20, find=find, extra=extra)
+    assert len(nodes) <= app.GRAPH_MAX_NODES + 1
