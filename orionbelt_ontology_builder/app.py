@@ -2484,7 +2484,7 @@ def _render_panel_add_restriction_button(classes, ntype, ename):
         st.rerun()
 
 
-def _render_panel_add_restriction_form(ont, classes, properties, ntype, ename):
+def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename):
     """Add a restriction by clicking the two classes it relates (issue #221).
 
     Same arm-then-pick as the relation form: the selected class is the one the
@@ -2493,15 +2493,26 @@ def _render_panel_add_restriction_form(ont, classes, properties, ntype, ename):
     value restrictions and the three qualified cardinalities. hasValue and the
     plain cardinalities say something about one class on its own, so the graph
     has no second end to offer and they stay on the Restrictions page.
+
+    ``object_props`` only, deliberately. Everything this flow can produce fills a
+    class slot: the value of someValuesFrom/allValuesFrom, or the owl:onClass of
+    a qualified cardinality. On a data property those slots take a data range
+    instead, so offering one here would write ``owl:someValuesFrom :SomeClass``
+    against an ``owl:DatatypeProperty`` — an axiom no reasoner accepts. Data
+    properties stay on the Restrictions page until this flow can offer a
+    datatype for them.
     """
     by_id = {_uid(c["uri"]): c for c in classes}
     subject = by_id.get(st.session_state.get("_viz_crel_subject"))
     if subject is None:
         _panel_close_add()
         st.rerun()
-    if not properties:
+    if not object_props:
         st.markdown("**New restriction**")
-        st.info("Add a property first: a restriction is always on one.")
+        st.info(
+            "Add an object property first. Restrictions built here point at a "
+            "class, which a data property cannot do."
+        )
         if st.button("Cancel", key="panel_add_rest_nocancel", use_container_width=True):
             _panel_close_add()
             st.rerun()
@@ -2532,7 +2543,7 @@ def _render_panel_add_restriction_form(ont, classes, properties, ntype, ename):
 
     st.markdown("**New restriction**")
     cls_options, cls_lookup = build_class_options(classes)
-    prop_options, prop_lookup = build_uri_options(properties)
+    prop_options, prop_lookup = build_uri_options(object_props)
     display_by_uri = {u: d for d, u in cls_lookup.items()}
     types = [t for t in ont.RESTRICTION_TYPES if restriction_references_class(t)]
     # Outside the form on purpose: a form batches until submit and does not rerun
@@ -5024,7 +5035,7 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
             "cardinality, or a literal for hasValue. A full URI is kept as it is.",
         )
         new_on_class = None
-        if "Qualified" in new_type:
+        if restriction_takes_on_class(new_type):
             new_on_class = st.selectbox(
                 "Qualified on Class",
                 on_options,
@@ -9715,12 +9726,10 @@ def render_visualization():
                             ont, classes, _sel_ntype, _sel_ename
                         )
                     elif _add_kind == "rest":
+                        # Object properties only: every restriction this flow can
+                        # build points at a class, which a data property cannot.
                         _render_panel_add_restriction_form(
-                            ont,
-                            classes,
-                            object_props + data_props,
-                            _sel_ntype,
-                            _sel_ename,
+                            ont, classes, object_props, _sel_ntype, _sel_ename
                         )
                     elif not has_selection:
                         st.caption(
