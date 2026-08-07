@@ -6,6 +6,18 @@
 
 <p align="center"><strong>A browser-based ontology workbench built with Streamlit and rdflib</strong></p>
 
+<p align="center">
+  Build and explore OWL ontologies directly in your browser.
+</p>
+
+<p align="center">
+  ✔ Visual graph editor<br>
+  ✔ OWL RL reasoning &amp; consistency checks<br>
+  ✔ OWL + SKOS in one workbench<br>
+  ✔ RDF/OWL import &amp; export<br>
+  ✔ Pure Python
+</p>
+
 [![GitHub stars](https://img.shields.io/github/stars/ralforion/orionbelt-ontology-builder?style=social)](https://github.com/ralforion/orionbelt-ontology-builder)
 [![PyPI](https://img.shields.io/pypi/v/orionbelt-ontology-builder?logo=pypi&logoColor=white&label=PyPI&color=purple)](https://pypi.org/project/orionbelt-ontology-builder/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -369,6 +381,15 @@ orionbelt-ontology-builder/
 ```
 
 Dependencies: streamlit, rdflib, owlrl, networkx, pyvis.
+
+---
+
+## Roadmap
+
+Not implemented yet, listed here so it is clear what the workbench does *not* do today:
+
+- **SHACL validation.** Validation is currently structural (orphan classes, duplicate labels, domain/range mismatches, SKOS cycles) plus OWL RL reasoning. Shape-based validation against SHACL constraints is not supported.
+- **SPARQL queries.** There is no query console; exploration is through search, usage/backlink views and the graph.
 
 ---
 
