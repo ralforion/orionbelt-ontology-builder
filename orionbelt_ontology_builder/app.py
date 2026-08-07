@@ -1998,6 +1998,57 @@ def _apply_class_edit(
     return True
 
 
+def restriction_takes_on_class(restriction_type: str) -> bool:
+    """Does this restriction type carry an ``owl:onClass``?
+
+    The qualified cardinalities do: OWL 2 requires one to name the class being
+    counted, and a qualified cardinality written without it is an axiom no
+    reasoner accepts.
+
+    Matched case-insensitively on purpose. The exact-cardinality type is spelled
+    ``qualifiedCardinality`` with a lower-case q, so a ``"Qualified" in ...``
+    test matched its min and max siblings but silently missed it: that type
+    never got an onClass selector and wrote a bare ``owl:qualifiedCardinality``.
+    """
+    return "qualified" in restriction_type.lower()
+
+
+def restriction_value_is_class(restriction_type: str) -> bool:
+    """Is this restriction's *value* another class, rather than a literal,
+    an individual or a number?"""
+    return restriction_type in ("someValuesFrom", "allValuesFrom")
+
+
+def restriction_references_class(restriction_type: str) -> bool:
+    """Does this restriction point at a second class at all? (issue #221)
+
+    These are the types worth building by clicking two nodes on the graph. The
+    rest (hasValue, the plain cardinalities) say something about one class on
+    its own, so the graph has no second end to offer and they stay on the
+    Restrictions page.
+    """
+    return restriction_value_is_class(restriction_type) or restriction_takes_on_class(
+        restriction_type
+    )
+
+
+def _apply_restriction_add(ont, target_uri, prop_uri, rtype, value, on_class=None):
+    """Write one restriction. Returns True on success.
+
+    Shared by the Restrictions page and the Visualization panel (issue #221).
+    The engine rejects a bad cardinality or an empty value by raising, and that
+    has to reach the user as a message rather than a traceback.
+    """
+    try:
+        ont.add_restriction(target_uri, prop_uri, rtype, value, on_class=on_class)
+    except Exception as e:  # noqa: BLE001 - a rejected axiom must show as a message
+        show_message(f"Error adding restriction: {e!s}", "error")
+        return False
+    save_checkpoint("Add restriction")
+    show_message("Restriction added!", "success")
+    return True
+
+
 def _apply_class_relation_add(ont, subj_uri, rel_type, obj_uri, subj_show, obj_show):
     """Write one class relation. Returns True on success.
 
@@ -2416,6 +2467,126 @@ def _render_panel_add_relation_form(ont, classes, ntype, ename):
     ):
         _panel_close_add()
         st.rerun()
+
+
+def _render_panel_add_restriction_button(classes, ntype, ename):
+    """The button that arms a restriction add, at the foot of the panel (#221)."""
+    if _panel_add_parent(classes, ntype, ename) is None:
+        return
+    if st.button(
+        "Add restriction",
+        key="panel_add_rest_open",
+        use_container_width=True,
+        help="Then click the class it restricts to.",
+    ):
+        st.session_state["_viz_add_kind"] = "rest"
+        st.session_state["_viz_crel_subject"] = ename
+        st.rerun()
+
+
+def _render_panel_add_restriction_form(ont, classes, properties, ntype, ename):
+    """Add a restriction by clicking the two classes it relates (issue #221).
+
+    Same arm-then-pick as the relation form: the selected class is the one the
+    restriction is applied to, and the next class you click is the one it points
+    at. Only the types that *have* a second class are offered here — the two
+    value restrictions and the three qualified cardinalities. hasValue and the
+    plain cardinalities say something about one class on its own, so the graph
+    has no second end to offer and they stay on the Restrictions page.
+    """
+    by_id = {_uid(c["uri"]): c for c in classes}
+    subject = by_id.get(st.session_state.get("_viz_crel_subject"))
+    if subject is None:
+        _panel_close_add()
+        st.rerun()
+    if not properties:
+        st.markdown("**New restriction**")
+        st.info("Add a property first: a restriction is always on one.")
+        if st.button("Cancel", key="panel_add_rest_nocancel", use_container_width=True):
+            _panel_close_add()
+            st.rerun()
+        return
+
+    obj_id = st.session_state.get("_viz_crel_object")
+    if not obj_id:
+        st.markdown(f"**Restriction on {subject['name']}**")
+        st.info("Now click the class it restricts to.")
+        action, picked = resolve_picked_object(
+            st.session_state["_viz_crel_subject"], ntype, ename
+        )
+        if action == "pick":
+            st.session_state["_viz_crel_object"] = picked
+            st.rerun()
+        if action == "cancel":
+            _panel_close_add()
+            st.rerun()
+        if st.button("Cancel", key="panel_add_rest_cancel", use_container_width=True):
+            _panel_close_add()
+            st.rerun()
+        return
+
+    other = by_id.get(obj_id)
+    if other is None:
+        st.session_state.pop("_viz_crel_object", None)
+        st.rerun()
+
+    st.markdown("**New restriction**")
+    cls_options, cls_lookup = build_class_options(classes)
+    prop_options, prop_lookup = build_uri_options(properties)
+    display_by_uri = {u: d for d, u in cls_lookup.items()}
+    types = [t for t in ont.RESTRICTION_TYPES if restriction_references_class(t)]
+    # Outside the form on purpose: a form batches until submit and does not rerun
+    # when a widget inside it changes, so the fields that depend on the type
+    # (which slot the picked class fills, and whether a count is needed) would
+    # still be showing the previous type's shape when you pressed Add.
+    rtype = st.selectbox("Restriction Type", options=types, key="panel_rest_type")
+    qualified = restriction_takes_on_class(rtype)
+    with st.form("panel_add_rest_form"):
+        target_disp = st.selectbox(
+            "Apply to Class",
+            options=cls_options,
+            index=cls_options.index(display_by_uri[subject["uri"]]),
+            format_func=_pad_option,
+        )
+        prop_disp = st.selectbox(
+            "On Property", options=prop_options, format_func=_pad_option
+        )
+        # The picked class is the value for someValuesFrom / allValuesFrom, and
+        # the owl:onClass for the qualified cardinalities. Same click, different
+        # slot in the axiom, so the label says which one it is filling.
+        klass_disp = st.selectbox(
+            "Qualified on Class" if qualified else "Value (Class)",
+            options=cls_options,
+            index=cls_options.index(display_by_uri[other["uri"]]),
+            format_func=_pad_option,
+        )
+        cardinality = None
+        if qualified:
+            cardinality = st.number_input("Cardinality", min_value=0, value=1)
+        add_col, cancel_col = st.columns(2)
+        with add_col:
+            submitted = st.form_submit_button(
+                "Add restriction", use_container_width=True
+            )
+        with cancel_col:
+            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+    if cancelled:
+        _panel_close_add()
+        st.rerun()
+    if submitted:
+        picked_uri = cls_lookup.get(klass_disp)
+        on_class = picked_uri if restriction_takes_on_class(rtype) else None
+        value = cardinality if restriction_takes_on_class(rtype) else picked_uri
+        if _apply_restriction_add(
+            ont,
+            cls_lookup.get(target_disp),
+            prop_lookup.get(prop_disp),
+            rtype,
+            value,
+            on_class=on_class,
+        ):
+            _panel_close_add()
+            st.rerun()
 
 
 def _render_panel_entity_editor(
@@ -4986,7 +5157,7 @@ def render_add_restriction(ont, classes, properties):
             value = st.number_input("Cardinality", min_value=0, value=1)
 
         on_class = None
-        if "Qualified" in restriction_type:
+        if restriction_takes_on_class(restriction_type):
             on_class = cls_lookup[
                 st.selectbox(
                     "Qualified on Class",
@@ -4997,20 +5168,15 @@ def render_add_restriction(ont, classes, properties):
             ]
 
         submitted = st.form_submit_button("Add Restriction")
-        if submitted:
-            try:
-                ont.add_restriction(
-                    cls_lookup[target_disp],
-                    prop_lookup[property_disp],
-                    restriction_type,
-                    value,
-                    on_class=on_class,
-                )
-                save_checkpoint("Add restriction")
-                show_message("Restriction added!", "success")
-                st.rerun()
-            except Exception as e:  # noqa: BLE001 - a rejected edit must show as a message, not a traceback
-                show_message(f"Error adding restriction: {e!s}", "error")
+        if submitted and _apply_restriction_add(
+            ont,
+            cls_lookup[target_disp],
+            prop_lookup[property_disp],
+            restriction_type,
+            value,
+            on_class=on_class,
+        ):
+            st.rerun()
 
 
 def render_restrictions():
@@ -9548,6 +9714,14 @@ def render_visualization():
                         _render_panel_add_relation_form(
                             ont, classes, _sel_ntype, _sel_ename
                         )
+                    elif _add_kind == "rest":
+                        _render_panel_add_restriction_form(
+                            ont,
+                            classes,
+                            object_props + data_props,
+                            _sel_ntype,
+                            _sel_ename,
+                        )
                     elif not has_selection:
                         st.caption(
                             "Click a node to see details. Ctrl/Cmd-click focuses on it."
@@ -9579,6 +9753,7 @@ def render_visualization():
                             _open_full_editor(ntype, ename)
                         _render_panel_add_class_button(classes, ntype, ename)
                         _render_panel_add_relation_button(classes, ntype, ename)
+                        _render_panel_add_restriction_button(classes, ntype, ename)
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
