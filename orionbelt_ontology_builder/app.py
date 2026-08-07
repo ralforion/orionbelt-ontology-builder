@@ -9919,6 +9919,22 @@ def main():
         st.sidebar.write(f"🏷️ SKOS Concepts: {stats['concepts']}")
     st.sidebar.write(f"📊 Triples: {stats['content_triples']}")
 
+    # Say what the app is, but only to someone who has nothing loaded yet. The
+    # name otherwise lives in the sidebar and the tab title, and a permanent
+    # banner would push every page's real content down for the whole session.
+    # It sits above the page dispatch rather than on the Dashboard because a
+    # fresh session lands on Import / Export, so a Dashboard-only intro would be
+    # seen by returning users and missed by the newcomers it is written for.
+    if _ontology_is_empty(st.session_state.ontology):
+        # ® to match the trademark notice in the README; this is the one place
+        # in the UI that prints the full product name.
+        st.title("OrionBelt® Ontology Builder")
+        st.markdown(
+            "### Build and explore OWL ontologies in your browser\n\n"
+            "Create, visualize and validate ontologies without installing "
+            "Protégé."
+        )
+
     # Show ontology name in main area
     ont = st.session_state.ontology
     meta = ont.get_ontology_metadata()
