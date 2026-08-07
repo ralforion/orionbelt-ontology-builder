@@ -2975,6 +2975,28 @@ GRAPH_MAX_NODES = 500
 FOCUS_BUILD_MAX_NODES = 5000
 
 
+def prioritise_find_target(items, node_id_of, find_id):
+    """Build the entity picked in Find first, so the cap cannot drop it (#234).
+
+    Each loop stops at a fixed node budget, in list order, so an entity far
+    enough down was never drawn. The Find dropdown lists every entity regardless
+    of what was drawn, so picking one of those left the viewer nothing to centre
+    on. It then dropped the camera pin, and dropping the pin re-enables the
+    post-layout auto-fit, so the graph visibly reframed while the entity the user
+    asked for was missing: movement, and no result, which is exactly what the
+    issue describes.
+
+    Reordering rather than exempting keeps the cap honest — the same number of
+    nodes is drawn, and the one the user named is simply not the one sacrificed.
+    """
+    if not find_id:
+        return items
+    for i, item in enumerate(items):
+        if node_id_of(item) == find_id:
+            return [item, *items[:i], *items[i + 1 :]]
+    return items
+
+
 def graph_node_cap(focus_pruning: bool) -> int:
     """How many nodes a graph build may assemble (issue #216).
 
@@ -8776,6 +8798,17 @@ def render_visualization():
             focus_pruning = bool(focus_mode and focus_seed_ids)
             max_nodes = graph_node_cap(focus_pruning)
             node_count = 0
+
+            def _find_kind_is(prefix: str, _fid=_find_id) -> bool:
+                """Is the Find target one of *this* kind of node? (issue #234)
+
+                Ordering the target first only helps if its loop runs at all, and
+                the kinds after classes are skipped outright once the budget is
+                spent. Node ids carry their kind as a prefix, so the guard can
+                let a block through for the one entity the user asked for.
+                """
+                return bool(_fid) and _fid.startswith(prefix)
+
             # Why the graph is smaller than the ontology, shown above it. Empty
             # when nothing was left out.
             graph_notice = ""
@@ -8802,7 +8835,9 @@ def render_visualization():
 
             # Add classes as nodes (only selected classes)
             if show_classes and selected_classes:
-                for cls in classes:
+                for cls in prioritise_find_target(
+                    classes, lambda c: _uid(c["uri"]), _find_id
+                ):
                     if node_count >= max_nodes:
                         break
                     if cls["uri"] not in visible_class_uris:
@@ -8929,8 +8964,14 @@ def render_visualization():
                         )
 
             # Add data properties (connected to displayed classes, or standalone if no domain)
-            if show_data_props and data_props and node_count < max_nodes:
-                for prop in data_props:
+            if (
+                show_data_props
+                and data_props
+                and (node_count < max_nodes or _find_kind_is("dprop_"))
+            ):
+                for prop in prioritise_find_target(
+                    data_props, lambda p: f"dprop_{_uid(p['uri'])}", _find_id
+                ):
                     if node_count >= max_nodes:
                         break
                     # Skip if domain is set but the class node isn't displayed
@@ -8973,9 +9014,15 @@ def render_visualization():
                         )
 
             # Add individuals
-            if show_individuals and individuals and node_count < max_nodes:
+            if (
+                show_individuals
+                and individuals
+                and (node_count < max_nodes or _find_kind_is("ind_"))
+            ):
                 ind_collisions = _build_name_collision_set(individuals)
-                for ind in individuals:
+                for ind in prioritise_find_target(
+                    individuals, lambda i: f"ind_{_uid(i['uri'])}", _find_id
+                ):
                     if node_count >= max_nodes:
                         break
                     # Individuals filter (issue #196). Focus mode builds the full
@@ -9210,9 +9257,11 @@ def render_visualization():
                             )
 
             # Add SKOS concepts and relations
-            if show_skos and node_count < max_nodes:
+            if show_skos and (node_count < max_nodes or _find_kind_is("skos_")):
                 concepts = ont.get_concepts()
-                for concept in concepts:
+                for concept in prioritise_find_target(
+                    concepts, lambda c: f"skos_{c['name']}", _find_id
+                ):
                     if node_count >= max_nodes:
                         break
                     c_id = f"skos_{concept['name']}"

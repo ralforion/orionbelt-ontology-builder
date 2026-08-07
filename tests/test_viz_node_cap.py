@@ -57,17 +57,21 @@ def _script():
         elif os.environ["SEED"]:
             st.session_state["_viz_cfg_focus_seeds"] = [os.environ["SEED"]]
         st.session_state["_viz_cfg_focus_depth"] = int(os.environ["DEPTH"])
+        if os.environ.get("FIND"):
+            # What picking an entity in "Find and centre" leaves behind.
+            st.session_state["viz_find_entity"] = os.environ["FIND"]
 
     app.render_visualization()
 
 
-def _graph(n_classes, seed="", shape="chain", depth=1):
+def _graph(n_classes, seed="", shape="chain", depth=1, find=""):
     """Render once and return ``(nodes, edges, notice)``. An empty seed means
-    focus mode off."""
+    focus mode off; ``find`` is an entity picked in "Find and centre"."""
     os.environ["N_CLASSES"] = str(n_classes)
     os.environ["SEED"] = seed
     os.environ["SHAPE"] = shape
     os.environ["DEPTH"] = str(depth)
+    os.environ["FIND"] = find
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -170,3 +174,38 @@ def test_focus_depth_grows_the_neighbourhood_from_a_far_class(depth):
     nodes, _, _ = _graph(over, seed=f"Class: C{over - 1:04d}", depth=depth)
     # The chain ends at the seed, so each hop adds exactly one class.
     assert len(nodes) == depth + 1
+
+
+# --- Find and centre past the cap (issue #234) ------------------------------
+
+
+def test_a_class_past_the_cap_is_drawn_when_it_is_the_find_target():
+    """The reported bug. The dropdown lists every class regardless of what was
+    drawn, so picking one past the cap left the viewer nothing to centre on: it
+    dropped the camera pin, which re-enables the post-layout auto-fit, so the
+    graph visibly reframed while the picked class was absent."""
+    over = app.GRAPH_MAX_NODES + 20
+    target = f"C{over - 1:04d}"
+    nodes, _, _ = _graph(over, find=f"Class: {target}")
+    assert target in {n.get("label") for n in nodes}
+
+
+def test_the_cap_still_holds_with_a_find_target():
+    """The picked class is not an extra node on top of the budget, it simply is
+    not the one dropped."""
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(over, find=f"Class: C{over - 1:04d}")
+    assert len(nodes) <= app.GRAPH_MAX_NODES
+
+
+def test_a_class_below_the_cap_is_unaffected_by_being_the_find_target():
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(over, find="Class: C0002")
+    assert "C0002" in {n.get("label") for n in nodes}
+
+
+def test_without_a_find_target_the_class_past_the_cap_is_still_dropped():
+    """The cap is unchanged; only the entity the user named is protected."""
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(over)
+    assert f"C{over - 1:04d}" not in {n.get("label") for n in nodes}
