@@ -1734,7 +1734,11 @@ def annotation_ename(subject_uri: str, ann: dict) -> str:
         ann.get("predicate_uri") or ann["predicate"],
         ann["value"],
         ann.get("language") or "",
-        ann.get("datatype") or "",
+        # The full datatype URI, not the local name: two datatypes in different
+        # namespaces share a local name, and a non-XSD one does not resolve back
+        # from it. "uri" marks a resource-valued annotation, which is a different
+        # triple from a literal that happens to spell the same IRI.
+        "uri" if ann.get("is_uri") else (ann.get("datatype_uri") or ""),
     )
 
 
@@ -2083,9 +2087,14 @@ def _apply_annotation_edit(ont, subject_uri, ann, new_pred, new_value, new_lang)
     The datatype rides along unchanged. Without it the re-add would store a
     plain string and quietly drop a ``^^xsd:date`` that the user never touched.
     """
-    datatype = ann.get("datatype")
+    # The full datatype URI, never the display local name: a non-XSD local name
+    # does not resolve back, so deleting by it matches nothing and re-adding
+    # mints a relative ``^^<Thing>`` beside the untouched original.
+    datatype = ann.get("datatype_uri") or ann.get("datatype")
+    is_uri = bool(ann.get("is_uri"))
+    old_pred = ann.get("predicate_uri") or ann["predicate"]
     if (
-        new_pred == (ann.get("predicate_uri") or ann["predicate"])
+        new_pred == old_pred
         and new_value == ann["value"]
         and (new_lang or None) == (ann.get("language") or None)
     ):
@@ -2093,26 +2102,29 @@ def _apply_annotation_edit(ont, subject_uri, ann, new_pred, new_value, new_lang)
 
     ont.delete_annotation(
         subject_uri,
-        ann.get("predicate_uri") or ann["predicate"],
+        old_pred,
         ann["value"],
         lang=ann.get("language"),
         datatype=datatype,
+        value_is_uri=is_uri,
     )
     try:
         ont.add_annotation(
             subject_uri,
             new_pred,
             new_value,
-            lang=new_lang or None,
-            datatype=None if new_lang else datatype,
+            lang=None if is_uri else (new_lang or None),
+            datatype=None if (is_uri or new_lang) else datatype,
+            value_is_uri=is_uri,
         )
     except Exception as e:  # noqa: BLE001 - a rejected predicate must not eat the annotation
         ont.add_annotation(
             subject_uri,
-            ann.get("predicate_uri") or ann["predicate"],
+            old_pred,
             ann["value"],
             lang=ann.get("language"),
             datatype=datatype,
+            value_is_uri=is_uri,
         )
         show_message(f"Annotation unchanged: {e!s}", "error")
         return False
@@ -2339,13 +2351,21 @@ def _render_panel_annotation_editor(ont, ename):
             help="A full URI, a prefixed name (dcterms:created), or a common "
             "name like label.",
         )
-        new_value = st.text_input("Value", value=ann["value"])
-        new_lang = st.text_input(
-            "Language",
-            value=ann.get("language") or "",
-            help="Optional BCP 47 tag such as en or de. Leave empty for none.",
+        new_value = st.text_input(
+            "Value" if not ann.get("is_uri") else "Value (IRI)", value=ann["value"]
         )
-        if ann.get("datatype"):
+        new_lang = ""
+        if ann.get("is_uri"):
+            # A resource-valued annotation has no language or datatype to carry;
+            # it stays a resource through the rewrite.
+            st.caption("Points at a resource, not a literal.")
+        else:
+            new_lang = st.text_input(
+                "Language",
+                value=ann.get("language") or "",
+                help="Optional BCP 47 tag such as en or de. Leave empty for none.",
+            )
+        if ann.get("datatype") and not ann.get("is_uri"):
             # Not editable here, but say it is there: it is carried through the
             # rewrite untouched, and a silent one would look like data loss.
             st.caption(f"Datatype: {ann['datatype']} (kept)")
@@ -2361,7 +2381,11 @@ def _render_panel_annotation_editor(ont, ename):
             ann.get("predicate_uri") or ann["predicate"],
             ann["value"],
             lang=ann.get("language"),
-            datatype=ann.get("datatype"),
+            # Same two reasons as the rewrite: the display local name does not
+            # resolve back, and a literal match never finds a resource, so
+            # either would report a delete that removed nothing.
+            datatype=ann.get("datatype_uri") or ann.get("datatype"),
+            value_is_uri=bool(ann.get("is_uri")),
         )
         save_checkpoint("Delete annotation")
         show_message("Annotation deleted!", "success")
@@ -6294,7 +6318,14 @@ def render_annotations():
                                         ann.get("predicate_uri", ann["predicate"]),
                                         ann["value"],
                                         lang=ann.get("language"),
-                                        datatype=ann.get("datatype"),
+                                        # Full URI, and the resource/literal
+                                        # distinction: passing the display local
+                                        # name or treating an IRI object as a
+                                        # literal deletes nothing while
+                                        # reporting success (issue #223 review).
+                                        datatype=ann.get("datatype_uri")
+                                        or ann.get("datatype"),
+                                        value_is_uri=bool(ann.get("is_uri")),
                                     )
                                     save_checkpoint("Delete annotation")
                                     show_message("Annotation deleted!", "success")
@@ -8828,7 +8859,11 @@ def render_visualization():
         selected_inds_key = (
             "_".join(sorted(selected_ind_uris)) if selected_ind_uris else "none"
         )
-        _graph_ver = 18  # Bump to invalidate cached graph data after code changes
+        # Bump to invalidate cached graph data after code changes. 19: annotation
+        # nodes gained a stable id, ntype and ename (issue #223), and a session
+        # holding a pre-#223 payload would otherwise keep serving nodes a click
+        # cannot resolve until some unrelated change happened to evict it.
+        _graph_ver = 19
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.

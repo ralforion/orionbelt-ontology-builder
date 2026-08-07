@@ -169,3 +169,111 @@ def test_a_language_tag_wins_over_a_datatype():
     ann = _ann(ont, DCT + "y")
     assert ann.get("language") == "en"
     assert not ann.get("datatype")
+
+
+# --- review follow-ups: what the identity and the rewrite must not lose ------
+
+
+CUSTOM_DT = "http://types.example/a#Thing"
+SEE_ALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"
+
+
+def _typed(ont, value, datatype):
+    from rdflib import Literal, URIRef
+
+    ont.graph.add(
+        (
+            ont._uri("Person"),
+            URIRef(DCT + "x"),
+            Literal(value, datatype=URIRef(datatype)),
+        )
+    )
+
+
+def _resource(ont, value):
+    from rdflib import URIRef
+
+    ont.graph.add((ont._uri("Person"), URIRef(SEE_ALSO), URIRef(value)))
+
+
+def test_a_non_xsd_datatype_is_exposed_as_a_full_uri():
+    """The display local name does not resolve back, so acting on it is wrong."""
+    ont = _ont()
+    _typed(ont, "v", CUSTOM_DT)
+    ann = _ann(ont, DCT + "x")
+    assert ann["datatype"] == "Thing"
+    assert ann["datatype_uri"] == CUSTOM_DT
+
+
+def test_editing_a_custom_datatype_does_not_orphan_the_original():
+    """Deleting by the local name matched nothing and re-adding minted a
+    relative ``^^<Thing>``, leaving two triples where there was one."""
+    ont = _ont()
+    _typed(ont, "v", CUSTOM_DT)
+    assert _apply_annotation_edit(
+        ont, NS + "Person", _ann(ont, DCT + "x"), DCT + "x", "v2", ""
+    )
+    objs = list(
+        ont.graph.objects(ont._uri("Person"), __import__("rdflib").URIRef(DCT + "x"))
+    )
+    assert len(objs) == 1
+    assert str(objs[0]) == "v2"
+    assert str(objs[0].datatype) == CUSTOM_DT
+
+
+def test_a_resource_valued_annotation_is_flagged():
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ann = next(
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    )
+    assert ann["is_uri"] is True
+
+
+def test_editing_a_resource_valued_annotation_keeps_it_a_resource():
+    """A literal delete never matched the IRI object, and the replacement was
+    written as a string, so the original survived beside a copy of itself."""
+    from rdflib import URIRef
+
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ann = next(
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    )
+    assert _apply_annotation_edit(
+        ont, NS + "Person", ann, SEE_ALSO, "http://docs.example/other", ""
+    )
+    objs = list(ont.graph.objects(ont._uri("Person"), URIRef(SEE_ALSO)))
+    assert [(type(o).__name__, str(o)) for o in objs] == [
+        ("URIRef", "http://docs.example/other")
+    ]
+
+
+def test_deleting_a_resource_valued_annotation_actually_removes_it():
+    """It used to report success having removed nothing."""
+    from rdflib import URIRef
+
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ann = next(
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    )
+    ont.delete_annotation(
+        NS + "Person", ann["predicate_uri"], ann["value"], value_is_uri=True
+    )
+    assert not list(ont.graph.objects(ont._uri("Person"), URIRef(SEE_ALSO)))
+
+
+def test_a_resource_and_a_literal_spelling_the_same_iri_are_different_annotations():
+    """So a click on one cannot resolve to the other."""
+    from rdflib import Literal, URIRef
+
+    ont = _ont()
+    _resource(ont, "http://docs.example/person")
+    ont.graph.add(
+        (ont._uri("Person"), URIRef(SEE_ALSO), Literal("http://docs.example/person"))
+    )
+    anns = [
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    ]
+    assert len({annotation_ename(NS + "Person", a) for a in anns}) == 2

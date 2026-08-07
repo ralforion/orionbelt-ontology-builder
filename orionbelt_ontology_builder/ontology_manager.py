@@ -2124,6 +2124,7 @@ class OntologyManager:
         value: str,
         lang: str | None = None,
         datatype: str | None = None,
+        value_is_uri: bool = False,
     ):
         """Add an annotation to any resource.
 
@@ -2150,10 +2151,14 @@ class OntologyManager:
             datatype: Optional datatype, as the local name of an XSD type or a
                 full URI, resolved the same way :meth:`delete_annotation`
                 resolves it so an annotation can be removed and re-added without
-                changing. Ignored when ``lang`` is given, since RDF literals
-                carry a language tag or a datatype, never both. Without it an
-                edit that rewrote a value would silently drop its ``^^xsd:date``
-                and store a plain string (issue #223).
+                changing. Prefer the full URI: a local name that is not an XSD
+                type does not resolve back and would mint a relative
+                ``^^<Thing>``. Ignored when ``lang`` is given, since RDF
+                literals carry a language tag or a datatype, never both, and
+                when ``value_is_uri`` is set. Without it an edit that rewrote a
+                value would silently drop its ``^^xsd:date`` (issue #223).
+            value_is_uri: Write the object as a resource rather than a literal,
+                for annotations like ``rdfs:seeAlso`` whose value is an IRI.
         """
         self._require_valid_annotation_predicate(predicate)
         subj_uri = self._uri(subject)
@@ -2170,21 +2175,26 @@ class OntologyManager:
         ):
             self.graph.add((pred_uri, RDF.type, OWL.AnnotationProperty))
 
-        if lang:
-            literal = Literal(value, lang=lang)
+        if value_is_uri:
+            # Keep a resource-valued annotation a resource. Writing it back as a
+            # literal would leave the original triple in place beside a string
+            # copy of the same IRI.
+            obj: Node = URIRef(value)
+        elif lang:
+            obj = Literal(value, lang=lang)
         elif datatype:
-            literal = Literal(
+            obj = Literal(
                 value, datatype=self.XSD_DATATYPES.get(datatype, URIRef(datatype))
             )
         else:
-            literal = Literal(value)
+            obj = Literal(value)
 
-        self.graph.add((subj_uri, pred_uri, literal))
+        self.graph.add((subj_uri, pred_uri, obj))
 
-    def get_annotations(self, subject: str) -> list[dict[str, str]]:
+    def get_annotations(self, subject: str) -> list[dict[str, Any]]:
         """Get all annotations/predicates for a resource (like Protege shows)."""
         subj_uri = self._uri(subject)
-        annotations = []
+        annotations: list[dict[str, Any]] = []
 
         # Get all predicates for this subject, excluding rdf:type, rdfs:subClassOf,
         # rdfs:domain, rdfs:range, and other structural predicates
@@ -2224,7 +2234,7 @@ class OntologyManager:
             pred_uri = str(pred)
             prefix = self._get_prefix_for_uri(pred_uri)
             local_name = self._local_name(pred)
-            ann = {
+            ann: dict[str, Any] = {
                 "predicate": local_name,
                 "predicate_uri": pred_uri,
                 "predicate_prefixed": f"{prefix}:{local_name}"
@@ -2235,7 +2245,19 @@ class OntologyManager:
             if hasattr(obj, "language") and obj.language:
                 ann["language"] = obj.language
             if hasattr(obj, "datatype") and obj.datatype:
+                # Local name for display, full URI to act on. Two datatypes in
+                # different namespaces can share a local name, and one that is
+                # not an XSD type does not resolve back from the local name at
+                # all — deleting by it removes nothing and re-adding mints a
+                # relative ``^^<Thing>`` (issue #223 review).
                 ann["datatype"] = self._local_name(obj.datatype)
+                ann["datatype_uri"] = str(obj.datatype)
+            if isinstance(obj, URIRef):
+                # The object is a resource, not a literal. Callers that rewrite
+                # an annotation have to know: a literal delete does not match a
+                # URIRef, and re-adding one as a literal leaves the original in
+                # place next to a string copy of it.
+                ann["is_uri"] = True
             annotations.append(ann)
 
         # Sort by predicate name
@@ -2306,18 +2328,31 @@ class OntologyManager:
         value: str | None = None,
         lang: str | None = None,
         datatype: str | None = None,
+        value_is_uri: bool = False,
     ):
         """Delete an annotation from a resource.
 
         Matches language-tagged and datatype-qualified literals when lang/datatype
         are provided. When they are not provided but a value is given, searches
         for any literal with a matching string value regardless of tag.
+
+        ``datatype`` may be an XSD local name or a full URI; a full one is what
+        callers should pass, since a non-XSD local name does not resolve back.
+        ``value_is_uri`` says the object is a resource rather than a literal,
+        which no literal match can find.
         """
         subj_uri = self._uri(subject)
         pred_uri = self._resolve_predicate_uri(predicate)
 
         if value is None:
             self.graph.remove((subj_uri, pred_uri, None))
+            return
+
+        if value_is_uri:
+            # A resource-valued annotation (rdfs:seeAlso, owl:sameAs). The
+            # literal branches below cannot match one, so without this the
+            # delete silently removes nothing and reports success.
+            self.graph.remove((subj_uri, pred_uri, URIRef(value)))
             return
 
         # Build exact literal if lang or datatype is known
