@@ -43,6 +43,32 @@ def _script():
             om.add_class("Hub")
             for i in range(int(os.environ["N_CLASSES"])):
                 om.add_class(f"C{i:04d}", parent="Hub")
+        # One entity of another kind, to check that a Find target which is not
+        # a class is reachable too. Those loops run after classes, so the budget
+        # is already spent by the time they start (issue #234 review).
+        # One entity of another kind, to check that a Find target which is not
+        # a class is reachable too. Those loops run after classes, so the budget
+        # is already spent by the time they start (issue #234 review).
+        #
+        # Data properties and individuals are off by default, and Find only lists
+        # the types that are shown, so the toggle has to be on for the entity to
+        # be findable at all.
+        extra = os.environ.get("EXTRA", "")
+        if extra == "dprop":
+            om.add_data_property("findMe")
+            st.session_state["_viz_cfg_show_data_props"] = True
+        elif extra == "dprop_capped_domain":
+            # Its domain is a class the cap drops, so the "domain isn't
+            # displayed" guard skips the property even when it is the target.
+            om.add_data_property(
+                "findMe", domain=f"C{int(os.environ['N_CLASSES']) - 1:04d}"
+            )
+            st.session_state["_viz_cfg_show_data_props"] = True
+        elif extra == "ind":
+            om.add_individual("findMe", "C0000")
+            st.session_state["_viz_cfg_show_individuals"] = True
+        elif extra == "skos":
+            om.add_concept("findMe")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
         # The cross-session settings restore mounts the localStorage component,
@@ -57,17 +83,22 @@ def _script():
         elif os.environ["SEED"]:
             st.session_state["_viz_cfg_focus_seeds"] = [os.environ["SEED"]]
         st.session_state["_viz_cfg_focus_depth"] = int(os.environ["DEPTH"])
+        if os.environ.get("FIND"):
+            # What picking an entity in "Find and centre" leaves behind.
+            st.session_state["viz_find_entity"] = os.environ["FIND"]
 
     app.render_visualization()
 
 
-def _graph(n_classes, seed="", shape="chain", depth=1):
+def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra=""):
     """Render once and return ``(nodes, edges, notice)``. An empty seed means
-    focus mode off."""
+    focus mode off; ``find`` is an entity picked in "Find and centre"."""
     os.environ["N_CLASSES"] = str(n_classes)
     os.environ["SEED"] = seed
     os.environ["SHAPE"] = shape
     os.environ["DEPTH"] = str(depth)
+    os.environ["FIND"] = find
+    os.environ["EXTRA"] = extra
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -170,3 +201,109 @@ def test_focus_depth_grows_the_neighbourhood_from_a_far_class(depth):
     nodes, _, _ = _graph(over, seed=f"Class: C{over - 1:04d}", depth=depth)
     # The chain ends at the seed, so each hop adds exactly one class.
     assert len(nodes) == depth + 1
+
+
+# --- Find and centre past the cap (issue #234) ------------------------------
+
+
+def test_a_class_past_the_cap_is_drawn_when_it_is_the_find_target():
+    """The reported bug. The dropdown lists every class regardless of what was
+    drawn, so picking one past the cap left the viewer nothing to centre on: it
+    dropped the camera pin, which re-enables the post-layout auto-fit, so the
+    graph visibly reframed while the picked class was absent."""
+    over = app.GRAPH_MAX_NODES + 20
+    target = f"C{over - 1:04d}"
+    nodes, _, _ = _graph(over, find=f"Class: {target}")
+    assert target in {n.get("label") for n in nodes}
+
+
+def test_the_cap_still_holds_with_a_find_target():
+    """The picked class is not an extra node on top of the budget, it simply is
+    not the one dropped."""
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(over, find=f"Class: C{over - 1:04d}")
+    assert len(nodes) <= app.GRAPH_MAX_NODES
+
+
+def test_a_class_below_the_cap_is_unaffected_by_being_the_find_target():
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(over, find="Class: C0002")
+    assert "C0002" in {n.get("label") for n in nodes}
+
+
+def test_without_a_find_target_the_class_past_the_cap_is_still_dropped():
+    """The cap is unchanged; only the entity the user named is protected."""
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(over)
+    assert f"C{over - 1:04d}" not in {n.get("label") for n in nodes}
+
+
+@pytest.mark.parametrize(
+    ("extra", "find"),
+    [
+        ("dprop", "Data Property: findMe"),
+        ("ind", "Individual: findMe"),
+        ("skos", "Concept: findMe"),
+    ],
+)
+def test_a_non_class_find_target_is_drawn_after_classes_fill_the_budget(extra, find):
+    """Classes are built first, so by the time these loops run the budget is
+    already spent. Letting their block run is not enough on its own: the loop
+    still has to get past its own cap check to add the prioritised entity."""
+    nodes, _, _ = _graph(app.GRAPH_MAX_NODES + 20, find=find, extra=extra)
+    assert "findMe" in {n.get("label") for n in nodes}
+
+
+@pytest.mark.parametrize(
+    ("extra", "find"),
+    [
+        ("dprop", "Data Property: findMe"),
+        ("ind", "Individual: findMe"),
+        ("skos", "Concept: findMe"),
+    ],
+)
+def test_a_non_class_find_target_costs_at_most_one_node_over_the_cap(extra, find):
+    """Classes are built first and fill the budget, so a target of a later kind
+    cannot be swapped for one of them: it is added past the cap instead. One
+    extra node is immaterial to the browser, which is what the cap protects; a
+    graph silently missing what you asked for is not."""
+    nodes, _, _ = _graph(app.GRAPH_MAX_NODES + 20, find=find, extra=extra)
+    assert len(nodes) <= app.GRAPH_MAX_NODES + 1
+
+
+def test_the_find_target_is_part_of_the_graph_cache_key():
+    """Otherwise the fix above never runs on the path a user actually takes.
+
+    The page builds and caches a graph on arrival, with no target. Picking one
+    changes which nodes *would* be built, so unless the key sees it there is no
+    rebuild and the cached payload still lacks the entity that was asked for.
+
+    Pinned at the source rather than by driving it, because AppTest cannot run
+    this page twice: serialising the widget states between runs breaks on the
+    filter multiselects, the same limitation that keeps the rest of this file to
+    a single render per assertion.
+    """
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "orionbelt_ontology_builder/app.py"
+    ).read_text(encoding="utf-8")
+    key_line = next(
+        line for line in src.splitlines() if line.strip().startswith("graph_key = f")
+    )
+    assert "_find_id" in key_line, (
+        "the Find target decides which nodes are built, so it must be part of "
+        "the cache key or picking one will not trigger a rebuild"
+    )
+
+
+def test_a_data_property_find_target_is_drawn_even_if_its_domain_was_capped_out():
+    """A data property is normally skipped when its domain class isn't drawn,
+    which is right for the general case and wrong for the one entity the user
+    asked to see: its domain is exactly the kind of class the cap drops."""
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(
+        over, find="Data Property: findMe", extra="dprop_capped_domain"
+    )
+    assert "findMe" in {n.get("label") for n in nodes}
