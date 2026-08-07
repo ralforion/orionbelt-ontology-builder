@@ -46,12 +46,23 @@ def _script():
         # One entity of another kind, to check that a Find target which is not
         # a class is reachable too. Those loops run after classes, so the budget
         # is already spent by the time they start (issue #234 review).
+        # One entity of another kind, to check that a Find target which is not
+        # a class is reachable too. Those loops run after classes, so the budget
+        # is already spent by the time they start (issue #234 review).
+        #
+        # Data properties and individuals are off by default, and Find only lists
+        # the types that are shown, so the toggle has to be on for the entity to
+        # be findable at all.
         extra = os.environ.get("EXTRA", "")
         if extra == "dprop":
             om.add_data_property("findMe")
-            # Data properties and individuals are off by default, and Find only
-            # lists the types that are shown, so the toggle has to be on for the
-            # entity to be findable at all.
+            st.session_state["_viz_cfg_show_data_props"] = True
+        elif extra == "dprop_capped_domain":
+            # Its domain is a class the cap drops, so the "domain isn't
+            # displayed" guard skips the property even when it is the target.
+            om.add_data_property(
+                "findMe", domain=f"C{int(os.environ['N_CLASSES']) - 1:04d}"
+            )
             st.session_state["_viz_cfg_show_data_props"] = True
         elif extra == "ind":
             om.add_individual("findMe", "C0000")
@@ -258,3 +269,41 @@ def test_a_non_class_find_target_costs_at_most_one_node_over_the_cap(extra, find
     graph silently missing what you asked for is not."""
     nodes, _, _ = _graph(app.GRAPH_MAX_NODES + 20, find=find, extra=extra)
     assert len(nodes) <= app.GRAPH_MAX_NODES + 1
+
+
+def test_the_find_target_is_part_of_the_graph_cache_key():
+    """Otherwise the fix above never runs on the path a user actually takes.
+
+    The page builds and caches a graph on arrival, with no target. Picking one
+    changes which nodes *would* be built, so unless the key sees it there is no
+    rebuild and the cached payload still lacks the entity that was asked for.
+
+    Pinned at the source rather than by driving it, because AppTest cannot run
+    this page twice: serialising the widget states between runs breaks on the
+    filter multiselects, the same limitation that keeps the rest of this file to
+    a single render per assertion.
+    """
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "orionbelt_ontology_builder/app.py"
+    ).read_text(encoding="utf-8")
+    key_line = next(
+        line for line in src.splitlines() if line.strip().startswith("graph_key = f")
+    )
+    assert "_find_id" in key_line, (
+        "the Find target decides which nodes are built, so it must be part of "
+        "the cache key or picking one will not trigger a rebuild"
+    )
+
+
+def test_a_data_property_find_target_is_drawn_even_if_its_domain_was_capped_out():
+    """A data property is normally skipped when its domain class isn't drawn,
+    which is right for the general case and wrong for the one entity the user
+    asked to see: its domain is exactly the kind of class the cap drops."""
+    over = app.GRAPH_MAX_NODES + 20
+    nodes, _, _ = _graph(
+        over, find="Data Property: findMe", extra="dprop_capped_domain"
+    )
+    assert "findMe" in {n.get("label") for n in nodes}

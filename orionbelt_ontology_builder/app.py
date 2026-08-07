@@ -8692,7 +8692,13 @@ def render_visualization():
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
         ont_mutation = st.session_state.get("_ont_mutation_count", 0)
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}"
+        # The Find target belongs in the key because it decides which nodes get
+        # built: it is drawn even when the cap would otherwise have dropped it
+        # (issue #234). Without it the usual order of events defeats the whole
+        # thing — the page builds and caches a graph with no target, then picking
+        # one changes nothing the key can see, so no rebuild happens and the
+        # cached payload still lacks the entity that was asked for.
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -8981,12 +8987,22 @@ def render_visualization():
                         f"dprop_{_uid(prop['uri'])}" != _find_id
                     ):
                         break
-                    # Skip if domain is set but the class node isn't displayed
+                    # Skip if domain is set but the class node isn't displayed.
+                    # Not for the Find target though: its domain is exactly the
+                    # kind of class the cap drops, so this guard would put back
+                    # the silent no-result the prioritising exists to prevent.
+                    # It is drawn standalone, without the domain edge it cannot
+                    # have (issue #234 review).
+                    prop_node_id = f"dprop_{_uid(prop['uri'])}"
                     dom_uri = prop.get("domain_uri", "")
-                    if dom_uri and show_classes and dom_uri not in displayed_class_uris:
+                    if (
+                        dom_uri
+                        and show_classes
+                        and dom_uri not in displayed_class_uris
+                        and prop_node_id != _find_id
+                    ):
                         continue
 
-                    prop_node_id = f"dprop_{_uid(prop['uri'])}"
                     label = prop["label"] if prop["label"] else prop["name"]
                     title = f"Data Property: {prop['name']}"
                     if prop["domain"]:
