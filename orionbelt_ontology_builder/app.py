@@ -912,10 +912,29 @@ def viz_filter_changed(kind_key, uri_by_display):
     ]
 
 
+def focus_seeds_from_selection(selected_classes, class_count):
+    """The focus seeds a fresh switch into focus mode should start from (#224).
+
+    A class selection that is a genuine narrowing carries intent — the user
+    filtered down to what they care about — so the neighbourhood grows from all
+    of it. "Everything selected" is the default state and carries no intent at
+    all, and seeding from *that* opened "Focus on one node" on every class at
+    once: the post-build prune had nothing to narrow, so the mode did least on
+    exactly the large ontologies it exists for. Start from a single class there
+    instead, which is what the control is named after; the multiselect is right
+    there to add more.
+    """
+    labels = [f"Class: {c}" for c in selected_classes]
+    if class_count and len(labels) >= class_count:
+        return labels[:1]
+    return labels
+
+
 def viz_focus_toggle():
     """Persist the focus toggle and, when it turns on, seed the focus nodes from
     the classes selected in the multiselect — so the neighbourhood grows from
-    exactly what the user had picked (one class or several). An empty selection
+    exactly what the user had narrowed to, or from one class when they had
+    narrowed to nothing (see focus_seeds_from_selection). An empty selection
     falls back to the first node."""
     if _viz_widget_missing("viz_focus_mode"):
         return
@@ -923,8 +942,10 @@ def viz_focus_toggle():
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
     if on:
-        sel = st.session_state.get("_viz_cfg_selected_classes") or []
-        st.session_state["_viz_cfg_focus_seeds"] = [f"Class: {c}" for c in sel]
+        st.session_state["_viz_cfg_focus_seeds"] = focus_seeds_from_selection(
+            st.session_state.get("_viz_cfg_selected_classes") or [],
+            st.session_state.get("_viz_cfg_class_count") or 0,
+        )
 
 
 def viz_find_changed():
@@ -1969,6 +1990,112 @@ def _apply_class_edit(
     return True
 
 
+def _apply_class_relation_add(ont, subj_uri, rel_type, obj_uri, subj_show, obj_show):
+    """Write one class relation. Returns True on success.
+
+    Shared by the Relations page and the Visualization panel (issue #221), so
+    both refuse the same nonsense triple. The caller owns the rerun.
+    """
+    if not subj_uri or not obj_uri:
+        show_message("Pick both classes first!", "error")
+        return False
+    if subj_uri == obj_uri:
+        show_message("Please select two different classes!", "error")
+        return False
+    ont.add_class_relation(subj_uri, rel_type, obj_uri)
+    save_checkpoint("Add class relation")
+    show_message(f"Relation added: {subj_show} {rel_type} {obj_show}", "success")
+    return True
+
+
+def parent_option_index(parent_options, parent_lookup, parent_uri) -> int:
+    """Where ``parent_uri`` sits in a class dropdown, or 0 ("None") (issue #221).
+
+    The preselection is addressed by URI, not by name, since local names collide
+    across namespaces and picking by name could parent a new class onto the wrong
+    one. A URI that is no longer in the list falls back to "None" rather than to
+    whatever now sits at that index: the panel seeds this from the graph
+    selection, and that class can be deleted or filtered out from under it.
+    """
+    if not parent_uri:
+        return 0
+    display = next((d for d, u in parent_lookup.items() if u == parent_uri), None)
+    if display is not None and display in parent_options:
+        return parent_options.index(display)
+    return 0
+
+
+def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None):
+    """Render the "add a class" form. Returns True when a class was created.
+
+    Shared by the Classes page and the Visualization details panel, so both
+    create through the same guards (issue #221). ``form_key`` makes the widget
+    keys unique. ``parent_uri`` preselects the parent, which is how the panel
+    seeds a new class from the class you had selected on the graph; the field
+    stays editable, so the graph offers a starting point rather than deciding
+    for you. ``on_close`` is what dismissing the form means; the page has no such
+    thing (the tab is the form) so it passes None and gets no Cancel button.
+
+    The caller owns the rerun: the panel has to drop its open flag first.
+    """
+    parent_options, parent_lookup = build_class_options(classes, include_none=True)
+    parent_index = parent_option_index(parent_options, parent_lookup, parent_uri)
+
+    with st.form(form_key):
+        name = st.text_input(
+            "Class Name *", help="Local name for the class (e.g., 'Person')"
+        )
+        label = st.text_input("Label", help="Human-readable label")
+        comment = st.text_area("Comment", help="Description of the class")
+        parent_display = st.selectbox(
+            "Parent Class",
+            options=parent_options,
+            index=parent_index,
+            help="Select a parent class for hierarchy",
+            format_func=_pad_option,
+        )
+        ns_options, ns_lookup = build_namespace_options(ont)
+        ns_display = st.selectbox(
+            "Namespace",
+            options=ns_options,
+            help="Namespace the class is created in (default is the base URI)",
+        )
+
+        cancelled = False
+        if on_close is None:
+            submitted = st.form_submit_button("Add Class")
+        else:
+            add_col, cancel_col = st.columns(2)
+            with add_col:
+                submitted = st.form_submit_button("Add Class", use_container_width=True)
+            with cancel_col:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+        if cancelled:
+            on_close()
+            st.rerun()
+        if submitted:
+            ns_val = ns_lookup.get(ns_display)
+            if not name:
+                show_message("Class name is required!", "error")
+            elif reason := ont.invalid_name_reason(name):
+                show_message(reason, "error")
+            elif str(ont._uri(name, ns_val)) in {c["uri"] for c in classes}:
+                show_message(f"Class '{name}' already exists!", "error")
+            else:
+                ont.add_class(
+                    name,
+                    parent=parent_lookup.get(parent_display),
+                    label=label,
+                    comment=comment,
+                    namespace=ns_val,
+                )
+                save_checkpoint("Add class")
+                show_message(f"Class '{name}' added successfully!", "success")
+                return True
+    return False
+
+
 def _apply_property_edit(
     ont, prop, new_name, new_label, new_comment, new_domain, new_range
 ):
@@ -2088,6 +2215,199 @@ def _render_panel_restriction_editor(ont, ename, classes, properties):
         "applied_to_uris": [src_uri],
     }
     render_restriction_form(ont, row, f"panel_{_uid(ename)}", classes, properties)
+
+
+def _panel_add_kind():
+    """Which add form the Visualization panel is showing, or None (issue #221).
+
+    One ``_viz_add_kind`` value rather than a flag per kind, so the class and
+    relation forms (and the individual one this grows to host) cannot end up open
+    at the same time.
+    """
+    return st.session_state.get("_viz_add_kind")
+
+
+def _panel_close_add() -> None:
+    """Close whatever add form is open, and disarm any pending pick."""
+    for key in ("_viz_add_kind", "_viz_crel_subject", "_viz_crel_object"):
+        st.session_state.pop(key, None)
+
+
+def resolve_picked_object(subject_id, selected_ntype, selected_ename):
+    """What an armed "pick the object" click means (issue #221).
+
+    Returns ``("pick", node_id)`` to take it as the object, ``("cancel", None)``
+    to abandon the add, or ``("wait", None)`` to keep waiting.
+
+    The subject stays selected on the graph when the pick is armed, so its own id
+    has to read as "still waiting" rather than as a relation from a class to
+    itself. Losing the selection is the cancel: clicking empty canvas clears it,
+    and so does clicking the subject again, which is the gesture people reach for
+    to undo a click. Anything that is not a class keeps waiting instead of
+    cancelling, since misclicking a property should not throw the pairing away.
+    """
+    if not selected_ename:
+        return ("cancel", None)
+    if selected_ename == subject_id:
+        return ("wait", None)
+    if selected_ntype != "Class":
+        return ("wait", None)
+    return ("pick", selected_ename)
+
+
+def _panel_add_parent(classes, ntype, ename):
+    """The class a new one should hang under: the selected node, if it is a class."""
+    if ntype == "Class" and ename:
+        return next((c["uri"] for c in classes if _uid(c["uri"]) == ename), None)
+    return None
+
+
+def _render_panel_add_class_button(classes, ntype, ename):
+    """The button that opens the add form, at the foot of the panel (issue #221)."""
+    parent_uri = _panel_add_parent(classes, ntype, ename)
+    parent_name = next((c["name"] for c in classes if c["uri"] == parent_uri), None)
+    if st.button(
+        "Add subclass" if parent_uri else "Add class",
+        key="panel_add_class_open",
+        use_container_width=True,
+        help=(
+            f"Add a class under '{parent_name}'."
+            if parent_uri
+            else "Add a class. Select a class first to make it the parent."
+        ),
+    ):
+        st.session_state["_viz_add_kind"] = "class"
+        st.rerun()
+
+
+def _render_panel_add_class_form(ont, classes, ntype, ename):
+    """The add-a-class form, shown *instead of* the panel's usual contents.
+
+    It replaces them rather than joining them: the entity editor already has its
+    own Name, Label and Comment fields, and two sets of those stacked in a narrow
+    column is a good way to fill in the wrong one. Replacing also keeps the form
+    at the top of the panel, where it is visible without scrolling.
+
+    A selected class becomes the new class's parent, which is the point of adding
+    from the graph at all: you hang a class where it belongs by clicking there,
+    instead of finding the parent again in a dropdown of every class. With
+    anything else selected, or nothing, it still adds a class, just parentless.
+    """
+    parent_uri = _panel_add_parent(classes, ntype, ename)
+    parent_name = next((c["name"] for c in classes if c["uri"] == parent_uri), None)
+    st.markdown(
+        f"**New subclass of {parent_name}**" if parent_name else "**New class**"
+    )
+    if parent_name:
+        st.caption("Change the parent below to hang it somewhere else.")
+    if render_add_class_form(
+        ont,
+        classes,
+        "panel_add_class_form",
+        parent_uri=parent_uri,
+        on_close=_panel_close_add,
+    ):
+        _panel_close_add()
+        st.rerun()
+
+
+def _render_panel_add_relation_button(classes, ntype, ename):
+    """The button that arms a relation add, at the foot of the panel (issue #221).
+
+    Only offered with a class selected: a relation needs a subject, and pressing
+    this is what fixes the selected class as one.
+    """
+    if _panel_add_parent(classes, ntype, ename) is None:
+        return
+    if st.button(
+        "Add relation",
+        key="panel_add_rel_open",
+        use_container_width=True,
+        help="Then click the class this one points at.",
+    ):
+        st.session_state["_viz_add_kind"] = "crel"
+        st.session_state["_viz_crel_subject"] = ename
+        st.rerun()
+
+
+def _render_panel_add_relation_form(ont, classes, ntype, ename):
+    """Add a class relation by clicking its two ends on the graph (issue #221).
+
+    Pressing "Add relation" fixes the selected class as the subject and waits for
+    the next class click to be the object, which keeps the direction explicit:
+    these are arrows, not lines, so the order the two ends are given in is the
+    content of the triple, not a detail. Both ends stay editable in the form
+    afterwards, so a misclick is corrected here rather than by starting over.
+    """
+    by_id = {_uid(c["uri"]): c for c in classes}
+    subject = by_id.get(st.session_state.get("_viz_crel_subject"))
+    if subject is None:
+        # The subject was deleted or renamed while the pick was armed.
+        _panel_close_add()
+        st.rerun()
+
+    obj_id = st.session_state.get("_viz_crel_object")
+    if not obj_id:
+        st.markdown(f"**Relation from {subject['name']}**")
+        st.info("Now click the class it points at.")
+        action, picked = resolve_picked_object(
+            st.session_state["_viz_crel_subject"], ntype, ename
+        )
+        if action == "pick":
+            st.session_state["_viz_crel_object"] = picked
+            st.rerun()
+        if action == "cancel":
+            _panel_close_add()
+            st.rerun()
+        if st.button("Cancel", key="panel_add_rel_cancel", use_container_width=True):
+            _panel_close_add()
+            st.rerun()
+        return
+
+    obj = by_id.get(obj_id)
+    if obj is None:
+        st.session_state.pop("_viz_crel_object", None)
+        st.rerun()
+
+    st.markdown("**New relation**")
+    options, lookup = build_class_options(classes)
+    # Not parent_option_index: that falls back to index 0 for a URI it cannot
+    # find, which is "None" in a parent dropdown but a real class here. Both ends
+    # were just resolved out of `classes`, so both are present.
+    display_by_uri = {u: d for d, u in lookup.items()}
+    with st.form("panel_add_rel_form"):
+        subj_disp = st.selectbox(
+            "Subject",
+            options=options,
+            index=options.index(display_by_uri[subject["uri"]]),
+            format_func=_pad_option,
+        )
+        rel_type = st.selectbox("Relation Type", options=list(ont.CLASS_RELATIONS))
+        obj_disp = st.selectbox(
+            "Object",
+            options=options,
+            index=options.index(display_by_uri[obj["uri"]]),
+            format_func=_pad_option,
+        )
+        st.caption(f"Reads as: {subject['name']} → {obj['name']}")
+        add_col, cancel_col = st.columns(2)
+        with add_col:
+            submitted = st.form_submit_button("Add relation", use_container_width=True)
+        with cancel_col:
+            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+    if cancelled:
+        _panel_close_add()
+        st.rerun()
+    if submitted and _apply_class_relation_add(
+        ont,
+        lookup.get(subj_disp),
+        rel_type,
+        lookup.get(obj_disp),
+        subj_disp,
+        obj_disp,
+    ):
+        _panel_close_add()
+        st.rerun()
 
 
 def _render_panel_entity_editor(
@@ -2911,50 +3231,8 @@ def render_classes():
 
     if _cls_tab == "Add Class":
         st.subheader("Add New Class")
-
-        with st.form("add_class_form"):
-            name = st.text_input(
-                "Class Name *", help="Local name for the class (e.g., 'Person')"
-            )
-            label = st.text_input("Label", help="Human-readable label")
-            comment = st.text_area("Comment", help="Description of the class")
-            parent_options, parent_lookup = build_class_options(
-                classes, include_none=True
-            )
-            parent_display = st.selectbox(
-                "Parent Class",
-                options=parent_options,
-                help="Select a parent class for hierarchy",
-                format_func=_pad_option,
-            )
-            ns_options, ns_lookup = build_namespace_options(ont)
-            ns_display = st.selectbox(
-                "Namespace",
-                options=ns_options,
-                help="Namespace the class is created in (default is the base URI)",
-            )
-
-            submitted = st.form_submit_button("Add Class")
-            if submitted:
-                ns_val = ns_lookup.get(ns_display)
-                if not name:
-                    show_message("Class name is required!", "error")
-                elif reason := ont.invalid_name_reason(name):
-                    show_message(reason, "error")
-                elif str(ont._uri(name, ns_val)) in {c["uri"] for c in classes}:
-                    show_message(f"Class '{name}' already exists!", "error")
-                else:
-                    parent_val = parent_lookup.get(parent_display)
-                    ont.add_class(
-                        name,
-                        parent=parent_val,
-                        label=label,
-                        comment=comment,
-                        namespace=ns_val,
-                    )
-                    save_checkpoint("Add class")
-                    show_message(f"Class '{name}' added successfully!", "success")
-                    st.rerun()
+        if render_add_class_form(ont, classes, "add_class_form"):
+            st.rerun()
 
     if _cls_tab == "Edit/Delete Class":
         st.subheader("Edit or Delete Class")
@@ -4980,7 +5258,6 @@ def render_relations():
                 )
                 submitted = st.form_submit_button("Add Class Relation")
                 if submitted:
-                    class1_uri = cls_lookup.get(class1_disp)
                     class2_show = (
                         class2_disp
                         if class2_uri == cls_lookup.get(class2_disp)
@@ -4988,15 +5265,14 @@ def render_relations():
                     )
                     if ext_err:
                         show_message(ext_err, "error")
-                    elif class1_uri == class2_uri:
-                        show_message("Please select two different classes!", "error")
-                    else:
-                        ont.add_class_relation(class1_uri, relation_type, class2_uri)
-                        save_checkpoint("Add class relation")
-                        show_message(
-                            f"Relation added: {class1_disp} {relation_type} {class2_show}",
-                            "success",
-                        )
+                    elif _apply_class_relation_add(
+                        ont,
+                        cls_lookup.get(class1_disp),
+                        relation_type,
+                        class2_uri,
+                        class1_disp,
+                        class2_show,
+                    ):
                         st.rerun()
 
     if _rel_tab == "Property Relations":
@@ -7848,8 +8124,11 @@ def render_visualization():
         selected_ind_uris = set(filters["ind"]["selected_uris"])
         # Display mirror of the class selection, refreshed here on every render
         # and never written to elsewhere. The focus-mode controls below read it
-        # to seed themselves from the current selection.
+        # to seed themselves from the current selection. The total rides along so
+        # they can tell a real narrowing from the everything-selected default
+        # (see focus_seeds_from_selection); neither is a persisted setting.
         st.session_state["_viz_cfg_selected_classes"] = selected_classes_list
+        st.session_state["_viz_cfg_class_count"] = len(all_class_names)
 
         # Focus mode: centre the view on one node (class, individual or SKOS
         # concept) and show only its neighbourhood within N hops. The pruning
@@ -7975,16 +8254,14 @@ def render_visualization():
                 label_set = set(focus_labels)
                 # Default the focus seeds to the classes selected in the
                 # multiselect, so the neighbourhood grows from exactly what the
-                # user had picked (one class or several).
+                # user had narrowed to — or from one class when they had narrowed
+                # to nothing (see focus_seeds_from_selection).
                 saved_seeds = st.session_state.get("_viz_cfg_focus_seeds")
                 if saved_seeds is None:
-                    saved_seeds = [
-                        f"Class: {c}"
-                        for c in (
-                            st.session_state.get("_viz_cfg_selected_classes") or []
-                        )
-                        if f"Class: {c}" in label_set
-                    ]
+                    saved_seeds = focus_seeds_from_selection(
+                        st.session_state.get("_viz_cfg_selected_classes") or [],
+                        len(all_class_names),
+                    )
                 saved_seeds = [s for s in saved_seeds if s in label_set]
                 if not saved_seeds:
                     saved_seeds = [focus_labels[0]]
@@ -8005,8 +8282,10 @@ def render_visualization():
                         on_change=viz_sync,
                         args=("_viz_cfg_focus_seeds", "viz_focus_seeds"),
                         help="Classes, individuals or SKOS concepts to centre on. "
-                        "The neighbourhood grows from all of them. Toggle the "
-                        "entity-type checkboxes above to list more.",
+                        "The neighbourhood grows from all of them. Starts from "
+                        "the classes you had filtered down to, or from one when "
+                        "you hadn't filtered. Toggle the entity-type checkboxes "
+                        "above to list more.",
                     )
                 with fcol2:
                     focus_depth = st.slider(
@@ -8103,8 +8382,14 @@ def render_visualization():
                     # An empty (or narrowed) filter hides nodes and there is no
                     # native way back — offer a one-click restore (issue B3).
                     with _bcol1:
+                        # The count says what the button would restore you to, so
+                        # its greyed-out state reads as "you already have all 4"
+                        # rather than as an arbitrary disable. Its only other
+                        # signal is the shown/total on the segmented control
+                        # above, which is easy to miss and sits on a different
+                        # widget.
                         if st.button(
-                            "Select all",
+                            f"Select all ({len(_entries)})",
                             key=f"viz_select_all_{_key}",
                             disabled=not _narrowed,
                             use_container_width=True,
@@ -9239,10 +9524,27 @@ def render_visualization():
                             st.session_state["_viz_cfg_details_panel"] = False
                             st.session_state["_viz_settings_dirty"] = True
                             st.rerun()
-                    if not has_selection:
+                    _sel_ntype = ntype if has_selection else None
+                    _sel_ename = ename if has_selection else None
+                    _add_kind = _panel_add_kind()
+                    if _add_kind == "class":
+                        # The add form owns the whole panel while it is open, so
+                        # its fields can't be confused with the editor's.
+                        _render_panel_add_class_form(
+                            ont, classes, _sel_ntype, _sel_ename
+                        )
+                    elif _add_kind == "crel":
+                        # Owns the panel for the same reason, and because while
+                        # the pick is armed a graph click means "this is the
+                        # object", not "show me this node".
+                        _render_panel_add_relation_form(
+                            ont, classes, _sel_ntype, _sel_ename
+                        )
+                    elif not has_selection:
                         st.caption(
                             "Click a node to see details. Ctrl/Cmd-click focuses on it."
                         )
+                        _render_panel_add_class_button(classes, None, None)
                     else:
                         st.markdown(f"**{_sel.get('label', '')}**")
                         # What was selected, not merely that it was an edge:
@@ -9267,6 +9569,8 @@ def render_visualization():
                             use_container_width=True,
                         ):
                             _open_full_editor(ntype, ename)
+                        _render_panel_add_class_button(classes, ntype, ename)
+                        _render_panel_add_relation_button(classes, ntype, ename)
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
@@ -9499,6 +9803,13 @@ def main():
     selection = st.sidebar.radio(
         "Navigation", _page_names, index=_default_idx, key="nav_radio"
     )
+
+    # An add form in the graph panel belongs to the Visualization page. Leaving
+    # abandons it, so a half-armed "now click the object" state can't be waiting
+    # when you come back and read a later, unrelated click as the second end
+    # (issue #221).
+    if selection != "Visualization":
+        _panel_close_add()
 
     # Undo / Redo controls
     um = st.session_state.undo_manager
