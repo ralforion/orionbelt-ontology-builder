@@ -2508,22 +2508,183 @@ def _panel_add_parent(classes, ntype, ename):
     return None
 
 
-def _render_panel_add_class_button(classes, ntype, ename):
-    """The button that opens the add form, at the foot of the panel (issue #221)."""
+def panel_subject_uri(ntype, ename, classes, object_props, data_props, individuals):
+    """The URI of the selected node, when it is something to hang more off.
+
+    Resolved from the same pools the entity editor uses. The edge-borne kinds
+    (relations, restrictions) and the annotation nodes themselves have no URI of
+    their own, so nothing is offered for them (issue #221).
+    """
+    pool = {
+        "Class": classes,
+        "Object Property": object_props,
+        "Data Property": data_props,
+        "Individual": individuals,
+    }.get(ntype)
+    if not pool or not ename:
+        return None
+    return next((e["uri"] for e in pool if _uid(e["uri"]) == ename), None)
+
+
+def _render_panel_add_individual_form(ont, classes, individuals, ntype, ename):
+    """Add an individual of the selected class, from the graph (issue #221).
+
+    The class is the point of adding from here: an individual is always an
+    instance *of* something, and the graph already says which.
+    """
+    cls_uri = _panel_add_parent(classes, ntype, ename)
+    cls = next((c for c in classes if c["uri"] == cls_uri), None)
+    if cls is None:
+        _panel_close_add()
+        st.rerun()
+
+    st.markdown(f"**New {cls['name']}**")
+    with st.form("panel_add_ind_form"):
+        name = st.text_input("Individual Name *")
+        label = st.text_input("Label")
+        comment = st.text_area("Comment")
+        ns_options, ns_lookup = build_namespace_options(ont)
+        ns_display = st.selectbox(
+            "Namespace",
+            options=ns_options,
+            help="Namespace the individual is created in (default is the base URI)",
+        )
+        add_col, cancel_col = st.columns(2)
+        with add_col:
+            submitted = st.form_submit_button(
+                "Add individual", use_container_width=True
+            )
+        with cancel_col:
+            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+    if cancelled:
+        _panel_close_add()
+        st.rerun()
+    if submitted:
+        ns_val = ns_lookup.get(ns_display)
+        if not name:
+            show_message("Individual name is required!", "error")
+        elif reason := ont.invalid_name_reason(name):
+            show_message(reason, "error")
+        elif str(ont._uri(name, ns_val)) in {i["uri"] for i in individuals}:
+            show_message(f"Individual '{name}' already exists!", "error")
+        else:
+            # By URI, not by name: the class may live in another namespace, and
+            # its local name alone would resolve into this ontology's own.
+            ont.add_individual(
+                name, cls["uri"], label=label, comment=comment, namespace=ns_val
+            )
+            save_checkpoint("Add individual")
+            show_message(f"Individual '{name}' added!", "success")
+            _panel_close_add()
+            st.rerun()
+
+
+def _render_panel_add_annotation_form(ont, subject_uri, subject_label):
+    """Annotate the selected entity, from the graph (issue #221).
+
+    The subject is whatever is selected, which is the whole saving: on the
+    Annotations page you pick it out of a list of every resource in the
+    ontology. Predicate options are shared with that page, so a type invented
+    here is offered there and the other way round.
+    """
+    if not subject_uri:
+        _panel_close_add()
+        st.rerun()
+
+    st.markdown(f"**Annotate {subject_label}**")
+    options, lookup = annotation_predicate_options(ont)
+    with st.form("panel_add_ann_form"):
+        predicate_display = st.selectbox(
+            "Annotation Type",
+            options=options,
+            accept_new_options=True,
+            key="panel_ann_predicate",
+            help=(
+                "Pick a type, or type your own to create it: a name like "
+                "`wikidataId`, a bound prefix like `wdt:P31`, or a full URI."
+            ),
+        )
+        value = st.text_area("Value *", key="panel_ann_value")
+        lang = st.text_input(
+            "Language",
+            key="panel_ann_lang",
+            help="Optional BCP 47 tag such as en or de. Leave empty for none.",
+        )
+        add_col, cancel_col = st.columns(2)
+        with add_col:
+            submitted = st.form_submit_button(
+                "Add annotation", use_container_width=True
+            )
+        with cancel_col:
+            cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+    if cancelled:
+        _panel_close_add()
+        st.rerun()
+    if submitted:
+        if not value.strip():
+            show_message("Annotation value is required!", "error")
+            return
+        predicate = lookup.get(predicate_display, predicate_display)
+        try:
+            ont.add_annotation(subject_uri, predicate, value, lang=lang or None)
+        except Exception as e:  # noqa: BLE001 - a rejected predicate is a message
+            show_message(str(e), "error")
+            return
+        save_checkpoint("Add annotation")
+        show_message("Annotation added!", "success")
+        _panel_close_add()
+        st.rerun()
+
+
+def _render_panel_add_buttons(classes, ntype, ename, subject_uri):
+    """What you can create from what is selected, two to a row (issue #221).
+
+    The set depends on the selection, so it is collected and then laid out
+    rather than written as a fixed column of buttons: five stacked full-width
+    ones push the entity editor off a narrow panel, and most are irrelevant to
+    any given node anyway.
+
+    Everything here follows the graph rather than asking again for what the
+    graph already says: the class you selected becomes the parent, the subject,
+    the type, or the annotated resource.
+    """
     parent_uri = _panel_add_parent(classes, ntype, ename)
     parent_name = next((c["name"] for c in classes if c["uri"] == parent_uri), None)
-    if st.button(
-        "Add subclass" if parent_uri else "Add class",
-        key="panel_add_class_open",
-        use_container_width=True,
-        help=(
+    actions = [
+        (
+            "Add subclass" if parent_uri else "Add class",
+            "class",
             f"Add a class under '{parent_name}'."
             if parent_uri
-            else "Add a class. Select a class first to make it the parent."
-        ),
-    ):
-        st.session_state["_viz_add_kind"] = "class"
-        st.rerun()
+            else "Add a class. Select a class first to make it the parent.",
+        )
+    ]
+    if parent_uri:
+        actions += [
+            ("Add relation", "crel", "Then click the class this one points at."),
+            ("Add restriction", "rest", "Then click the class it restricts to."),
+            ("Add individual", "ind", f"Add an instance of '{parent_name}'."),
+        ]
+    if subject_uri:
+        actions.append(("Add annotation", "ann", "Annotate the selected entity."))
+
+    for row_start in range(0, len(actions), 2):
+        row = actions[row_start : row_start + 2]
+        columns = st.columns(2)
+        for column, (label, kind, help_text) in zip(columns, row, strict=False):
+            with column:
+                if st.button(
+                    label,
+                    key=f"panel_add_open_{kind}",
+                    use_container_width=True,
+                    help=help_text,
+                ):
+                    st.session_state["_viz_add_kind"] = kind
+                    if kind in ("crel", "rest"):
+                        st.session_state["_viz_crel_subject"] = ename
+                    st.rerun()
 
 
 def _render_panel_add_class_form(ont, classes, ntype, ename):
@@ -2554,25 +2715,6 @@ def _render_panel_add_class_form(ont, classes, ntype, ename):
         on_close=_panel_close_add,
     ):
         _panel_close_add()
-        st.rerun()
-
-
-def _render_panel_add_relation_button(classes, ntype, ename):
-    """The button that arms a relation add, at the foot of the panel (issue #221).
-
-    Only offered with a class selected: a relation needs a subject, and pressing
-    this is what fixes the selected class as one.
-    """
-    if _panel_add_parent(classes, ntype, ename) is None:
-        return
-    if st.button(
-        "Add relation",
-        key="panel_add_rel_open",
-        use_container_width=True,
-        help="Then click the class this one points at.",
-    ):
-        st.session_state["_viz_add_kind"] = "crel"
-        st.session_state["_viz_crel_subject"] = ename
         st.rerun()
 
 
@@ -2653,21 +2795,6 @@ def _render_panel_add_relation_form(ont, classes, ntype, ename):
         obj_disp,
     ):
         _panel_close_add()
-        st.rerun()
-
-
-def _render_panel_add_restriction_button(classes, ntype, ename):
-    """The button that arms a restriction add, at the foot of the panel (#221)."""
-    if _panel_add_parent(classes, ntype, ename) is None:
-        return
-    if st.button(
-        "Add restriction",
-        key="panel_add_rest_open",
-        use_container_width=True,
-        help="Then click the class it restricts to.",
-    ):
-        st.session_state["_viz_add_kind"] = "rest"
-        st.session_state["_viz_crel_subject"] = ename
         st.rerun()
 
 
@@ -6043,6 +6170,67 @@ def annotation_option_for_predicate(ont, predicate_lookup, predicate_uri):
     return None
 
 
+def annotation_predicate_options(ont):
+    """The annotation types to offer, and what each display maps to.
+
+    The ones already used in the ontology first, so a vocabulary in play
+    stays in play, then the standard ones. Shared by the Annotations page and
+    the Visualization panel so both offer the same list (issue #221).
+    """
+    # Get predicates used in the ontology
+    used_predicates = ont.get_used_annotation_predicates()
+
+    # Build predicate options: standard ones + used from ontology
+    standard_predicates = [
+        {"local_name": "label", "uri": "label", "prefix": "rdfs"},
+        {"local_name": "comment", "uri": "comment", "prefix": "rdfs"},
+        {"local_name": "seeAlso", "uri": "seeAlso", "prefix": "rdfs"},
+        {"local_name": "isDefinedBy", "uri": "isDefinedBy", "prefix": "rdfs"},
+        {"local_name": "prefLabel", "uri": "prefLabel", "prefix": "skos"},
+        {"local_name": "altLabel", "uri": "altLabel", "prefix": "skos"},
+        {"local_name": "definition", "uri": "definition", "prefix": "skos"},
+        {"local_name": "example", "uri": "example", "prefix": "skos"},
+        {"local_name": "note", "uri": "note", "prefix": "skos"},
+        {"local_name": "title", "uri": "title", "prefix": "dcterms"},
+        {
+            "local_name": "description",
+            "uri": "description",
+            "prefix": "dcterms",
+        },
+        {"local_name": "creator", "uri": "creator", "prefix": "dcterms"},
+        {
+            "local_name": "contributor",
+            "uri": "contributor",
+            "prefix": "dcterms",
+        },
+        {"local_name": "date", "uri": "date", "prefix": "dcterms"},
+        {"local_name": "deprecated", "uri": "deprecated", "prefix": "owl"},
+    ]
+
+    # Combine and deduplicate (used predicates take priority as they have full URIs)
+    predicate_options = []
+    predicate_lookup = {}  # display -> uri
+
+    # Add used predicates first (from ontology)
+    seen_names = set()
+    for p in used_predicates:
+        display = f"{p['prefix']}:{p['local_name']}" if p["prefix"] else p["local_name"]
+        if display not in seen_names:
+            predicate_options.append(display)
+            predicate_lookup[display] = p["uri"]
+            seen_names.add(display)
+            seen_names.add(p["local_name"])  # Also mark local name as seen
+
+    # Add standard predicates that aren't already included
+    for p in standard_predicates:
+        display = f"{p['prefix']}:{p['local_name']}"
+        if p["local_name"] not in seen_names and display not in seen_names:
+            predicate_options.append(display)
+            predicate_lookup[display] = p["uri"]  # Use short name for standard ones
+    predicate_options.sort(key=lambda x: x.lower())
+    return predicate_options, predicate_lookup
+
+
 def render_add_annotation(ont, all_resources):
     """Render the "Add Annotation" tab.
 
@@ -6056,61 +6244,7 @@ def render_add_annotation(ont, all_resources):
     if not all_resources:
         st.warning("Please create at least one resource first.")
     else:
-        # Get predicates used in the ontology
-        used_predicates = ont.get_used_annotation_predicates()
-
-        # Build predicate options: standard ones + used from ontology
-        standard_predicates = [
-            {"local_name": "label", "uri": "label", "prefix": "rdfs"},
-            {"local_name": "comment", "uri": "comment", "prefix": "rdfs"},
-            {"local_name": "seeAlso", "uri": "seeAlso", "prefix": "rdfs"},
-            {"local_name": "isDefinedBy", "uri": "isDefinedBy", "prefix": "rdfs"},
-            {"local_name": "prefLabel", "uri": "prefLabel", "prefix": "skos"},
-            {"local_name": "altLabel", "uri": "altLabel", "prefix": "skos"},
-            {"local_name": "definition", "uri": "definition", "prefix": "skos"},
-            {"local_name": "example", "uri": "example", "prefix": "skos"},
-            {"local_name": "note", "uri": "note", "prefix": "skos"},
-            {"local_name": "title", "uri": "title", "prefix": "dcterms"},
-            {
-                "local_name": "description",
-                "uri": "description",
-                "prefix": "dcterms",
-            },
-            {"local_name": "creator", "uri": "creator", "prefix": "dcterms"},
-            {
-                "local_name": "contributor",
-                "uri": "contributor",
-                "prefix": "dcterms",
-            },
-            {"local_name": "date", "uri": "date", "prefix": "dcterms"},
-            {"local_name": "deprecated", "uri": "deprecated", "prefix": "owl"},
-        ]
-
-        # Combine and deduplicate (used predicates take priority as they have full URIs)
-        predicate_options = []
-        predicate_lookup = {}  # display -> uri
-
-        # Add used predicates first (from ontology)
-        seen_names = set()
-        for p in used_predicates:
-            display = (
-                f"{p['prefix']}:{p['local_name']}" if p["prefix"] else p["local_name"]
-            )
-            if display not in seen_names:
-                predicate_options.append(display)
-                predicate_lookup[display] = p["uri"]
-                seen_names.add(display)
-                seen_names.add(p["local_name"])  # Also mark local name as seen
-
-        # Add standard predicates that aren't already included
-        for p in standard_predicates:
-            display = f"{p['prefix']}:{p['local_name']}"
-            if p["local_name"] not in seen_names and display not in seen_names:
-                predicate_options.append(display)
-                predicate_lookup[display] = p["uri"]  # Use short name for standard ones
-
-        # Sort options
-        predicate_options.sort(key=lambda x: x.lower())
+        predicate_options, predicate_lookup = annotation_predicate_options(ont)
 
         # Clear the value/language of the annotation just saved, on the run
         # after it was added: a widget's state can't be changed once it has
@@ -10015,11 +10149,28 @@ def render_visualization():
                         _render_panel_add_restriction_form(
                             ont, classes, object_props, _sel_ntype, _sel_ename
                         )
+                    elif _add_kind == "ind":
+                        _render_panel_add_individual_form(
+                            ont, classes, individuals, _sel_ntype, _sel_ename
+                        )
+                    elif _add_kind == "ann":
+                        _render_panel_add_annotation_form(
+                            ont,
+                            panel_subject_uri(
+                                _sel_ntype,
+                                _sel_ename,
+                                classes,
+                                object_props,
+                                data_props,
+                                individuals,
+                            ),
+                            _sel.get("label", "") if has_selection else "",
+                        )
                     elif not has_selection:
                         st.caption(
                             "Click a node to see details. Ctrl/Cmd-click focuses on it."
                         )
-                        _render_panel_add_class_button(classes, None, None)
+                        _render_panel_add_buttons(classes, None, None, None)
                     else:
                         st.markdown(f"**{_sel.get('label', '')}**")
                         # What was selected, not merely that it was an edge:
@@ -10044,9 +10195,19 @@ def render_visualization():
                             use_container_width=True,
                         ):
                             _open_full_editor(ntype, ename)
-                        _render_panel_add_class_button(classes, ntype, ename)
-                        _render_panel_add_relation_button(classes, ntype, ename)
-                        _render_panel_add_restriction_button(classes, ntype, ename)
+                        _render_panel_add_buttons(
+                            classes,
+                            ntype,
+                            ename,
+                            panel_subject_uri(
+                                ntype,
+                                ename,
+                                classes,
+                                object_props,
+                                data_props,
+                                individuals,
+                            ),
+                        )
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 if has_selection:
