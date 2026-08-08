@@ -4,54 +4,86 @@ Two entities can be connected several times over — disjointWith and an object
 property, say — and vis draws every edge with the same global curve unless each
 is told otherwise. The builder gives each one a distinct side and roundness so
 they fan out instead of lying on top of each other.
+
+Three relations between one pair is enough to reproduce it, so these render the
+real ``render_visualization`` and read the curves out of the graph payload
+rather than re-implementing the arithmetic.
 """
 
-import pathlib
+import json
+import os
+from collections import defaultdict
 
 import pytest
+from streamlit.testing.v1 import AppTest
 
-APP = pathlib.Path(__file__).resolve().parents[1] / "orionbelt_ontology_builder/app.py"
+
+def _script():
+    import os
+
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_class("A")
+        om.add_class("B")
+        # As many relations between the same pair as asked for. Three is the
+        # count the old arithmetic broke on: the third repeated the first.
+        for rel in list(om.CLASS_RELATIONS)[: int(os.environ["N_RELS"])]:
+            om.add_class_relation("A", rel, "B")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+    app.render_visualization()
 
 
-def _curves(n):
-    """The (side, roundness) pairs the builder assigns to ``n`` parallel edges.
-
-    A direct port of the loop in ``render_visualization``: the arithmetic sits
-    inside a 400-line function that cannot be called in isolation, and it is the
-    arithmetic that was wrong.
-    """
+def _curves(n_rels):
+    """Render and return the (type, roundness) of every A-to-B edge."""
+    os.environ["N_RELS"] = str(n_rels)
+    at = AppTest.from_function(_script)
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    data = at.session_state["last_graph_data"]
+    edges = json.loads(data["edges"])
+    groups = defaultdict(list)
+    for edge in edges:
+        groups[tuple(sorted((edge["from"], edge["to"])))].append(edge)
+    biggest = max(groups.values(), key=len)
     return [
-        ("curvedCW" if i % 2 == 0 else "curvedCCW", round(0.2 * (i // 2 + 1), 2))
-        for i in range(n)
+        (e.get("smooth", {}).get("type"), e.get("smooth", {}).get("roundness"))
+        for e in biggest
     ]
 
 
-@pytest.mark.parametrize("count", range(2, 9))
-def test_every_parallel_edge_gets_its_own_curve(count):
-    """The bug: ``(i + 1) // 2`` was 1 for both i=1 and i=2, so the third edge
-    was drawn exactly on top of the first, and every odd one after it repeated
-    an earlier curve."""
-    curves = _curves(count)
-    assert len(set(curves)) == count, f"overlapping curves in {curves}"
+@pytest.mark.parametrize("n_rels", [2, 3])
+def test_every_parallel_edge_gets_its_own_curve(n_rels):
+    """The bug: the third edge was drawn with exactly the first one's curve, so
+    two entities related three ways showed only two lines."""
+    curves = _curves(n_rels)
+    assert len(curves) == n_rels
+    assert len(set(curves)) == n_rels, f"overlapping curves in {curves}"
 
 
 def test_a_pair_curves_to_opposite_sides():
-    """Two edges is the common case: one each way, equally bowed."""
-    assert _curves(2) == [("curvedCW", 0.2), ("curvedCCW", 0.2)]
+    """The common case: one edge each way, equally bowed."""
+    assert set(_curves(2)) == {("curvedCW", 0.2), ("curvedCCW", 0.2)}
 
 
-def test_each_further_pair_bows_wider():
-    """So the third and fourth clear the first two rather than crowding them."""
-    curves = _curves(6)
-    assert [r for _, r in curves] == [0.2, 0.2, 0.4, 0.4, 0.6, 0.6]
+def test_the_third_edge_bows_wider_rather_than_repeating_the_first():
+    curves = _curves(3)
+    assert sorted(r for _, r in curves) == [0.2, 0.2, 0.4]
 
 
-def test_the_builder_uses_this_arithmetic():
-    """Pin the port against the real loop, so the two cannot drift apart."""
-    src = APP.read_text(encoding="utf-8")
-    block = src.split("# Spread parallel edges so they don't overlap", 1)[1]
-    block = block.split("# Generate and display", 1)[0]
-    assert "0.2 * (i // 2 + 1)" in block, (
-        "the roundness step changed; update _curves above to match"
-    )
-    assert '"curvedCW" if i % 2 == 0 else "curvedCCW"' in block
+def test_a_single_edge_is_left_alone():
+    """Nothing to spread, so the global curve applies and no per-edge override
+    is emitted."""
+    os.environ["N_RELS"] = "1"
+    at = AppTest.from_function(_script)
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    edges = json.loads(at.session_state["last_graph_data"]["edges"])
+    assert edges, "no edge was drawn"
+    assert all("smooth" not in e for e in edges)
