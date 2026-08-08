@@ -17,7 +17,7 @@ import streamlit as st
 from . import local_store
 
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.19.1"
+APP_VERSION = "1.20.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
