@@ -9877,25 +9877,17 @@ def render_visualization():
             for group in _edge_groups.values():
                 if len(group) < 2:
                     continue
+                # Alternate sides, widening every second edge, so each edge of a
+                # pair gets a distinct (side, roundness). The old arithmetic gave
+                # index 2 the same curve as index 0 — `(i + 1) // 2` is 1 for
+                # both i=1 and i=2 — so from three parallel edges upwards the
+                # third lay exactly on top of the first (issue #245).
                 for i, edge in enumerate(group):
-                    if i == 0:
-                        edge["smooth"] = {
-                            "enabled": True,
-                            "type": "curvedCW",
-                            "roundness": 0.2,
-                        }
-                    elif i % 2 == 1:
-                        edge["smooth"] = {
-                            "enabled": True,
-                            "type": "curvedCCW",
-                            "roundness": 0.2 * ((i + 1) // 2),
-                        }
-                    else:
-                        edge["smooth"] = {
-                            "enabled": True,
-                            "type": "curvedCW",
-                            "roundness": 0.2 * ((i + 1) // 2),
-                        }
+                    edge["smooth"] = {
+                        "enabled": True,
+                        "type": "curvedCW" if i % 2 == 0 else "curvedCCW",
+                        "roundness": 0.2 * (i // 2 + 1),
+                    }
 
             # Generate and display the graph using custom component
             try:
