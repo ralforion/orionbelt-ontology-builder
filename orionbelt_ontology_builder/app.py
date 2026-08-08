@@ -9054,7 +9054,21 @@ def render_visualization():
                 ):
                     if node_count >= max_nodes:
                         break
-                    if cls["uri"] not in visible_class_uris:
+                    # The entity picked in Find is drawn even when the node
+                    # filter hides it: you asked to see it, and a graph that
+                    # silently omits it looks broken rather than filtered.
+                    #
+                    # Checked here, against the live filter, rather than by
+                    # un-hiding it in the filter when the pick happens. That
+                    # un-hiding ran once per pick, so an entity that was visible
+                    # when picked and hidden by a *later* filter change was never
+                    # revealed again: the pick had not changed, so nothing
+                    # re-ran, and the app went on telling the viewer to centre on
+                    # a node it had not sent (issue #234).
+                    if (
+                        cls["uri"] not in visible_class_uris
+                        and _uid(cls["uri"]) != _find_id
+                    ):
                         continue
                     cls_node_id = _uid(cls["uri"])
                     disp_cls_name = _disambiguated_name(cls, cls_collisions)
@@ -9257,7 +9271,11 @@ def render_visualization():
                     # Individuals filter (issue #196). Focus mode builds the full
                     # graph and prunes afterwards, so it ignores the filter the
                     # same way the class one does.
-                    if not focus_mode and ind["uri"] not in selected_ind_uris:
+                    if (
+                        not focus_mode
+                        and ind["uri"] not in selected_ind_uris
+                        and f"ind_{_uid(ind['uri'])}" != _find_id
+                    ):
                         continue
                     ind_node_id = f"ind_{_uid(ind['uri'])}"
                     disp_ind_name = _disambiguated_name(ind, ind_collisions)

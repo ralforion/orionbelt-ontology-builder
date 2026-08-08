@@ -86,11 +86,25 @@ def _script():
         if os.environ.get("FIND"):
             # What picking an entity in "Find and centre" leaves behind.
             st.session_state["viz_find_entity"] = os.environ["FIND"]
+        if os.environ.get("HIDE"):
+            # A narrowed node filter that does *not* include the Find target,
+            # and a find-seq already marked as revealed: the state left behind
+            # when an entity was visible at the moment it was picked and a later
+            # filter change hid it (issue #234).
+            keep = set(os.environ["HIDE"].split())
+            st.session_state["_viz_cfg_selected_class_uris"] = [
+                c["uri"] for c in om.get_classes() if c["name"] in keep
+            ]
+            st.session_state["_viz_cfg_known_class_uris"] = {
+                c["uri"] for c in om.get_classes()
+            }
+            st.session_state["_viz_find_seq"] = 1
+            st.session_state["_viz_find_revealed_seq"] = 1
 
     app.render_visualization()
 
 
-def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra=""):
+def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra="", hide=""):
     """Render once and return ``(nodes, edges, notice)``. An empty seed means
     focus mode off; ``find`` is an entity picked in "Find and centre"."""
     os.environ["N_CLASSES"] = str(n_classes)
@@ -99,6 +113,7 @@ def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra=""):
     os.environ["DEPTH"] = str(depth)
     os.environ["FIND"] = find
     os.environ["EXTRA"] = extra
+    os.environ["HIDE"] = hide
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -307,3 +322,23 @@ def test_a_data_property_find_target_is_drawn_even_if_its_domain_was_capped_out(
         over, find="Data Property: findMe", extra="dprop_capped_domain"
     )
     assert "findMe" in {n.get("label") for n in nodes}
+
+
+def test_a_find_target_hidden_by_a_later_filter_change_is_still_drawn():
+    """The state the reporter was in: the entity was visible when they picked
+    it, so nothing needed revealing and the find-seq was marked done; a later
+    filter change then hid it. The pick had not changed, so the once-per-pick
+    reveal never ran again and the graph never got the node, while the app went
+    on telling the viewer to centre on it (issue #234)."""
+    keep = "C0001 C0002 C0003"
+    nodes, _, _ = _graph(40, find="Class: C0007", hide=keep)
+    labels = {n.get("label") for n in nodes}
+    assert "C0007" in labels, "the entity asked for is missing from the graph"
+
+
+def test_the_node_filter_still_hides_everything_else():
+    """Only the entity you asked for is exempt; the filter is otherwise honoured."""
+    keep = "C0001 C0002 C0003"
+    nodes, _, _ = _graph(40, find="Class: C0007", hide=keep)
+    labels = {n.get("label") for n in nodes}
+    assert labels == {"C0001", "C0002", "C0003", "C0007"}
