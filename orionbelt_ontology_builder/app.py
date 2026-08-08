@@ -8592,6 +8592,11 @@ def render_visualization():
         # sits beside the Filter Classes expander so it doesn't cost the graph a
         # whole row; the empty state is a placeholder (clearable), not a "—" row.
         _find_id: str | None = None
+        # Whether that target is a class. Class node ids carry no prefix, so the
+        # kind cannot be read back off the id the way the others can, and the
+        # class loop's own guard needs it: an emptied filter would otherwise skip
+        # the loop before the per-node bypass could run (issue #234 review).
+        _find_is_class = False
         focus_seed_ids: list = []
         focus_depth = 0
         _find_col, _filter_col = st.columns([1, 3])
@@ -8610,6 +8615,9 @@ def render_visualization():
                 )
                 if _find_choice:
                     _find_id = focus_targets.get(_find_choice)
+                    _find_is_class = bool(_find_id) and _find_choice.startswith(
+                        "Class: "
+                    )
                     # The target may currently be hidden — by one of the display
                     # filters, or pruned away in focus mode — in which case its
                     # node isn't in the graph and the JS focus() would silently
@@ -8620,24 +8628,12 @@ def render_visualization():
                     _cur_seq = st.session_state.get("_viz_find_seq", 0)
                     if st.session_state.get("_viz_find_revealed_seq") != _cur_seq:
                         st.session_state["_viz_find_revealed_seq"] = _cur_seq
-                        _label, _, _name = _find_choice.partition(": ")
                         _reveal_rerun = False
-                        # Every filterable kind can hide its entity, so look the
-                        # picked label up across them rather than only classes.
-                        for _fk in _FILTER_KINDS:
-                            if _label != _fk["singular"]:
-                                continue
-                            _key = _fk["key"]
-                            _uri = filters[_key]["uri_by_display"].get(_name)
-                            _sel = list(
-                                st.session_state.get(f"_viz_cfg_selected_{_key}_uris")
-                                or []
-                            )
-                            if _uri and _uri not in _sel:
-                                st.session_state[f"_viz_cfg_selected_{_key}_uris"] = (
-                                    _sel + [_uri]
-                                )
-                                _reveal_rerun = True
+                        # A node filter hiding the target is handled where the
+                        # graph is built, against the live filter, so nothing is
+                        # written back here. Un-hiding it once per pick both
+                        # rewrote a filter the user had set and went stale the
+                        # moment a later filter change hid it again (issue #234).
                         if st.session_state.get("_viz_cfg_focus_mode"):
                             _seeds = list(
                                 st.session_state.get("_viz_cfg_focus_seeds") or []
@@ -9048,7 +9044,7 @@ def render_visualization():
             skos_node_ids: set = set()
 
             # Add classes as nodes (only selected classes)
-            if show_classes and selected_classes:
+            if show_classes and (selected_classes or _find_is_class):
                 for cls in prioritise_find_target(
                     classes, lambda c: _uid(c["uri"]), _find_id
                 ):

@@ -100,11 +100,28 @@ def _script():
             }
             st.session_state["_viz_find_seq"] = 1
             st.session_state["_viz_find_revealed_seq"] = 1
+        if os.environ.get("HIDE_ALL"):
+            # The filter emptied completely, with the reveal already marked done.
+            st.session_state["_viz_cfg_selected_class_uris"] = []
+            st.session_state["_viz_cfg_known_class_uris"] = {
+                c["uri"] for c in om.get_classes()
+            }
+            st.session_state["_viz_find_seq"] = 1
+            st.session_state["_viz_find_revealed_seq"] = 1
 
     app.render_visualization()
 
 
-def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra="", hide=""):
+def _graph(
+    n_classes,
+    seed="",
+    shape="chain",
+    depth=1,
+    find="",
+    extra="",
+    hide="",
+    hide_all=False,
+):
     """Render once and return ``(nodes, edges, notice)``. An empty seed means
     focus mode off; ``find`` is an entity picked in "Find and centre"."""
     os.environ["N_CLASSES"] = str(n_classes)
@@ -114,6 +131,7 @@ def _graph(n_classes, seed="", shape="chain", depth=1, find="", extra="", hide="
     os.environ["FIND"] = find
     os.environ["EXTRA"] = extra
     os.environ["HIDE"] = hide
+    os.environ["HIDE_ALL"] = "1" if hide_all else ""
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -342,3 +360,41 @@ def test_the_node_filter_still_hides_everything_else():
     nodes, _, _ = _graph(40, find="Class: C0007", hide=keep)
     labels = {n.get("label") for n in nodes}
     assert labels == {"C0001", "C0002", "C0003", "C0007"}
+
+
+def test_a_find_target_survives_an_emptied_class_filter():
+    """Clearing the filter entirely skips the class loop before the per-node
+    bypass can run, so the entity asked for disappeared with everything else."""
+    nodes, _, _ = _graph(40, find="Class: C0007", hide_all=True)
+    assert {n.get("label") for n in nodes} == {"C0007"}
+
+
+def test_find_does_not_rewrite_the_users_node_filter():
+    """Picking an entity used to un-hide it by editing the filter, which both
+    changed a setting the user had chosen and went stale as soon as a later
+    filter change hid it again. The graph exempts it at build time instead, so
+    the filter is left exactly as it was found."""
+    import ast
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "orionbelt_ontology_builder/app.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    handlers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If) and "_viz_find_revealed_seq" in ast.dump(node.test)
+    ]
+    assert handlers, "the Find reveal handler was not found"
+    for handler in handlers:
+        for node in ast.walk(handler):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                dumped = ast.dump(target)
+                assert not ("_viz_cfg_selected_" in dumped and "_uris" in dumped), (
+                    f"line {node.lineno}: Find must not write the node filter; "
+                    "the graph exempts the target at build time instead"
+                )
