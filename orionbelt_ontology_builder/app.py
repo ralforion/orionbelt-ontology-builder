@@ -2379,6 +2379,38 @@ def _render_panel_annotation_editor(
         )
         return
 
+    render_annotation_form(
+        ont,
+        subject_uri,
+        ann,
+        _uid(ename),
+        classes,
+        object_props,
+        data_props,
+        individuals,
+    )
+
+
+def render_annotation_form(
+    ont,
+    subject_uri,
+    ann,
+    form_key,
+    classes,
+    object_props,
+    data_props,
+    individuals,
+    on_close=None,
+):
+    """Render the edit form for one annotation (issue #257).
+
+    Shared by the Annotations page rows and the Visualization details panel, so
+    both rewrite the triple through the same guards and rollback. ``form_key``
+    makes the widget keys unique — the page passes the row's position, the panel
+    the selected node's id. ``on_close`` is what dismissing the editor means; the
+    panel has no such thing (it follows the graph selection), so it passes None
+    and gets no Cancel button.
+    """
     subject_options, subject_lookup = annotation_subject_options(
         classes, object_props, data_props, individuals
     )
@@ -2391,13 +2423,13 @@ def _render_panel_annotation_editor(
         _own = f"{_uri_local_name(subject_uri)} [current]"
         subject_options = [_own, *subject_options]
         subject_lookup[_own] = subject_uri
-    with st.form(f"panel_edit_ann_{_uid(ename)}"):
+    with st.form(f"edit_ann_{form_key}"):
         # Which resource it hangs off is editable, so an annotation can be moved
         # the way a relation or restriction can be re-pointed from here (#251).
         new_subject = required_selectbox(
             "On",
             subject_options,
-            key=f"panel_ann_on_{_uid(ename)}",
+            key=f"ann_on_{form_key}",
             current_display=subject_options[
                 _uri_option_index(subject_options, subject_lookup, subject_uri)
             ],
@@ -2428,12 +2460,22 @@ def _render_panel_annotation_editor(
             # Not editable here, but say it is there: it is carried through the
             # rewrite untouched, and a silent one would look like data loss.
             st.caption(f"Datatype: {ann['datatype']} (kept)")
-        save_col, del_col = st.columns(2)
+        cancelled = False
+        if on_close is None:
+            save_col, del_col = st.columns(2)
+        else:
+            save_col, del_col, cancel_col = st.columns(3)
         with save_col:
             saved = st.form_submit_button("Save", use_container_width=True)
         with del_col:
             deleted = st.form_submit_button("Delete", use_container_width=True)
+        if on_close is not None:
+            with cancel_col:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
 
+    if cancelled:
+        on_close()
+        st.rerun()
     if deleted:
         ont.delete_annotation(
             subject_uri,
@@ -2447,7 +2489,9 @@ def _render_panel_annotation_editor(
             value_is_uri=bool(ann.get("is_uri")),
         )
         save_checkpoint("Delete annotation")
-        show_message("Annotation deleted!", "success")
+        if on_close is not None:
+            on_close()
+        set_flash_message("Annotation deleted!", "success")
         st.rerun()
     if saved:
         if _missing := missing_required(On=new_subject):
@@ -2467,7 +2511,9 @@ def _render_panel_annotation_editor(
             new_subject_uri=subject_lookup.get(new_subject),
         ):
             save_checkpoint("Update annotation")
-            show_message("Annotation updated!", "success")
+            if on_close is not None:
+                on_close()
+            set_flash_message("Annotation updated!", "success")
             st.rerun()
 
 
@@ -6779,6 +6825,7 @@ def render_annotations():
         all_resources.append(
             {
                 "name": c["name"],
+                "uri": c["uri"],
                 "label": c.get("label"),
                 "type": "Class",
                 "display": display,
@@ -6789,6 +6836,7 @@ def render_annotations():
         all_resources.append(
             {
                 "name": p["name"],
+                "uri": p["uri"],
                 "label": p.get("label"),
                 "type": "Object Property",
                 "display": display,
@@ -6799,6 +6847,7 @@ def render_annotations():
         all_resources.append(
             {
                 "name": p["name"],
+                "uri": p["uri"],
                 "label": p.get("label"),
                 "type": "Data Property",
                 "display": display,
@@ -6809,6 +6858,7 @@ def render_annotations():
         all_resources.append(
             {
                 "name": i["name"],
+                "uri": i["uri"],
                 "label": i.get("label"),
                 "type": "Individual",
                 "display": display,
@@ -6876,8 +6926,14 @@ def render_annotations():
                         st.info(f"No annotations found for '{resource_name}'")
                     else:
                         st.subheader(f"Annotations for {selected}")
-                        for ann in annotations:
-                            col1, col2, col3 = st.columns([2, 4, 1])
+                        resource_uri = resource.get("uri") or resource_name
+                        for _ai, ann in enumerate(annotations):
+                            # By position, the way the restriction rows are
+                            # keyed: a resource can carry two annotations that
+                            # differ only in language, and they would otherwise
+                            # share a key and open each other's editor.
+                            row_key = f"{_uid(resource_uri)}_{_ai}"
+                            col1, col2, col3, col4 = st.columns([2, 4, 0.7, 0.7])
                             with col1:
                                 # Show prefixed predicate (e.g., rdfs:label, skos:prefLabel)
                                 predicate_display = ann.get(
@@ -6897,9 +6953,18 @@ def render_annotations():
                                 )
                                 st.write(f"{ann['value']}{lang_str}{dtype_str}")
                             with col3:
+                                st.button(
+                                    "✏️",
+                                    key=f"edit_ann_{row_key}",
+                                    help="Edit this annotation",
+                                    on_click=_cb_toggle_edit,
+                                    args=("ann", row_key),
+                                )
+                            with col4:
                                 if st.button(
                                     "🗑️",
-                                    key=f"del_ann_{resource_name}_{ann['predicate']}_{hash(ann['value'])}",
+                                    key=f"del_ann_{row_key}",
+                                    help="Delete this annotation",
                                 ):
                                     ont.delete_annotation(
                                         resource_name,
@@ -6916,8 +6981,21 @@ def render_annotations():
                                         value_is_uri=bool(ann.get("is_uri")),
                                     )
                                     save_checkpoint("Delete annotation")
-                                    show_message("Annotation deleted!", "success")
+                                    set_flash_message("Annotation deleted!", "success")
                                     st.rerun()
+
+                            if _is_open("ann", row_key, "edit"):
+                                render_annotation_form(
+                                    ont,
+                                    resource_uri,
+                                    ann,
+                                    row_key,
+                                    classes,
+                                    object_props,
+                                    data_props,
+                                    individuals,
+                                    on_close=lambda: _close_entity("ann"),
+                                )
 
     if _ann_tab == "Add Annotation":
         render_add_annotation(ont, all_resources)
