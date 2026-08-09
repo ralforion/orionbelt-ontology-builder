@@ -89,8 +89,15 @@ def render_import_export():
                 st.session_state.ontology = ont
                 save_checkpoint("Import ontology")
                 request_autosave_flush()
+                # The same count the sidebar shows, which is what the user
+                # checks it against. len(graph) includes the ontology header,
+                # so an import of a file carrying one announced more triples
+                # than Quick Stats then displayed, and the difference read as
+                # data lost on the way in (issue #263). The template and
+                # upper/reference loaders below already report it this way.
                 set_flash_message(
-                    f"Ontology imported successfully! ({len(ont.graph)} triples)",
+                    "Ontology imported successfully! "
+                    f"({ont.get_statistics()['content_triples']} triples)",
                     "success",
                 )
                 # Clear file uploader by incrementing its key
@@ -253,7 +260,7 @@ def render_import_export():
                         st.session_state.import_preview = None
                         st.session_state.import_content = None
                         st.session_state.import_format = None
-                        triples = len(ont.graph)
+                        triples = ont.get_statistics()["content_triples"]
                         set_flash_message(
                             f"Ontology imported successfully! ({triples} triples)",
                             "success",
