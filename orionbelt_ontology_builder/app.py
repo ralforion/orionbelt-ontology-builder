@@ -142,6 +142,16 @@ _CUSTOM_CSS = """
            rendered as an image in the sidebar body instead. */
         display: none !important;
     }
+    [data-testid="stSidebarHeader"] {
+        /* 60px tall plus a 16px margin, to hold a 28px collapse button, all
+           of it above the logo. Sized to the button instead, which keeps it
+           clear of the logo underneath. */
+        height: 2.5rem !important;
+        min-height: 2.5rem !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        margin-bottom: 0 !important;
+    }
     [data-testid="stSidebarUserContent"] {
         padding-bottom: 1.5rem !important;
     }
