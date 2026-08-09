@@ -115,11 +115,15 @@ _CUSTOM_CSS = """
         border-radius: 4px;
         color: #721c24;
     }
-    /* Reduce margin/padding */
+    /* Reduce margin/padding. The side gutters are Streamlit's own 80px, which
+       on a wide screen is 160px the graph could be using; 2rem still keeps text
+       pages off the window edge. */
     .block-container, .stMainBlockContainer,
     [data-testid="stAppViewBlockContainer"] {
         padding-top: 2.5rem !important;
         padding-bottom: 0 !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
     }
     footer, [data-testid="stBottom"] {
         display: none !important;
