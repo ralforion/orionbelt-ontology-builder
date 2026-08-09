@@ -32,17 +32,31 @@ def _script():
         om.add_class("B")
         # As many relations between the same pair as asked for. Three is the
         # count the old arithmetic broke on: the third repeated the first.
-        for rel in list(om.CLASS_RELATIONS)[: int(os.environ["N_RELS"])]:
-            om.add_class_relation("A", rel, "B")
+        rels = list(om.CLASS_RELATIONS)[: int(os.environ["N_RELS"])]
+        for n, rel in enumerate(rels):
+            # MIXED points every second relation the other way, which is the
+            # case the reporter hit: "A disjointWith B" alongside
+            # "B nextItem A" (issue #245).
+            if os.environ.get("MIXED") and n % 2:
+                om.add_class_relation("B", rel, "A")
+            else:
+                om.add_class_relation("A", rel, "B")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
         st.session_state["_viz_settings_restored"] = True
     app.render_visualization()
 
 
-def _curves(n_rels):
-    """Render and return the (type, roundness) of every A-to-B edge."""
+def _curves(n_rels, mixed=False):
+    """Render and return each A-B edge's curve as an *absolute* side.
+
+    ``curvedCW`` is clockwise along the edge's own from-to, so the raw label
+    says nothing on its own: two edges pointing opposite ways with opposite
+    labels sit on the same side of the pair. Normalising to the group's
+    canonical order is what the eye actually sees.
+    """
     os.environ["N_RELS"] = str(n_rels)
+    os.environ["MIXED"] = "1" if mixed else ""
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -51,11 +65,15 @@ def _curves(n_rels):
     groups = defaultdict(list)
     for edge in edges:
         groups[tuple(sorted((edge["from"], edge["to"])))].append(edge)
-    biggest = max(groups.values(), key=len)
-    return [
-        (e.get("smooth", {}).get("type"), e.get("smooth", {}).get("roundness"))
-        for e in biggest
-    ]
+    key, biggest = max(groups.items(), key=lambda kv: len(kv[1]))
+    out = []
+    for edge in biggest:
+        smooth = edge.get("smooth") or {}
+        side = smooth.get("type")
+        if side and edge["from"] != key[0]:
+            side = "curvedCCW" if side == "curvedCW" else "curvedCW"
+        out.append((side, smooth.get("roundness")))
+    return out
 
 
 @pytest.mark.parametrize("n_rels", [2, 3])
@@ -87,3 +105,19 @@ def test_a_single_edge_is_left_alone():
     edges = json.loads(at.session_state["last_graph_data"]["edges"])
     assert edges, "no edge was drawn"
     assert all("smooth" not in e for e in edges)
+
+
+@pytest.mark.parametrize("n_rels", [2, 3])
+def test_edges_pointing_opposite_ways_still_bow_apart(n_rels):
+    """The reported case: `A disjointWith B` next to `B nextItem A`.
+
+    Alternating the label alone puts these on the *same* side, because the
+    label is relative to each edge's own direction and the two flips cancel.
+    """
+    curves = _curves(n_rels, mixed=True)
+    assert len(set(curves)) == n_rels, f"overlapping curves in {curves}"
+
+
+def test_a_reversed_pair_lands_on_opposite_sides():
+    sides = [side for side, _ in _curves(2, mixed=True)]
+    assert set(sides) == {"curvedCW", "curvedCCW"}
