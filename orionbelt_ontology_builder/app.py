@@ -5420,7 +5420,14 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
         index=types.index(rest["type"]) if rest["type"] in types else 0,
         key=f"er_type_{form_key}",
     )
-    value_options, value_lookup = _slot_options(classes, rest.get("value_uri"))
+    # Carry the row's own value into the class picker only when it already names
+    # a class. A hasValue value is an individual or a literal, and offering it
+    # here let a switch to someValuesFrom write owl:someValuesFrom :alice, naming
+    # an individual where a class belongs (#250 review).
+    value_options, value_lookup = _slot_options(
+        classes,
+        rest.get("value_uri") if restriction_value_is_class(rest["type"]) else None,
+    )
 
     with st.form(f"edit_rest_form_{form_key}"):
         new_class = st.selectbox(

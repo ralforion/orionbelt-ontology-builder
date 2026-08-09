@@ -299,3 +299,18 @@ def test_a_hasvalue_literal_stays_a_literal():
     assert not at.exception, at.exception
     row = at.session_state["ontology"].get_restrictions()[0]
     assert row["value"] == "42" and row["value_uri"] is None
+
+
+def test_switching_a_hasvalue_row_to_a_class_type_offers_only_classes():
+    """A hasValue row's value is an individual or a literal. Carrying it into
+    the class picker let a type change write owl:someValuesFrom :alice, which
+    names an individual where a class belongs (#250 review)."""
+    at = AppTest.from_function(_has_value_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    at.selectbox(key="er_type_0").set_value("someValuesFrom").run(timeout=120)
+
+    options = [o.strip() for o in at.selectbox(key="er_valcls_0").options]
+    assert options == ["Person"], options
+    assert "alice" not in " ".join(options)
