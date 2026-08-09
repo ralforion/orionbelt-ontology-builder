@@ -5285,6 +5285,40 @@ def render_individuals():
                         st.rerun()
 
 
+def required_selectbox(label, options, key, current_display=None, **kwargs):
+    """A dropdown that can be cleared, for a field that still must be filled.
+
+    Streamlit only draws the clear cross when a selectbox may hold nothing,
+    which means ``index=None`` and therefore no preselection — so the current
+    value is seeded into the widget's own state instead. That is done once per
+    value rather than once per render: re-seeding every run would undo a clear
+    the moment it happened, and seeding only on first sight would show a stale
+    value when the row underneath changes (issue #252).
+
+    Returns the chosen option, or ``None`` when the field has been cleared. Every
+    caller has to say so rather than carrying on: clearing a required dropdown
+    used to fall back to whatever was selected before, so the write landed on a
+    resource the user had explicitly cleared, with nothing said either way.
+    """
+    seeded_for = f"{key}__seeded_for"
+    if st.session_state.get(seeded_for) != current_display:
+        st.session_state[seeded_for] = current_display
+        st.session_state[key] = current_display if current_display in options else None
+    return st.selectbox(label, options, index=None, key=key, **kwargs)
+
+
+def missing_required(**fields) -> str | None:
+    """The message for the first required field left empty, or None.
+
+    Named so the error says which field, since a form can have several and
+    "something is required" sends the user hunting.
+    """
+    for name, value in fields.items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return f"{name} is required."
+    return None
+
+
 def _slot_options(entities: list, current_uri) -> tuple:
     """Build ``(options, lookup)`` for an editor slot, keeping ``current_uri``.
 
@@ -5430,20 +5464,26 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
     )
 
     with st.form(f"edit_rest_form_{form_key}"):
-        new_class = st.selectbox(
+        new_class = required_selectbox(
             "Applies to Class",
             cls_options,
-            index=_uri_option_index(cls_options, cls_lookup, applied_uris[0]),
             key=f"er_cls_{form_key}",
+            current_display=cls_options[
+                _uri_option_index(cls_options, cls_lookup, applied_uris[0])
+            ],
             format_func=_pad_option,
         )
-        new_property = st.selectbox(
+        new_property = required_selectbox(
             "Property",
             prop_options,
-            index=_uri_option_index(
-                prop_options, prop_lookup, rest.get("property_uri") or rest["property"]
-            ),
             key=f"er_prop_{form_key}",
+            current_display=prop_options[
+                _uri_option_index(
+                    prop_options,
+                    prop_lookup,
+                    rest.get("property_uri") or rest["property"],
+                )
+            ],
             format_func=_pad_option,
         )
         if restriction_value_is_class(new_type):
@@ -5451,17 +5491,18 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
             # classes rather than asking for the name to be typed (issue #250).
             # A value the list does not hold — an imported class, an external
             # URI — is offered as itself, so an unchanged row round-trips.
-            new_value = value_lookup.get(
-                st.selectbox(
-                    "Value (Class)",
-                    value_options,
-                    index=_uri_option_index(
+            _picked_value = required_selectbox(
+                "Value (Class)",
+                value_options,
+                key=f"er_valcls_{form_key}",
+                current_display=value_options[
+                    _uri_option_index(
                         value_options, value_lookup, rest.get("value_uri")
-                    ),
-                    key=f"er_valcls_{form_key}",
-                    format_func=_pad_option,
-                )
+                    )
+                ],
+                format_func=_pad_option,
             )
+            new_value = value_lookup.get(_picked_value) if _picked_value else None
         else:
             # Cardinalities and hasValue keep the free-text field: a number and a
             # literal are what they are, and the engine already reports a bad
@@ -5500,7 +5541,26 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
         if cancelled:
             on_close()
             st.rerun()
-        if saved:
+        if saved and (
+            _missing := missing_required(
+                **{
+                    "Applies to Class": new_class,
+                    "Property": new_property,
+                    # The value is a class only for the types that take one; the
+                    # others are free text and the engine already reports empty.
+                    **(
+                        {"Value (Class)": new_value}
+                        if restriction_value_is_class(new_type)
+                        else {}
+                    ),
+                }
+            )
+        ):
+            # A cleared dropdown used to fall back to the value it started with,
+            # so the axiom was rewritten against a class or property the user had
+            # explicitly cleared, and nothing was said either way (issue #252).
+            show_message(_missing, "error")
+        elif saved:
             try:
                 changed = ont.update_restriction(
                     {
