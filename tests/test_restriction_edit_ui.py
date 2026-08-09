@@ -40,6 +40,16 @@ def _click(at, label):
     next(b for b in at.button if b.label == label).click().run(timeout=120)
 
 
+def _pick_class(at, key, name):
+    """Choose a class in a value selectbox. Options are padded for search
+    ranking (see app.SEARCH_PAD_WIDTH), so match on the stripped label."""
+    box = at.selectbox(key=key)
+    option = next(
+        o for o in box.options if o.strip() == name or o.strip().startswith(name + " ")
+    )
+    box.set_value(option)
+
+
 def _open_row(at, index):
     at.session_state["active_rest"] = (str(index), "edit")
     at.run(timeout=120)
@@ -56,7 +66,7 @@ def test_editor_opens_with_the_rows_own_values():
 
     assert not at.exception, at.exception
     assert at.selectbox(key="er_type_0").value == "someValuesFrom"
-    assert at.text_input(key="er_val_0").value == "Engine"
+    assert at.selectbox(key="er_valcls_0").value.strip() == "Engine"
 
 
 def test_saving_edits_the_row_it_was_opened_for():
@@ -65,7 +75,7 @@ def test_saving_edits_the_row_it_was_opened_for():
     at.run(timeout=120)
     _open_row(at, 0)
 
-    at.text_input(key="er_val_0").set_value("Frame")
+    _pick_class(at, "er_valcls_0", "Frame")
     _click(at, "💾 Save")
 
     assert not at.exception, at.exception
@@ -94,7 +104,7 @@ def test_cancel_leaves_the_restriction_alone():
     at.run(timeout=120)
     _open_row(at, 0)
 
-    at.text_input(key="er_val_0").set_value("Frame")
+    _pick_class(at, "er_valcls_0", "Frame")
     _click(at, "Cancel")
 
     assert _rows(at.session_state["ontology"]) == [
@@ -109,7 +119,7 @@ def test_a_bad_cardinality_is_reported_and_changes_nothing():
     at.run(timeout=120)
     _open_row(at, 0)
 
-    at.selectbox(key="er_type_0").set_value("exactCardinality")
+    at.selectbox(key="er_type_0").set_value("exactCardinality").run(timeout=120)
     at.text_input(key="er_val_0").set_value("two")
     _click(at, "💾 Save")
 
@@ -127,7 +137,7 @@ def test_a_negative_cardinality_is_reported_and_changes_nothing():
     at.run(timeout=120)
     _open_row(at, 0)
 
-    at.selectbox(key="er_type_0").set_value("maxCardinality")
+    at.selectbox(key="er_type_0").set_value("maxCardinality").run(timeout=120)
     at.text_input(key="er_val_0").set_value("-1")
     _click(at, "💾 Save")
 
@@ -182,8 +192,10 @@ def test_an_imported_restriction_keeps_its_namespace_through_an_edit():
     _open_row(at, 0)
 
     assert not at.exception, at.exception
-    # The value is offered as its URI, so saving round-trips it.
-    assert at.text_input(key="er_val_0").value == "http://other.example/vocab#Bar"
+    # The imported class is a proper option now rather than a raw URI, and it
+    # maps back to its own URI, so saving round-trips it (issue #250). The
+    # assertions after the save are what prove that.
+    assert at.selectbox(key="er_valcls_0").value.strip() == "Bar"
 
     at.selectbox(key="er_type_0").set_value("allValuesFrom")
     _click(at, "💾 Save")
@@ -197,8 +209,13 @@ def test_an_imported_restriction_keeps_its_namespace_through_an_edit():
 
 
 def test_an_empty_value_is_reported_and_changes_nothing():
-    """It used to write owl:someValuesFrom : and destroy the original."""
-    at = AppTest.from_function(_script)
+    """It used to write owl:someValuesFrom : and destroy the original.
+
+    Driven through hasValue, which is still a free-text field. A class-valued
+    type cannot reach this any more: its picker has no empty option, which is
+    the point of #250 and is asserted below.
+    """
+    at = AppTest.from_function(_has_value_script)
     at.run(timeout=120)
     _open_row(at, 0)
 
@@ -207,10 +224,17 @@ def test_an_empty_value_is_reported_and_changes_nothing():
 
     assert not at.exception, at.exception
     assert any("needs a value" in e.value for e in at.error)
-    assert _rows(at.session_state["ontology"]) == [
-        ("hasPart", "someValuesFrom", "Engine"),
-        ("hasPart", "someValuesFrom", "Wheel"),
-    ]
+    assert at.session_state["ontology"].get_restrictions()[0]["value"] is not None
+
+
+def test_a_class_valued_restriction_cannot_be_emptied():
+    """The picker offers classes only, so there is no empty value to submit."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    options = at.selectbox(key="er_valcls_0").options
+    assert options and all(o.strip() for o in options)
 
 
 def _has_value_script():

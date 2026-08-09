@@ -5394,10 +5394,13 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
     )
     on_options, on_lookup = _slot_options(classes, rest.get("on_class_uri"))
 
-    # The value stays free text: it can be a class, a cardinality or a literal,
-    # and a form cannot swap the widget when the type picker changes. It is
-    # pre-filled as a full URI in the two cases where a bare local name would
-    # not round-trip (review P2):
+    # The value is a class, a cardinality or a literal depending on the type, so
+    # the type picker sits *outside* the form below: a form batches until submit
+    # and does not rerun when a widget inside it changes, so the value field
+    # could not follow the type and had to stay free text for every type
+    # (issue #250). Outside, changing the type reruns and the right widget
+    # appears. It is pre-filled as a full URI in the two cases where a bare local
+    # name would not round-trip (review P2):
     #   * an imported entity, since a local name resolves into the base
     #     namespace and would point at a different thing;
     #   * any resource-valued hasValue, since add_restriction stores a
@@ -5410,6 +5413,14 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
         rest["type"] == "hasValue" or not str(_value_uri).startswith(str(ont.namespace))
     ):
         value_default = str(_value_uri)
+
+    new_type = st.selectbox(
+        "Restriction Type",
+        types,
+        index=types.index(rest["type"]) if rest["type"] in types else 0,
+        key=f"er_type_{form_key}",
+    )
+    value_options, value_lookup = _slot_options(classes, rest.get("value_uri"))
 
     with st.form(f"edit_rest_form_{form_key}"):
         new_class = st.selectbox(
@@ -5428,19 +5439,33 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
             key=f"er_prop_{form_key}",
             format_func=_pad_option,
         )
-        new_type = st.selectbox(
-            "Restriction Type",
-            types,
-            index=types.index(rest["type"]) if rest["type"] in types else 0,
-            key=f"er_type_{form_key}",
-        )
-        new_value = st.text_input(
-            "Value",
-            value=value_default,
-            key=f"er_val_{form_key}",
-            help="A class name for someValuesFrom/allValuesFrom, a number for a "
-            "cardinality, or a literal for hasValue. A full URI is kept as it is.",
-        )
+        if restriction_value_is_class(new_type):
+            # someValuesFrom / allValuesFrom point at a class, so offer the
+            # classes rather than asking for the name to be typed (issue #250).
+            # A value the list does not hold — an imported class, an external
+            # URI — is offered as itself, so an unchanged row round-trips.
+            new_value = value_lookup.get(
+                st.selectbox(
+                    "Value (Class)",
+                    value_options,
+                    index=_uri_option_index(
+                        value_options, value_lookup, rest.get("value_uri")
+                    ),
+                    key=f"er_valcls_{form_key}",
+                    format_func=_pad_option,
+                )
+            )
+        else:
+            # Cardinalities and hasValue keep the free-text field: a number and a
+            # literal are what they are, and the engine already reports a bad
+            # one. Only the class-valued types gained a picker (issue #250).
+            new_value = st.text_input(
+                "Value",
+                value=value_default,
+                key=f"er_val_{form_key}",
+                help="A number for a cardinality, or a literal for hasValue. A "
+                "full URI is kept as it is.",
+            )
         new_on_class = None
         if restriction_takes_on_class(new_type):
             new_on_class = st.selectbox(
