@@ -2211,17 +2211,20 @@ def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None
         )
         label = st.text_input("Label", help="Human-readable label")
         comment = st.text_area("Comment", help="Description of the class")
-        parent_display = st.selectbox(
+        parent_display = clearable_selectbox(
             "Parent Class",
-            options=parent_options,
-            index=parent_index,
+            parent_options,
+            key=f"add_cls_parent_{form_key}",
+            current_display=parent_options[parent_index],
             help="Select a parent class for hierarchy",
             format_func=_pad_option,
         )
         ns_options, ns_lookup = build_namespace_options(ont)
-        ns_display = st.selectbox(
+        ns_display = clearable_selectbox(
             "Namespace",
-            options=ns_options,
+            ns_options,
+            key=f"add_cls_ns_{form_key}",
+            current_display=ns_options[0] if ns_options else None,
             help="Namespace the class is created in (default is the base URI)",
         )
 
@@ -2611,9 +2614,11 @@ def _render_panel_add_individual_form(ont, classes, individuals, ntype, ename):
         label = st.text_input("Label")
         comment = st.text_area("Comment")
         ns_options, ns_lookup = build_namespace_options(ont)
-        ns_display = st.selectbox(
+        ns_display = clearable_selectbox(
             "Namespace",
-            options=ns_options,
+            ns_options,
+            key="panel_add_ind_ns",
+            current_display=ns_options[0] if ns_options else None,
             help="Namespace the individual is created in (default is the base URI)",
         )
         add_col, cancel_col = st.columns(2)
@@ -2662,11 +2667,12 @@ def _render_panel_add_annotation_form(ont, subject_uri, subject_label):
     st.markdown(f"**Annotate {subject_label}**")
     options, lookup = annotation_predicate_options(ont)
     with st.form("panel_add_ann_form"):
-        predicate_display = st.selectbox(
+        predicate_display = required_selectbox(
             "Annotation Type",
-            options=options,
-            accept_new_options=True,
+            options,
             key="panel_ann_predicate",
+            current_display=options[0] if options else None,
+            accept_new_options=True,
             help=(
                 "Pick a type, or type your own to create it: a name like "
                 "`wikidataId`, a bound prefix like `wdt:P31`, or a full URI."
@@ -2690,6 +2696,9 @@ def _render_panel_add_annotation_form(ont, subject_uri, subject_label):
         _panel_close_add()
         st.rerun()
     if submitted:
+        if _missing := missing_required(**{"Annotation Type": predicate_display}):
+            show_message(_missing, "error")
+            return
         if not value.strip():
             show_message("Annotation value is required!", "error")
             return
@@ -3055,10 +3064,11 @@ def _render_panel_entity_editor(
             comment = st.text_area("Comment", value=entity["comment"])
             others = [c["name"] for c in classes if c["name"] != entity["name"]]
             cur = entity["parents"][0] if entity["parents"] else "None"
-            parent = st.selectbox(
+            parent = clearable_selectbox(
                 "Parent",
                 ["None"] + others,
-                index=others.index(cur) + 1 if cur in others else 0,
+                key=f"panel_edit_cls_parent_{_uid(entity['uri'])}",
+                current_display=cur if cur in others else "None",
             )
             if st.form_submit_button("Save", use_container_width=True):
                 if _apply_class_edit(ont, entity, name, label, comment, parent):
@@ -3075,10 +3085,11 @@ def _render_panel_entity_editor(
                 (d for d, u in cls_lookup.items() if u == entity.get("domain_uri", "")),
                 "None",
             )
-            dom = st.selectbox(
+            dom = clearable_selectbox(
                 "Domain",
                 cls_opts,
-                index=cls_opts.index(cur_dom) if cur_dom in cls_opts else 0,
+                key=f"panel_edit_prop_dom_{_uid(entity['uri'])}",
+                current_display=cur_dom if cur_dom in cls_opts else None,
                 format_func=_pad_option,
             )
             if ntype == "Object Property":
@@ -3090,10 +3101,11 @@ def _render_panel_entity_editor(
                     ),
                     "None",
                 )
-                rng = st.selectbox(
+                rng = clearable_selectbox(
                     "Range",
                     cls_opts,
-                    index=cls_opts.index(cur_rng) if cur_rng in cls_opts else 0,
+                    key=f"panel_edit_prop_rng_{_uid(entity['uri'])}",
+                    current_display=cur_rng if cur_rng in cls_opts else None,
                     format_func=_pad_option,
                 )
                 # Only apply when changed, so a range/domain that can't be shown
@@ -3110,20 +3122,31 @@ def _render_panel_entity_editor(
                     if entity["range"] in dts
                     else (dts[0] if dts else None)
                 )
-                rng = st.selectbox(
+                rng = required_selectbox(
                     "Range (datatype)",
                     dts,
-                    index=dts.index(default_rng) if default_rng in dts else 0,
+                    key=f"panel_edit_prop_dtrng_{_uid(entity['uri'])}",
+                    current_display=default_rng,
                 )
                 new_range = rng if rng != default_rng else None
             new_domain = (cls_lookup.get(dom) or "") if dom != cur_dom else None
             if st.form_submit_button("Save", use_container_width=True):
-                if _apply_property_edit(
-                    ont, entity, name, label, comment, new_domain, new_range
+                # A data property's range has no "no datatype" state to fall
+                # back on: cleared, it would read as "leave as-is" and the save
+                # would quietly do nothing to it.
+                if ntype == "Data Property" and (
+                    _missing := missing_required(**{"Range (datatype)": rng})
                 ):
-                    save_checkpoint("Update property")
-                    show_message("Property updated!", "success")
-                st.rerun()
+                    # No rerun: show_message draws inline, so rerunning here
+                    # would wipe the error before it was ever seen.
+                    show_message(_missing, "error")
+                else:
+                    if _apply_property_edit(
+                        ont, entity, name, label, comment, new_domain, new_range
+                    ):
+                        save_checkpoint("Update property")
+                        show_message("Property updated!", "success")
+                    st.rerun()
     elif ntype == "Individual":
         with st.form("panel_edit_ind"):
             name = st.text_input("Name", value=entity["name"])
@@ -3131,8 +3154,18 @@ def _render_panel_entity_editor(
             comment = st.text_area("Comment", value=entity["comment"])
             cur_classes = entity["classes"]
             avail = [c["name"] for c in classes if c["name"] not in cur_classes]
-            add_cls = st.selectbox("Add to class", ["None"] + avail)
-            rem_cls = st.selectbox("Remove from class", ["None"] + cur_classes)
+            add_cls = clearable_selectbox(
+                "Add to class",
+                ["None"] + avail,
+                key=f"panel_edit_ind_add_{_uid(entity['uri'])}",
+                current_display="None",
+            )
+            rem_cls = clearable_selectbox(
+                "Remove from class",
+                ["None"] + cur_classes,
+                key=f"panel_edit_ind_rem_{_uid(entity['uri'])}",
+                current_display="None",
+            )
             if st.form_submit_button("Save", use_container_width=True):
                 if _apply_individual_edit(
                     ont, entity, name, label, comment, add_cls, rem_cls
@@ -3784,17 +3817,13 @@ def render_classes():
                             current_parent = (
                                 cls["parents"][0] if cls["parents"] else "None"
                             )
-                            new_parent = st.selectbox(
+                            new_parent = clearable_selectbox(
                                 "Parent Class",
-                                options=["None"] + other_classes,
-                                index=0
-                                if current_parent == "None"
-                                else (
-                                    other_classes.index(current_parent) + 1
-                                    if current_parent in other_classes
-                                    else 0
-                                ),
+                                ["None"] + other_classes,
                                 key=f"par_{cls_uid}",
+                                current_display=current_parent
+                                if current_parent in other_classes
+                                else "None",
                             )
 
                             if st.form_submit_button("Save Changes"):
@@ -3867,10 +3896,11 @@ def render_classes():
         else:
             # Build options with disambiguated name · Label format; lookup is by URI
             class_options, class_lookup = build_class_options(classes)
-            selected_display = st.selectbox(
+            selected_display = clearable_selectbox(
                 "Select Class",
-                options=class_options,
+                class_options,
                 key="edit_class_select",
+                current_display=class_options[0] if class_options else None,
                 format_func=_pad_option,
             )
             selected_uri = class_lookup.get(selected_display)
@@ -3898,10 +3928,11 @@ def render_classes():
                     ns_index = _namespace_option_index(
                         ont, ns_options, ns_lookup, class_info["uri"]
                     )
-                    new_ns_display = st.selectbox(
+                    new_ns_display = required_selectbox(
                         "Namespace",
-                        options=ns_options,
-                        index=ns_index,
+                        ns_options,
+                        key=f"edit_cls_ns_{selected_uid}",
+                        current_display=ns_options[ns_index] if ns_options else None,
                         help="Moving to another namespace re-points every "
                         "reference to this class.",
                     )
@@ -3918,16 +3949,13 @@ def render_classes():
                     current_parent = (
                         class_info["parents"][0] if class_info["parents"] else "None"
                     )
-                    new_parent = st.selectbox(
+                    new_parent = clearable_selectbox(
                         "Parent Class",
-                        options=["None"] + other_classes,
-                        index=0
-                        if current_parent == "None"
-                        else (
-                            other_classes.index(current_parent) + 1
-                            if current_parent in other_classes
-                            else 0
-                        ),
+                        ["None"] + other_classes,
+                        key=f"edit_cls_parent_{selected_uid}",
+                        current_display=current_parent
+                        if current_parent in other_classes
+                        else "None",
                     )
 
                     col1, col2 = st.columns(2)
@@ -3938,7 +3966,14 @@ def render_classes():
                             "Delete Class", type="secondary"
                         )
 
-                    if update_btn:
+                    if update_btn and (
+                        _missing := missing_required(Namespace=new_ns_display)
+                    ):
+                        # An empty namespace reads as the base URI, so a cleared
+                        # one would move the class there and re-point every
+                        # reference, silently.
+                        show_message(_missing, "error")
+                    elif update_btn:
                         if _apply_class_edit(
                             ont,
                             class_info,
@@ -4251,18 +4286,21 @@ def render_properties():
                                 "no links are lost.",
                             )
                             ns_opts, ns_lookup = build_namespace_options(ont)
-                            new_namespace = ns_lookup.get(
-                                st.selectbox(
-                                    "Namespace",
-                                    options=ns_opts,
-                                    index=_namespace_option_index(
+                            ns_disp = required_selectbox(
+                                "Namespace",
+                                ns_opts,
+                                key=f"objp_ns_{prop_uid}",
+                                current_display=ns_opts[
+                                    _namespace_option_index(
                                         ont, ns_opts, ns_lookup, prop["uri"]
-                                    ),
-                                    key=f"objp_ns_{prop_uid}",
-                                    help="Moving to another namespace re-points "
-                                    "every reference to this property.",
-                                )
+                                    )
+                                ]
+                                if ns_opts
+                                else None,
+                                help="Moving to another namespace re-points "
+                                "every reference to this property.",
                             )
+                            new_namespace = ns_lookup.get(ns_disp)
                             new_name = _custom_uri_field(
                                 prop["uri"],
                                 new_name,
@@ -4294,27 +4332,35 @@ def render_properties():
                             )
                             col1, col2 = st.columns(2)
                             with col1:
-                                dom_disp = st.selectbox(
+                                dom_disp = clearable_selectbox(
                                     "Domain",
-                                    options=cls_opts,
-                                    index=cls_opts.index(cur_dom_disp)
-                                    if cur_dom_disp in cls_opts
-                                    else 0,
+                                    cls_opts,
                                     key=f"objp_dom_{prop_uid}",
+                                    current_display=cur_dom_disp
+                                    if cur_dom_disp in cls_opts
+                                    else None,
                                     format_func=_pad_option,
                                 )
                             with col2:
-                                rng_disp = st.selectbox(
+                                rng_disp = clearable_selectbox(
                                     "Range",
-                                    options=cls_opts,
-                                    index=cls_opts.index(cur_rng_disp)
-                                    if cur_rng_disp in cls_opts
-                                    else 0,
+                                    cls_opts,
                                     key=f"objp_rng_{prop_uid}",
+                                    current_display=cur_rng_disp
+                                    if cur_rng_disp in cls_opts
+                                    else None,
                                     format_func=_pad_option,
                                 )
 
                             if st.form_submit_button("Save Changes"):
+                                # An empty namespace reads as the base URI, so a
+                                # cleared one would move the property there and
+                                # re-point every reference to it. Flashed rather
+                                # than shown, since the rerun below would wipe
+                                # anything drawn inline here.
+                                if _missing := missing_required(Namespace=ns_disp):
+                                    set_flash_message(_missing, "error")
+                                    st.rerun()
                                 if (
                                     new_name
                                     and new_name != prop["name"]
@@ -4464,18 +4510,21 @@ def render_properties():
                                 "no links are lost.",
                             )
                             ns_opts, ns_lookup = build_namespace_options(ont)
-                            new_namespace = ns_lookup.get(
-                                st.selectbox(
-                                    "Namespace",
-                                    options=ns_opts,
-                                    index=_namespace_option_index(
+                            ns_disp = required_selectbox(
+                                "Namespace",
+                                ns_opts,
+                                key=f"dp_ns_{prop_uid}",
+                                current_display=ns_opts[
+                                    _namespace_option_index(
                                         ont, ns_opts, ns_lookup, prop["uri"]
-                                    ),
-                                    key=f"dp_ns_{prop_uid}",
-                                    help="Moving to another namespace re-points "
-                                    "every reference to this property.",
-                                )
+                                    )
+                                ]
+                                if ns_opts
+                                else None,
+                                help="Moving to another namespace re-points "
+                                "every reference to this property.",
                             )
+                            new_namespace = ns_lookup.get(ns_disp)
                             new_name = _custom_uri_field(
                                 prop["uri"],
                                 new_name,
@@ -4499,13 +4548,13 @@ def render_properties():
                             )
                             col1, col2 = st.columns(2)
                             with col1:
-                                dom_disp = st.selectbox(
+                                dom_disp = clearable_selectbox(
                                     "Domain",
-                                    options=cls_opts,
-                                    index=cls_opts.index(cur_dom_disp)
-                                    if cur_dom_disp in cls_opts
-                                    else 0,
+                                    cls_opts,
                                     key=f"dp_dom_{prop_uid}",
+                                    current_display=cur_dom_disp
+                                    if cur_dom_disp in cls_opts
+                                    else None,
                                     format_func=_pad_option,
                                 )
                             with col2:
@@ -4514,16 +4563,27 @@ def render_properties():
                                     if prop["range"] in datatypes
                                     else "string"
                                 )
-                                new_range = st.selectbox(
+                                new_range = required_selectbox(
                                     "Range (Datatype)",
-                                    options=datatypes,
-                                    index=datatypes.index(current_range)
-                                    if current_range in datatypes
-                                    else 0,
+                                    datatypes,
                                     key=f"dp_rng_{prop_uid}",
+                                    current_display=current_range,
                                 )
 
                             if st.form_submit_button("Save Changes"):
+                                # An empty namespace reads as the base URI, so a
+                                # cleared one would move the property there and
+                                # re-point every reference to it. Flashed rather
+                                # than shown, since the rerun below would wipe
+                                # anything drawn inline here.
+                                if _missing := missing_required(
+                                    **{
+                                        "Namespace": ns_disp,
+                                        "Range (Datatype)": new_range,
+                                    }
+                                ):
+                                    set_flash_message(_missing, "error")
+                                    st.rerun()
                                 if (
                                     new_name
                                     and new_name != prop["name"]
@@ -4595,21 +4655,31 @@ def render_properties():
                 )
                 with st.form("reuse_obj_prop_form"):
                     reuse_opts, reuse_lookup = build_uri_options(object_props)
-                    prop_disp = st.selectbox(
+                    prop_disp = required_selectbox(
                         "Existing property *",
-                        options=reuse_opts,
+                        reuse_opts,
+                        key="reuse_prop_existing",
+                        current_display=reuse_opts[0] if reuse_opts else None,
                         format_func=_pad_option,
                     )
 
                     cls_opts, cls_lookup = build_class_options(classes)
                     col1, col2 = st.columns(2)
                     with col1:
-                        source_disp = st.selectbox(
-                            "Source class *", options=cls_opts, format_func=_pad_option
+                        source_disp = required_selectbox(
+                            "Source class *",
+                            cls_opts,
+                            key="reuse_prop_source",
+                            current_display=cls_opts[0] if cls_opts else None,
+                            format_func=_pad_option,
                         )
                     with col2:
-                        target_disp = st.selectbox(
-                            "Target class *", options=cls_opts, format_func=_pad_option
+                        target_disp = required_selectbox(
+                            "Target class *",
+                            cls_opts,
+                            key="reuse_prop_target",
+                            current_display=cls_opts[0] if cls_opts else None,
+                            format_func=_pad_option,
                         )
 
                     link_disp = st.radio(
@@ -4629,7 +4699,15 @@ def render_properties():
                         prop_name = reuse_lookup.get(prop_disp)
                         source = cls_lookup.get(source_disp)
                         target = cls_lookup.get(target_disp)
-                        if not (prop_name and source and target):
+                        if _missing := missing_required(
+                            **{
+                                "Existing property": prop_disp,
+                                "Source class": source_disp,
+                                "Target class": target_disp,
+                            }
+                        ):
+                            show_message(_missing, "error")
+                        elif not (prop_name and source and target):
                             show_message(
                                 "Property, source and target are required!", "error"
                             )
@@ -4666,12 +4744,20 @@ def render_properties():
                 )
                 col1, col2 = st.columns(2)
                 with col1:
-                    domain_disp = st.selectbox(
-                        "Domain (Class)", options=cls_opts, format_func=_pad_option
+                    domain_disp = clearable_selectbox(
+                        "Domain (Class)",
+                        cls_opts,
+                        key="add_objprop_domain",
+                        current_display=cls_opts[0] if cls_opts else None,
+                        format_func=_pad_option,
                     )
                 with col2:
-                    range_disp = st.selectbox(
-                        "Range (Class)", options=cls_opts, format_func=_pad_option
+                    range_disp = clearable_selectbox(
+                        "Range (Class)",
+                        cls_opts,
+                        key="add_objprop_range",
+                        current_display=cls_opts[0] if cls_opts else None,
+                        format_func=_pad_option,
                     )
 
                 st.write("**Property Characteristics:**")
@@ -4688,13 +4774,19 @@ def render_properties():
                 with col4:
                     symmetric = st.checkbox("Symmetric")
 
-                inverse_disp = st.selectbox(
-                    "Inverse Of", options=obj_prop_opts, format_func=_pad_option
+                inverse_disp = clearable_selectbox(
+                    "Inverse Of",
+                    obj_prop_opts,
+                    key="add_objprop_inverse",
+                    current_display=obj_prop_opts[0] if obj_prop_opts else None,
+                    format_func=_pad_option,
                 )
                 ns_options, ns_lookup = build_namespace_options(ont)
-                ns_display = st.selectbox(
+                ns_display = clearable_selectbox(
                     "Namespace",
-                    options=ns_options,
+                    ns_options,
+                    key="add_objprop_ns",
+                    current_display=ns_options[0] if ns_options else None,
                     help="Namespace the property is created in (default is the base URI)",
                 )
 
@@ -4742,29 +4834,38 @@ def render_properties():
             cls_opts, cls_lookup = build_class_options(classes, include_none=True)
             col1, col2 = st.columns(2)
             with col1:
-                domain_disp = st.selectbox(
+                domain_disp = clearable_selectbox(
                     "Domain (Class)",
-                    options=cls_opts,
+                    cls_opts,
                     key="data_prop_domain",
+                    current_display=cls_opts[0] if cls_opts else None,
                     format_func=_pad_option,
                 )
             with col2:
                 datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())
-                range_ = st.selectbox(
-                    "Range (Datatype)", options=datatypes, key="data_prop_range"
+                range_ = required_selectbox(
+                    "Range (Datatype)",
+                    datatypes,
+                    key="data_prop_range",
+                    current_display=datatypes[0] if datatypes else None,
                 )
 
             functional = st.checkbox("Functional", key="data_prop_functional")
             ns_options, ns_lookup = build_namespace_options(ont)
-            ns_display = st.selectbox(
+            ns_display = clearable_selectbox(
                 "Namespace",
-                options=ns_options,
-                help="Namespace the property is created in (default is the base URI)",
+                ns_options,
                 key="data_prop_namespace",
+                current_display=ns_options[0] if ns_options else None,
+                help="Namespace the property is created in (default is the base URI)",
             )
 
             submitted = st.form_submit_button("Add Data Property")
-            if submitted:
+            if submitted and (
+                _missing := missing_required(**{"Range (Datatype)": range_})
+            ):
+                show_message(_missing, "error")
+            elif submitted:
                 ns_val = ns_lookup.get(ns_display)
                 prop_uris = {p["uri"] for p in object_props} | {
                     p["uri"] for p in data_props
@@ -5039,18 +5140,21 @@ def render_individuals():
                                 "delete-and-recreate.",
                             )
                             ns_opts, ns_lookup = build_namespace_options(ont)
-                            new_namespace = ns_lookup.get(
-                                st.selectbox(
-                                    "Namespace",
-                                    options=ns_opts,
-                                    index=_namespace_option_index(
+                            ns_disp = required_selectbox(
+                                "Namespace",
+                                ns_opts,
+                                key=f"ind_ns_{_ik}",
+                                current_display=ns_opts[
+                                    _namespace_option_index(
                                         ont, ns_opts, ns_lookup, ind["uri"]
-                                    ),
-                                    key=f"ind_ns_{_ik}",
-                                    help="Moving to another namespace re-points "
-                                    "every reference to this individual.",
-                                )
+                                    )
+                                ]
+                                if ns_opts
+                                else None,
+                                help="Moving to another namespace re-points "
+                                "every reference to this individual.",
                             )
+                            new_namespace = ns_lookup.get(ns_disp)
                             new_name = _custom_uri_field(
                                 ind["uri"], new_name, key=f"custom_uri_ind_{_ik}"
                             )
@@ -5069,19 +5173,27 @@ def render_individuals():
 
                             col1, col2 = st.columns(2)
                             with col1:
-                                add_class = st.selectbox(
+                                add_class = clearable_selectbox(
                                     "Add to Class",
-                                    options=["None"] + available_classes,
+                                    ["None"] + available_classes,
                                     key=f"ind_add_cls_{_ik}",
+                                    current_display="None",
                                 )
                             with col2:
-                                remove_class = st.selectbox(
+                                remove_class = clearable_selectbox(
                                     "Remove from Class",
-                                    options=["None"] + current_classes,
+                                    ["None"] + current_classes,
                                     key=f"ind_rem_cls_{_ik}",
+                                    current_display="None",
                                 )
 
                             if st.form_submit_button("Save Changes"):
+                                # An empty namespace reads as the base URI, so a
+                                # cleared one would move the individual there
+                                # and re-point every reference to it.
+                                if _missing := missing_required(Namespace=ns_disp):
+                                    set_flash_message(_missing, "error")
+                                    st.rerun()
                                 if (
                                     new_name
                                     and new_name != ind["name"]
@@ -5131,18 +5243,27 @@ def render_individuals():
                 name = st.text_input("Individual Name *")
                 label = st.text_input("Label")
                 comment = st.text_area("Comment")
-                class_type = st.selectbox("Class Type *", options=class_names)
+                class_type = required_selectbox(
+                    "Class Type *",
+                    class_names,
+                    key="add_ind_class_type",
+                    current_display=class_names[0] if class_names else None,
+                )
                 ns_options, ns_lookup = build_namespace_options(ont)
-                ns_display = st.selectbox(
+                ns_display = clearable_selectbox(
                     "Namespace",
-                    options=ns_options,
+                    ns_options,
+                    key="add_ind_ns",
+                    current_display=ns_options[0] if ns_options else None,
                     help="Namespace the individual is created in (default is the base URI)",
                 )
 
                 submitted = st.form_submit_button("Add Individual")
                 if submitted:
                     ns_val = ns_lookup.get(ns_display)
-                    if not name:
+                    if _missing := missing_required(**{"Class Type": class_type}):
+                        show_message(_missing, "error")
+                    elif not name:
                         show_message("Individual name is required!", "error")
                     elif reason := ont.invalid_name_reason(name):
                         show_message(reason, "error")
@@ -5169,7 +5290,12 @@ def render_individuals():
             st.warning("Please create at least one property first.")
         else:
             with st.form("add_prop_value_form"):
-                individual = st.selectbox("Select Individual", options=ind_names)
+                individual = required_selectbox(
+                    "Select Individual",
+                    ind_names,
+                    key="add_pv_individual",
+                    current_display=ind_names[0] if ind_names else None,
+                )
 
                 prop_type = st.radio(
                     "Property Type", ["Object Property", "Data Property"]
@@ -5177,24 +5303,37 @@ def render_individuals():
 
                 if prop_type == "Object Property":
                     prop_options = [p["name"] for p in object_props]
-                    property_name = st.selectbox(
+                    property_name = required_selectbox(
                         "Property",
-                        options=prop_options if prop_options else ["No properties"],
+                        prop_options if prop_options else ["No properties"],
+                        key="add_pv_obj_prop",
+                        current_display=(prop_options or ["No properties"])[0],
                     )
-                    value = st.selectbox("Value (Individual)", options=ind_names)
+                    value = required_selectbox(
+                        "Value (Individual)",
+                        ind_names,
+                        key="add_pv_obj_value",
+                        current_display=ind_names[0] if ind_names else None,
+                    )
                     is_object = True
                 else:
                     prop_options = [p["name"] for p in data_props]
-                    property_name = st.selectbox(
+                    property_name = required_selectbox(
                         "Property",
-                        options=prop_options if prop_options else ["No properties"],
+                        prop_options if prop_options else ["No properties"],
+                        key="add_pv_data_prop",
+                        current_display=(prop_options or ["No properties"])[0],
                     )
                     value = st.text_input("Value")
                     is_object = False
 
                 submitted = st.form_submit_button("Add Property Value")
                 if submitted:
-                    if not property_name or property_name == "No properties":
+                    if _missing := missing_required(
+                        **{"Select Individual": individual, "Property": property_name}
+                    ):
+                        show_message(_missing, "error")
+                    elif property_name == "No properties":
                         show_message("Please select a property!", "error")
                     elif not value:
                         show_message("Please provide a value!", "error")
@@ -5313,26 +5452,37 @@ def render_individuals():
                         st.rerun()
 
 
-def required_selectbox(label, options, key, current_display=None, **kwargs):
-    """A dropdown that can be cleared, for a field that still must be filled.
+def clearable_selectbox(label, options, key, current_display=None, **kwargs):
+    """A dropdown carrying the clear cross, returning None once cleared.
 
-    Streamlit only draws the clear cross when a selectbox may hold nothing,
-    which means ``index=None`` and therefore no preselection — so the current
-    value is seeded into the widget's own state instead. That is done once per
-    value rather than once per render: re-seeding every run would undo a clear
-    the moment it happened, and seeding only on first sight would show a stale
-    value when the row underneath changes.
+    Streamlit only draws that cross when a selectbox may hold nothing, which
+    means ``index=None`` and therefore no preselection — so the current value is
+    seeded into the widget's own state instead. That is done once per value
+    rather than once per render: re-seeding every run would undo a clear the
+    moment it happened, and seeding only on first sight would show a stale value
+    when the row underneath changes.
 
-    Returns the chosen option, or ``None`` when the field has been cleared. Every
-    caller has to say so rather than carrying on: clearing a required dropdown
-    used to fall back to whatever was selected before, so the write landed on a
-    resource the user had explicitly cleared, with nothing said either way.
+    Use this where empty is a legitimate answer: a picker that chooses what to
+    show, or a field whose absence simply means "not set".
     """
     seeded_for = f"{key}__seeded_for"
     if st.session_state.get(seeded_for) != current_display:
         st.session_state[seeded_for] = current_display
         st.session_state[key] = current_display if current_display in options else None
     return st.selectbox(label, options, index=None, key=key, **kwargs)
+
+
+def required_selectbox(label, options, key, current_display=None, **kwargs):
+    """A clearable dropdown for a field that still must be filled.
+
+    Identical to :func:`clearable_selectbox` on screen; the difference is the
+    obligation it puts on the caller, which has to check the result with
+    :func:`missing_required` and refuse the write. Clearing a required dropdown
+    used to fall back to whatever was selected before, so the write landed on a
+    resource the user had explicitly cleared, with nothing said either way. A
+    test pins the two together so a new form cannot offer one without the other.
+    """
+    return clearable_selectbox(label, options, key, current_display, **kwargs)
 
 
 def missing_required(**fields) -> str | None:
@@ -5544,15 +5694,17 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
             )
         new_on_class = None
         if restriction_takes_on_class(new_type):
-            new_on_class = st.selectbox(
+            new_on_class = required_selectbox(
                 "Qualified on Class",
                 on_options,
-                index=(
+                key=f"er_onclass_{form_key}",
+                current_display=on_options[
                     _uri_option_index(on_options, on_lookup, rest["on_class_uri"])
                     if rest.get("on_class_uri")
                     else 0
-                ),
-                key=f"er_onclass_{form_key}",
+                ]
+                if on_options
+                else None,
                 format_func=_pad_option,
             )
 
@@ -5579,6 +5731,13 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
                     **(
                         {"Value (Class)": new_value}
                         if restriction_value_is_class(new_type)
+                        else {}
+                    ),
+                    # A qualified cardinality without its onClass is an axiom
+                    # no reasoner accepts, so it cannot be left empty either.
+                    **(
+                        {"Qualified on Class": new_on_class}
+                        if restriction_takes_on_class(new_type)
                         else {}
                     ),
                 }
@@ -5652,11 +5811,19 @@ def render_add_restriction(ont, classes, properties):
         # was silently created on a base-namespace twin instead.
         cls_opts, cls_lookup = build_uri_options(classes)
         prop_opts, prop_lookup = build_uri_options(properties)
-        target_disp = st.selectbox(
-            "Apply to Class", options=cls_opts, format_func=_pad_option
+        target_disp = required_selectbox(
+            "Apply to Class",
+            cls_opts,
+            key="add_rest_target",
+            current_display=cls_opts[0] if cls_opts else None,
+            format_func=_pad_option,
         )
-        property_disp = st.selectbox(
-            "On Property", options=prop_opts, format_func=_pad_option
+        property_disp = required_selectbox(
+            "On Property",
+            prop_opts,
+            key="add_rest_property",
+            current_display=prop_opts[0] if prop_opts else None,
+            format_func=_pad_option,
         )
 
         # Straight from the engine, so a type can never be offered here
@@ -5667,26 +5834,33 @@ def render_add_restriction(ont, classes, properties):
 
         st.write("**Restriction Value:**")
         value = None
+        value_disp = None
+        value_label = None
         if restriction_type in ["someValuesFrom", "allValuesFrom"]:
-            value = cls_lookup[
-                st.selectbox(
-                    "Value (Class)",
-                    options=cls_opts,
-                    key="rest_class_value",
-                    format_func=_pad_option,
-                )
-            ]
+            value_label = "Value (Class)"
+            value_disp = required_selectbox(
+                "Value (Class)",
+                cls_opts,
+                key="rest_class_value",
+                current_display=cls_opts[0] if cls_opts else None,
+                format_func=_pad_option,
+            )
+            value = cls_lookup.get(value_disp)
         elif restriction_type == "hasValue":
             ind_opts, ind_lookup = build_uri_options(ont.get_individuals())
             value_type = st.radio("Value Type", ["Literal", "Individual"])
             if value_type == "Literal":
                 value = st.text_input("Literal Value")
             elif ind_opts:
-                value = ind_lookup[
-                    st.selectbox(
-                        "Individual", options=ind_opts, format_func=_pad_option
-                    )
-                ]
+                value_label = "Individual"
+                value_disp = required_selectbox(
+                    "Individual",
+                    ind_opts,
+                    key="rest_individual_value",
+                    current_display=ind_opts[0],
+                    format_func=_pad_option,
+                )
+                value = ind_lookup.get(value_disp)
             else:
                 # Offering a "No individuals" placeholder let that string
                 # be stored as the value.
@@ -5695,18 +5869,34 @@ def render_add_restriction(ont, classes, properties):
             value = st.number_input("Cardinality", min_value=0, value=1)
 
         on_class = None
+        on_class_disp = None
         if restriction_takes_on_class(restriction_type):
-            on_class = cls_lookup[
-                st.selectbox(
-                    "Qualified on Class",
-                    options=cls_opts,
-                    key="qualified_class",
-                    format_func=_pad_option,
-                )
-            ]
+            on_class_disp = required_selectbox(
+                "Qualified on Class",
+                cls_opts,
+                key="qualified_class",
+                current_display=cls_opts[0] if cls_opts else None,
+                format_func=_pad_option,
+            )
+            on_class = cls_lookup.get(on_class_disp)
 
         submitted = st.form_submit_button("Add Restriction")
-        if submitted and _apply_restriction_add(
+        if submitted and (
+            _missing := missing_required(
+                **{
+                    "Apply to Class": target_disp,
+                    "On Property": property_disp,
+                    **({value_label: value_disp} if value_label else {}),
+                    **(
+                        {"Qualified on Class": on_class_disp}
+                        if restriction_takes_on_class(restriction_type)
+                        else {}
+                    ),
+                }
+            )
+        ):
+            show_message(_missing, "error")
+        elif submitted and _apply_restriction_add(
             ont,
             cls_lookup[target_disp],
             prop_lookup[property_disp],
@@ -5936,10 +6126,11 @@ def render_relations():
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    class1_disp = st.selectbox(
+                    class1_disp = required_selectbox(
                         "Class 1",
-                        options=cls_opts,
+                        cls_opts,
                         key="crel_class1",
+                        current_display=cls_opts[0] if cls_opts else None,
                         format_func=_pad_option,
                     )
                 with col2:
@@ -5949,10 +6140,11 @@ def render_relations():
                         key="crel_type",
                     )
                 with col3:
-                    class2_disp = st.selectbox(
+                    class2_disp = required_selectbox(
                         "Class 2",
-                        options=cls_opts,
+                        cls_opts,
                         key="crel_class2",
+                        current_display=cls_opts[0] if cls_opts else None,
                         format_func=_pad_option,
                     )
 
@@ -5975,7 +6167,13 @@ def render_relations():
                         if class2_uri == cls_lookup.get(class2_disp)
                         else class2_uri
                     )
-                    if ext_err:
+                    # Class 2 is checked as the resolved target, since an
+                    # external URI legitimately stands in for the pick.
+                    if _missing := missing_required(
+                        **{"Class 1": class1_disp, "Class 2": class2_uri}
+                    ):
+                        show_message(_missing, "error")
+                    elif ext_err:
                         show_message(ext_err, "error")
                     elif _apply_class_relation_add(
                         ont,
@@ -6002,10 +6200,11 @@ def render_relations():
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    prop1_disp = st.selectbox(
+                    prop1_disp = required_selectbox(
                         "Property 1",
-                        options=prop_opts,
+                        prop_opts,
                         key="prel_prop1",
+                        current_display=prop_opts[0] if prop_opts else None,
                         format_func=_pad_option,
                     )
                 with col2:
@@ -6015,10 +6214,11 @@ def render_relations():
                         key="prel_type",
                     )
                 with col3:
-                    prop2_disp = st.selectbox(
+                    prop2_disp = required_selectbox(
                         "Property 2",
-                        options=prop_opts,
+                        prop_opts,
                         key="prel_prop2",
+                        current_display=prop_opts[0] if prop_opts else None,
                         format_func=_pad_option,
                     )
 
@@ -6042,7 +6242,11 @@ def render_relations():
                         if prop2_uri == prop_lookup.get(prop2_disp)
                         else prop2_uri
                     )
-                    if ext_err:
+                    if _missing := missing_required(
+                        **{"Property 1": prop1_disp, "Property 2": prop2_uri}
+                    ):
+                        show_message(_missing, "error")
+                    elif ext_err:
                         show_message(ext_err, "error")
                     elif prop1_uri == prop2_uri:
                         show_message("Please select two different properties!", "error")
@@ -6069,10 +6273,11 @@ def render_relations():
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    ind1_disp = st.selectbox(
+                    ind1_disp = required_selectbox(
                         "Individual 1",
-                        options=ind_opts,
+                        ind_opts,
                         key="irel_ind1",
+                        current_display=ind_opts[0] if ind_opts else None,
                         format_func=_pad_option,
                     )
                 with col2:
@@ -6082,10 +6287,11 @@ def render_relations():
                         key="irel_type",
                     )
                 with col3:
-                    ind2_disp = st.selectbox(
+                    ind2_disp = required_selectbox(
                         "Individual 2",
-                        options=ind_opts,
+                        ind_opts,
                         key="irel_ind2",
+                        current_display=ind_opts[0] if ind_opts else None,
                         format_func=_pad_option,
                     )
 
@@ -6106,7 +6312,11 @@ def render_relations():
                     ind2_show = (
                         ind2_disp if ind2_uri == ind_lookup.get(ind2_disp) else ind2_uri
                     )
-                    if ext_err:
+                    if _missing := missing_required(
+                        **{"Individual 1": ind1_disp, "Individual 2": ind2_uri}
+                    ):
+                        show_message(_missing, "error")
+                    elif ext_err:
                         show_message(ext_err, "error")
                     elif ind1_uri == ind2_uri:
                         show_message(
@@ -6277,16 +6487,15 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
         # The add forms can point an object at an entity in an ontology that
         # was never imported; without this the editor could keep such a
         # target but never set one.
-        # The external-URI field reads the object's URI, which a cleared
-        # object has not got, and has nothing to override without one.
-        ext_obj_uri, ext_err = (None, None)
-        if new_object is not None:
-            ext_obj_uri, ext_err = _external_uri_target(
-                ont,
-                row_lookup[new_object],
-                key=f"eo_ext_{form_key}",
-                label="the object",
-            )
+        # ``.get``, not ``[]``: a cleared object has no URI to default to, and
+        # the field is still offered because typing an external URI is how the
+        # object is set when no local entity holds it.
+        ext_obj_uri, ext_err = _external_uri_target(
+            ont,
+            row_lookup.get(new_object),
+            key=f"eo_ext_{form_key}",
+            label="the object",
+        )
         cancelled = False
         if on_close is None:
             saved = st.form_submit_button("💾 Save", use_container_width=True)
@@ -6300,8 +6509,11 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
         if cancelled:
             on_close()
             st.rerun()
+        # Checked against the resolved target rather than the dropdown: an
+        # external URI legitimately replaces the pick, so an object typed there
+        # is an object, and only having neither is an error.
         if saved and (
-            _missing := missing_required(Subject=new_subject, Object=new_object)
+            _missing := missing_required(Subject=new_subject, Object=ext_obj_uri)
         ):
             # A cleared endpoint used to fall back to the one the row started
             # with, rewriting the triple against an entity the user had
@@ -6481,11 +6693,12 @@ def render_add_annotation(ont, all_resources):
             # puts its type into the used-predicate options — would change
             # the widget's identity and snap the selection back to the first
             # entry.
-            predicate_display = st.selectbox(
+            predicate_display = required_selectbox(
                 "Annotation Type",
-                options=predicate_options,
-                accept_new_options=True,
+                predicate_options,
                 key="ann_predicate",
+                current_display=predicate_options[0] if predicate_options else None,
+                accept_new_options=True,
                 help=(
                     "Pick a type, or type your own to create it: a name like "
                     "`wikidataId`, a bound prefix like `wdt:P31`, or a full "
@@ -6508,7 +6721,12 @@ def render_add_annotation(ont, all_resources):
                 predicate_uri, predicate_reason = resolve_annotation_predicate_choice(
                     ont, predicate_display, predicate_lookup
                 )
-                if _missing := missing_required(**{"Select Resource": selected}):
+                if _missing := missing_required(
+                    **{
+                        "Select Resource": selected,
+                        "Annotation Type": predicate_display,
+                    }
+                ):
                     # Clearing the resource used to leave the previous pick in
                     # place, so the annotation was written to a resource the
                     # user had cleared, with nothing said either way.
@@ -6626,10 +6844,12 @@ def render_annotations():
 
             with col2:
                 if filtered_resources:
-                    selected = st.selectbox(
+                    _view_opts = [r["display"] for r in filtered_resources]
+                    selected = clearable_selectbox(
                         "Select Resource",
-                        options=[r["display"] for r in filtered_resources],
+                        _view_opts,
                         key="view_annotations_select",
+                        current_display=_view_opts[0] if _view_opts else None,
                     )
                 else:
                     selected = None
@@ -7056,13 +7276,21 @@ def render_skos_vocabulary():
                             _rel_opts, _rel_lookup = build_uri_options(
                                 [c for c in concepts if c["uri"] != concept["uri"]]
                             )
-                            rel_target = st.selectbox(
+                            rel_target = required_selectbox(
                                 "Target Concept",
                                 _rel_opts,
                                 key=f"rel_target_{_ck}",
+                                current_display=_rel_opts[0] if _rel_opts else None,
                                 format_func=_pad_option,
                             )
-                            if st.button("Add", key=f"add_rel_{_ck}") and rel_target:
+                            _add_rel = st.button("Add", key=f"add_rel_{_ck}")
+                            if _add_rel and (
+                                _missing := missing_required(
+                                    **{"Target Concept": rel_target}
+                                )
+                            ):
+                                show_message(_missing, "error")
+                            elif _add_rel and rel_target:
                                 # Address both concepts by their actual URIs: a
                                 # concept moved to a non-base namespace (e.g. via a
                                 # custom URI) would not resolve through the base
@@ -7134,13 +7362,13 @@ def render_skos_vocabulary():
                                 "None",
                             )
                             broader_options = ["None"] + _broader_opts
-                            new_broader = st.selectbox(
+                            new_broader = clearable_selectbox(
                                 "Broader Concept",
                                 broader_options,
-                                index=broader_options.index(_cur_broader_disp)
-                                if _cur_broader_disp in broader_options
-                                else 0,
                                 key=f"broader_{_ck}",
+                                current_display=_cur_broader_disp
+                                if _cur_broader_disp in broader_options
+                                else "None",
                                 format_func=_pad_option,
                             )
 
@@ -7159,13 +7387,13 @@ def render_skos_vocabulary():
                                 "None",
                             )
                             scheme_options = ["None"] + scheme_opts
-                            new_scheme = st.selectbox(
+                            new_scheme = clearable_selectbox(
                                 "Scheme",
                                 scheme_options,
-                                index=scheme_options.index(_cur_scheme_disp)
-                                if _cur_scheme_disp in scheme_options
-                                else 0,
                                 key=f"scheme_{_ck}",
+                                current_display=_cur_scheme_disp
+                                if _cur_scheme_disp in scheme_options
+                                else "None",
                                 format_func=_pad_option,
                             )
                             new_name = _custom_uri_field(
@@ -7248,17 +7476,19 @@ def render_skos_vocabulary():
             c_name = st.text_input("Concept Name *")
             c_pref = st.text_input("Preferred Label")
             c_def = st.text_area("Definition")
-            c_scheme = st.selectbox(
+            c_scheme = clearable_selectbox(
                 "Scheme",
                 ["None"] + scheme_opts,
                 key="concept_scheme_select",
+                current_display="None",
                 format_func=_pad_option,
             )
             _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
-            c_broader = st.selectbox(
+            c_broader = clearable_selectbox(
                 "Broader Concept",
                 ["None"] + _add_broader_opts,
                 key="concept_broader_select",
+                current_display="None",
                 format_func=_pad_option,
             )
             c_lang = st.text_input("Language Tag (e.g., en, de)", key="concept_lang")
@@ -7777,8 +8007,11 @@ def render_import_export():
             st.success(st.session_state.pop("_template_msg"))
 
         template_names = get_template_names()
-        selected_template = st.selectbox(
-            "Select Template", template_names, key="template_select"
+        selected_template = clearable_selectbox(
+            "Select Template",
+            template_names,
+            key="template_select",
+            current_display=template_names[0] if template_names else None,
         )
 
         if selected_template:
@@ -7857,8 +8090,11 @@ def render_import_export():
             st.error(st.session_state.pop("_upper_onto_err"))
 
         upper_names = get_upper_ontology_names()
-        selected_upper = st.selectbox(
-            "Select Upper Ontology", upper_names, key="upper_ontology_select"
+        selected_upper = clearable_selectbox(
+            "Select Upper Ontology",
+            upper_names,
+            key="upper_ontology_select",
+            current_display=upper_names[0] if upper_names else None,
         )
 
         if selected_upper:
@@ -7952,8 +8188,11 @@ def render_import_export():
             st.error(st.session_state.pop("_ref_onto_err"))
 
         ref_names = get_reference_ontology_names()
-        selected_ref = st.selectbox(
-            "Select Reference Ontology", ref_names, key="reference_ontology_select"
+        selected_ref = clearable_selectbox(
+            "Select Reference Ontology",
+            ref_names,
+            key="reference_ontology_select",
+            current_display=ref_names[0] if ref_names else None,
         )
 
         if selected_ref:
@@ -8049,9 +8288,11 @@ def render_advanced():
             st.warning("Need at least 2 classes to create expressions.")
         else:
             with st.form("add_class_expression_form"):
-                target_class = st.selectbox(
+                target_class = required_selectbox(
                     "Target Class",
-                    options=class_names,
+                    class_names,
+                    key="adv_expr_target",
+                    current_display=class_names[0] if class_names else None,
                     help="The class to define with this expression",
                 )
 
@@ -8062,8 +8303,11 @@ def render_advanced():
 
                 st.write("**Select members:**")
                 if expr_type == "complementOf":
-                    complement_class = st.selectbox(
-                        "Complement of Class", options=class_names
+                    complement_class = required_selectbox(
+                        "Complement of Class",
+                        class_names,
+                        key="adv_expr_complement",
+                        current_display=class_names[0] if class_names else None,
                     )
                     selected_classes = [complement_class] if complement_class else []
                     selected_individuals = []
@@ -8078,7 +8322,9 @@ def render_advanced():
 
                 submitted = st.form_submit_button("Add Expression")
                 if submitted:
-                    if expr_type == "oneOf" and selected_individuals:
+                    if _missing := missing_required(**{"Target Class": target_class}):
+                        show_message(_missing, "error")
+                    elif expr_type == "oneOf" and selected_individuals:
                         ont.add_class_expression(
                             target_class, expr_type, individuals=selected_individuals
                         )
@@ -8117,9 +8363,11 @@ def render_advanced():
             st.warning("Need at least 2 object properties to create chains.")
         else:
             with st.form("add_property_chain_form"):
-                result_prop = st.selectbox(
+                result_prop = required_selectbox(
                     "Result Property",
-                    options=obj_prop_names,
+                    obj_prop_names,
+                    key="adv_chain_result",
+                    current_display=obj_prop_names[0] if obj_prop_names else None,
                     help="The property that results from following the chain",
                 )
 
@@ -8131,7 +8379,9 @@ def render_advanced():
 
                 submitted = st.form_submit_button("Add Property Chain")
                 if submitted:
-                    if len(chain_props) < 2:
+                    if _missing := missing_required(**{"Result Property": result_prop}):
+                        show_message(_missing, "error")
+                    elif len(chain_props) < 2:
                         show_message("Chain must have at least 2 properties!", "error")
                     else:
                         ont.add_property_chain(result_prop, chain_props)
@@ -8164,9 +8414,11 @@ def render_advanced():
             )
         else:
             with st.form("add_disjoint_union_form"):
-                parent_class = st.selectbox(
+                parent_class = required_selectbox(
                     "Parent Class",
-                    options=class_names,
+                    class_names,
+                    key="adv_union_parent",
+                    current_display=class_names[0] if class_names else None,
                     help="The class that is the disjoint union",
                 )
 
@@ -8178,7 +8430,9 @@ def render_advanced():
 
                 submitted = st.form_submit_button("Add Disjoint Union")
                 if submitted:
-                    if len(member_classes) < 2:
+                    if _missing := missing_required(**{"Parent Class": parent_class}):
+                        show_message(_missing, "error")
+                    elif len(member_classes) < 2:
                         show_message("Need at least 2 member classes!", "error")
                     elif parent_class in member_classes:
                         show_message("Parent class cannot be a member!", "error")
@@ -8246,7 +8500,12 @@ def render_advanced():
             st.warning("Need at least 1 property.")
         else:
             with st.form("add_has_key_form"):
-                target_class = st.selectbox("Class", options=class_names)
+                target_class = required_selectbox(
+                    "Class",
+                    class_names,
+                    key="adv_haskey_class",
+                    current_display=class_names[0] if class_names else None,
+                )
 
                 key_props = st.multiselect(
                     "Key Properties",
@@ -8256,7 +8515,9 @@ def render_advanced():
 
                 submitted = st.form_submit_button("Add hasKey")
                 if submitted:
-                    if not key_props:
+                    if _missing := missing_required(Class=target_class):
+                        show_message(_missing, "error")
+                    elif not key_props:
                         show_message("Select at least 1 property!", "error")
                     else:
                         ont.add_has_key(target_class, key_props)

@@ -90,3 +90,90 @@ def test_no_form_checks_without_offering_one():
     clearable = _functions_calling("required_selectbox")
     checked = _functions_calling("missing_required")
     assert not (checked - clearable), sorted(checked - clearable)
+
+
+# --- nothing new slips back to a plain dropdown -----------------------------
+
+# The dropdowns the rule below cannot read off the call itself, because their
+# options were built a line earlier and passed by name: three fixed sets from
+# the engine (the restriction types, the relation types) and one "All" filter.
+ALLOWED_BY_NAME = {
+    ("render_restriction_form", "Restriction Type"),
+    ("_render_panel_add_restriction_form", "Restriction Type"),
+    ("render_relation_form", "Relation"),
+    ("render_annotations", "Filter by Type"),
+}
+
+
+def _plain_selectboxes():
+    """Every ``st.selectbox`` left in the app, as (function, label, node)."""
+    tree = ast.parse(APP.read_text(encoding="utf-8"))
+    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+
+    def enclosing(node):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.FunctionDef):
+                return node.name
+        return "<module>"
+
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "selectbox" or not node.args:
+            continue
+        label = node.args[0]
+        label = label.value if isinstance(label, ast.Constant) else None
+        yield enclosing(node), label, node
+
+
+def _options_of(node):
+    if len(node.args) > 1:
+        return node.args[1]
+    return next((k.value for k in node.keywords if k.arg == "options"), None)
+
+
+def _is_exempt(func, label, node):
+    """A plain dropdown is fine when clearing it would mean nothing.
+
+    Three shapes qualify: it already passes ``index=None`` (so it draws the
+    cross itself), its options carry an explicit "All" (empty already has a
+    name), or its options are a fixed enum — a list literal, or one built
+    straight from an engine constant.
+    """
+    if func == "clearable_selectbox":
+        return True
+    if any(k.arg == "index" and _is_none(k.value) for k in node.keywords):
+        return True
+    options = _options_of(node)
+    if options is None:
+        return True
+    if any(isinstance(c, ast.Constant) and c.value == "All" for c in ast.walk(options)):
+        return True
+    if isinstance(options, (ast.List, ast.Tuple)):
+        return True
+    if isinstance(options, ast.Call) and isinstance(options.func, ast.Name):
+        return options.func.id in ("list", "sorted")
+    return (func, label) in ALLOWED_BY_NAME
+
+
+def _is_none(node):
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def test_no_dropdown_worth_clearing_is_left_plain():
+    """Every picker of an entity, a namespace or a datatype offers the cross.
+
+    Written as a rule rather than a list of labels so a new form is covered the
+    day it is added: only a fixed enum, an "All"-style filter or a dropdown that
+    is already clearable may stay a plain ``st.selectbox``.
+    """
+    offenders = [
+        f"app.py:{node.lineno} {func}() {label!r}"
+        for func, label, node in _plain_selectboxes()
+        if not _is_exempt(func, label, node)
+    ]
+    assert not offenders, (
+        "these dropdowns hold a value worth clearing but offer no way to:\n  "
+        + "\n  ".join(sorted(offenders))
+    )
