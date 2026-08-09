@@ -70,7 +70,7 @@ def render_import_export():
                 st.session_state.ontology = get_ontology_manager_class()(
                     base_uri=base_uri
                 )
-                from .ontology_manager import UndoManager
+                from ..ontology_manager import UndoManager
 
                 st.session_state.undo_manager = UndoManager(st.session_state.ontology)
                 # Replacing the graph is a deliberate change; bump the revision
@@ -182,7 +182,7 @@ def render_import_export():
             )
 
             # Import mode selector
-            from .ontology_manager import (
+            from ..ontology_manager import (
                 IMPORT_MERGE,
                 IMPORT_MERGE_OVERWRITE,
                 IMPORT_REPLACE,
@@ -405,7 +405,7 @@ def render_import_export():
                     st.session_state.ontology.set_ontology_metadata(
                         label=label, comment=comment, creator=creator
                     )
-                    from .ontology_manager import UndoManager
+                    from ..ontology_manager import UndoManager
 
                     st.session_state.undo_manager = UndoManager(
                         st.session_state.ontology
@@ -420,7 +420,7 @@ def render_import_export():
                     st.rerun()
 
     if _ie_tab == "Templates":
-        from .templates import get_template, get_template_names, render_template
+        from ..templates import get_template, get_template_names, render_template
 
         def _on_apply_template():
             selected = st.session_state.template_select
@@ -479,7 +479,7 @@ def render_import_export():
             )
 
     if _ie_tab == "Upper Ontologies":
-        from .templates import (
+        from ..templates import (
             get_upper_ontology,
             get_upper_ontology_names,
             load_upper_ontology_module,
@@ -574,7 +574,7 @@ def render_import_export():
             )
 
     if _ie_tab == "Reference Ontologies":
-        from .templates import (
+        from ..templates import (
             get_reference_ontology,
             get_reference_ontology_names,
             load_reference_ontology_module,

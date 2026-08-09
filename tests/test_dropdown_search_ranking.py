@@ -29,7 +29,8 @@ SCORE_MAX is disabled, so only a byte-identical option scores as a certainty.
 """
 
 import ast
-from pathlib import Path
+
+import sources
 
 from orionbelt_ontology_builder import app
 
@@ -242,7 +243,6 @@ def _entity_dropdowns_missing_format_func() -> list[tuple[int, str]]:
     Every one of them filters on the rendered label, so a missed call site keeps
     the issue #214 ranking with nothing to show for it.
     """
-    tree = ast.parse(Path(app.__file__).read_text(encoding="utf-8"))
     builders = {"build_uri_options", "build_class_options", "_slot_options"}
     missing = []
 
@@ -260,9 +260,16 @@ def _entity_dropdowns_missing_format_func() -> list[tuple[int, str]]:
     # Scope-by-scope: the same local name means different things in different
     # functions (``prop_options`` is builder output in one and a list of bare
     # names in another), so a module-wide name set would flag the wrong calls.
-    for scope in ast.walk(tree):
-        if not isinstance(scope, ast.FunctionDef):
-            continue
+    # Every UI module, not app.py alone: the dropdowns this guards live in
+    # ui.py and the page modules since the split, and a scan of one file would
+    # pass while the rest went unchecked (PR #262 review).
+    scopes = [
+        (source.name, scope)
+        for source in sources.ui_sources()
+        for scope in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
+        if isinstance(scope, ast.FunctionDef)
+    ]
+    for _module, scope in scopes:
         body = [n for stmt in scope.body for n in ast.walk(stmt)]
 
         option_vars: set[str] = set()

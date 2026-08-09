@@ -50,3 +50,38 @@ def test_no_ui_module_builds_an_asset_path_from_its_own_file():
         "asset paths must hang off ui.PKG_DIR, not the module using them:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def test_every_relative_import_resolves():
+    """Including the ones inside functions, which nothing else reaches.
+
+    Moving a module changes what ``from .x import y`` means. Six of those went
+    from ``orionbelt_ontology_builder.templates`` to
+    ``orionbelt_ontology_builder.pages.templates`` when the pages were split
+    out, and because they sit inside button handlers, neither an import nor the
+    whole suite touched them: Templates, Upper and Reference Ontologies, New
+    Ontology and Clear Ontology would all have raised on click (PR #262 review).
+    """
+    import ast
+    import importlib.util
+
+    import sources
+
+    broken = []
+    for path in sorted(sources.PKG.rglob("*.py")):
+        module = ".".join(path.relative_to(sources.PKG.parent).with_suffix("").parts)
+        package = module.rsplit(".", 1)[0]
+        for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+            if not isinstance(node, ast.ImportFrom) or not node.level:
+                continue
+            base = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
+            target = f"{base}.{node.module}" if node.module else base
+            try:
+                found = importlib.util.find_spec(target)
+            except (ImportError, ModuleNotFoundError):
+                found = None
+            if found is None:
+                broken.append(
+                    f"{path.name}:{node.lineno} {'.' * node.level}{node.module}"
+                )
+    assert not broken, "relative imports that do not resolve:\n  " + "\n  ".join(broken)
