@@ -3182,13 +3182,40 @@ def _panel_drop_selection() -> None:
         )
 
 
+@st.dialog("Confirm delete")
+def _panel_confirm_dialog(summary, key_suffix, delete) -> None:
+    """Ask before deleting, in a modal rather than under the panel.
+
+    The panel is a narrow column beside the graph, and its editor already fills
+    it, so a confirmation drawn inline landed below the fold — the impact
+    summary and the button to accept it were both off-screen unless you knew to
+    scroll. A modal puts the question where it was asked.
+    """
+    st.warning(summary)
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button(
+            "Confirm Delete",
+            key=f"yes_{key_suffix}",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state[f"confirm_delete_{key_suffix}"] = False
+            delete()
+            st.rerun()
+    with col_no:
+        if st.button("Cancel", key=f"no_{key_suffix}", use_container_width=True):
+            st.session_state[f"confirm_delete_{key_suffix}"] = False
+            st.rerun()
+
+
 def _panel_delete_entity(ont, kind, entity) -> None:
     """Delete button plus impact confirmation for the selected node (#222).
 
     The counterpart to adding from the graph (issue #221), and deliberately the
-    same two-step the entity pages use: ``confirm_delete`` names what else goes
-    with it, which matters more here than there — from the graph you are one
-    click from an entity you were only looking at.
+    same two-step the entity pages use: the summary names what else goes with
+    it, which matters more here than there — from the graph you are one click
+    from an entity you were only looking at.
 
     Outside the editor's form on purpose: a form batches until submit, so a
     confirmation drawn inside one could not appear until something else was
@@ -3203,17 +3230,24 @@ def _panel_delete_entity(ont, kind, entity) -> None:
         on_click=_cb_confirm_delete,
         args=(suffix,),
     )
-    if not confirm_delete(entity["uri"], kind, suffix):
+    if not st.session_state.get(f"confirm_delete_{suffix}"):
         return
-    {
-        "class": ont.delete_class,
-        "property": ont.delete_property,
-        "individual": ont.delete_individual,
-    }[kind](entity["uri"])
-    save_checkpoint(f"Delete {kind}")
-    _panel_drop_selection()
-    set_flash_message(f"{entity['name']} deleted!", "success")
-    st.rerun()
+
+    def _delete():
+        {
+            "class": ont.delete_class,
+            "property": ont.delete_property,
+            "individual": ont.delete_individual,
+        }[kind](entity["uri"])
+        save_checkpoint(f"Delete {kind}")
+        _panel_drop_selection()
+        set_flash_message(f"{entity['name']} deleted!", "success")
+
+    _panel_confirm_dialog(
+        ont.format_delete_impact(ont.get_delete_impact(entity["uri"], kind)),
+        suffix,
+        _delete,
+    )
 
 
 def _panel_delete_edge(ont, label, key_suffix, delete) -> None:
@@ -3237,28 +3271,24 @@ def _panel_delete_edge(ont, label, key_suffix, delete) -> None:
     )
     if not st.session_state.get(f"confirm_delete_{key_suffix}"):
         return
-    st.warning(f"Delete this {label}? The entities at either end are kept.")
-    col_yes, col_no = st.columns(2)
-    with col_yes:
-        if st.button("Confirm Delete", key=f"yes_confirm_{key_suffix}", type="primary"):
-            st.session_state[f"confirm_delete_{key_suffix}"] = False
-            _before = len(ont.graph)
-            _changed = delete()
-            if _changed is None:
-                _changed = len(ont.graph) != _before
-            if _changed:
-                save_checkpoint(f"Delete {label}")
-                _panel_drop_selection()
-                set_flash_message(f"{label.capitalize()} deleted!", "success")
-            else:
-                set_flash_message(
-                    f"This {label} is no longer in the ontology.", "error"
-                )
-            st.rerun()
-    with col_no:
-        if st.button("Cancel", key=f"no_confirm_{key_suffix}"):
-            st.session_state[f"confirm_delete_{key_suffix}"] = False
-            st.rerun()
+
+    def _delete():
+        before = len(ont.graph)
+        changed = delete()
+        if changed is None:
+            changed = len(ont.graph) != before
+        if changed:
+            save_checkpoint(f"Delete {label}")
+            _panel_drop_selection()
+            set_flash_message(f"{label.capitalize()} deleted!", "success")
+        else:
+            set_flash_message(f"This {label} is no longer in the ontology.", "error")
+
+    _panel_confirm_dialog(
+        f"Delete this {label}? The entities at either end are kept.",
+        key_suffix,
+        _delete,
+    )
 
 
 def _render_panel_entity_editor(
