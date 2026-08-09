@@ -3136,7 +3136,7 @@ def _viz_selection_key(sel):
     return (sel.get("ntype"), sel.get("ename"), sel.get("nodeId"))
 
 
-def _viz_live_selection(live, dropped):
+def _viz_live_selection(live, dropped, revision):
     """Reconcile the component's reported selection with a deleted one (#222).
 
     Returns ``(selection, dropped)``: what the panel should show, and the marker
@@ -3149,20 +3149,37 @@ def _viz_live_selection(live, dropped):
     The marker applies only while it matches, and only when there is one:
     comparing against a missing marker is how every edge selection came to be
     read as deleted.
+
+    It is also scoped to the revision it was made at. Undo puts the entity back
+    and the component reports the very same payload for it, which is
+    indistinguishable from the stale one — so a marker that only cleared on a
+    *different* pick left the restored entity unselectable for good. Any
+    ontology change moves the revision, which is enough to retire it.
     """
     if not (isinstance(live, dict) and "selected" in live):
         return None, dropped
-    if dropped is not None and _viz_selection_key(live) == dropped:
-        return None, dropped
+    if dropped is not None:
+        key, at_revision = dropped
+        if at_revision != revision:
+            dropped = None
+        elif _viz_selection_key(live) == key:
+            return None, dropped
     return (live if live.get("selected") else None), None
 
 
 def _panel_drop_selection() -> None:
-    """Forget what was selected after deleting what it stood for (issue #222)."""
+    """Forget what was selected after deleting what it stood for (issue #222).
+
+    Called after the checkpoint, so the revision recorded is the one the delete
+    produced: anything later, undo included, retires the marker.
+    """
     st.session_state["_viz_last_selection"] = None
     key = _viz_selection_key(st.session_state.get("graph_viewer"))
     if key is not None:
-        st.session_state["_viz_dropped_selection"] = key
+        st.session_state["_viz_dropped_selection"] = (
+            key,
+            st.session_state.get("_ont_mutation_count", 0),
+        )
 
 
 def _panel_delete_entity(ont, kind, entity) -> None:
@@ -10760,7 +10777,9 @@ def render_visualization():
             _live_sel = st.session_state.get("graph_viewer")
             if isinstance(_live_sel, dict) and "selected" in _live_sel:
                 _kept, _dropped = _viz_live_selection(
-                    _live_sel, st.session_state.get("_viz_dropped_selection")
+                    _live_sel,
+                    st.session_state.get("_viz_dropped_selection"),
+                    st.session_state.get("_ont_mutation_count", 0),
                 )
                 st.session_state["_viz_last_selection"] = _kept
                 if _dropped is None:

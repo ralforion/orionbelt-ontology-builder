@@ -201,54 +201,60 @@ NODE_PICK = {"nodeId": "abc123", "ntype": "Class", "ename": "abc123", "selected"
 EDGE_PICK = {"ntype": "Class Relation", "ename": "a|disjointWith|b", "selected": True}
 
 
+def _dropped_after_delete(pick, revision=7):
+    """Run the drop the way the delete does, and hand back the marker."""
+    import streamlit as st
+
+    st.session_state.clear()
+    st.session_state["graph_viewer"] = dict(pick)
+    st.session_state["_viz_last_selection"] = dict(pick)
+    st.session_state["_ont_mutation_count"] = revision
+    app._panel_drop_selection()
+    return st.session_state["_viz_dropped_selection"]
+
+
 def test_the_deleted_node_stops_counting_as_selected():
     """The component still reports the node it last had, which is the one just
     deleted, so the panel would reopen on an entity that is gone."""
     import streamlit as st
 
-    st.session_state.clear()
-    st.session_state["graph_viewer"] = dict(NODE_PICK)
-    st.session_state["_viz_last_selection"] = dict(NODE_PICK)
-
-    app._panel_drop_selection()
-    dropped = st.session_state["_viz_dropped_selection"]
+    dropped = _dropped_after_delete(NODE_PICK)
 
     assert st.session_state["_viz_last_selection"] is None
-    assert app._viz_live_selection(NODE_PICK, dropped) == (None, dropped)
+    assert app._viz_live_selection(NODE_PICK, dropped, 7) == (None, dropped)
 
 
 def test_a_different_pick_clears_the_marker():
     """Otherwise the panel would stay shut for whatever came next."""
-    import streamlit as st
-
-    st.session_state.clear()
-    st.session_state["graph_viewer"] = dict(NODE_PICK)
-    app._panel_drop_selection()
-    dropped = st.session_state["_viz_dropped_selection"]
+    dropped = _dropped_after_delete(NODE_PICK)
 
     other = {**NODE_PICK, "nodeId": "def456", "ename": "def456"}
-    assert app._viz_live_selection(other, dropped) == (other, None)
+    assert app._viz_live_selection(other, dropped, 7) == (other, None)
+
+
+def test_undo_makes_the_entity_selectable_again():
+    """Undo puts it back and the component reports the identical payload for
+    it, so the marker has to retire on the revision rather than on a different
+    pick — or the restored entity could never be selected again."""
+    dropped = _dropped_after_delete(NODE_PICK, revision=7)
+
+    assert app._viz_live_selection(NODE_PICK, dropped, 8) == (NODE_PICK, None)
 
 
 def test_an_edge_pick_survives_with_no_delete_pending():
     """The regression this guard caused: an edge selection has no nodeId, so
     comparing ids alone read every edge click as the node just deleted — and no
     edge could open the panel at all, delete buttons included."""
-    assert app._viz_live_selection(EDGE_PICK, None) == (EDGE_PICK, None)
+    assert app._viz_live_selection(EDGE_PICK, None, 0) == (EDGE_PICK, None)
 
 
 def test_only_the_deleted_edge_is_suppressed():
-    import streamlit as st
-
-    st.session_state.clear()
-    st.session_state["graph_viewer"] = dict(EDGE_PICK)
-    app._panel_drop_selection()
-    dropped = st.session_state["_viz_dropped_selection"]
+    dropped = _dropped_after_delete(EDGE_PICK)
 
     other_edge = {**EDGE_PICK, "ename": "a|subClassOf|b"}
-    assert app._viz_live_selection(EDGE_PICK, dropped) == (None, dropped)
-    assert app._viz_live_selection(other_edge, dropped) == (other_edge, None)
+    assert app._viz_live_selection(EDGE_PICK, dropped, 7) == (None, dropped)
+    assert app._viz_live_selection(other_edge, dropped, 7) == (other_edge, None)
 
 
 def test_a_deselect_is_still_a_deselect():
-    assert app._viz_live_selection({"selected": False}, None) == (None, None)
+    assert app._viz_live_selection({"selected": False}, None, 0) == (None, None)
