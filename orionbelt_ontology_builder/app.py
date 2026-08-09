@@ -142,6 +142,18 @@ _CUSTOM_CSS = """
        in the browser: this recovers ~270px, enough for the whole sidebar to
        fit without scrolling.
        NOTE: internal DOM again — re-verify on a Streamlit bump. */
+    /* The "what is hidden" note, which rides on the Filter Nodes label as its
+       only italic run. Quieter than the label it follows, and gone once the
+       expander is open: the controls inside then say the same thing in full.
+       Scoped by the container key so no other expander's label is touched. */
+    .st-key-viz_filter_nodes summary em {
+        font-style: normal;
+        font-size: 0.8rem;
+        opacity: 0.55;
+    }
+    .st-key-viz_filter_nodes details[open] summary em {
+        display: none;
+    }
     [data-testid="stSidebarHeader"] [data-testid="stLogoSpacer"] {
         /* Reserves room for a st.logo() this app doesn't set: the mark is
            rendered as an image in the sidebar body instead. */
@@ -2586,6 +2598,18 @@ def _render_panel_relation_editor(ont, ename, classes):
     render_relation_form(
         ont, rel, f"panel_{_uid(ename)}", _relation_spec("crel", ont, classes)
     )
+    _panel_delete_edge(
+        ont,
+        "relation",
+        f"viz_crel_{_uid(ename)}",
+        # By URI: a local name resolves into the base namespace, so a relation
+        # between imported classes would not be found and nothing would go.
+        lambda: ont.remove_class_relation(
+            rel.get("subject_uri") or rel["subject"],
+            rel["relation"],
+            rel.get("object_uri") or rel["object"],
+        ),
+    )
 
 
 def _render_panel_restriction_editor(ont, ename, classes, properties):
@@ -2618,6 +2642,21 @@ def _render_panel_restriction_editor(ont, ename, classes, properties):
         "applied_to_uris": [src_uri],
     }
     render_restriction_form(ont, row, f"panel_{_uid(ename)}", classes, properties)
+    _panel_delete_edge(
+        ont,
+        "restriction",
+        f"viz_rest_{_uid(ename)}",
+        # By URI and by value, like the Restrictions page: a local name resolves
+        # into the base namespace, and a sibling on the same property and type
+        # would be deleted instead of this one (issue #152).
+        lambda: ont.delete_restriction(
+            src_uri,
+            rest.get("property_uri") or rest["property"],
+            rest["type"],
+            value=rest.get("value_uri") or rest.get("value"),
+            on_class=rest.get("on_class_uri") or rest.get("on_class"),
+        ),
+    )
 
 
 def _panel_add_kind():
@@ -3097,6 +3136,173 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
             st.rerun()
 
 
+def _viz_selection_key(sel):
+    """What identifies a selection, whether it is a node or an edge.
+
+    Not the node id alone: the component sends one only for ``selectNode``, so
+    every edge selection reports ``None`` there and comparing ids matched them
+    all against each other. Type and name are on both.
+    """
+    if not isinstance(sel, dict):
+        return None
+    return (sel.get("ntype"), sel.get("ename"), sel.get("nodeId"))
+
+
+def _viz_live_selection(live, dropped, revision):
+    """Reconcile the component's reported selection with a deleted one (#222).
+
+    Returns ``(selection, dropped)``: what the panel should show, and the marker
+    to carry into the next run.
+
+    The panel's selection is re-seeded from the component's own value on every
+    run, and after a delete the component still reports what it last had, having
+    not been told otherwise — so clearing the stored selection alone would last
+    exactly one rerun and the panel would reopen on the entity that just went.
+    The marker applies only while it matches, and only when there is one:
+    comparing against a missing marker is how every edge selection came to be
+    read as deleted.
+
+    It is also scoped to the revision it was made at. Undo puts the entity back
+    and the component reports the very same payload for it, which is
+    indistinguishable from the stale one — so a marker that only cleared on a
+    *different* pick left the restored entity unselectable for good. Any
+    ontology change moves the revision, which is enough to retire it.
+    """
+    if not (isinstance(live, dict) and "selected" in live):
+        return None, dropped
+    if dropped is not None:
+        key, at_revision = dropped
+        if at_revision != revision:
+            dropped = None
+        elif _viz_selection_key(live) == key:
+            return None, dropped
+    return (live if live.get("selected") else None), None
+
+
+def _panel_drop_selection() -> None:
+    """Forget what was selected after deleting what it stood for (issue #222).
+
+    Called after the checkpoint, so the revision recorded is the one the delete
+    produced: anything later, undo included, retires the marker.
+    """
+    st.session_state["_viz_last_selection"] = None
+    key = _viz_selection_key(st.session_state.get("graph_viewer"))
+    if key is not None:
+        st.session_state["_viz_dropped_selection"] = (
+            key,
+            st.session_state.get("_ont_mutation_count", 0),
+        )
+
+
+@st.dialog("Confirm delete")
+def _panel_confirm_dialog(summary, key_suffix, delete) -> None:
+    """Ask before deleting, in a modal rather than under the panel.
+
+    The panel is a narrow column beside the graph, and its editor already fills
+    it, so a confirmation drawn inline landed below the fold — the impact
+    summary and the button to accept it were both off-screen unless you knew to
+    scroll. A modal puts the question where it was asked.
+    """
+    st.warning(summary)
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button(
+            "Confirm Delete",
+            key=f"yes_{key_suffix}",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state[f"confirm_delete_{key_suffix}"] = False
+            delete()
+            st.rerun()
+    with col_no:
+        if st.button("Cancel", key=f"no_{key_suffix}", use_container_width=True):
+            st.session_state[f"confirm_delete_{key_suffix}"] = False
+            st.rerun()
+
+
+def _panel_delete_entity(ont, kind, entity) -> None:
+    """Delete button plus impact confirmation for the selected node (#222).
+
+    The counterpart to adding from the graph (issue #221), and deliberately the
+    same two-step the entity pages use: the summary names what else goes with
+    it, which matters more here than there — from the graph you are one click
+    from an entity you were only looking at.
+
+    Outside the editor's form on purpose: a form batches until submit, so a
+    confirmation drawn inside one could not appear until something else was
+    submitted.
+    """
+    suffix = f"viz_{kind}_{_uid(entity['uri'])}"
+    st.button(
+        "🗑️ Delete",
+        key=f"panel_del_{suffix}",
+        use_container_width=True,
+        help=f"Delete this {kind} from the ontology.",
+        on_click=_cb_confirm_delete,
+        args=(suffix,),
+    )
+    if not st.session_state.get(f"confirm_delete_{suffix}"):
+        return
+
+    def _delete():
+        {
+            "class": ont.delete_class,
+            "property": ont.delete_property,
+            "individual": ont.delete_individual,
+        }[kind](entity["uri"])
+        save_checkpoint(f"Delete {kind}")
+        _panel_drop_selection()
+        set_flash_message(f"{entity['name']} deleted!", "success")
+
+    _panel_confirm_dialog(
+        ont.format_delete_impact(ont.get_delete_impact(entity["uri"], kind)),
+        suffix,
+        _delete,
+    )
+
+
+def _panel_delete_edge(ont, label, key_suffix, delete) -> None:
+    """Delete button plus confirmation for an axiom drawn as an edge (#222).
+
+    An axiom has no URI, so ``get_delete_impact`` has nothing to look up and the
+    confirmation says what is going instead.
+
+    Whether anything actually went is worth reporting: an edge can outlive the
+    axiom behind it, and a delete that removed nothing while saying otherwise is
+    the failure the page-level ones were fixed for (issue #152).
+    ``delete_restriction`` answers that itself; ``remove_class_relation`` returns
+    nothing, so the graph is measured around the call instead of assuming.
+    """
+    st.button(
+        f"🗑️ Delete {label}",
+        key=f"panel_del_{key_suffix}",
+        use_container_width=True,
+        on_click=_cb_confirm_delete,
+        args=(key_suffix,),
+    )
+    if not st.session_state.get(f"confirm_delete_{key_suffix}"):
+        return
+
+    def _delete():
+        before = len(ont.graph)
+        changed = delete()
+        if changed is None:
+            changed = len(ont.graph) != before
+        if changed:
+            save_checkpoint(f"Delete {label}")
+            _panel_drop_selection()
+            set_flash_message(f"{label.capitalize()} deleted!", "success")
+        else:
+            set_flash_message(f"This {label} is no longer in the ontology.", "error")
+
+    _panel_confirm_dialog(
+        f"Delete this {label}? The entities at either end are kept.",
+        key_suffix,
+        _delete,
+    )
+
+
 def _render_panel_entity_editor(
     ont, ntype, ename, sel, classes, object_props, data_props, individuals
 ):
@@ -3260,6 +3466,15 @@ def _render_panel_entity_editor(
                     save_checkpoint("Update individual")
                     show_message("Individual updated!", "success")
                 st.rerun()
+
+    _delete_kind = {
+        "Class": "class",
+        "Object Property": "property",
+        "Data Property": "property",
+        "Individual": "individual",
+    }.get(ntype)
+    if _delete_kind:
+        _panel_delete_entity(ont, _delete_kind, entity)
 
     st.caption("IRI")
     st.code(entity["uri"], language=None)
@@ -8815,6 +9030,33 @@ _FILTER_KINDS = (
 )
 
 
+def viz_hidden_caption(
+    focus_mode, focus_seeds, focus_depth, focus_hidden, hidden_by_filter
+) -> str:
+    """One line saying what is not on screen, or "" when everything is.
+
+    A focus or a narrowed node filter is invisible on the canvas: a class you
+    just added simply isn't drawn, and nothing says why. That reads as the graph
+    losing the entity rather than as the view you set.
+
+    Seeds are listed by name up to five, then counted, so a focus on half the
+    ontology stays one short line.
+    """
+    parts = []
+    if focus_mode and focus_seeds:
+        shown = [s.split(": ", 1)[-1] for s in focus_seeds[:5]]
+        names = ", ".join(shown)
+        if len(focus_seeds) > 5:
+            names += f", … (+{len(focus_seeds) - 5})"
+        hops = "hop" if focus_depth == 1 else "hops"
+        parts.append(f"Focused on {names} · {focus_depth} {hops}")
+    if focus_hidden:
+        parts.append(f"{focus_hidden} hidden by focus")
+    if hidden_by_filter:
+        parts.append(f"{hidden_by_filter} hidden by the node filter")
+    return " · ".join(parts)
+
+
 def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     """Reconcile one Visualization filter's selection with the ontology.
 
@@ -8842,6 +9084,10 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     and re-show a deliberately hidden one (issue #179 review).
     """
     all_set = set(all_uris)
+    # Coerced, not assumed: the session always stores a set here, but this pair
+    # is the obvious thing to persist next, and JSON has no sets — a list would
+    # otherwise reach the difference below and raise.
+    known = None if known is None else set(known)
     if replaced or selected is None or known is None:
         selected_set = set(all_uris)
     else:
@@ -9343,6 +9589,10 @@ def render_visualization():
         # the loop before the per-node bypass could run (issue #234 review).
         _find_is_class = False
         focus_seed_ids: list = []
+        # Declared with the rest, not left to the branch that draws the picker:
+        # with focus mode on and every focusable type switched off, that branch
+        # does not run and the page crashed reading this further down (P1).
+        focus_seeds: list = []
         focus_depth = 0
         _find_col, _filter_col = st.columns([1, 3])
         with _find_col:
@@ -9390,7 +9640,20 @@ def render_visualization():
                                 _reveal_rerun = True
                         if _reveal_rerun:
                             st.rerun()
-        with _filter_col.expander("Filter Nodes", expanded=False):
+        # What the view is holding back, on the expander's own label: it costs
+        # no vertical space there, and it sits on the control that causes it.
+        # Written by the run that built the graph (below), because the numbers
+        # come from the focus controls inside this very expander and from the
+        # prune, neither of which has happened yet. Italic, which the CSS hides
+        # while the expander is open — the controls then say it in full.
+        _hidden_note = st.session_state.get("_viz_hidden_note") or ""
+        _filter_label = "Filter Nodes"
+        if _hidden_note:
+            _filter_label += f" &nbsp; *{_hidden_note}*"
+        with (
+            _filter_col.container(key="viz_filter_nodes"),
+            st.expander(_filter_label, expanded=False),
+        ):
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
@@ -10426,7 +10689,9 @@ def render_visualization():
             # focus_depth hops over the assembled edges (BFS over all node
             # types, so depth counts real graph links rather than class hops).
             # Several seeds grow the neighbourhood from all of them at once.
+            focus_hidden = 0
             if focus_pruning:
+                _before_prune = len(net.nodes)
                 present_ids = {n["id"] for n in net.nodes}
                 seeds = {sid for sid in focus_seed_ids if sid in present_ids}
                 if seeds:
@@ -10464,6 +10729,7 @@ def render_visualization():
                     net.edges = [
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
                     ]
+                    focus_hidden = _before_prune - len(net.nodes)
                 else:
                     # No seed was built (past the assembly cap, or its type
                     # toggled off) — show nothing rather than the whole graph,
@@ -10528,6 +10794,10 @@ def render_visualization():
                     # Cached with the graph so it survives the reruns that reuse
                     # it, rather than flashing once on the build that found it.
                     "notice": graph_notice,
+                    # What the focus prune took out, cached with the graph it
+                    # produced so the caption below survives the reruns that
+                    # reuse it (issue #222 follow-up).
+                    "focus_hidden": focus_hidden,
                 }
                 # NB: don't bump viz_render_seq here. The component re-renders on
                 # its own whenever nodes/edges change, and seq is the layout-cache
@@ -10549,6 +10819,25 @@ def render_visualization():
         # the cached graph is reused.
         if gdata and gdata.get("notice"):
             status.warning(gdata["notice"], icon="⚠️")
+        # Recompute the note for the Filter Nodes label now that the focus
+        # controls have rendered and the prune has run. One rerun when it
+        # actually changes, so the label is never a step behind what the graph
+        # is showing; it converges because the note is derived from settings,
+        # not from the rerun.
+        _note_now = viz_hidden_caption(
+            focus_mode,
+            list(focus_seeds) if focus_mode else [],
+            focus_depth,
+            (gdata or {}).get("focus_hidden", 0),
+            (len(filters["class"]["uris"]) - len(filters["class"]["selected_uris"]))
+            + (len(filters["ind"]["uris"]) - len(filters["ind"]["selected_uris"])),
+        )
+        if _note_now != st.session_state.get("_viz_hidden_note", ""):
+            st.session_state["_viz_hidden_note"] = _note_now
+            st.rerun()
+        # Say what is being held back, small, right above the canvas: a focus or
+        # a narrowed filter is otherwise invisible, and an entity that isn't
+        # drawn looks lost rather than filtered (issue #222 follow-up).
         if gdata:
             import os as _os
 
@@ -10603,9 +10892,14 @@ def render_visualization():
             # when the component returned nothing (a fresh re-mount).
             _live_sel = st.session_state.get("graph_viewer")
             if isinstance(_live_sel, dict) and "selected" in _live_sel:
-                st.session_state["_viz_last_selection"] = (
-                    _live_sel if _live_sel.get("selected") else None
+                _kept, _dropped = _viz_live_selection(
+                    _live_sel,
+                    st.session_state.get("_viz_dropped_selection"),
+                    st.session_state.get("_ont_mutation_count", 0),
                 )
+                st.session_state["_viz_last_selection"] = _kept
+                if _dropped is None:
+                    st.session_state.pop("_viz_dropped_selection", None)
             _prev_sel = st.session_state.get("_viz_last_selection")
             _prev_has_sel = isinstance(_prev_sel, dict) and _prev_sel.get("selected")
 

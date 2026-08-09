@@ -205,12 +205,18 @@ def test_panel_edits_the_restriction_the_edge_stands_for(graph):
 
 
 def test_panel_editor_offers_no_cancel(graph):
-    """The panel follows the graph selection, so there is nothing to cancel to."""
+    """The panel follows the graph selection, so there is nothing to cancel to.
+
+    Delete is a separate thing and does belong here (issue #222); Cancel is what
+    must not appear.
+    """
     om = graph[1]
     uris = _uris(om)
     ename = app._edge_id(uris["Bicycle"], "disjointWith", uris["Engine"])
     at = _run("panel", "Class Relation", ename)
-    assert [b.label for b in at.button] == ["💾 Save"]
+    labels = [b.label for b in at.button]
+    assert "💾 Save" in labels
+    assert not [label for label in labels if "Cancel" in label]
 
 
 def test_panel_reports_an_axiom_that_is_no_longer_there(graph):
