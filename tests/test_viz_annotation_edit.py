@@ -369,3 +369,181 @@ def test_a_literal_delete_is_unaffected_by_the_widened_match():
     assert not [
         a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "source"
     ]
+
+
+# --- moving an annotation to another resource (issue #251) -------------------
+
+
+def _subject_options(ont):
+    from orionbelt_ontology_builder.app import annotation_subject_options
+
+    return annotation_subject_options(
+        ont.get_classes(),
+        ont.get_object_properties(),
+        ont.get_data_properties(),
+        ont.get_individuals(),
+    )
+
+
+def test_an_annotation_moves_to_another_resource():
+    ont = _ont()
+    ont.add_class("Org")
+    ont.add_annotation(NS + "Person", DCT + "source", "Wikidata Q5")
+    ann = _ann(ont, DCT + "source")
+
+    assert _apply_annotation_edit(
+        ont,
+        NS + "Person",
+        ann,
+        DCT + "source",
+        "Wikidata Q5",
+        "",
+        new_subject_uri=NS + "Org",
+    )
+    assert not [
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "source"
+    ]
+    moved = [a for a in ont.get_annotations(NS + "Org") if a["predicate"] == "source"]
+    assert [a["value"] for a in moved] == ["Wikidata Q5"]
+
+
+def test_a_move_carries_the_datatype():
+    """The move is the same delete-then-add, so it must not drop what an edit
+    in place already preserves."""
+    ont = _ont()
+    ont.add_class("Org")
+    ont.add_annotation(NS + "Person", DCT + "created", "2024-01-01", datatype="date")
+    ann = _ann(ont, DCT + "created")
+    assert _apply_annotation_edit(
+        ont,
+        NS + "Person",
+        ann,
+        DCT + "created",
+        "2024-01-01",
+        "",
+        new_subject_uri=NS + "Org",
+    )
+    moved = next(
+        a for a in ont.get_annotations(NS + "Org") if a["predicate"] == "created"
+    )
+    assert moved["datatype"] == "date"
+
+
+def test_a_move_keeps_a_resource_value_a_resource():
+    from rdflib import URIRef
+
+    ont = _ont()
+    ont.add_class("Org")
+    _resource(ont, "http://docs.example/person")
+    ann = next(
+        a for a in ont.get_annotations(NS + "Person") if a["predicate"] == "seeAlso"
+    )
+    assert _apply_annotation_edit(
+        ont,
+        NS + "Person",
+        ann,
+        SEE_ALSO,
+        "http://docs.example/person",
+        "",
+        new_subject_uri=NS + "Org",
+    )
+    objs = list(ont.graph.objects(ont._uri("Org"), URIRef(SEE_ALSO)))
+    assert [(type(o).__name__, str(o)) for o in objs] == [
+        ("URIRef", "http://docs.example/person")
+    ]
+    assert not list(ont.graph.objects(ont._uri("Person"), URIRef(SEE_ALSO)))
+
+
+def test_a_move_to_the_same_resource_is_not_a_change():
+    ont = _ont()
+    ont.add_annotation(NS + "Person", DCT + "source", "same")
+    ann = _ann(ont, DCT + "source")
+    assert not _apply_annotation_edit(
+        ont,
+        NS + "Person",
+        ann,
+        DCT + "source",
+        "same",
+        "",
+        new_subject_uri=NS + "Person",
+    )
+
+
+def test_a_failed_move_leaves_the_annotation_where_it_was():
+    """The add can be rejected after the delete, and the original subject is
+    where it has to go back to."""
+    ont = _ont()
+    ont.add_class("Org")
+    ont.add_annotation(NS + "Person", DCT + "source", "keepme")
+    ann = _ann(ont, DCT + "source")
+    assert not _apply_annotation_edit(
+        ont,
+        NS + "Person",
+        ann,
+        "nosuchprefix:thing",
+        "keepme",
+        "",
+        new_subject_uri=NS + "Org",
+    )
+    assert [
+        a["value"]
+        for a in ont.get_annotations(NS + "Person")
+        if a["predicate"] == "source"
+    ] == ["keepme"]
+    assert not [
+        a for a in ont.get_annotations(NS + "Org") if a["predicate"] == "source"
+    ]
+
+
+def test_the_subject_picker_offers_every_annotatable_kind():
+    ont = _ont()
+    ont.add_object_property("knows")
+    ont.add_data_property("age")
+    ont.add_individual("alice", "Person")
+    options, lookup = _subject_options(ont)
+    assert {lookup[o] for o in options} == {
+        NS + "Person",
+        NS + "knows",
+        NS + "age",
+        NS + "alice",
+    }
+
+
+def test_the_picker_says_what_kind_each_resource_is():
+    """A property and a class read alike otherwise, and moving an annotation
+    onto the wrong one is silent."""
+    ont = _ont()
+    ont.add_data_property("age")
+    options, _ = _subject_options(ont)
+    assert {o[o.rindex("[") :] for o in options} == {"[Class]", "[Data Property]"}
+
+
+def test_the_picker_keys_by_uri_across_namespaces():
+    """Two resources sharing a local name are different subjects, and the
+    picker has to be able to name both."""
+    from rdflib import OWL, RDF, URIRef
+
+    ont = _ont()
+    other = URIRef("http://elsewhere.example/o#Person")
+    ont.graph.add((other, RDF.type, OWL.Class))
+    options, lookup = _subject_options(ont)
+    for_person = [o for o in options if o.startswith("Person")]
+    assert len(for_person) == 2
+    assert len({lookup[o] for o in for_person}) == 2
+
+
+def test_an_unlisted_subject_is_offered_rather_than_silently_replaced():
+    """The picker covers classes, properties and individuals. An annotation on
+    anything else would otherwise select the first entry, so saving without
+    touching the subject would move the annotation to it."""
+    from orionbelt_ontology_builder.app import _uri_option_index
+
+    ont = _ont()
+    options, lookup = _subject_options(ont)
+    outsider = "http://example.org/ontology#"
+    assert outsider not in set(lookup.values())
+    # What the editor does when the current subject is not among the options.
+    own = f"{outsider} [current]"
+    options = [own, *options]
+    lookup[own] = outsider
+    assert lookup[options[_uri_option_index(options, lookup, outsider)]] == outsider

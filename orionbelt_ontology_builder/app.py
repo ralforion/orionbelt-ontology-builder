@@ -2075,7 +2075,9 @@ def restriction_references_class(restriction_type: str) -> bool:
     )
 
 
-def _apply_annotation_edit(ont, subject_uri, ann, new_pred, new_value, new_lang):
+def _apply_annotation_edit(
+    ont, subject_uri, ann, new_pred, new_value, new_lang, new_subject_uri=None
+):
     """Rewrite one annotation. Returns True when the graph changed (issue #223).
 
     An annotation is a triple, and the engine has no update for one, so an edit
@@ -2093,10 +2095,14 @@ def _apply_annotation_edit(ont, subject_uri, ann, new_pred, new_value, new_lang)
     datatype = ann.get("datatype_uri") or ann.get("datatype")
     is_uri = bool(ann.get("is_uri"))
     old_pred = ann.get("predicate_uri") or ann["predicate"]
+    # Moving an annotation to another resource is the same delete-then-add, just
+    # landing somewhere else, so it rides the same guards and rollback (#251).
+    target_uri = new_subject_uri or subject_uri
     if (
         new_pred == old_pred
         and new_value == ann["value"]
         and (new_lang or None) == (ann.get("language") or None)
+        and target_uri == subject_uri
     ):
         return False
 
@@ -2110,7 +2116,7 @@ def _apply_annotation_edit(ont, subject_uri, ann, new_pred, new_value, new_lang)
     )
     try:
         ont.add_annotation(
-            subject_uri,
+            target_uri,
             new_pred,
             new_value,
             lang=None if is_uri else (new_lang or None),
@@ -2313,7 +2319,34 @@ def _apply_individual_edit(
     return True
 
 
-def _render_panel_annotation_editor(ont, ename):
+def annotation_subject_options(classes, object_props, data_props, individuals):
+    """Everything an annotation can hang off, as ``(options, display -> URI)``.
+
+    Built per kind and tagged with it, so a class and an individual sharing a
+    name stay apart, and keyed by URI throughout: local names collide across
+    namespaces, and moving an annotation onto the wrong same-named resource
+    would be silent (issue #251).
+    """
+    options: list[str] = []
+    lookup: dict[str, str] = {}
+    for kind, items in (
+        ("Class", classes),
+        ("Object Property", object_props),
+        ("Data Property", data_props),
+        ("Individual", individuals),
+    ):
+        kind_options, kind_lookup = build_uri_options(items)
+        for display in kind_options:
+            tagged = f"{display} [{kind}]"
+            options.append(tagged)
+            lookup[tagged] = kind_lookup[display]
+    options.sort(key=str.lower)
+    return options, lookup
+
+
+def _render_panel_annotation_editor(
+    ont, ename, classes, object_props, data_props, individuals
+):
     """Edit the annotation behind a graph node, in the Details panel (#223).
 
     The node names the whole triple, which is looked up in the live ontology for
@@ -2343,8 +2376,28 @@ def _render_panel_annotation_editor(ont, ename):
         )
         return
 
-    st.caption(f"On {_uri_local_name(subject_uri)}")
+    subject_options, subject_lookup = annotation_subject_options(
+        classes, object_props, data_props, individuals
+    )
+    # An annotation can sit on something the picker does not list — the ontology
+    # itself, a SKOS concept — and an unlisted subject would otherwise select the
+    # first entry, so saving an untouched annotation would quietly move it. Offer
+    # the current subject as its own option instead, the way the relation editor
+    # offers an external URI (issue #251).
+    if subject_uri not in set(subject_lookup.values()):
+        _own = f"{_uri_local_name(subject_uri)} [current]"
+        subject_options = [_own, *subject_options]
+        subject_lookup[_own] = subject_uri
     with st.form(f"panel_edit_ann_{_uid(ename)}"):
+        # Which resource it hangs off is editable, so an annotation can be moved
+        # the way a relation or restriction can be re-pointed from here (#251).
+        new_subject = st.selectbox(
+            "On",
+            options=subject_options,
+            index=_uri_option_index(subject_options, subject_lookup, subject_uri),
+            format_func=_pad_option,
+            help="Move the annotation by choosing a different resource.",
+        )
         new_pred = st.text_input(
             "Predicate",
             value=ann.get("predicate_uri") or ann["predicate"],
@@ -2394,7 +2447,13 @@ def _render_panel_annotation_editor(ont, ename):
         if not new_value.strip():
             show_message("Annotation value is required!", "error")
         elif _apply_annotation_edit(
-            ont, subject_uri, ann, new_pred, new_value, new_lang
+            ont,
+            subject_uri,
+            ann,
+            new_pred,
+            new_value,
+            new_lang,
+            new_subject_uri=subject_lookup.get(new_subject),
         ):
             save_checkpoint("Update annotation")
             show_message("Annotation updated!", "success")
@@ -2935,7 +2994,9 @@ def _render_panel_entity_editor(
     if ntype == "Annotation":
         # Like the two above, an annotation has no URI of its own: it resolves
         # from the identity its node carries, not from an entity pool (#223).
-        _render_panel_annotation_editor(ont, ename)
+        _render_panel_annotation_editor(
+            ont, ename, classes, object_props, data_props, individuals
+        )
         return None
 
     # Object properties are drawn as edges (so selecting one is a selectEdge with
