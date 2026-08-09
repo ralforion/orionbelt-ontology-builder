@@ -3124,19 +3124,45 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
             st.rerun()
 
 
-def _panel_drop_selection() -> None:
-    """Forget the selected node after deleting what it stood for (issue #222).
+def _viz_selection_key(sel):
+    """What identifies a selection, whether it is a node or an edge.
+
+    Not the node id alone: the component sends one only for ``selectNode``, so
+    every edge selection reports ``None`` there and comparing ids matched them
+    all against each other. Type and name are on both.
+    """
+    if not isinstance(sel, dict):
+        return None
+    return (sel.get("ntype"), sel.get("ename"), sel.get("nodeId"))
+
+
+def _viz_live_selection(live, dropped):
+    """Reconcile the component's reported selection with a deleted one (#222).
+
+    Returns ``(selection, dropped)``: what the panel should show, and the marker
+    to carry into the next run.
 
     The panel's selection is re-seeded from the component's own value on every
-    run, and the component still reports the node that was just deleted — so
-    clearing the stored selection alone would last exactly one rerun. The node id
-    is remembered instead and treated as no selection until a different node
-    arrives.
+    run, and after a delete the component still reports what it last had, having
+    not been told otherwise — so clearing the stored selection alone would last
+    exactly one rerun and the panel would reopen on the entity that just went.
+    The marker applies only while it matches, and only when there is one:
+    comparing against a missing marker is how every edge selection came to be
+    read as deleted.
     """
+    if not (isinstance(live, dict) and "selected" in live):
+        return None, dropped
+    if dropped is not None and _viz_selection_key(live) == dropped:
+        return None, dropped
+    return (live if live.get("selected") else None), None
+
+
+def _panel_drop_selection() -> None:
+    """Forget what was selected after deleting what it stood for (issue #222)."""
     st.session_state["_viz_last_selection"] = None
-    live = st.session_state.get("graph_viewer")
-    if isinstance(live, dict):
-        st.session_state["_viz_dropped_node"] = live.get("nodeId")
+    key = _viz_selection_key(st.session_state.get("graph_viewer"))
+    if key is not None:
+        st.session_state["_viz_dropped_selection"] = key
 
 
 def _panel_delete_entity(ont, kind, entity) -> None:
@@ -10733,17 +10759,12 @@ def render_visualization():
             # when the component returned nothing (a fresh re-mount).
             _live_sel = st.session_state.get("graph_viewer")
             if isinstance(_live_sel, dict) and "selected" in _live_sel:
-                # A node deleted from the panel is still reported as selected by
-                # the component, which has not been told otherwise. Treat it as
-                # no selection until a different node arrives, or the panel would
-                # reopen on the entity that was just removed (issue #222).
-                if _live_sel.get("nodeId") == st.session_state.get("_viz_dropped_node"):
-                    _live_sel = None
-                else:
-                    st.session_state.pop("_viz_dropped_node", None)
-                st.session_state["_viz_last_selection"] = (
-                    _live_sel if _live_sel and _live_sel.get("selected") else None
+                _kept, _dropped = _viz_live_selection(
+                    _live_sel, st.session_state.get("_viz_dropped_selection")
                 )
+                st.session_state["_viz_last_selection"] = _kept
+                if _dropped is None:
+                    st.session_state.pop("_viz_dropped_selection", None)
             _prev_sel = st.session_state.get("_viz_last_selection")
             _prev_has_sel = isinstance(_prev_sel, dict) and _prev_sel.get("selected")
 

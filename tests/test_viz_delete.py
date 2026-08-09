@@ -195,16 +195,60 @@ def test_a_restriction_edge_can_be_deleted():
 # --- the selection that outlives what it pointed at -------------------------
 
 
+NODE_PICK = {"nodeId": "abc123", "ntype": "Class", "ename": "abc123", "selected": True}
+# An edge selection carries no nodeId at all: the component sends one only for
+# selectNode (lib/graph_viewer/index.html, the selectEdge handler).
+EDGE_PICK = {"ntype": "Class Relation", "ename": "a|disjointWith|b", "selected": True}
+
+
 def test_the_deleted_node_stops_counting_as_selected():
     """The component still reports the node it last had, which is the one just
     deleted, so the panel would reopen on an entity that is gone."""
     import streamlit as st
 
     st.session_state.clear()
-    st.session_state["graph_viewer"] = {"nodeId": "abc123", "selected": True}
-    st.session_state["_viz_last_selection"] = {"nodeId": "abc123", "selected": True}
+    st.session_state["graph_viewer"] = dict(NODE_PICK)
+    st.session_state["_viz_last_selection"] = dict(NODE_PICK)
 
     app._panel_drop_selection()
+    dropped = st.session_state["_viz_dropped_selection"]
 
     assert st.session_state["_viz_last_selection"] is None
-    assert st.session_state["_viz_dropped_node"] == "abc123"
+    assert app._viz_live_selection(NODE_PICK, dropped) == (None, dropped)
+
+
+def test_a_different_pick_clears_the_marker():
+    """Otherwise the panel would stay shut for whatever came next."""
+    import streamlit as st
+
+    st.session_state.clear()
+    st.session_state["graph_viewer"] = dict(NODE_PICK)
+    app._panel_drop_selection()
+    dropped = st.session_state["_viz_dropped_selection"]
+
+    other = {**NODE_PICK, "nodeId": "def456", "ename": "def456"}
+    assert app._viz_live_selection(other, dropped) == (other, None)
+
+
+def test_an_edge_pick_survives_with_no_delete_pending():
+    """The regression this guard caused: an edge selection has no nodeId, so
+    comparing ids alone read every edge click as the node just deleted — and no
+    edge could open the panel at all, delete buttons included."""
+    assert app._viz_live_selection(EDGE_PICK, None) == (EDGE_PICK, None)
+
+
+def test_only_the_deleted_edge_is_suppressed():
+    import streamlit as st
+
+    st.session_state.clear()
+    st.session_state["graph_viewer"] = dict(EDGE_PICK)
+    app._panel_drop_selection()
+    dropped = st.session_state["_viz_dropped_selection"]
+
+    other_edge = {**EDGE_PICK, "ename": "a|subClassOf|b"}
+    assert app._viz_live_selection(EDGE_PICK, dropped) == (None, dropped)
+    assert app._viz_live_selection(other_edge, dropped) == (other_edge, None)
+
+
+def test_a_deselect_is_still_a_deselect():
+    assert app._viz_live_selection({"selected": False}, None) == (None, None)
