@@ -108,22 +108,45 @@ var fsDetachTimer = null;   // timer that detaches fsResizeHandler
 // not change when the graph is resized, so the two cannot chase each other.
 var AUTOFIT_MAX_RESERVE = 220;
 
-function autofitReserve(rect) {
-    var host = window.frameElement;
-    while (host && host.getAttribute
-           && host.getAttribute('data-testid') !== 'stElementContainer') {
-        host = host.parentElement;
+function autofitReserve() {
+    var node = window.frameElement;
+    while (node && node.getAttribute
+           && node.getAttribute('data-testid') !== 'stElementContainer') {
+        node = node.parentElement;
     }
-    if (!host || !host.parentElement) return 90;
-    var gap = parseFloat(
-        window.parent.getComputedStyle(host.parentElement).rowGap
-    ) || 0;
-    var below = 0;
-    for (var sib = host.nextElementSibling; sib; sib = sib.nextElementSibling) {
-        var h = sib.getBoundingClientRect().height;
-        if (h > 0) below += h + gap;
+    if (!node || !node.parentElement) return 90;
+    // The lowest edge of anything below, not the sum of their heights: that way
+    // the gaps and padding between them are included without having to know
+    // which of Streamlit's blocks contributes what.
+    var bottom = window.frameElement.getBoundingClientRect().bottom;
+    var lowest = bottom;
+    while (node && node.parentElement) {
+        var parent = node.parentElement;
+        var ptid = parent.getAttribute && parent.getAttribute('data-testid');
+        // Climb, because the status bar is not the graph's sibling: it sits a
+        // level up, after the whole row of columns. Skip the row itself, where
+        // the following sibling is the details panel *beside* the graph — taking
+        // that for "below" collapsed the canvas to its floor.
+        if (ptid !== 'stHorizontalBlock') {
+            for (var sib = node.nextElementSibling; sib; sib = sib.nextElementSibling) {
+                var r = sib.getBoundingClientRect();
+                if (r.height > 0 && r.bottom > lowest) lowest = r.bottom;
+                // Descendants too: the status bar is a fixed-height div inside a
+                // shorter markdown container, so the container's own edge sits
+                // 16px above the bar it holds and the bar hung off the window.
+                var kids = sib.querySelectorAll('*');
+                if (kids.length && kids.length < 60) {
+                    for (var i = 0; i < kids.length; i++) {
+                        var kr = kids[i].getBoundingClientRect();
+                        if (kr.height > 0 && kr.bottom > lowest) lowest = kr.bottom;
+                    }
+                }
+            }
+        }
+        if (ptid === 'stMainBlockContainer') break;
+        node = parent;
     }
-    return Math.min(below, AUTOFIT_MAX_RESERVE);
+    return Math.min(lowest - bottom, AUTOFIT_MAX_RESERVE);
 }
 
 function autofitHeight() {
@@ -131,7 +154,7 @@ function autofitHeight() {
         var fe = window.frameElement;
         if (!fe) return null;
         var rect = fe.getBoundingClientRect();
-        var avail = window.parent.innerHeight - rect.top - autofitReserve(rect) - 8;
+        var avail = window.parent.innerHeight - rect.top - autofitReserve() - 8;
         return Math.max(Math.round(avail), 300);
     } catch (e) {
         return null;  // cross-origin or unavailable: fall back to fixed height
@@ -287,14 +310,27 @@ window.addEventListener('resize', autofitApply);
 // closing) — layout changes that don't fire a 'resize' event. Poll for a
 // position change and re-fit, so the graph grows back after such a shift
 // instead of staying stuck at a height computed for the old position (bug B2).
+//
+// The reserve below is watched as well as the top. Hiding the details panel puts
+// the status bar back under the graph without moving the graph's top edge, so
+// watching the top alone kept a height computed for no bar at all and pushed the
+// bar off the bottom of the window.
 var _lastFitTop = null;
+var _lastFitReserve = null;
 setInterval(function() {
     if (!autofitOn || !network) return;
-    var t;
+    var t, res;
     try {
-        t = window.frameElement ? Math.round(window.frameElement.getBoundingClientRect().top) : 0;
+        var fe = window.frameElement;
+        if (!fe) return;
+        t = Math.round(fe.getBoundingClientRect().top);
+        res = Math.round(autofitReserve());
     } catch (e) { return; }
-    if (t !== _lastFitTop) { _lastFitTop = t; autofitApply(); }
+    if (t !== _lastFitTop || res !== _lastFitReserve) {
+        _lastFitTop = t;
+        _lastFitReserve = res;
+        autofitApply();
+    }
 }, 400);
 
 function downloadGraph() {
