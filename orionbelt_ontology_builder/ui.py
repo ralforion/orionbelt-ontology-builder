@@ -64,7 +64,11 @@ _VIZ_INT_RANGES = {
 VIZ_FILE_STATE_KEY = "viz_file_state"
 VIZ_FILE_STATE_MAX_FILES = 20
 AUTOSAVE_DEBOUNCE_SECONDS = 2.0
-_FAVICON = _Path(__file__).parent / "favicon.png"
+# The package directory, not this module's: assets are the package's, and a
+# module that moves into a subpackage must not take their paths with it — the
+# graph component broke exactly that way when the pages were split out.
+PKG_DIR = _Path(__file__).resolve().parent
+_FAVICON = PKG_DIR / "favicon.png"
 _CUSTOM_CSS = """
 <style>
     .stTabs [data-baseweb="tab-list"] {
@@ -4680,3 +4684,13 @@ def _autosave_ready() -> bool:
         return True
     idle = time.time() - st.session_state.get("_autosave_mutated_at", 0.0)
     return idle >= AUTOSAVE_DEBOUNCE_SECONDS
+
+
+def request_autosave_flush() -> None:
+    """Force the next autosave to write now, skipping the debounce window.
+
+    Call after important actions (import, new ontology, linking a file) so a
+    large, deliberate change is persisted immediately. Applies to whichever
+    backend is active.
+    """
+    st.session_state["_force_autosave_flush"] = True

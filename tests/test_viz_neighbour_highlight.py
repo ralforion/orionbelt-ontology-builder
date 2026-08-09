@@ -9,6 +9,8 @@ source level instead, the way the fullscreen ones are in test_viz_fullscreen.py.
 import re
 from pathlib import Path
 
+import sources
+
 _PKG = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder"
 _VIEWER = _PKG / "lib" / "graph_viewer" / "index.html"
 
@@ -89,7 +91,7 @@ def test_the_ring_does_not_impersonate_the_validation_ring():
     entities with, so a neighbour ring at the same weight would read as a
     validation warning.
     """
-    app_src = (_PKG / "app.py").read_text(encoding="utf-8")
+    app_src = sources.viz_text()
     issue_widths = set(re.findall(r"border_width = (\d+) if has_issue", app_src))
     assert issue_widths == {"3"}, (
         f"expected the validation ring at width 3, found {issue_widths}"

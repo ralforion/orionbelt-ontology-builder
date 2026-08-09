@@ -17,6 +17,7 @@ import json
 import os
 
 import pytest
+import sources
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -318,12 +319,7 @@ def test_the_find_target_is_part_of_the_graph_cache_key():
     filter multiselects, the same limitation that keeps the rest of this file to
     a single render per assertion.
     """
-    import pathlib
-
-    src = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "orionbelt_ontology_builder/app.py"
-    ).read_text(encoding="utf-8")
+    src = sources.viz_text()
     key_line = next(
         line for line in src.splitlines() if line.strip().startswith("graph_key = f")
     )
@@ -377,12 +373,8 @@ def test_find_does_not_rewrite_the_users_node_filter():
     filter change hid it again. The graph exempts it at build time instead, so
     the filter is left exactly as it was found."""
     import ast
-    import pathlib
 
-    src = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "orionbelt_ontology_builder/app.py"
-    ).read_text(encoding="utf-8")
+    src = sources.viz_text()
     tree = ast.parse(src)
     handlers = [
         node

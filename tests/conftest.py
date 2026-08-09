@@ -36,21 +36,28 @@ def skos_om():
 
 @pytest.fixture
 def patch_ui(monkeypatch):
-    """Patch a name on every module that binds it.
+    """Patch a name on every UI module that binds it.
 
-    ``app.py`` was split into ``app`` (the shell and the pages) and ``ui`` (the
-    shared helpers), and ``from .ui import X`` binds a *copy* in the importing
-    module. Patching one module therefore leaves the other's calls untouched,
-    and most of these names are called from both — so a test would silently
-    exercise the unpatched half.
+    ``app.py`` was split into ``ui``, a ``pages`` package and the shell, and
+    ``from ..ui import X`` binds a *copy* in each importing module. Patching one
+    module therefore leaves the others' calls untouched, and these names are
+    typically read from several — so a test would silently exercise an
+    unpatched half and pass.
 
     Sets the attribute wherever it exists instead, which is what a test written
     against the single module meant by ``setattr(app, ...)``.
     """
-    from orionbelt_ontology_builder import app, ui
+    import importlib
+
+    import sources
+
+    modules = []
+    for path in sources.ui_sources():
+        rel = path.relative_to(sources.PKG.parent).with_suffix("")
+        modules.append(importlib.import_module(".".join(rel.parts)))
 
     def _patch(name, value):
-        for module in (app, ui):
+        for module in modules:
             if hasattr(module, name):
                 monkeypatch.setattr(module, name, value)
 

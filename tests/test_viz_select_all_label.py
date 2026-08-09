@@ -8,14 +8,13 @@ count is the point of the control and is pinned here.
 """
 
 import ast
-from pathlib import Path
 
-_APP = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder" / "app.py"
+import sources
 
 
 def _select_all_button():
     """The ``st.button`` call that restores a node filter, as an AST node."""
-    tree = ast.parse(_APP.read_text(encoding="utf-8"))
+    tree = ast.parse(sources.viz_text())
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -25,7 +24,9 @@ def _select_all_button():
         for kw in node.keywords:
             if kw.arg == "key" and "viz_select_all" in ast.dump(kw.value):
                 return node
-    raise AssertionError("no st.button keyed viz_select_all found in app.py")
+    raise AssertionError(
+        "no st.button keyed viz_select_all found in the Visualization source"
+    )
 
 
 def test_the_label_carries_a_count():

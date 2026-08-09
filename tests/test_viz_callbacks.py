@@ -13,9 +13,9 @@ reach them. They are module-level now and driven directly here, inside an
 """
 
 import ast
-import inspect
 import os
 
+import sources
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -185,7 +185,9 @@ def test_every_viz_callback_is_a_module_level_function():
     """These were nested inside render_visualization, which is why the crash
     survived: no test could call them. A new one hidden in there again would be
     just as unreachable."""
-    tree = ast.parse(inspect.getsource(app))
+    # The Visualization page and the callbacks it wires live in their own
+    # modules now, so read the UI source rather than one module's.
+    tree = ast.parse(sources.viz_text())
     wired = {
         kw.value.id
         for node in ast.walk(tree)
