@@ -142,6 +142,18 @@ _CUSTOM_CSS = """
        in the browser: this recovers ~270px, enough for the whole sidebar to
        fit without scrolling.
        NOTE: internal DOM again — re-verify on a Streamlit bump. */
+    /* The "what is hidden" note, which rides on the Filter Nodes label as its
+       only italic run. Quieter than the label it follows, and gone once the
+       expander is open: the controls inside then say the same thing in full.
+       Scoped by the container key so no other expander's label is touched. */
+    .st-key-viz_filter_nodes summary em {
+        font-style: normal;
+        font-size: 0.8rem;
+        opacity: 0.55;
+    }
+    .st-key-viz_filter_nodes details[open] summary em {
+        display: none;
+    }
     [data-testid="stSidebarHeader"] [data-testid="stLogoSpacer"] {
         /* Reserves room for a st.logo() this app doesn't set: the mark is
            rendered as an image in the sidebar body instead. */
@@ -9620,7 +9632,20 @@ def render_visualization():
                                 _reveal_rerun = True
                         if _reveal_rerun:
                             st.rerun()
-        with _filter_col.expander("Filter Nodes", expanded=False):
+        # What the view is holding back, on the expander's own label: it costs
+        # no vertical space there, and it sits on the control that causes it.
+        # Written by the run that built the graph (below), because the numbers
+        # come from the focus controls inside this very expander and from the
+        # prune, neither of which has happened yet. Italic, which the CSS hides
+        # while the expander is open — the controls then say it in full.
+        _hidden_note = st.session_state.get("_viz_hidden_note") or ""
+        _filter_label = "Filter Nodes"
+        if _hidden_note:
+            _filter_label += f" &nbsp; *{_hidden_note}*"
+        with (
+            _filter_col.container(key="viz_filter_nodes"),
+            st.expander(_filter_label, expanded=False),
+        ):
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
@@ -10786,10 +10811,12 @@ def render_visualization():
         # the cached graph is reused.
         if gdata and gdata.get("notice"):
             status.warning(gdata["notice"], icon="⚠️")
-        # Say what is being held back, small, right above the canvas: a focus or
-        # a narrowed filter is otherwise invisible, and an entity that isn't
-        # drawn looks lost rather than filtered (issue #222 follow-up).
-        _hidden_caption = viz_hidden_caption(
+        # Recompute the note for the Filter Nodes label now that the focus
+        # controls have rendered and the prune has run. One rerun when it
+        # actually changes, so the label is never a step behind what the graph
+        # is showing; it converges because the note is derived from settings,
+        # not from the rerun.
+        _note_now = viz_hidden_caption(
             focus_mode,
             list(focus_seeds) if focus_mode else [],
             focus_depth,
@@ -10797,8 +10824,12 @@ def render_visualization():
             (len(filters["class"]["uris"]) - len(filters["class"]["selected_uris"]))
             + (len(filters["ind"]["uris"]) - len(filters["ind"]["selected_uris"])),
         )
-        if _hidden_caption:
-            st.caption(_hidden_caption)
+        if _note_now != st.session_state.get("_viz_hidden_note", ""):
+            st.session_state["_viz_hidden_note"] = _note_now
+            st.rerun()
+        # Say what is being held back, small, right above the canvas: a focus or
+        # a narrowed filter is otherwise invisible, and an entity that isn't
+        # drawn looks lost rather than filtered (issue #222 follow-up).
         if gdata:
             import os as _os
 
