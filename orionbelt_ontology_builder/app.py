@@ -131,6 +131,32 @@ _CUSTOM_CSS = """
     [data-testid="stCustomComponentV1"] {
         margin-bottom: -1rem !important;
     }
+    /* Sidebar density. Streamlit's defaults put 16px between every element,
+       64px around each divider and 96px of padding under the last one, which
+       together pushed Quick Stats off the bottom of a 1080p screen. Measured
+       in the browser: this recovers ~270px, enough for the whole sidebar to
+       fit without scrolling.
+       NOTE: internal DOM again — re-verify on a Streamlit bump. */
+    [data-testid="stSidebarHeader"] [data-testid="stLogoSpacer"] {
+        /* Reserves room for a st.logo() this app doesn't set: the mark is
+           rendered as an image in the sidebar body instead. */
+        display: none !important;
+    }
+    [data-testid="stSidebarUserContent"] {
+        padding-bottom: 1.5rem !important;
+    }
+    [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] {
+        gap: 0.5rem !important;
+    }
+    [data-testid="stSidebar"] hr {
+        margin-top: 0.4rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+    [data-testid="stSidebar"] h1 {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        margin-bottom: 0.2rem !important;
+    }
 </style>
 """
 
@@ -11103,13 +11129,19 @@ def main():
     # Quick stats in sidebar
     stats = st.session_state.ontology.get_statistics()
     st.sidebar.caption("Quick Stats")
-    st.sidebar.write(f"📦 Classes: {stats['classes']}")
-    st.sidebar.write(f"🔗 Object Props: {stats['object_properties']}")
-    st.sidebar.write(f"📝 Data Props: {stats['data_properties']}")
-    st.sidebar.write(f"👤 Individuals: {stats['individuals']}")
+    # One block rather than a write() per line: each was its own element, and
+    # the gap between elements cost more than the lines themselves. Two trailing
+    # spaces are markdown for a line break.
+    _stat_lines = [
+        f"📦 Classes: {stats['classes']}",
+        f"🔗 Object Props: {stats['object_properties']}",
+        f"📝 Data Props: {stats['data_properties']}",
+        f"👤 Individuals: {stats['individuals']}",
+    ]
     if stats.get("concepts", 0) > 0:
-        st.sidebar.write(f"🏷️ SKOS Concepts: {stats['concepts']}")
-    st.sidebar.write(f"📊 Triples: {stats['content_triples']}")
+        _stat_lines.append(f"🏷️ SKOS Concepts: {stats['concepts']}")
+    _stat_lines.append(f"📊 Triples: {stats['content_triples']}")
+    st.sidebar.markdown("  \n".join(_stat_lines))
 
     # Say what the app is, but only to someone who has nothing loaded yet. The
     # name otherwise lives in the sidebar and the tab title, and a permanent
