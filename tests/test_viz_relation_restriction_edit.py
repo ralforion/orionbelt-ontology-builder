@@ -190,8 +190,11 @@ def test_panel_edits_the_restriction_the_edge_stands_for(graph):
     )
     at = _run("panel", "Restriction", ename)
 
-    assert at.text_input(key=_panel_key(ename, "er_val")).value == "Wheel"
-    at.text_input(key=_panel_key(ename, "er_val")).set_value("Vehicle")
+    # someValuesFrom points at a class, so the value is a picker now (#250).
+    assert at.selectbox(key=_panel_key(ename, "er_valcls")).value.strip() == "Wheel"
+    _box = at.selectbox(key=_panel_key(ename, "er_valcls"))
+    # Options are padded for search ranking, so match on the stripped label.
+    _box.set_value(next(o for o in _box.options if o.strip() == "Vehicle"))
     _click(at, "💾 Save")
 
     assert not at.exception, at.exception
@@ -261,7 +264,11 @@ def test_open_full_editor_opens_the_restrictions_row(graph):
     at = _run("restrictions", ename=ename)
 
     # One editor, on the Wheel restriction rather than its Engine sibling.
-    values = [i.value for i in at.text_input if i.key and i.key.startswith("er_val_")]
+    values = [
+        s.value.strip()
+        for s in at.selectbox
+        if s.key and s.key.startswith("er_valcls_")
+    ]
     assert values == ["Wheel"]
     assert "_rest_open_edge" not in at.session_state
 
