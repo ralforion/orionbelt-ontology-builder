@@ -27,7 +27,14 @@ import pathlib
 
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
 
-APP = pathlib.Path(__file__).resolve().parents[1] / "orionbelt_ontology_builder/app.py"
+PKG = pathlib.Path(__file__).resolve().parents[1] / "orionbelt_ontology_builder"
+# The UI modules, found by the import rather than named: app.py was split, and a
+# check that reads one file would quietly stop covering whatever moved out of it
+# while still passing. The engine is excluded because checkpointing is the UI's
+# job — OntologyManager's own methods call each other freely.
+SOURCES = sorted(
+    p for p in PKG.rglob("*.py") if "import streamlit" in p.read_text(encoding="utf-8")
+)
 
 # The only calls exempt from carrying their own bump, keyed by the function they
 # sit in: these helpers apply an edit on behalf of a page that checkpoints around
@@ -143,20 +150,23 @@ def _enclosing_function(node: ast.AST, parents: dict) -> str:
 
 def test_every_mutation_site_moves_the_revision():
     """Fails with the file and line of any mutation whose handler doesn't."""
-    tree = ast.parse(APP.read_text())
-    parents = _parents(tree)
     mutators = _mutating_methods()
 
     offenders = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if node.func.attr not in mutators:
-            continue
-        if _enclosing_function(node, parents) in CHECKPOINTED_BY_CALLER:
-            continue
-        if not _handler_bumps(node, parents):
-            offenders.append(f"app.py:{node.lineno} {node.func.attr}()")
+    for source in SOURCES:
+        tree = ast.parse(source.read_text())
+        parents = _parents(tree)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            ):
+                continue
+            if node.func.attr not in mutators:
+                continue
+            if _enclosing_function(node, parents) in CHECKPOINTED_BY_CALLER:
+                continue
+            if not _handler_bumps(node, parents):
+                offenders.append(f"{source.name}:{node.lineno} {node.func.attr}()")
 
     assert not offenders, (
         "these mutations never move _ont_mutation_count, so they cannot be "

@@ -32,3 +32,26 @@ def skos_om():
     m.add_concept("Dog", scheme="MyScheme", pref_label="Dog", broader="Animal")
     m.add_concept("Cat", scheme="MyScheme", pref_label="Cat", broader="Animal")
     return m
+
+
+@pytest.fixture
+def patch_ui(monkeypatch):
+    """Patch a name on every module that binds it.
+
+    ``app.py`` was split into ``app`` (the shell and the pages) and ``ui`` (the
+    shared helpers), and ``from .ui import X`` binds a *copy* in the importing
+    module. Patching one module therefore leaves the other's calls untouched,
+    and most of these names are called from both — so a test would silently
+    exercise the unpatched half.
+
+    Sets the attribute wherever it exists instead, which is what a test written
+    against the single module meant by ``setattr(app, ...)``.
+    """
+    from orionbelt_ontology_builder import app, ui
+
+    def _patch(name, value):
+        for module in (app, ui):
+            if hasattr(module, name):
+                monkeypatch.setattr(module, name, value)
+
+    return _patch

@@ -83,7 +83,7 @@ def test_search_name_ranks_above_alt_label(populated_om):
     assert names.index("Doggo") < names.index("Wolf")
 
 
-def test_search_disambiguates_same_name_across_namespaces(monkeypatch):
+def test_search_disambiguates_same_name_across_namespaces(monkeypatch, patch_ui):
     """Two entities sharing a local name in different namespaces get a
     namespace tag in the sidebar search, matching the graph/UI (issue #119)."""
     import types
@@ -104,9 +104,7 @@ def test_search_disambiguates_same_name_across_namespaces(monkeypatch):
 
     # The sidebar builds a per-group collision set and disambiguates via the
     # shared helper; _prefix_for_uri reads the active ontology from session.
-    monkeypatch.setattr(
-        app, "st", types.SimpleNamespace(session_state={"ontology": om})
-    )
+    patch_ui("st", types.SimpleNamespace(session_state={"ontology": om}))
     collisions = app._build_name_collision_set(results)
     assert "Dog" in collisions
     displayed = {app._disambiguated_name(r, collisions) for r in results}
