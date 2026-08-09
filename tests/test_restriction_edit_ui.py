@@ -314,3 +314,78 @@ def test_switching_a_hasvalue_row_to_a_class_type_offers_only_classes():
     options = [o.strip() for o in at.selectbox(key="er_valcls_0").options]
     assert options == ["Person"], options
     assert "alice" not in " ".join(options)
+
+
+# --- clearing a required dropdown --------------------------------------------
+
+
+def test_a_required_dropdown_can_be_cleared():
+    """The clear cross only exists when a selectbox may hold nothing, so the
+    current value is seeded into the widget rather than preselected."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    box = at.selectbox(key="er_cls_0")
+    assert box.value is not None and box.value.strip() == "Bicycle"
+    box.set_value(None).run(timeout=120)
+    assert at.selectbox(key="er_cls_0").value is None
+
+
+def test_clearing_the_class_and_saving_reports_it_and_changes_nothing():
+    """It used to fall back to the value the row started with, rewriting the
+    axiom against a class the user had explicitly cleared."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    at.selectbox(key="er_cls_0").set_value(None).run(timeout=120)
+    _click(at, "💾 Save")
+
+    assert not at.exception, at.exception
+    assert any("Applies to Class is required" in e.value for e in at.error)
+    assert _rows(at.session_state["ontology"]) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]
+
+
+def test_clearing_the_property_and_saving_reports_it():
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    at.selectbox(key="er_prop_0").set_value(None).run(timeout=120)
+    _click(at, "💾 Save")
+
+    assert any("Property is required" in e.value for e in at.error)
+    assert _rows(at.session_state["ontology"]) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]
+
+
+def test_clearing_the_class_value_and_saving_reports_it():
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    at.selectbox(key="er_valcls_0").set_value(None).run(timeout=120)
+    _click(at, "💾 Save")
+
+    assert any("Value (Class) is required" in e.value for e in at.error)
+    assert _rows(at.session_state["ontology"]) == [
+        ("hasPart", "someValuesFrom", "Engine"),
+        ("hasPart", "someValuesFrom", "Wheel"),
+    ]
+
+
+def test_an_untouched_row_still_saves():
+    """The seeding must not leave a required field looking empty."""
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    _open_row(at, 0)
+
+    _click(at, "💾 Save")
+
+    assert not any("is required" in e.value for e in at.error)
