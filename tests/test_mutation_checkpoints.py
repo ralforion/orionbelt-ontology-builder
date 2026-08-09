@@ -42,6 +42,11 @@ CHECKPOINTED_BY_CALLER = {
     # rollback path returns False having restored the graph, so there is nothing
     # to checkpoint there either (issue #223).
     "_apply_annotation_edit",
+    # Both hand their delete to _panel_delete_edge as a callback, and that is
+    # where the checkpoint sits — the axiom has no URI, so the panel resolves it
+    # and the shared helper confirms, deletes and checkpoints (issue #222).
+    "_render_panel_relation_editor",
+    "_render_panel_restriction_editor",
 }
 
 # Either of these moves the revision: the checkpoint helper, or a direct bump

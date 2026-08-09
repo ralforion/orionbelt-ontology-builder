@@ -2586,6 +2586,18 @@ def _render_panel_relation_editor(ont, ename, classes):
     render_relation_form(
         ont, rel, f"panel_{_uid(ename)}", _relation_spec("crel", ont, classes)
     )
+    _panel_delete_edge(
+        ont,
+        "relation",
+        f"viz_crel_{_uid(ename)}",
+        # By URI: a local name resolves into the base namespace, so a relation
+        # between imported classes would not be found and nothing would go.
+        lambda: ont.remove_class_relation(
+            rel.get("subject_uri") or rel["subject"],
+            rel["relation"],
+            rel.get("object_uri") or rel["object"],
+        ),
+    )
 
 
 def _render_panel_restriction_editor(ont, ename, classes, properties):
@@ -2618,6 +2630,21 @@ def _render_panel_restriction_editor(ont, ename, classes, properties):
         "applied_to_uris": [src_uri],
     }
     render_restriction_form(ont, row, f"panel_{_uid(ename)}", classes, properties)
+    _panel_delete_edge(
+        ont,
+        "restriction",
+        f"viz_rest_{_uid(ename)}",
+        # By URI and by value, like the Restrictions page: a local name resolves
+        # into the base namespace, and a sibling on the same property and type
+        # would be deleted instead of this one (issue #152).
+        lambda: ont.delete_restriction(
+            src_uri,
+            rest.get("property_uri") or rest["property"],
+            rest["type"],
+            value=rest.get("value_uri") or rest.get("value"),
+            on_class=rest.get("on_class_uri") or rest.get("on_class"),
+        ),
+    )
 
 
 def _panel_add_kind():
@@ -3097,6 +3124,100 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
             st.rerun()
 
 
+def _panel_drop_selection() -> None:
+    """Forget the selected node after deleting what it stood for (issue #222).
+
+    The panel's selection is re-seeded from the component's own value on every
+    run, and the component still reports the node that was just deleted — so
+    clearing the stored selection alone would last exactly one rerun. The node id
+    is remembered instead and treated as no selection until a different node
+    arrives.
+    """
+    st.session_state["_viz_last_selection"] = None
+    live = st.session_state.get("graph_viewer")
+    if isinstance(live, dict):
+        st.session_state["_viz_dropped_node"] = live.get("nodeId")
+
+
+def _panel_delete_entity(ont, kind, entity) -> None:
+    """Delete button plus impact confirmation for the selected node (#222).
+
+    The counterpart to adding from the graph (issue #221), and deliberately the
+    same two-step the entity pages use: ``confirm_delete`` names what else goes
+    with it, which matters more here than there — from the graph you are one
+    click from an entity you were only looking at.
+
+    Outside the editor's form on purpose: a form batches until submit, so a
+    confirmation drawn inside one could not appear until something else was
+    submitted.
+    """
+    suffix = f"viz_{kind}_{_uid(entity['uri'])}"
+    st.button(
+        "🗑️ Delete",
+        key=f"panel_del_{suffix}",
+        use_container_width=True,
+        help=f"Delete this {kind} from the ontology.",
+        on_click=_cb_confirm_delete,
+        args=(suffix,),
+    )
+    if not confirm_delete(entity["uri"], kind, suffix):
+        return
+    {
+        "class": ont.delete_class,
+        "property": ont.delete_property,
+        "individual": ont.delete_individual,
+    }[kind](entity["uri"])
+    save_checkpoint(f"Delete {kind}")
+    _panel_drop_selection()
+    set_flash_message(f"{entity['name']} deleted!", "success")
+    st.rerun()
+
+
+def _panel_delete_edge(ont, label, key_suffix, delete) -> None:
+    """Delete button plus confirmation for an axiom drawn as an edge (#222).
+
+    An axiom has no URI, so ``get_delete_impact`` has nothing to look up and the
+    confirmation says what is going instead.
+
+    Whether anything actually went is worth reporting: an edge can outlive the
+    axiom behind it, and a delete that removed nothing while saying otherwise is
+    the failure the page-level ones were fixed for (issue #152).
+    ``delete_restriction`` answers that itself; ``remove_class_relation`` returns
+    nothing, so the graph is measured around the call instead of assuming.
+    """
+    st.button(
+        f"🗑️ Delete {label}",
+        key=f"panel_del_{key_suffix}",
+        use_container_width=True,
+        on_click=_cb_confirm_delete,
+        args=(key_suffix,),
+    )
+    if not st.session_state.get(f"confirm_delete_{key_suffix}"):
+        return
+    st.warning(f"Delete this {label}? The entities at either end are kept.")
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("Confirm Delete", key=f"yes_confirm_{key_suffix}", type="primary"):
+            st.session_state[f"confirm_delete_{key_suffix}"] = False
+            _before = len(ont.graph)
+            _changed = delete()
+            if _changed is None:
+                _changed = len(ont.graph) != _before
+            if _changed:
+                save_checkpoint(f"Delete {label}")
+                _panel_drop_selection()
+                set_flash_message(f"{label.capitalize()} deleted!", "success")
+            else:
+                set_flash_message(
+                    f"This {label} is no longer in the ontology.", "error"
+                )
+            st.rerun()
+    with col_no:
+        if st.button("Cancel", key=f"no_confirm_{key_suffix}"):
+            st.session_state[f"confirm_delete_{key_suffix}"] = False
+            st.rerun()
+
+
 def _render_panel_entity_editor(
     ont, ntype, ename, sel, classes, object_props, data_props, individuals
 ):
@@ -3260,6 +3381,15 @@ def _render_panel_entity_editor(
                     save_checkpoint("Update individual")
                     show_message("Individual updated!", "success")
                 st.rerun()
+
+    _delete_kind = {
+        "Class": "class",
+        "Object Property": "property",
+        "Data Property": "property",
+        "Individual": "individual",
+    }.get(ntype)
+    if _delete_kind:
+        _panel_delete_entity(ont, _delete_kind, entity)
 
     st.caption("IRI")
     st.code(entity["uri"], language=None)
@@ -10603,8 +10733,16 @@ def render_visualization():
             # when the component returned nothing (a fresh re-mount).
             _live_sel = st.session_state.get("graph_viewer")
             if isinstance(_live_sel, dict) and "selected" in _live_sel:
+                # A node deleted from the panel is still reported as selected by
+                # the component, which has not been told otherwise. Treat it as
+                # no selection until a different node arrives, or the panel would
+                # reopen on the entity that was just removed (issue #222).
+                if _live_sel.get("nodeId") == st.session_state.get("_viz_dropped_node"):
+                    _live_sel = None
+                else:
+                    st.session_state.pop("_viz_dropped_node", None)
                 st.session_state["_viz_last_selection"] = (
-                    _live_sel if _live_sel.get("selected") else None
+                    _live_sel if _live_sel and _live_sel.get("selected") else None
                 )
             _prev_sel = st.session_state.get("_viz_last_selection")
             _prev_has_sel = isinstance(_prev_sel, dict) and _prev_sel.get("selected")
