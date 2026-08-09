@@ -258,3 +258,29 @@ def test_only_the_deleted_edge_is_suppressed():
 
 def test_a_deselect_is_still_a_deselect():
     assert app._viz_live_selection({"selected": False}, None, 0) == (None, None)
+
+
+# --- saying what is not on screen -------------------------------------------
+
+
+def test_no_caption_when_nothing_is_hidden():
+    assert app.viz_hidden_caption(False, [], 1, 0, 0) == ""
+
+
+def test_focus_names_its_seeds_and_counts_what_it_took():
+    assert app.viz_hidden_caption(True, ["Class: Person"], 1, 6, 0) == (
+        "Focused on Person · 1 hop · 6 hidden by focus"
+    )
+
+
+def test_many_seeds_stay_one_short_line():
+    """Five names, then a count: a focus on half the ontology must not turn the
+    caption into a paragraph."""
+    seeds = [f"Class: C{i}" for i in range(9)]
+    assert app.viz_hidden_caption(True, seeds, 2, 3, 0) == (
+        "Focused on C0, C1, C2, C3, C4, … (+4) · 2 hops · 3 hidden by focus"
+    )
+
+
+def test_the_node_filter_is_reported_on_its_own():
+    assert app.viz_hidden_caption(False, [], 1, 0, 4) == ("4 hidden by the node filter")

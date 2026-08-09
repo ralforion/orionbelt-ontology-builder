@@ -9018,6 +9018,33 @@ _FILTER_KINDS = (
 )
 
 
+def viz_hidden_caption(
+    focus_mode, focus_seeds, focus_depth, focus_hidden, hidden_by_filter
+) -> str:
+    """One line saying what is not on screen, or "" when everything is.
+
+    A focus or a narrowed node filter is invisible on the canvas: a class you
+    just added simply isn't drawn, and nothing says why. That reads as the graph
+    losing the entity rather than as the view you set.
+
+    Seeds are listed by name up to five, then counted, so a focus on half the
+    ontology stays one short line.
+    """
+    parts = []
+    if focus_mode and focus_seeds:
+        shown = [s.split(": ", 1)[-1] for s in focus_seeds[:5]]
+        names = ", ".join(shown)
+        if len(focus_seeds) > 5:
+            names += f", … (+{len(focus_seeds) - 5})"
+        hops = "hop" if focus_depth == 1 else "hops"
+        parts.append(f"Focused on {names} · {focus_depth} {hops}")
+    if focus_hidden:
+        parts.append(f"{focus_hidden} hidden by focus")
+    if hidden_by_filter:
+        parts.append(f"{hidden_by_filter} hidden by the node filter")
+    return " · ".join(parts)
+
+
 def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     """Reconcile one Visualization filter's selection with the ontology.
 
@@ -10629,7 +10656,9 @@ def render_visualization():
             # focus_depth hops over the assembled edges (BFS over all node
             # types, so depth counts real graph links rather than class hops).
             # Several seeds grow the neighbourhood from all of them at once.
+            focus_hidden = 0
             if focus_pruning:
+                _before_prune = len(net.nodes)
                 present_ids = {n["id"] for n in net.nodes}
                 seeds = {sid for sid in focus_seed_ids if sid in present_ids}
                 if seeds:
@@ -10667,6 +10696,7 @@ def render_visualization():
                     net.edges = [
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
                     ]
+                    focus_hidden = _before_prune - len(net.nodes)
                 else:
                     # No seed was built (past the assembly cap, or its type
                     # toggled off) — show nothing rather than the whole graph,
@@ -10731,6 +10761,10 @@ def render_visualization():
                     # Cached with the graph so it survives the reruns that reuse
                     # it, rather than flashing once on the build that found it.
                     "notice": graph_notice,
+                    # What the focus prune took out, cached with the graph it
+                    # produced so the caption below survives the reruns that
+                    # reuse it (issue #222 follow-up).
+                    "focus_hidden": focus_hidden,
                 }
                 # NB: don't bump viz_render_seq here. The component re-renders on
                 # its own whenever nodes/edges change, and seq is the layout-cache
@@ -10752,6 +10786,19 @@ def render_visualization():
         # the cached graph is reused.
         if gdata and gdata.get("notice"):
             status.warning(gdata["notice"], icon="⚠️")
+        # Say what is being held back, small, right above the canvas: a focus or
+        # a narrowed filter is otherwise invisible, and an entity that isn't
+        # drawn looks lost rather than filtered (issue #222 follow-up).
+        _hidden_caption = viz_hidden_caption(
+            focus_mode,
+            list(focus_seeds) if focus_mode else [],
+            focus_depth,
+            (gdata or {}).get("focus_hidden", 0),
+            (len(filters["class"]["uris"]) - len(filters["class"]["selected_uris"]))
+            + (len(filters["ind"]["uris"]) - len(filters["ind"]["selected_uris"])),
+        )
+        if _hidden_caption:
+            st.caption(_hidden_caption)
         if gdata:
             import os as _os
 
