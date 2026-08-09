@@ -316,7 +316,7 @@ def test_switching_a_hasvalue_row_to_a_class_type_offers_only_classes():
     assert "alice" not in " ".join(options)
 
 
-# --- clearing a required dropdown (issue #252) -------------------------------
+# --- clearing a required dropdown --------------------------------------------
 
 
 def test_a_required_dropdown_can_be_cleared():

@@ -2391,10 +2391,13 @@ def _render_panel_annotation_editor(
     with st.form(f"panel_edit_ann_{_uid(ename)}"):
         # Which resource it hangs off is editable, so an annotation can be moved
         # the way a relation or restriction can be re-pointed from here (#251).
-        new_subject = st.selectbox(
+        new_subject = required_selectbox(
             "On",
-            options=subject_options,
-            index=_uri_option_index(subject_options, subject_lookup, subject_uri),
+            subject_options,
+            key=f"panel_ann_on_{_uid(ename)}",
+            current_display=subject_options[
+                _uri_option_index(subject_options, subject_lookup, subject_uri)
+            ],
             format_func=_pad_option,
             help="Move the annotation by choosing a different resource.",
         )
@@ -2444,7 +2447,12 @@ def _render_panel_annotation_editor(
         show_message("Annotation deleted!", "success")
         st.rerun()
     if saved:
-        if not new_value.strip():
+        if _missing := missing_required(On=new_subject):
+            # A cleared subject used to fall back to the one it came from, so
+            # the annotation was rewritten onto a resource the user had
+            # explicitly cleared.
+            show_message(_missing, "error")
+        elif not new_value.strip():
             show_message("Annotation value is required!", "error")
         elif _apply_annotation_edit(
             ont,
@@ -2823,17 +2831,19 @@ def _render_panel_add_relation_form(ont, classes, ntype, ename):
     # were just resolved out of `classes`, so both are present.
     display_by_uri = {u: d for d, u in lookup.items()}
     with st.form("panel_add_rel_form"):
-        subj_disp = st.selectbox(
+        subj_disp = required_selectbox(
             "Subject",
-            options=options,
-            index=options.index(display_by_uri[subject["uri"]]),
+            options,
+            key=f"panel_rel_subj_{_uid(ename or '')}",
+            current_display=display_by_uri[subject["uri"]],
             format_func=_pad_option,
         )
         rel_type = st.selectbox("Relation Type", options=list(ont.CLASS_RELATIONS))
-        obj_disp = st.selectbox(
+        obj_disp = required_selectbox(
             "Object",
-            options=options,
-            index=options.index(display_by_uri[obj["uri"]]),
+            options,
+            key=f"panel_rel_obj_{_uid(ename or '')}",
+            current_display=display_by_uri[obj["uri"]],
             format_func=_pad_option,
         )
         st.caption(f"Reads as: {subject['name']} → {obj['name']}")
@@ -2845,7 +2855,9 @@ def _render_panel_add_relation_form(ont, classes, ntype, ename):
     if cancelled:
         _panel_close_add()
         st.rerun()
-    if submitted and _apply_class_relation_add(
+    if submitted and (_missing := missing_required(Subject=subj_disp, Object=obj_disp)):
+        show_message(_missing, "error")
+    elif submitted and _apply_class_relation_add(
         ont,
         lookup.get(subj_disp),
         rel_type,
@@ -2926,22 +2938,28 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
     rtype = st.selectbox("Restriction Type", options=types, key="panel_rest_type")
     qualified = restriction_takes_on_class(rtype)
     with st.form("panel_add_rest_form"):
-        target_disp = st.selectbox(
+        target_disp = required_selectbox(
             "Apply to Class",
-            options=cls_options,
-            index=cls_options.index(display_by_uri[subject["uri"]]),
+            cls_options,
+            key=f"panel_rest_target_{_uid(ename or '')}",
+            current_display=display_by_uri[subject["uri"]],
             format_func=_pad_option,
         )
-        prop_disp = st.selectbox(
-            "On Property", options=prop_options, format_func=_pad_option
+        prop_disp = required_selectbox(
+            "On Property",
+            prop_options,
+            key=f"panel_rest_prop_{_uid(ename or '')}",
+            current_display=prop_options[0] if prop_options else None,
+            format_func=_pad_option,
         )
         # The picked class is the value for someValuesFrom / allValuesFrom, and
         # the owl:onClass for the qualified cardinalities. Same click, different
         # slot in the axiom, so the label says which one it is filling.
-        klass_disp = st.selectbox(
+        klass_disp = required_selectbox(
             "Qualified on Class" if qualified else "Value (Class)",
-            options=cls_options,
-            index=cls_options.index(display_by_uri[other["uri"]]),
+            cls_options,
+            key=f"panel_rest_cls_{_uid(ename or '')}",
+            current_display=display_by_uri[other["uri"]],
             format_func=_pad_option,
         )
         cardinality = None
@@ -2957,7 +2975,17 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
     if cancelled:
         _panel_close_add()
         st.rerun()
-    if submitted:
+    if submitted and (
+        _missing := missing_required(
+            **{
+                "Apply to Class": target_disp,
+                "On Property": prop_disp,
+                ("Qualified on Class" if qualified else "Value (Class)"): klass_disp,
+            }
+        )
+    ):
+        show_message(_missing, "error")
+    elif submitted:
         picked_uri = cls_lookup.get(klass_disp)
         on_class = picked_uri if restriction_takes_on_class(rtype) else None
         value = cardinality if restriction_takes_on_class(rtype) else picked_uri
@@ -5293,7 +5321,7 @@ def required_selectbox(label, options, key, current_display=None, **kwargs):
     value is seeded into the widget's own state instead. That is done once per
     value rather than once per render: re-seeding every run would undo a clear
     the moment it happened, and seeding only on first sight would show a stale
-    value when the row underneath changes (issue #252).
+    value when the row underneath changes.
 
     Returns the chosen option, or ``None`` when the field has been cleared. Every
     caller has to say so rather than carrying on: clearing a required dropdown
@@ -5558,7 +5586,7 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
         ):
             # A cleared dropdown used to fall back to the value it started with,
             # so the axiom was rewritten against a class or property the user had
-            # explicitly cleared, and nothing was said either way (issue #252).
+            # explicitly cleared, and nothing was said either way.
             show_message(_missing, "error")
         elif saved:
             try:
@@ -6226,11 +6254,11 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
         subj_default = _uri_option_index(row_options, row_lookup, subj_uri)
         obj_default = _uri_option_index(row_options, row_lookup, obj_uri)
         types = list(spec["relation_types"])
-        new_subject = st.selectbox(
+        new_subject = required_selectbox(
             "Subject",
             row_options,
-            index=subj_default,
             key=f"es_{form_key}",
+            current_display=row_options[subj_default],
             format_func=_pad_option,
         )
         new_type = st.selectbox(
@@ -6239,22 +6267,26 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
             index=types.index(rel["relation"]) if rel["relation"] in types else 0,
             key=f"et_{form_key}",
         )
-        new_object = st.selectbox(
+        new_object = required_selectbox(
             "Object",
             row_options,
-            index=obj_default,
             key=f"eo_{form_key}",
+            current_display=row_options[obj_default],
             format_func=_pad_option,
         )
         # The add forms can point an object at an entity in an ontology that
         # was never imported; without this the editor could keep such a
         # target but never set one.
-        ext_obj_uri, ext_err = _external_uri_target(
-            ont,
-            row_lookup[new_object],
-            key=f"eo_ext_{form_key}",
-            label="the object",
-        )
+        # The external-URI field reads the object's URI, which a cleared
+        # object has not got, and has nothing to override without one.
+        ext_obj_uri, ext_err = (None, None)
+        if new_object is not None:
+            ext_obj_uri, ext_err = _external_uri_target(
+                ont,
+                row_lookup[new_object],
+                key=f"eo_ext_{form_key}",
+                label="the object",
+            )
         cancelled = False
         if on_close is None:
             saved = st.form_submit_button("💾 Save", use_container_width=True)
@@ -6268,6 +6300,14 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
         if cancelled:
             on_close()
             st.rerun()
+        if saved and (
+            _missing := missing_required(Subject=new_subject, Object=new_object)
+        ):
+            # A cleared endpoint used to fall back to the one the row started
+            # with, rewriting the triple against an entity the user had
+            # explicitly cleared.
+            show_message(_missing, "error")
+            return
         if saved:
             new_subj_uri = row_lookup[new_subject]
             new_obj_uri = ext_obj_uri
@@ -6425,10 +6465,11 @@ def render_add_annotation(ont, all_resources):
         with st.form("add_annotation_form"):
             # Use display format with label
             resource_options = [f"{r['display']} [{r['type']}]" for r in all_resources]
-            selected = st.selectbox(
+            selected = required_selectbox(
                 "Select Resource",
-                options=resource_options,
+                resource_options,
                 key="ann_resource",
+                current_display=resource_options[0] if resource_options else None,
                 format_func=_pad_option,
             )
 
@@ -6467,7 +6508,12 @@ def render_add_annotation(ont, all_resources):
                 predicate_uri, predicate_reason = resolve_annotation_predicate_choice(
                     ont, predicate_display, predicate_lookup
                 )
-                if not value:
+                if _missing := missing_required(**{"Select Resource": selected}):
+                    # Clearing the resource used to leave the previous pick in
+                    # place, so the annotation was written to a resource the
+                    # user had cleared, with nothing said either way.
+                    show_message(_missing, "error")
+                elif not value:
                     show_message("Value is required!", "error")
                 elif predicate_reason:
                     show_message(predicate_reason, "error")
