@@ -9084,6 +9084,10 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     and re-show a deliberately hidden one (issue #179 review).
     """
     all_set = set(all_uris)
+    # Coerced, not assumed: the session always stores a set here, but this pair
+    # is the obvious thing to persist next, and JSON has no sets — a list would
+    # otherwise reach the difference below and raise.
+    known = None if known is None else set(known)
     if replaced or selected is None or known is None:
         selected_set = set(all_uris)
     else:
