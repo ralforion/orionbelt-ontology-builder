@@ -5466,7 +5466,15 @@ def clearable_selectbox(label, options, key, current_display=None, **kwargs):
     show, or a field whose absence simply means "not set".
     """
     seeded_for = f"{key}__seeded_for"
-    if st.session_state.get(seeded_for) != current_display:
+    # ``key not in session_state`` is the second half of the condition, not a
+    # redundancy: Streamlit drops the state of a widget that wasn't rendered on
+    # a run, so leaving the page and coming back loses the value — while the
+    # marker below, not being a widget key, survives and would suppress the
+    # re-seed. The field then came back empty instead of showing what it holds.
+    if (
+        key not in st.session_state
+        or st.session_state.get(seeded_for) != current_display
+    ):
         st.session_state[seeded_for] = current_display
         st.session_state[key] = current_display if current_display in options else None
     return st.selectbox(label, options, index=None, key=key, **kwargs)

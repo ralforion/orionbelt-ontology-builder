@@ -177,3 +177,55 @@ def test_no_dropdown_worth_clearing_is_left_plain():
         "these dropdowns hold a value worth clearing but offer no way to:\n  "
         + "\n  ".join(sorted(offenders))
     )
+
+
+# --- seeding ----------------------------------------------------------------
+
+
+def _seed(monkeypatch, key, options, current_display):
+    """Run the helper's seeding with a stubbed selectbox, returning what it
+    would have rendered with."""
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+
+    seen = {}
+
+    def fake_selectbox(label, opts, index=None, key=None, **kwargs):
+        seen["value"] = st.session_state.get(key)
+        return seen["value"]
+
+    monkeypatch.setattr(app.st, "selectbox", fake_selectbox)
+    app.clearable_selectbox("L", options, key=key, current_display=current_display)
+    return seen["value"]
+
+
+def test_a_clear_survives_the_next_render(monkeypatch):
+    """Re-seeding on every run would undo the clear the moment it happened."""
+    import streamlit as st
+
+    st.session_state.clear()
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
+    st.session_state["k"] = None  # the user clears it
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") is None
+
+
+def test_the_value_comes_back_after_the_widget_is_dropped(monkeypatch):
+    """Streamlit discards the state of a widget that wasn't rendered on a run,
+    so leaving the page and returning must re-seed rather than show empty."""
+    import streamlit as st
+
+    st.session_state.clear()
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
+    del st.session_state["k"]  # what Streamlit does while the page is away
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
+
+
+def test_a_changed_row_underneath_reseeds(monkeypatch):
+    """Seeding only on first sight would leave the previous row's value on
+    screen when the editor is reopened for another row."""
+    import streamlit as st
+
+    st.session_state.clear()
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
+    assert _seed(monkeypatch, "k", ["a", "b"], "b") == "b"
