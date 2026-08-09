@@ -55,6 +55,7 @@ _VIZ_PERSIST_KEYS = (
     "details_panel",
     "focus_mode",
     "focus_depth",
+    "options_open",
 )
 # Clamp restored integer settings so a stale/tampered value can't crash a slider
 # whose value must lie within its min/max.
@@ -9032,6 +9033,7 @@ def render_visualization():
             "highlight_issues": False,
             "focus_mode": False,
             "focus_depth": 1,
+            "options_open": True,
         }
         # Bring back settings saved in a previous session before applying
         # defaults, so a returning user opens with their own preferences (#142).
@@ -9044,130 +9046,24 @@ def render_visualization():
             # Restore widget key from persisted config
             st.session_state[wid_key] = st.session_state[cfg_key]
 
-        _cols = (
-            st.columns([1, 1, 1, 1, 1, 1, 1, 1])
-            if _has_skos
-            else st.columns([1, 1, 1, 1, 1, 1, 1])
-        )
-        with _cols[0]:
-            show_classes = st.checkbox(
-                "Classes",
-                key="viz_show_classes",
+        # The display options are a band of controls above the canvas that is
+        # set once and then left alone, so it collapses to give the graph the
+        # room. A toggle rather than an expander: an expander's open state is
+        # client-side only and resets on reload, while this rides the same
+        # persisted viz settings, so a band you collapsed stays collapsed.
+        # Render sits outside it, since redrawing is the one thing still worth
+        # doing while the rest is out of the way.
+        _opt_col, _render_col = st.columns([5, 1])
+        with _opt_col:
+            options_open = st.toggle(
+                "Display options",
+                key="viz_options_open",
                 on_change=viz_sync,
-                args=("_viz_cfg_show_classes", "viz_show_classes"),
+                args=("_viz_cfg_options_open", "viz_options_open"),
+                help="Which node types to draw, the graph height and the "
+                "layout spacing.",
             )
-        with _cols[1]:
-            show_properties = st.checkbox(
-                "Obj Props",
-                key="viz_show_obj_props",
-                on_change=viz_sync,
-                args=("_viz_cfg_show_obj_props", "viz_show_obj_props"),
-            )
-        with _cols[2]:
-            show_data_props = st.checkbox(
-                "Data Props",
-                key="viz_show_data_props",
-                on_change=viz_sync,
-                args=("_viz_cfg_show_data_props", "viz_show_data_props"),
-            )
-        with _cols[3]:
-            show_annotations = st.checkbox(
-                "Annotations",
-                key="viz_show_annotations",
-                on_change=viz_sync,
-                args=("_viz_cfg_show_annotations", "viz_show_annotations"),
-            )
-        with _cols[4]:
-            show_individuals = st.checkbox(
-                "Individuals",
-                key="viz_show_individuals",
-                on_change=viz_sync,
-                args=("_viz_cfg_show_individuals", "viz_show_individuals"),
-            )
-        if _has_skos:
-            with _cols[5]:
-                show_skos = st.checkbox(
-                    "SKOS",
-                    key="viz_show_skos",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_skos", "viz_show_skos"),
-                )
-            with _cols[6]:
-                show_ind_edges = st.checkbox(
-                    "Ind. Edges",
-                    key="viz_show_ind_edges",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_ind_edges", "viz_show_ind_edges"),
-                    help="Show property edges between individuals",
-                )
-            with _cols[7]:
-                show_triples = st.checkbox(
-                    "Triples",
-                    key="viz_show_triples",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_triples", "viz_show_triples"),
-                    help="Show all RDF triples for visible nodes",
-                )
-        else:
-            show_skos = False
-            with _cols[5]:
-                show_ind_edges = st.checkbox(
-                    "Ind. Edges",
-                    key="viz_show_ind_edges",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_ind_edges", "viz_show_ind_edges"),
-                    help="Show property edges between individuals",
-                )
-            with _cols[6]:
-                show_triples = st.checkbox(
-                    "Triples",
-                    key="viz_show_triples",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_triples", "viz_show_triples"),
-                    help="Show all RDF triples for visible nodes",
-                )
-
-        # Row 2: sliders + fit-to-window + highlight issues + render button
-        col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
-        with col1:
-            height = st.slider(
-                "Graph Height",
-                300,
-                1200,
-                step=10,
-                key="viz_graph_height",
-                on_change=viz_sync,
-                args=("_viz_cfg_graph_height", "viz_graph_height"),
-                disabled=st.session_state.get("_viz_cfg_fit", True),
-                help="Used when 'Fit to window' is off.",
-            )
-        with col2:
-            node_spacing = st.slider(
-                "Node Spacing",
-                50,
-                300,
-                help="Distance between nodes. Increase for less overlap.",
-                key="viz_node_spacing",
-                on_change=viz_sync,
-                args=("_viz_cfg_node_spacing", "viz_node_spacing"),
-            )
-        with col3:
-            fit = st.checkbox(
-                "Fit to window",
-                help="Resize the graph to fill the window height. "
-                "Turn off to use the Graph Height slider.",
-                key="viz_fit",
-                on_change=viz_sync,
-                args=("_viz_cfg_fit", "viz_fit"),
-            )
-        with col4:
-            highlight_issues = st.checkbox(
-                "Highlight Issues",
-                key="viz_highlight_issues",
-                on_change=viz_sync,
-                args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
-            )
-        with col5:
+        with _render_col:
             render_graph = st.button(
                 "Render",
                 type="primary",
@@ -9175,6 +9071,135 @@ def render_visualization():
                 help="Redraw the graph and re-run the layout. Also re-centres on "
                 "the current Find selection.",
             )
+
+        if options_open:
+            _cols = (
+                st.columns([1, 1, 1, 1, 1, 1, 1, 1])
+                if _has_skos
+                else st.columns([1, 1, 1, 1, 1, 1, 1])
+            )
+            with _cols[0]:
+                st.checkbox(
+                    "Classes",
+                    key="viz_show_classes",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_classes", "viz_show_classes"),
+                )
+            with _cols[1]:
+                st.checkbox(
+                    "Obj Props",
+                    key="viz_show_obj_props",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_obj_props", "viz_show_obj_props"),
+                )
+            with _cols[2]:
+                st.checkbox(
+                    "Data Props",
+                    key="viz_show_data_props",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_data_props", "viz_show_data_props"),
+                )
+            with _cols[3]:
+                st.checkbox(
+                    "Annotations",
+                    key="viz_show_annotations",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_annotations", "viz_show_annotations"),
+                )
+            with _cols[4]:
+                st.checkbox(
+                    "Individuals",
+                    key="viz_show_individuals",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_individuals", "viz_show_individuals"),
+                )
+            _ind_edge_col, _triple_col = (
+                (_cols[6], _cols[7]) if _has_skos else (_cols[5], _cols[6])
+            )
+            if _has_skos:
+                with _cols[5]:
+                    st.checkbox(
+                        "SKOS",
+                        key="viz_show_skos",
+                        on_change=viz_sync,
+                        args=("_viz_cfg_show_skos", "viz_show_skos"),
+                    )
+            with _ind_edge_col:
+                st.checkbox(
+                    "Ind. Edges",
+                    key="viz_show_ind_edges",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_ind_edges", "viz_show_ind_edges"),
+                    help="Show property edges between individuals",
+                )
+            with _triple_col:
+                st.checkbox(
+                    "Triples",
+                    key="viz_show_triples",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_show_triples", "viz_show_triples"),
+                    help="Show all RDF triples for visible nodes",
+                )
+
+            # Row 2: sliders + fit-to-window + highlight issues
+            col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+            with col1:
+                st.slider(
+                    "Graph Height",
+                    300,
+                    1200,
+                    step=10,
+                    key="viz_graph_height",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_graph_height", "viz_graph_height"),
+                    disabled=st.session_state.get("_viz_cfg_fit", True),
+                    help="Used when 'Fit to window' is off.",
+                )
+            with col2:
+                st.slider(
+                    "Node Spacing",
+                    50,
+                    300,
+                    help="Distance between nodes. Increase for less overlap.",
+                    key="viz_node_spacing",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_node_spacing", "viz_node_spacing"),
+                )
+            with col3:
+                st.checkbox(
+                    "Fit to window",
+                    help="Resize the graph to fill the window height. "
+                    "Turn off to use the Graph Height slider.",
+                    key="viz_fit",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_fit", "viz_fit"),
+                )
+            with col4:
+                st.checkbox(
+                    "Highlight Issues",
+                    key="viz_highlight_issues",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
+                )
+
+        # Read the settings from the persisted config rather than from the
+        # widgets' return values: collapsed, the widgets do not render at all,
+        # and the config is what they write into either way.
+        _cfg = st.session_state
+        show_classes = _cfg["_viz_cfg_show_classes"]
+        show_properties = _cfg["_viz_cfg_show_obj_props"]
+        show_data_props = _cfg["_viz_cfg_show_data_props"]
+        show_annotations = _cfg["_viz_cfg_show_annotations"]
+        show_individuals = _cfg["_viz_cfg_show_individuals"]
+        # SKOS has no toggle without concepts to draw, so it stays off rather
+        # than reading a stale True from a previous ontology.
+        show_skos = _has_skos and _cfg["_viz_cfg_show_skos"]
+        show_ind_edges = _cfg["_viz_cfg_show_ind_edges"]
+        show_triples = _cfg["_viz_cfg_show_triples"]
+        height = _cfg["_viz_cfg_graph_height"]
+        node_spacing = _cfg["_viz_cfg_node_spacing"]
+        fit = _cfg["_viz_cfg_fit"]
+        highlight_issues = _cfg["_viz_cfg_highlight_issues"]
 
         validation_subjects = set()
         if highlight_issues:

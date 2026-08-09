@@ -94,12 +94,28 @@ var fsDetachTimer = null;   // timer that detaches fsResizeHandler
 
 // When "Fit to window" is on, fill the available window height instead of using
 // the fixed Graph Height. Reads the parent window's height and this iframe's
-// position in it (same-origin), reserving room for the status bar below.
+// position in it (same-origin), reserving room for whatever sits below.
+//
+// That reserve used to be a flat 90px, which is what the status bar takes when
+// something is selected. With nothing selected the bar is a single line, so the
+// graph stopped ~80px short of the bottom for no reason. It is measured instead:
+// the distance from this iframe's bottom edge to the bottom of the page's
+// content block is exactly the status bar plus the block's own padding. Measured
+// from the iframe's *bottom*, so it does not change when the graph is resized
+// and the two cannot chase each other.
 function autofitHeight() {
     try {
         var fe = window.frameElement;
-        var top = fe ? fe.getBoundingClientRect().top : 0;
-        var avail = window.parent.innerHeight - top - 90;
+        if (!fe) return null;
+        var rect = fe.getBoundingClientRect();
+        var doc = window.parent.document;
+        var block = doc.querySelector('[data-testid="stMainBlockContainer"]')
+            || doc.querySelector('.block-container');
+        var below = 90;
+        if (block) {
+            below = Math.max(block.getBoundingClientRect().bottom - rect.bottom, 0);
+        }
+        var avail = window.parent.innerHeight - rect.top - below - 8;
         return Math.max(Math.round(avail), 300);
     } catch (e) {
         return null;  // cross-origin or unavailable: fall back to fixed height
