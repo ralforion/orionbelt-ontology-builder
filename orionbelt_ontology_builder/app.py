@@ -9874,18 +9874,29 @@ def render_visualization():
             for edge in net.edges:
                 key = tuple(sorted((edge["from"], edge["to"])))
                 _edge_groups[key].append(edge)
-            for group in _edge_groups.values():
+            for (_first, _second), group in _edge_groups.items():
                 if len(group) < 2:
                     continue
                 # Alternate sides, widening every second edge, so each edge of a
-                # pair gets a distinct (side, roundness). The old arithmetic gave
-                # index 2 the same curve as index 0 — `(i + 1) // 2` is 1 for
-                # both i=1 and i=2 — so from three parallel edges upwards the
-                # third lay exactly on top of the first (issue #245).
+                # pair gets a distinct curve. Two things this has to get right:
+                #
+                # The step. `(i + 1) // 2` was 1 for both i=1 and i=2, so from
+                # three parallel edges upwards the third lay exactly on top of
+                # the first.
+                #
+                # The direction. curvedCW is clockwise *along the edge's own*
+                # from-to, so two edges pointing opposite ways cancel out: give
+                # one CW and the other CCW, as plain alternation does, and they
+                # land on the same side of the pair rather than either side of
+                # it. Flipping the label for an edge that runs against the
+                # group's canonical order makes the side absolute, so
+                # `A disjointWith B` and `B nextItem A` bow apart (issue #245).
                 for i, edge in enumerate(group):
+                    _runs_backwards = edge["from"] != _first
+                    _clockwise = (i % 2 == 0) != _runs_backwards
                     edge["smooth"] = {
                         "enabled": True,
-                        "type": "curvedCW" if i % 2 == 0 else "curvedCCW",
+                        "type": "curvedCW" if _clockwise else "curvedCCW",
                         "roundness": 0.2 * (i // 2 + 1),
                     }
 
