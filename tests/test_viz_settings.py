@@ -33,7 +33,7 @@ class _FakeLS:
         self.saved = value
 
 
-def test_apply_validates_types_and_clamps_ints(monkeypatch):
+def test_apply_validates_types_and_clamps_ints(monkeypatch, patch_ui):
     fake: dict = {}
     monkeypatch.setattr(app.st, "session_state", fake)
     app._apply_viz_settings(
@@ -57,14 +57,14 @@ def test_apply_validates_types_and_clamps_ints(monkeypatch):
     assert "_viz_cfg_bogus" not in fake
 
 
-def test_apply_ignores_non_dict(monkeypatch):
+def test_apply_ignores_non_dict(monkeypatch, patch_ui):
     fake: dict = {}
     monkeypatch.setattr(app.st, "session_state", fake)
     app._apply_viz_settings(None, DEFAULTS)
     assert fake == {}
 
 
-def test_disk_persist_and_restore_roundtrip(monkeypatch, tmp_path):
+def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
     monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
@@ -91,7 +91,7 @@ def test_disk_persist_and_restore_roundtrip(monkeypatch, tmp_path):
     assert restore_state["_viz_cfg_fit"] is False
 
 
-def test_persist_requires_a_user_change(monkeypatch, tmp_path):
+def test_persist_requires_a_user_change(monkeypatch, patch_ui, tmp_path):
     # Merely rendering the page (no change) must not write anything, so a cloud
     # reload can't overwrite saved settings with the starting defaults (P1).
     cfg_file = tmp_path / "config.json"
@@ -102,7 +102,7 @@ def test_persist_requires_a_user_change(monkeypatch, tmp_path):
     assert not cfg_file.exists()
 
 
-def test_persist_noops_when_unchanged(monkeypatch, tmp_path):
+def test_persist_noops_when_unchanged(monkeypatch, patch_ui, tmp_path):
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
     monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
@@ -114,12 +114,12 @@ def test_persist_noops_when_unchanged(monkeypatch, tmp_path):
     assert cfg_file.stat().st_mtime_ns == first  # not rewritten
 
 
-def test_browser_restore_retries_until_real_value(monkeypatch):
+def test_browser_restore_retries_until_real_value(monkeypatch, patch_ui):
     # The localStorage value hasn't arrived yet (getItem returns None). Restore
     # must NOT resolve (it retries next rerun) — otherwise a later save would
     # write defaults over the real saved set before it is read (P1).
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: False)
-    monkeypatch.setattr(app, "_get_local_storage", lambda: _FakeLS(None))
+    patch_ui("_get_local_storage", lambda: _FakeLS(None))
     state: dict = {}
     monkeypatch.setattr(app.st, "session_state", state)
     app._restore_viz_settings(DEFAULTS)
@@ -129,10 +129,10 @@ def test_browser_restore_retries_until_real_value(monkeypatch):
     assert "_viz_settings_saved_json" not in state
 
 
-def test_browser_restore_applies_real_value(monkeypatch):
+def test_browser_restore_applies_real_value(monkeypatch, patch_ui):
     val = json.dumps({"show_skos": False, "graph_height": 900})
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: False)
-    monkeypatch.setattr(app, "_get_local_storage", lambda: _FakeLS(val))
+    patch_ui("_get_local_storage", lambda: _FakeLS(val))
     state: dict = {}
     monkeypatch.setattr(app.st, "session_state", state)
     app._restore_viz_settings(DEFAULTS)
@@ -141,11 +141,11 @@ def test_browser_restore_applies_real_value(monkeypatch):
     assert state["_viz_cfg_graph_height"] == 900
 
 
-def test_browser_dirty_change_is_saved(monkeypatch):
+def test_browser_dirty_change_is_saved(monkeypatch, patch_ui):
     # A brand-new user (nothing saved) still persists once they change a setting.
     ls = _FakeLS(None)
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: False)
-    monkeypatch.setattr(app, "_get_local_storage", lambda: ls)
+    patch_ui("_get_local_storage", lambda: ls)
     state: dict = {"_viz_settings_dirty": True, "_viz_cfg_show_skos": False}
     monkeypatch.setattr(app.st, "session_state", state)
     app._persist_viz_settings()
@@ -153,13 +153,11 @@ def test_browser_dirty_change_is_saved(monkeypatch):
     assert json.loads(ls.saved)["show_skos"] is False
 
 
-def test_restore_defers_to_in_progress_changes(monkeypatch):
+def test_restore_defers_to_in_progress_changes(monkeypatch, patch_ui):
     # If the user already changed a setting this session, a late restore must not
     # override it.
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: False)
-    monkeypatch.setattr(
-        app, "_get_local_storage", lambda: _FakeLS(json.dumps({"show_skos": True}))
-    )
+    patch_ui("_get_local_storage", lambda: _FakeLS(json.dumps({"show_skos": True})))
     state: dict = {"_viz_settings_dirty": True, "_viz_cfg_show_skos": False}
     monkeypatch.setattr(app.st, "session_state", state)
     app._restore_viz_settings(DEFAULTS)

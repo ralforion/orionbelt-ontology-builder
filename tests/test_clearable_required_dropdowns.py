@@ -17,7 +17,14 @@ import pytest
 
 from orionbelt_ontology_builder.app import missing_required
 
-APP = pathlib.Path(__file__).resolve().parents[1] / "orionbelt_ontology_builder/app.py"
+PKG = pathlib.Path(__file__).resolve().parents[1] / "orionbelt_ontology_builder"
+# The UI modules, found by the import rather than named: app.py was split, and a
+# check that reads one file would quietly stop covering whatever moved out of it
+# while still passing. The engine is excluded because checkpointing is the UI's
+# job — OntologyManager's own methods call each other freely.
+SOURCES = sorted(
+    p for p in PKG.rglob("*.py") if "import streamlit" in p.read_text(encoding="utf-8")
+)
 
 
 # --- the message ------------------------------------------------------------
@@ -49,23 +56,26 @@ def test_a_label_with_spaces_survives():
 
 
 def _functions_calling(name):
-    tree = ast.parse(APP.read_text(encoding="utf-8"))
-    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    found = set()
+    for source in SOURCES:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
 
-    def enclosing(node):
-        while node in parents:
-            node = parents[node]
-            if isinstance(node, ast.FunctionDef):
-                return node.name
-        return "<module>"
+        def enclosing(node, parents=parents):
+            while node in parents:
+                node = parents[node]
+                if isinstance(node, ast.FunctionDef):
+                    return node.name
+            return "<module>"
 
-    return {
-        enclosing(node)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == name
-    }
+        found |= {
+            enclosing(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == name
+        }
+    return found
 
 
 def test_every_form_with_a_clearable_dropdown_checks_it():
@@ -107,24 +117,27 @@ ALLOWED_BY_NAME = {
 
 def _plain_selectboxes():
     """Every ``st.selectbox`` left in the app, as (function, label, node)."""
-    tree = ast.parse(APP.read_text(encoding="utf-8"))
-    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    for source in SOURCES:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
 
-    def enclosing(node):
-        while node in parents:
-            node = parents[node]
-            if isinstance(node, ast.FunctionDef):
-                return node.name
-        return "<module>"
+        def enclosing(node, parents=parents):
+            while node in parents:
+                node = parents[node]
+                if isinstance(node, ast.FunctionDef):
+                    return node.name
+            return "<module>"
 
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if node.func.attr != "selectbox" or not node.args:
-            continue
-        label = node.args[0]
-        label = label.value if isinstance(label, ast.Constant) else None
-        yield enclosing(node), label, node
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            ):
+                continue
+            if node.func.attr != "selectbox" or not node.args:
+                continue
+            label = node.args[0]
+            label = label.value if isinstance(label, ast.Constant) else None
+            yield enclosing(node), label, node
 
 
 def _options_of(node):
@@ -169,7 +182,7 @@ def test_no_dropdown_worth_clearing_is_left_plain():
     is already clearable may stay a plain ``st.selectbox``.
     """
     offenders = [
-        f"app.py:{node.lineno} {func}() {label!r}"
+        f"{func}() {label!r}"
         for func, label, node in _plain_selectboxes()
         if not _is_exempt(func, label, node)
     ]

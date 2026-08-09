@@ -6,7 +6,6 @@ app writes an axiom no reasoner will accept.
 """
 
 import ast
-from pathlib import Path
 
 import pytest
 
@@ -25,7 +24,7 @@ QUALIFIED = (
 VALUE_CLASS = ("someValuesFrom", "allValuesFrom")
 NO_SECOND_CLASS = ("hasValue", "minCardinality", "maxCardinality", "exactCardinality")
 
-_APP = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder" / "app.py"
+import sources
 
 
 @pytest.mark.parametrize("rtype", QUALIFIED)
@@ -82,7 +81,7 @@ def test_no_form_decides_qualified_by_case_sensitive_substring():
     untouched row sent ``on_class=None`` and stripped ``owl:onClass`` off an
     axiom that was already valid.
     """
-    tree = ast.parse(_APP.read_text(encoding="utf-8"))
+    tree = ast.parse(sources.viz_text())
     offenders = [
         node.lineno
         for node in ast.walk(tree)
@@ -130,7 +129,7 @@ def test_the_graph_flow_is_handed_object_properties_only():
     would produce ``owl:someValuesFrom :SomeClass`` against an
     ``owl:DatatypeProperty``.
     """
-    src = _APP.read_text(encoding="utf-8")
+    src = sources.viz_text()
     call = src.split("_render_panel_add_restriction_form(\n", 1)[1].split(")", 1)[0]
     assert "data_props" not in call, (
         "the graph restriction flow must not be offered data properties"

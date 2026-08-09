@@ -8,6 +8,8 @@ details panel behind it, and no other test would notice.
 import ast
 from pathlib import Path
 
+import sources
+
 _PKG = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder"
 _VIEWER = _PKG / "lib" / "graph_viewer" / "index.html"
 
@@ -40,9 +42,11 @@ def test_graph_status_placeholder_is_unconditional():
     viewer and drops graph fullscreen — the first-click and Ctrl-click "falls
     back to normal mode" glitches in issue #189.
     """
-    tree = ast.parse((_PKG / "app.py").read_text(encoding="utf-8"))
+    tree = ast.parse(sources.viz_text())
     placeholders = _status_placeholder_assignments(tree)
-    assert placeholders, "expected a `status = st.empty()` placeholder in app.py"
+    assert placeholders, (
+        "expected a `status = st.empty()` placeholder in the Visualization source"
+    )
 
     conditional = []
     for node in ast.walk(tree):

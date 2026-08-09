@@ -49,12 +49,12 @@ class _FakeSt:
 
 
 @pytest.fixture
-def fake_st(tmp_path, monkeypatch):
+def fake_st(patch_ui, tmp_path, monkeypatch):
     """Patch app.st with a fake and redirect the data dir to a temp home."""
     monkeypatch.setattr(local_store.Path, "home", lambda: tmp_path)
     st = _FakeSt()
     st.session_state.error_log = []  # log_error appends here
-    monkeypatch.setattr(app, "st", st)
+    patch_ui("st", st)
     local_store.set_linked_path(None)
     return st
 
@@ -284,14 +284,14 @@ class _FakeLS:
         self.items[k] = v
 
 
-def _use_fake_ls(monkeypatch):
+def _use_fake_ls(monkeypatch, patch_ui):
     ls = _FakeLS()
-    monkeypatch.setattr(app, "_get_local_storage", lambda: ls)
+    patch_ui("_get_local_storage", lambda: ls)
     return ls
 
 
-def test_localstorage_no_serialize_when_not_dirty(fake_st, monkeypatch):
-    ls = _use_fake_ls(monkeypatch)
+def test_localstorage_no_serialize_when_not_dirty(patch_ui, fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch, patch_ui)
     om = _populated()
     fake_st.session_state.ontology = om
     _set_state(fake_st, mc=2, settled=True)
@@ -308,9 +308,9 @@ def test_localstorage_no_serialize_when_not_dirty(fake_st, monkeypatch):
     assert ls.items == {}
 
 
-def test_localstorage_oversized_disables_until_mutation(fake_st, monkeypatch):
-    ls = _use_fake_ls(monkeypatch)
-    monkeypatch.setattr(app, "AUTOSAVE_MAX_BYTES", 5)  # force "too big"
+def test_localstorage_oversized_disables_until_mutation(patch_ui, fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch, patch_ui)
+    patch_ui("AUTOSAVE_MAX_BYTES", 5)  # force "too big"
     om = _populated()
     fake_st.session_state.ontology = om
     _set_state(fake_st, mc=1, settled=True)
@@ -333,8 +333,8 @@ def test_localstorage_oversized_disables_until_mutation(fake_st, monkeypatch):
     assert len(serialized) == 1
 
 
-def test_localstorage_writes_when_dirty_and_settled(fake_st, monkeypatch):
-    ls = _use_fake_ls(monkeypatch)
+def test_localstorage_writes_when_dirty_and_settled(patch_ui, fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch, patch_ui)
     om = _populated()
     fake_st.session_state.ontology = om
     _set_state(fake_st, mc=1, settled=True)
@@ -347,7 +347,9 @@ def test_localstorage_writes_when_dirty_and_settled(fake_st, monkeypatch):
 # ---- autosave is best-effort and never crashes the app (issue #121) -------
 
 
-def test_persist_autosave_swallows_unexpected_disk_error(fake_st, monkeypatch):
+def test_persist_autosave_swallows_unexpected_disk_error(
+    patch_ui, fake_st, monkeypatch
+):
     """A non-OSError escaping the disk backend must not propagate; it is logged
     and disk autosave is paused so it isn't retried (issue #121)."""
     monkeypatch.setattr(local_store, "local_persist_enabled", lambda: True)
@@ -356,7 +358,7 @@ def test_persist_autosave_swallows_unexpected_disk_error(fake_st, monkeypatch):
     def _boom():
         raise ValueError("serialization blew up")
 
-    monkeypatch.setattr(app, "_persist_autosave_to_disk", _boom)
+    patch_ui("_persist_autosave_to_disk", _boom)
 
     app.persist_autosave()  # must not raise
 

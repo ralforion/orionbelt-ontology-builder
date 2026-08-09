@@ -94,7 +94,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# "tests" too, so the suite can share helpers (tests/sources.py) rather than
+# each file re-deriving where the UI source lives.
+pythonpath = [".", "tests"]
 filterwarnings = [
     "ignore:ConjunctiveGraph is deprecated:DeprecationWarning:rdflib",
 ]

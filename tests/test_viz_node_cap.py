@@ -17,6 +17,7 @@ import json
 import os
 
 import pytest
+import sources
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -177,9 +178,9 @@ def test_without_focus_the_graph_stops_at_the_render_cap():
     assert f"20 of {app.GRAPH_MAX_NODES + 20} classes are not drawn" in notice
 
 
-def test_a_neighbourhood_larger_than_the_cap_is_cut_and_said_so(monkeypatch):
+def test_a_neighbourhood_larger_than_the_cap_is_cut_and_said_so(monkeypatch, patch_ui):
     """Focus assembles more than it draws, so the prune has to hold the line."""
-    monkeypatch.setattr(app, "GRAPH_MAX_NODES", 10)
+    patch_ui("GRAPH_MAX_NODES", 10)
     nodes, edges, notice = _graph(40, seed="Class: Hub", shape="star")
 
     assert len(nodes) == 10
@@ -188,10 +189,10 @@ def test_a_neighbourhood_larger_than_the_cap_is_cut_and_said_so(monkeypatch):
     assert "more than the 10 nodes the graph can draw" in notice
 
 
-def test_more_seeds_than_the_cap_are_cut_before_any_hop(monkeypatch):
+def test_more_seeds_than_the_cap_are_cut_before_any_hop(monkeypatch, patch_ui):
     """The seeds alone can overflow the cap — they default to every selected
     class — so the budget has to bind before the first ring, not after it."""
-    monkeypatch.setattr(app, "GRAPH_MAX_NODES", 10)
+    patch_ui("GRAPH_MAX_NODES", 10)
     nodes, edges, notice = _graph(40, seed="*")
 
     assert len(nodes) == 10
@@ -200,10 +201,12 @@ def test_more_seeds_than_the_cap_are_cut_before_any_hop(monkeypatch):
     assert "more than the 10 nodes the graph can draw" in notice
 
 
-def test_a_seed_past_the_assembly_cap_says_why_the_graph_is_empty(monkeypatch):
+def test_a_seed_past_the_assembly_cap_says_why_the_graph_is_empty(
+    monkeypatch, patch_ui
+):
     """The assembly cap is far above the render one, but it is still a cap; when
     a seed falls past it the empty graph has to explain itself."""
-    monkeypatch.setattr(app, "FOCUS_BUILD_MAX_NODES", 5)
+    patch_ui("FOCUS_BUILD_MAX_NODES", 5)
     nodes, edges, notice = _graph(20, seed="Class: C0019")
 
     assert nodes == [] and edges == []
@@ -316,12 +319,7 @@ def test_the_find_target_is_part_of_the_graph_cache_key():
     filter multiselects, the same limitation that keeps the rest of this file to
     a single render per assertion.
     """
-    import pathlib
-
-    src = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "orionbelt_ontology_builder/app.py"
-    ).read_text(encoding="utf-8")
+    src = sources.viz_text()
     key_line = next(
         line for line in src.splitlines() if line.strip().startswith("graph_key = f")
     )
@@ -375,12 +373,8 @@ def test_find_does_not_rewrite_the_users_node_filter():
     filter change hid it again. The graph exempts it at build time instead, so
     the filter is left exactly as it was found."""
     import ast
-    import pathlib
 
-    src = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "orionbelt_ontology_builder/app.py"
-    ).read_text(encoding="utf-8")
+    src = sources.viz_text()
     tree = ast.parse(src)
     handlers = [
         node

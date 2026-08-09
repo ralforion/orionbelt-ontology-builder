@@ -26,7 +26,7 @@ PREFIXES = {BASE: "base", FN: "fn", MATH: "math"}
 
 
 @pytest.fixture
-def prefixes(monkeypatch):
+def prefixes(patch_ui, monkeypatch):
     """Bind the test namespaces to prefixes.
 
     ``_prefix_for_uri`` reads the ontology out of session state, which does not
@@ -39,7 +39,7 @@ def prefixes(monkeypatch):
                 return prefix
         return ""
 
-    monkeypatch.setattr(app, "_prefix_for_uri", _prefix)
+    patch_ui("_prefix_for_uri", _prefix)
 
 
 @pytest.fixture
@@ -77,8 +77,8 @@ def test_every_entry_carries_its_prefix(entries):
     assert [e["prefix"] for e in entries] == ["base", "fn", "math", "base"]
 
 
-def test_unprefixed_namespace_falls_back_to_the_namespace(monkeypatch):
-    monkeypatch.setattr(app, "_prefix_for_uri", lambda uri: "")
+def test_unprefixed_namespace_falls_back_to_the_namespace(monkeypatch, patch_ui):
+    patch_ui("_prefix_for_uri", lambda uri: "")
     entries = app.build_filter_entries(CLASSES[1:3])
     assert _displays(entries) == [f"zero ({FN})", f"zero ({MATH})"]
 
@@ -92,8 +92,8 @@ def test_tokens_round_trip_through_the_parser(entries):
     )
 
 
-def test_token_for_an_unprefixed_ambiguous_class_is_its_uri(monkeypatch):
-    monkeypatch.setattr(app, "_prefix_for_uri", lambda uri: "")
+def test_token_for_an_unprefixed_ambiguous_class_is_its_uri(monkeypatch, patch_ui):
+    patch_ui("_prefix_for_uri", lambda uri: "")
     entries = app.build_filter_entries(CLASSES[1:3])
     assert [app.filter_entry_token(e) for e in entries] == [f"{FN}zero", f"{MATH}zero"]
 
