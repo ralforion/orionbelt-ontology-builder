@@ -9585,6 +9585,10 @@ def render_visualization():
         # the loop before the per-node bypass could run (issue #234 review).
         _find_is_class = False
         focus_seed_ids: list = []
+        # Declared with the rest, not left to the branch that draws the picker:
+        # with focus mode on and every focusable type switched off, that branch
+        # does not run and the page crashed reading this further down (P1).
+        focus_seeds: list = []
         focus_depth = 0
         _find_col, _filter_col = st.columns([1, 3])
         with _find_col:
