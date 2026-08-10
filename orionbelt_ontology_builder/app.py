@@ -207,6 +207,7 @@ from .ui import (  # noqa: F401
     viz_find_changed,
     viz_focus_toggle,
     viz_hidden_caption,
+    viz_hidden_note_style,
     viz_mark_ontology_seen,
     viz_ontology_was_replaced,
     viz_sync,

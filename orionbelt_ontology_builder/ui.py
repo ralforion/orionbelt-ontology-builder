@@ -128,17 +128,22 @@ _CUSTOM_CSS = """
        in the browser: this recovers ~270px, enough for the whole sidebar to
        fit without scrolling.
        NOTE: internal DOM again — re-verify on a Streamlit bump. */
-    /* The "what is hidden" note, which rides on the Filter Nodes label as its
-       only italic run. Quieter than the label it follows, and gone once the
-       expander is open: the controls inside then say the same thing in full.
-       Scoped by the container key so no other expander's label is touched. */
-    .st-key-viz_filter_nodes summary em {
-        font-style: normal;
+    /* The "what is hidden" note, which rides on the Filter Nodes label as
+       generated content — not as part of the label text, which would force the
+       expander shut on every filter edit (see viz_hidden_note_style, #267).
+       Quieter than the label it follows, and gone once the expander is open:
+       the controls inside then say the same thing in full. Scoped by the
+       container key so no other expander's label is touched.
+       The text itself comes from --viz-hidden-note, set per render. */
+    .st-key-viz_filter_nodes summary p::after {
+        content: var(--viz-hidden-note, "");
+        margin-left: 0.75rem;
         font-size: 0.8rem;
         opacity: 0.55;
     }
-    .st-key-viz_filter_nodes details[open] summary em {
-        display: none;
+    .st-key-viz_filter_nodes details[open] summary p::after {
+        content: "";
+        margin-left: 0;
     }
     [data-testid="stSidebarHeader"] [data-testid="stLogoSpacer"] {
         /* Reserves room for a st.logo() this app doesn't set: the mark is
@@ -4307,6 +4312,44 @@ def viz_hidden_caption(
     if hidden_by_filter:
         parts.append(f"{hidden_by_filter} hidden by the node filter")
     return " · ".join(parts)
+
+
+def viz_hidden_note_style(note: str) -> str:
+    """A ``<style>`` block that writes ``note`` onto the Filter Nodes label.
+
+    The note cannot simply be appended to the expander's label text: Streamlit's
+    expander resets its open/closed state to the ``expanded`` argument whenever
+    its label changes, and this note changes on every filter edit — so the panel
+    snapped shut after each class you added (issue #267). Carrying the note as
+    generated content keeps the label string constant: only this stylesheet
+    changes, and the expander never notices.
+
+    Everything but the text lives in the app's static CSS; this sets one custom
+    property, and ``""`` for no note renders nothing.
+    """
+    return (
+        "<style>.st-key-viz_filter_nodes "
+        f"{{ --viz-hidden-note: {css_string(note)}; }}</style>"
+    )
+
+
+def css_string(text: str) -> str:
+    """Quote ``text`` as a CSS string literal, safe inside a ``<style>`` block.
+
+    Entity names reach this (the note lists the focus seeds), so quotes and
+    backslashes are escaped as CSS demands, and ``<`` — the one character that
+    could end the style element early — as a six-digit hex escape, which needs
+    no trailing separator.
+    """
+    out = []
+    for ch in text:
+        if ch in '\\"':
+            out.append("\\" + ch)
+        elif ch == "<" or ord(ch) < 0x20:
+            out.append(f"\\{ord(ch):06x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
 
 
 def reconcile_filter_selection(all_uris, selected, known, replaced=False):
