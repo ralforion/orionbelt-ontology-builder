@@ -50,6 +50,7 @@ from ..ui import (
     viz_find_changed,
     viz_focus_toggle,
     viz_hidden_caption,
+    viz_hidden_note_style,
     viz_mark_ontology_seen,
     viz_ontology_was_replaced,
     viz_sync,
@@ -478,16 +479,19 @@ def render_visualization():
         # no vertical space there, and it sits on the control that causes it.
         # Written by the run that built the graph (below), because the numbers
         # come from the focus controls inside this very expander and from the
-        # prune, neither of which has happened yet. Italic, which the CSS hides
-        # while the expander is open — the controls then say it in full.
+        # prune, neither of which has happened yet. The CSS hides it while the
+        # expander is open — the controls then say it in full.
+        #
+        # It reaches the label as generated content, not as part of the label
+        # string: Streamlit's expander snaps back to `expanded` whenever its
+        # label changes, so a note that moves with the filter closed the panel
+        # under the user on every edit (issue #267).
         _hidden_note = st.session_state.get("_viz_hidden_note") or ""
-        _filter_label = "Filter Nodes"
-        if _hidden_note:
-            _filter_label += f" &nbsp; *{_hidden_note}*"
         with (
             _filter_col.container(key="viz_filter_nodes"),
-            st.expander(_filter_label, expanded=False),
+            st.expander("Filter Nodes", expanded=False),
         ):
+            st.html(viz_hidden_note_style(_hidden_note))
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
