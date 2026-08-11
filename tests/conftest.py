@@ -38,7 +38,7 @@ def skos_om():
 def patch_ui(monkeypatch):
     """Patch a name on every UI module that binds it.
 
-    ``app.py`` was split into ``ui``, a ``pages`` package and the shell, and
+    ``app.py`` was split into ``ui``, a ``views`` package and the shell, and
     ``from ..ui import X`` binds a *copy* in each importing module. Patching one
     module therefore leaves the others' calls untouched, and these names are
     typically read from several — so a test would silently exercise an

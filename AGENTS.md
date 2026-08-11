@@ -18,7 +18,11 @@ app.py                  # Streamlit entry point — re-exports package main()
 ontology_manager.py     # Backward-compat shim → package module
 templates.py            # Backward-compat shim → package module
 orionbelt_ontology_builder/
-├── app.py              # Streamlit UI (~4k lines, all pages)
+├── app.py              # The shell: nav, sidebar, page dispatch; re-exports the pages
+├── ui.py               # Shared UI helpers every page renders through
+├── views/              # One module per page (classes, properties, visualization, …)
+├── streamlit_entry.py  # Entry script for the console & desktop launchers
+├── cli.py, desktop.py  # `orionbelt-ontology-builder[-desktop]` console entry points
 ├── ontology_manager.py # Core OWL/SKOS engine on rdflib (OntologyManager, UndoManager)
 ├── templates.py        # Built-in templates, upper & reference ontologies
 ├── samples/            # Bundled ontologies (gist, gUFO, FOAF, PROV-O, …)
@@ -27,6 +31,12 @@ orionbelt_ontology_builder/
 └── favicon.png
 tests/                  # pytest suite (~22 test_*.py files)
 ```
+
+The page modules live in `views/`, **not** `pages/`: Streamlit treats a `pages`
+directory next to an entry script as a legacy multipage app and renders an
+automatic sidebar nav from its filenames, which is what issue #269 was. Both
+launchers run `streamlit_entry.py` from inside the package, so the name is load
+bearing there; `tests/test_no_streamlit_pages_dir.py` guards it.
 
 The real code lives in the **package**. The three top-level shims
 (`app.py`, `ontology_manager.py`, `templates.py`) only re-export from it so that

@@ -1,8 +1,8 @@
 """The package's own files resolve from wherever the code lives.
 
-Splitting app.py into a ``pages`` package broke the graph: the component
+Splitting app.py into a ``views`` package broke the graph: the component
 directory was resolved from ``__file__``, which had become
-``pages/lib/graph_viewer``. Every test passed — none of them renders the custom
+``views/lib/graph_viewer``. Every test passed — none of them renders the custom
 component, and an import cannot notice a path that is only built at render time.
 
 So the paths are asserted directly. They are anchored to the package, not to the
@@ -57,7 +57,7 @@ def test_every_relative_import_resolves():
 
     Moving a module changes what ``from .x import y`` means. Six of those went
     from ``orionbelt_ontology_builder.templates`` to
-    ``orionbelt_ontology_builder.pages.templates`` when the pages were split
+    ``orionbelt_ontology_builder.views.templates`` when the pages were split
     out, and because they sit inside button handlers, neither an import nor the
     whole suite touched them: Templates, Upper and Reference Ontologies, New
     Ontology and Clear Ontology would all have raised on click (PR #262 review).

@@ -1,6 +1,6 @@
 """Where the UI source lives, for the tests that read it rather than run it.
 
-``app.py`` was split into ``ui.py``, a ``pages`` package and the shell, so a
+``app.py`` was split into ``ui.py``, a ``views`` package and the shell, so a
 test that names one file scans a fraction of the UI and passes on the rest by
 accident. These helpers follow the code instead: a module counts as UI if it
 imports streamlit, which covers a page added tomorrow without anyone
@@ -27,5 +27,5 @@ def ui_text() -> str:
 def viz_text() -> str:
     """The Visualization page and the helpers it renders through."""
     return "\n".join(
-        (PKG / name).read_text("utf-8") for name in ("pages/visualization.py", "ui.py")
+        (PKG / name).read_text("utf-8") for name in ("views/visualization.py", "ui.py")
     )

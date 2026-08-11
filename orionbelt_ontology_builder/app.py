@@ -14,20 +14,6 @@ from . import local_store
 # this module held everything.
 logger = logging.getLogger(__name__)
 
-# The pages, re-exported so ``app.render_classes`` and friends still resolve.
-from .pages.advanced import render_advanced
-from .pages.annotations import render_annotations
-from .pages.classes import render_classes
-from .pages.dashboard import render_dashboard
-from .pages.import_export import render_import_export
-from .pages.individuals import render_individuals
-from .pages.properties import render_properties
-from .pages.relations import render_relations
-from .pages.restrictions import render_restrictions
-from .pages.skos import render_skos_vocabulary
-from .pages.source import render_source
-from .pages.validation import render_validation
-from .pages.visualization import render_visualization
 from .ui import (  # noqa: F401
     _ANN_ID_PARTS,
     _BRAND,
@@ -212,6 +198,23 @@ from .ui import (  # noqa: F401
     viz_ontology_was_replaced,
     viz_sync,
 )
+
+# The pages, re-exported so ``app.render_classes`` and friends still resolve.
+# They live in ``views`` rather than ``pages`` because Streamlit reads a
+# ``pages`` directory next to an entry script as a legacy multipage app (#269).
+from .views.advanced import render_advanced
+from .views.annotations import render_annotations
+from .views.classes import render_classes
+from .views.dashboard import render_dashboard
+from .views.import_export import render_import_export
+from .views.individuals import render_individuals
+from .views.properties import render_properties
+from .views.relations import render_relations
+from .views.restrictions import render_restrictions
+from .views.skos import render_skos_vocabulary
+from .views.source import render_source
+from .views.validation import render_validation
+from .views.visualization import render_visualization
 
 
 def _page_title() -> str:

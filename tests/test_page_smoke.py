@@ -25,7 +25,7 @@ import pytest
 import sources
 from streamlit.testing.v1 import AppTest
 
-PAGES = pathlib.Path(sources.PKG) / "pages"
+PAGES = pathlib.Path(sources.PKG) / "views"
 
 
 def _tabs_by_page() -> dict[str, tuple[str, list[str]]]:
