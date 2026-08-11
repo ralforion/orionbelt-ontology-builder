@@ -16,18 +16,26 @@ name: Docker Publish
 #                 The two run in parallel, so a release costs one build, not two
 #                 in sequence with the arm64 half emulated.
 # - manifest    → joins those per-architecture digests into the published tag
-#                 list: :1.2.3, :1.2, :1, :latest.
+#                 list: :1.2.3, :1.2, :1, :latest, carrying each architecture's
+#                 provenance attestation across, and fails if either an
+#                 architecture or an attestation did not make it.
 # - description → on main pushes only when README.md changed, plus manual runs
 #                 and releases: syncs README.md to the Docker Hub overview. This
 #                 job never builds an image, so no rolling :main / :edge tags.
 #
-# On caching: GitHub scopes its Actions cache to the ref that wrote it, plus the
-# default branch. Nothing here writes a cache the other refs can read now that
-# main no longer builds, so each job's cache-to only serves repeat runs of the
-# same ref — a second push to an open PR, or a re-run of a release. That is worth
-# keeping, but not at mode=max, which exported every intermediate layer and cost
-# ~43s of a ~130s build. mode=min exports only the final image's layers, which is
-# where the expensive `uv sync` work lives anyway.
+# On caching: these jobs read the layer cache and never write it, which looks
+# wrong until you follow the scoping. GitHub scopes its Actions cache to the ref
+# that wrote it plus the default branch, and since main stopped building there is
+# no ref left whose cache another run can read. A `cache-to` would therefore only
+# ever serve a repeat run of the same ref — a second push to an open PR, a re-run
+# of a release — and it is not close to worth it: exporting a cold cache took
+# 161.8s of a 244s build, against the ~55s of `uv sync` it might save on a push
+# that may never come. Dropping the export puts a build at roughly 80s flat.
+#
+# `cache-from` stays because a read costs nothing and starts paying the moment
+# something writes a cache these refs can see. That is the lever if builds ever
+# need to be faster: give main a scheduled or post-merge build whose only job is
+# to populate the cache, and every PR and release build warms up for free.
 #
 # Only the image, manifest and description jobs need secrets; build runs without
 # them so it works on pull requests from forks:
@@ -104,8 +112,8 @@ jobs:
           push: false
           load: true
           tags: orionbelt-ontology-builder:ci
+          # Read only, deliberately — see the note at the top of the file.
           cache-from: type=gha,scope=linux-amd64
-          cache-to: type=gha,mode=min,scope=linux-amd64
 
       # A build that succeeds can still produce an image that never serves, so
       # start it and wait for Streamlit to report healthy.
@@ -178,17 +186,19 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Off deliberately. The default (mode=min) makes buildkit wrap each
-          # build in an index holding the image plus an attestation manifest,
-          # which is where the two `unknown/unknown` entries in the published
-          # manifest list came from. Pushing by digest and merging the digests
-          # by hand gives that no well-defined home, so the published list is
-          # now exactly the two architectures. Re-enabling attestations means
-          # attaching them to the merged list on purpose, not inheriting them.
-          provenance: false
+          # Stated rather than inferred. With attestations on, buildkit wraps
+          # each build in an index holding the image manifest plus a provenance
+          # manifest, and the digest below is that index -- which is what makes
+          # the merge preserve them. build-push-action defaults provenance on
+          # for a registry push, but it reads the `push` input to decide, and
+          # this step pushes via `outputs` instead, so the default would not
+          # necessarily apply. mode=min matches what the published image has
+          # carried until now; mode=max would add build arguments and source
+          # detail on top.
+          provenance: mode=min
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Read only, deliberately — see the note at the top of the file.
           cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
-          cache-to: type=gha,mode=min,scope=${{ env.PLATFORM_SLUG }}
 
       # The digest is all the merge job needs; the layers are already on the Hub.
       - name: Export digest
@@ -237,6 +247,10 @@ jobs:
             type=semver,pattern={{major}}
 
       # One manifest list per tag, pointing at both per-architecture digests.
+      # Each of those digests is an index (image + provenance), and imagetools
+      # copies the children of a source index rather than flattening it to the
+      # image alone, so the attestations survive the merge. That is why this is
+      # `imagetools create` and not `docker manifest create`, which drops them.
       - name: Create the manifest list and push
         working-directory: /tmp/digests
         run: |
@@ -244,8 +258,23 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "$IMAGE@sha256:%s " *)
 
-      - name: Inspect what was published
-        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+      # Four entries expected: linux/amd64, linux/arm64, and one unknown/unknown
+      # provenance manifest apiece. Fail here rather than ship a tag that
+      # silently lost an architecture or its attestations.
+      - name: Check what was published
+        run: |
+          docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+          raw=$(docker buildx imagetools inspect --raw "$IMAGE:${{ steps.meta.outputs.version }}")
+          for want in linux/amd64 linux/arm64; do
+            jq -e --arg p "$want" \
+              'any(.manifests[]; "\(.platform.os)/\(.platform.architecture)" == $p)' \
+              <<< "$raw" > /dev/null || { echo "::error::$want missing from the manifest list"; exit 1; }
+          done
+          attestations=$(jq '[.manifests[] | select(.platform.architecture == "unknown")] | length' <<< "$raw")
+          [ "$attestations" -eq 2 ] || {
+            echo "::error::expected 2 provenance manifests, found $attestations"; exit 1;
+          }
+          echo "published 2 architectures and $attestations provenance manifests"
 
   description:
     needs: changes
