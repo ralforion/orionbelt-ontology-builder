@@ -4,19 +4,33 @@ name: Docker Publish
 # the Hub repo overview in sync with README.md.
 #
 # - changes     → detects whether Docker-relevant files or the README changed,
-#                 so the two jobs below don't run for unrelated edits (e.g. a
-#                 docs-only or version-bump PR no longer triggers a full build).
-# - build       → on PRs and main, only when Docker-relevant files change:
-#                 builds the image and smoke-tests it, never pushes. Catches
-#                 Dockerfile and dependency regressions before a release tag.
-# - image       → only on version tags (v1.2.3): publishes :1.2.3, :1.2, :1,
-#                 :latest. Always runs on a tag, never path-filtered.
+#                 so the jobs below don't run for unrelated edits.
+# - build       → pull requests only, and only when Docker-relevant files
+#                 change: builds the image and smoke-tests it, never pushes.
+#                 Catches Dockerfile and dependency regressions before a release
+#                 tag. Main pushes deliberately do NOT rebuild: a squash-merge of
+#                 an up-to-date branch has the same tree the PR just built and
+#                 health-checked, so it was building every change twice.
+# - image       → only on version tags (v1.2.3): builds each architecture on a
+#                 native runner (no QEMU) and pushes it to the Hub by digest.
+#                 The two run in parallel, so a release costs one build, not two
+#                 in sequence with the arm64 half emulated.
+# - manifest    → joins those per-architecture digests into the published tag
+#                 list: :1.2.3, :1.2, :1, :latest.
 # - description → on main pushes only when README.md changed, plus manual runs
 #                 and releases: syncs README.md to the Docker Hub overview. This
 #                 job never builds an image, so no rolling :main / :edge tags.
 #
-# Only the image and description jobs need secrets; build runs without them so it
-# works on pull requests from forks:
+# On caching: GitHub scopes its Actions cache to the ref that wrote it, plus the
+# default branch. Nothing here writes a cache the other refs can read now that
+# main no longer builds, so each job's cache-to only serves repeat runs of the
+# same ref — a second push to an open PR, or a re-run of a release. That is worth
+# keeping, but not at mode=max, which exported every intermediate layer and cost
+# ~43s of a ~130s build. mode=min exports only the final image's layers, which is
+# where the expensive `uv sync` work lives anyway.
+#
+# Only the image, manifest and description jobs need secrets; build runs without
+# them so it works on pull requests from forks:
 #   DOCKERHUB_USERNAME — Docker Hub account / org
 #   DOCKERHUB_TOKEN    — a Docker Hub access token (Account Settings → Security)
 #                        with read/write scope (read-only fails the description sync)
@@ -65,13 +79,15 @@ jobs:
   build:
     needs: changes
     runs-on: ubuntu-latest
-    # PRs and main pushes, but only when Docker-relevant files changed (the image
-    # job already builds release tags). always() so it still evaluates when the
-    # changes job was skipped (manual runs, where we build unconditionally).
+    # Pull requests only, and only when Docker-relevant files changed. The image
+    # job builds release tags, and the main push after a merge would rebuild the
+    # tree the PR already built. always() so it still evaluates when the changes
+    # job was skipped (manual runs, where we build unconditionally).
     if: >-
       ${{ always()
       && !startsWith(github.ref, 'refs/tags/v')
-      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.docker == 'true') }}
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.docker == 'true')) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -79,7 +95,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       # linux/amd64 only: it matches the runner, so this needs no QEMU and can
-      # load the result for the smoke test. The release build stays multi-arch.
+      # load the result for the smoke test. The release build covers both arches.
       - name: Build image
         uses: docker/build-push-action@v7
         with:
@@ -88,8 +104,8 @@ jobs:
           push: false
           load: true
           tags: orionbelt-ontology-builder:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=linux-amd64
+          cache-to: type=gha,mode=min,scope=linux-amd64
 
       # A build that succeeds can still produce an image that never serves, so
       # start it and wait for Streamlit to report healthy.
@@ -114,14 +130,26 @@ jobs:
         run: docker rm -f ob-ci || true
 
   image:
-    runs-on: ubuntu-latest
     # Build/push only for released version tags — never for branch or PR pushes.
     if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      # Both arches must publish for the manifest to be complete, but letting the
+      # second finish makes a re-run cheap: its cache is already warm.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      # linux/amd64 -> linux-amd64, for cache scopes and artifact names (neither
+      # accepts a slash).
+      - name: Name this platform
+        run: echo "PLATFORM_SLUG=${{ matrix.platform }}" | tr / - >> "$GITHUB_ENV"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
@@ -132,7 +160,73 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Derive tags and labels
+      # Labels only: they belong to the per-architecture image. The tags are
+      # applied once, to the manifest list, by the merge job below.
+      - name: Derive labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.title=OrionBelt Ontology Builder
+            org.opencontainers.image.description=A browser-based ontology workbench for building, editing, and managing OWL/SKOS ontologies.
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Off deliberately. The default (mode=min) makes buildkit wrap each
+          # build in an index holding the image plus an attestation manifest,
+          # which is where the two `unknown/unknown` entries in the published
+          # manifest list came from. Pushing by digest and merging the digests
+          # by hand gives that no well-defined home, so the published list is
+          # now exactly the two architectures. Re-enabling attestations means
+          # attaching them to the merged list on purpose, not inheriting them.
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+          cache-to: type=gha,mode=min,scope=${{ env.PLATFORM_SLUG }}
+
+      # The digest is all the merge job needs; the layers are already on the Hub.
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ env.PLATFORM_SLUG }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs: image
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive tags
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -141,20 +235,17 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-          labels: |
-            org.opencontainers.image.title=OrionBelt Ontology Builder
-            org.opencontainers.image.description=A browser-based ontology workbench for building, editing, and managing OWL/SKOS ontologies.
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # One manifest list per tag, pointing at both per-architecture digests.
+      - name: Create the manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Inspect what was published
+        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
 
   description:
     needs: changes
