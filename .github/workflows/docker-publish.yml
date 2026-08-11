@@ -16,7 +16,9 @@ name: Docker Publish
 #                 The two run in parallel, so a release costs one build, not two
 #                 in sequence with the arm64 half emulated.
 # - manifest    → joins those per-architecture digests into the published tag
-#                 list: :1.2.3, :1.2, :1, :latest.
+#                 list: :1.2.3, :1.2, :1, :latest, carrying each architecture's
+#                 provenance attestation across, and fails if either an
+#                 architecture or an attestation did not make it.
 # - description → on main pushes only when README.md changed, plus manual runs
 #                 and releases: syncs README.md to the Docker Hub overview. This
 #                 job never builds an image, so no rolling :main / :edge tags.
@@ -178,14 +180,16 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Off deliberately. The default (mode=min) makes buildkit wrap each
-          # build in an index holding the image plus an attestation manifest,
-          # which is where the two `unknown/unknown` entries in the published
-          # manifest list came from. Pushing by digest and merging the digests
-          # by hand gives that no well-defined home, so the published list is
-          # now exactly the two architectures. Re-enabling attestations means
-          # attaching them to the merged list on purpose, not inheriting them.
-          provenance: false
+          # Stated rather than inferred. With attestations on, buildkit wraps
+          # each build in an index holding the image manifest plus a provenance
+          # manifest, and the digest below is that index -- which is what makes
+          # the merge preserve them. build-push-action defaults provenance on
+          # for a registry push, but it reads the `push` input to decide, and
+          # this step pushes via `outputs` instead, so the default would not
+          # necessarily apply. mode=min matches what the published image has
+          # carried until now; mode=max would add build arguments and source
+          # detail on top.
+          provenance: mode=min
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
           cache-to: type=gha,mode=min,scope=${{ env.PLATFORM_SLUG }}
@@ -237,6 +241,10 @@ jobs:
             type=semver,pattern={{major}}
 
       # One manifest list per tag, pointing at both per-architecture digests.
+      # Each of those digests is an index (image + provenance), and imagetools
+      # copies the children of a source index rather than flattening it to the
+      # image alone, so the attestations survive the merge. That is why this is
+      # `imagetools create` and not `docker manifest create`, which drops them.
       - name: Create the manifest list and push
         working-directory: /tmp/digests
         run: |
@@ -244,8 +252,23 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "$IMAGE@sha256:%s " *)
 
-      - name: Inspect what was published
-        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+      # Four entries expected: linux/amd64, linux/arm64, and one unknown/unknown
+      # provenance manifest apiece. Fail here rather than ship a tag that
+      # silently lost an architecture or its attestations.
+      - name: Check what was published
+        run: |
+          docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+          raw=$(docker buildx imagetools inspect --raw "$IMAGE:${{ steps.meta.outputs.version }}")
+          for want in linux/amd64 linux/arm64; do
+            jq -e --arg p "$want" \
+              'any(.manifests[]; "\(.platform.os)/\(.platform.architecture)" == $p)' \
+              <<< "$raw" > /dev/null || { echo "::error::$want missing from the manifest list"; exit 1; }
+          done
+          attestations=$(jq '[.manifests[] | select(.platform.architecture == "unknown")] | length' <<< "$raw")
+          [ "$attestations" -eq 2 ] || {
+            echo "::error::expected 2 provenance manifests, found $attestations"; exit 1;
+          }
+          echo "published 2 architectures and $attestations provenance manifests"
 
   description:
     needs: changes
