@@ -538,8 +538,13 @@ class OntologyManager:
         prefix); when omitted the base namespace is used.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "class", namespace)
         if parent:
             self._require_valid_name(parent)
+            # The parent becomes a class by being one (and is declared as one by
+            # bulk_add_classes), so a parent owned by another kind of entity is
+            # the same collision one link removed.
+            self._require_free_name(parent, "class")
         class_uri = self._uri(name, namespace)
         self.graph.add((class_uri, RDF.type, OWL.Class))
 
@@ -640,17 +645,51 @@ class OntologyManager:
         kinds = self.entity_kinds(name, namespace)
         if not kinds:
             return None
-        same_kind = self.RESOURCE_TYPE_KINDS.get(resource_type, frozenset())
-        if any(kind in same_kind for kind in kinds):
+        if any(kind in self._kinds_of(resource_type) for kind in kinds):
             return f"{resource_type.capitalize()} '{name}' already exists!"
-        kind = kinds[0]
+        return self._cross_kind_message(name, kinds[0], resource_type)
+
+    def _kinds_of(self, resource_type: str) -> frozenset[str]:
+        """The entity kinds ``resource_type`` names. An engine kind ("object
+        property") stands for itself; the app's wider words are mapped."""
+        return self.RESOURCE_TYPE_KINDS.get(resource_type, frozenset({resource_type}))
+
+    def _cross_kind_message(self, name: str, other: str, resource_type: str) -> str:
         return (
-            f"'{name}' is already {_with_article(kind)} in this ontology. "
+            f"'{name}' is already {_with_article(other)} in this ontology. "
             "Classes, properties, individuals and SKOS concepts share one set "
-            f"of names, so this would make that {kind} "
+            f"of names, so this would make that {other} "
             f"{_with_article(resource_type)} as well instead of creating a new "
             "one. Choose a different name."
         )
+
+    def cross_kind_conflict(
+        self, name: str, resource_type: str, namespace: str | None = None
+    ) -> str | None:
+        """Why ``name`` cannot be used for a ``resource_type``, when *only* other
+        kinds of entity own it. None when the name is free, and None when it
+        already is this kind as well: re-adding an existing class is how
+        templates and bulk rows top one up, and an ontology that arrived punned
+        (PROV-O's EmptyCollection is a class and an individual) must stay usable
+        as the kind it is. Neither adds a type the name did not already carry.
+        """
+        kinds = self.entity_kinds(name, namespace)
+        if not kinds or any(kind in self._kinds_of(resource_type) for kind in kinds):
+            return None
+        return self._cross_kind_message(name, kinds[0], resource_type)
+
+    def _require_free_name(
+        self, name: str, resource_type: str, namespace: str | None = None
+    ) -> None:
+        """Raise ``ValueError`` if another kind of entity owns ``name``.
+
+        Every ``add_*`` runs this, so the guard holds for programmatic callers
+        too and not only for the app's create forms (issue #279). Loading and
+        merging graphs go around it: an ontology that arrives with a punned name
+        (PROV-O has one) is still read as it stands, and validation reports it.
+        """
+        if reason := self.cross_kind_conflict(name, resource_type, namespace):
+            raise ValueError(reason)
 
     def rename_class(self, old_name: str, new_name: str) -> bool:
         """Rename a class, updating all references.
@@ -1040,6 +1079,16 @@ class OntologyManager:
             namespace = entry.get("namespace", "").strip() or None
             parent = entry.get("parent", "").strip() or None
             uri = str(self._uri(name, namespace))
+            # Both halves of the row are checked before anything is written: a
+            # parent owned by another kind of entity would otherwise be linked
+            # to (and then declared a class by the backfill), leaving the class
+            # listed under an individual (issue #279).
+            conflict = self.cross_kind_conflict(name, "class", namespace)
+            if not conflict and parent:
+                conflict = self.cross_kind_conflict(parent, "class")
+            if conflict:
+                result["errors"].append({"name": name, "error": conflict})
+                continue
             if uri in existing:
                 # Existing class: add a newly named parent as an extra
                 # subClassOf rather than silently dropping the whole row (#157).
@@ -1061,12 +1110,6 @@ class OntologyManager:
                     result["updated"].append(name)
                     referenced_parents.add(str(parent_ref))
                 continue
-            if conflict := self.name_conflict_reason(name, "class", namespace):
-                # Not an existing class (that is handled above), so the name is
-                # taken by an individual, property or concept: creating it would
-                # type that one resource twice over (issue #279).
-                result["errors"].append({"name": name, "error": conflict})
-                continue
             try:
                 self.add_class(
                     name,
@@ -1083,12 +1126,9 @@ class OntologyManager:
 
         # Backfill: any referenced parent that no successful row declared as a
         # class becomes a bare owl:Class, so the hierarchy has no dangling target.
-        # A parent whose name is taken by another kind of entity is left alone:
-        # declaring it would pun that entity into a class (issue #279).
+        # Only parents from rows that got this far are here, so none of them is
+        # owned by another kind of entity; add_class refuses one anyway.
         for parent_uri in sorted(referenced_parents - existing):
-            if conflict := self.name_conflict_reason(parent_uri, "class"):
-                result["errors"].append({"name": parent_uri, "error": conflict})
-                continue
             try:
                 created_uri = self.add_class(parent_uri)
                 existing.add(parent_uri)
@@ -1123,11 +1163,9 @@ class OntologyManager:
             if uri in existing:
                 result["skipped"].append(name)
                 continue
-            if conflict := self.name_conflict_reason(name, "property", namespace):
-                # Taken by a class, individual, concept, or the other flavour of
-                # property: one name is one resource (issue #279).
-                result["errors"].append({"name": name, "error": conflict})
-                continue
+            # add_object_property/add_data_property refuse a name another kind
+            # of entity owns (including the other flavour of property), so a
+            # clashing row lands in errors (issue #279).
             try:
                 domain = entry.get("domain", "").strip() or None
                 range_ = entry.get("range", "").strip() or None
@@ -1179,11 +1217,8 @@ class OntologyManager:
             if uri in existing:
                 result["skipped"].append(name)
                 continue
-            if conflict := self.name_conflict_reason(name, "individual", namespace):
-                # Taken by a class, property or concept: naming an individual
-                # after one makes them the same resource (issue #279).
-                result["errors"].append({"name": name, "error": conflict})
-                continue
+            # add_individual refuses a name a class, property or concept
+            # already owns, so a clashing row lands in errors (issue #279).
             try:
                 self.add_individual(
                     name,
@@ -1307,6 +1342,7 @@ class OntologyManager:
         prefix); when omitted the base namespace is used.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "object property", namespace)
         for ref in (domain, range_, inverse_of):
             if ref:
                 self._require_valid_name(ref)
@@ -1358,6 +1394,7 @@ class OntologyManager:
         prefix); when omitted the base namespace is used.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "data property", namespace)
         if domain:
             self._require_valid_name(domain)
         prop_uri = self._uri(name, namespace)
@@ -1628,6 +1665,7 @@ class OntologyManager:
         namespace than its type.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "individual", namespace)
         self._require_valid_name(class_name)
         ind_uri = self._uri(name, namespace)
         class_uri = self._uri(class_name)
@@ -2526,6 +2564,7 @@ class OntologyManager:
     ) -> URIRef:
         """Add a new SKOS ConceptScheme."""
         self._require_valid_name(name)
+        self._require_free_name(name, "SKOS concept scheme")
         scheme_uri = self._uri(name)
         self.graph.add((scheme_uri, RDF.type, SKOS.ConceptScheme))
         if label:
@@ -2634,6 +2673,7 @@ class OntologyManager:
     ) -> URIRef:
         """Add a SKOS Concept with optional scheme/broader links."""
         self._require_valid_name(name)
+        self._require_free_name(name, "SKOS concept")
         for ref in (scheme, broader):
             if ref:
                 self._require_valid_name(ref)
