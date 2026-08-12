@@ -292,8 +292,8 @@ def render_individuals():
                         show_message("Individual name is required!", "error")
                     elif reason := ont.invalid_name_reason(name):
                         show_message(reason, "error")
-                    elif str(ont._uri(name, ns_val)) in {i["uri"] for i in individuals}:
-                        show_message(f"Individual '{name}' already exists!", "error")
+                    elif taken := ont.name_conflict_reason(name, "individual", ns_val):
+                        show_message(taken, "error")
                     else:
                         ont.add_individual(
                             name,

@@ -1909,7 +1909,7 @@ def render_visualization():
                         )
                     elif _add_kind == "ind":
                         _render_panel_add_individual_form(
-                            ont, classes, individuals, _sel_ntype, _sel_ename
+                            ont, classes, _sel_ntype, _sel_ename
                         )
                     elif _add_kind == "ann":
                         _render_panel_add_annotation_form(
