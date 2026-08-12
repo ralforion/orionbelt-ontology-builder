@@ -242,6 +242,41 @@ def test_validation_reports_a_name_that_is_two_things(populated_om):
     assert "a class and an individual" in punned[0]["message"]
 
 
+def _scheme_delete_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_concept_scheme("MyScheme")
+        om.add_concept("Dog", scheme="MyScheme")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["skos_active_tab"] = "Concept Schemes"
+        # The delete confirmation the 🗑️ button opens, keyed the way the page
+        # keys it (by a hash of the scheme URI, issue #87 part B). Seeded rather
+        # than clicked so the page renders the preview in a single run.
+        _sk = str(abs(hash(om.get_concept_schemes()[0]["uri"])))[:8]
+        st.session_state[f"confirm_delete_scheme_{_sk}"] = True
+
+    from orionbelt_ontology_builder import app
+
+    app.render_skos_vocabulary()
+
+
+def test_deleting_a_scheme_does_not_claim_it_is_two_things():
+    """The page asked for the impact of deleting a "concept", which made an
+    ordinary scheme read as punned with itself."""
+    at = AppTest.from_function(_scheme_delete_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+
+    preview = next(w.value for w in at.warning if "Deleting" in w.value)
+    assert preview.startswith("Deleting scheme")
+    assert "also" not in preview
+
+
 # --- the add form in front of it --------------------------------------------
 
 

@@ -108,7 +108,7 @@ def render_skos_vocabulary():
                         st.write(f"**Comment:** {scheme['comment'] or '—'}")
                         st.write(f"**Concepts:** {scheme['concept_count']}")
 
-                    if confirm_delete(scheme["uri"], "concept", f"scheme_{_sk}"):
+                    if confirm_delete(scheme["uri"], "scheme", f"scheme_{_sk}"):
                         ont.delete_concept_scheme(scheme["uri"])
                         save_checkpoint("Delete concept scheme")
                         set_flash_message(

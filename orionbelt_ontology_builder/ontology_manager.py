@@ -734,7 +734,11 @@ class OntologyManager:
 
         Args:
             name: local name or full URI of the resource
-            resource_type: one of "class", "property", "individual"
+            resource_type: one of the keys of ``RESOURCE_TYPE_KINDS`` — "class",
+                "property", "individual", "concept" or "scheme". It selects both
+                the impact detail collected and which types count as the
+                resource's own, so passing the wrong one reports the resource as
+                punned with itself.
 
         Returns a dict with categorised impact counts and details.
         """
@@ -756,7 +760,7 @@ class OntologyManager:
             "also_typed_as": [
                 kind
                 for kind in self.entity_kinds(name)
-                if kind not in self.RESOURCE_TYPE_KINDS.get(resource_type, frozenset())
+                if kind not in self._kinds_of(resource_type)
             ],
         }
 
@@ -800,8 +804,9 @@ class OntologyManager:
                         f"{self._local_name(s)} {self._local_name(p)}"
                     )
 
-        elif resource_type == "concept":
-            # SKOS relations referencing this concept
+        elif resource_type in ("concept", "scheme"):
+            # SKOS links pointing here: broader/narrower/related for a concept,
+            # the inScheme of every concept in it for a scheme.
             for s, p in self.graph.subject_predicates(uri):
                 if isinstance(s, URIRef) and p not in (RDF.type,):
                     impact["relations"].append(
