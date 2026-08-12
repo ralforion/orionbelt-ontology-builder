@@ -1850,8 +1850,8 @@ def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None
                 show_message("Class name is required!", "error")
             elif reason := ont.invalid_name_reason(name):
                 show_message(reason, "error")
-            elif str(ont._uri(name, ns_val)) in {c["uri"] for c in classes}:
-                show_message(f"Class '{name}' already exists!", "error")
+            elif taken := ont.name_conflict_reason(name, "class", ns_val):
+                show_message(taken, "error")
             else:
                 ont.add_class(
                     name,
@@ -2272,7 +2272,7 @@ def panel_subject_uri(ntype, ename, classes, object_props, data_props, individua
     return next((e["uri"] for e in pool if _uid(e["uri"]) == ename), None)
 
 
-def _render_panel_add_individual_form(ont, classes, individuals, ntype, ename):
+def _render_panel_add_individual_form(ont, classes, ntype, ename):
     """Add an individual of the selected class, from the graph (issue #221).
 
     The class is the point of adding from here: an individual is always an
@@ -2314,8 +2314,8 @@ def _render_panel_add_individual_form(ont, classes, individuals, ntype, ename):
             show_message("Individual name is required!", "error")
         elif reason := ont.invalid_name_reason(name):
             show_message(reason, "error")
-        elif str(ont._uri(name, ns_val)) in {i["uri"] for i in individuals}:
-            show_message(f"Individual '{name}' already exists!", "error")
+        elif taken := ont.name_conflict_reason(name, "individual", ns_val):
+            show_message(taken, "error")
         else:
             # By URI, not by name: the class may live in another namespace, and
             # its local name alone would resolve into this ontology's own.

@@ -50,6 +50,22 @@ def test_format_delete_impact(populated_om):
     assert "triple" in text
 
 
+def test_scheme_impact_shows_its_concepts_links(skos_om):
+    """A scheme is deleted as a "scheme", not a "concept": the resource type
+    also decides which types count as its own, so the wrong one made an ordinary
+    scheme look punned with itself (issue #279 review)."""
+    impact = skos_om.get_delete_impact("MyScheme", "scheme")
+    assert impact["also_typed_as"] == []
+    assert len(impact["relations"]) >= 1  # the inScheme of each concept in it
+    assert "also" not in skos_om.format_delete_impact(impact)
+
+
+def test_concept_impact_is_unaffected(skos_om):
+    impact = skos_om.get_delete_impact("Animal", "concept")
+    assert impact["also_typed_as"] == []
+    assert len(impact["relations"]) >= 1  # Dog and Cat are broader: Animal
+
+
 def test_isolated_class_has_minimal_impact(populated_om):
     populated_om.add_class("Isolated")
     impact = populated_om.get_delete_impact("Isolated", "class")

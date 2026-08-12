@@ -677,15 +677,12 @@ def render_properties():
                 submitted = st.form_submit_button("Add Object Property")
                 if submitted:
                     ns_val = ns_lookup.get(ns_display)
-                    prop_uris = {p["uri"] for p in object_props} | {
-                        p["uri"] for p in data_props
-                    }
                     if not name:
                         show_message("Property name is required!", "error")
                     elif reason := ont.invalid_name_reason(name):
                         show_message(reason, "error")
-                    elif str(ont._uri(name, ns_val)) in prop_uris:
-                        show_message(f"Property '{name}' already exists!", "error")
+                    elif taken := ont.name_conflict_reason(name, "property", ns_val):
+                        show_message(taken, "error")
                     else:
                         ont.add_object_property(
                             name,
@@ -751,15 +748,12 @@ def render_properties():
                 show_message(_missing, "error")
             elif submitted:
                 ns_val = ns_lookup.get(ns_display)
-                prop_uris = {p["uri"] for p in object_props} | {
-                    p["uri"] for p in data_props
-                }
                 if not name:
                     show_message("Property name is required!", "error")
                 elif reason := ont.invalid_name_reason(name):
                     show_message(reason, "error")
-                elif str(ont._uri(name, ns_val)) in prop_uris:
-                    show_message(f"Property '{name}' already exists!", "error")
+                elif taken := ont.name_conflict_reason(name, "property", ns_val):
+                    show_message(taken, "error")
                 else:
                     ont.add_data_property(
                         name,

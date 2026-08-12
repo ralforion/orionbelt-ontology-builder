@@ -108,7 +108,7 @@ def render_skos_vocabulary():
                         st.write(f"**Comment:** {scheme['comment'] or '—'}")
                         st.write(f"**Concepts:** {scheme['concept_count']}")
 
-                    if confirm_delete(scheme["uri"], "concept", f"scheme_{_sk}"):
+                    if confirm_delete(scheme["uri"], "scheme", f"scheme_{_sk}"):
                         ont.delete_concept_scheme(scheme["uri"])
                         save_checkpoint("Delete concept scheme")
                         set_flash_message(
@@ -191,12 +191,13 @@ def render_skos_vocabulary():
                     show_message("Scheme name is required!", "error")
                 elif reason := ont.invalid_name_reason(s_name):
                     show_message(reason, "error")
-                elif str(ont._uri(s_name)) in {s["uri"] for s in schemes}:
-                    # Reject by target URI, not local name, so a base scheme can
-                    # be recreated after an existing one is moved to a custom URI
-                    # (issue #87 part B), mirroring the class/property/individual
-                    # add flows.
-                    show_message(f"Scheme '{s_name}' already exists!", "error")
+                # Rejected by target URI, not local name, so a base scheme can
+                # be recreated after an existing one is moved to a custom URI
+                # (issue #87 part B), and across every entity kind, since one
+                # URI cannot be two things (issue #279). Mirrors the
+                # class/property/individual add flows.
+                elif taken := ont.name_conflict_reason(s_name, "scheme"):
+                    show_message(taken, "error")
                 else:
                     ont.add_concept_scheme(
                         s_name, label=s_label or None, comment=s_comment or None
@@ -533,11 +534,10 @@ def render_skos_vocabulary():
                     show_message("Concept name is required!", "error")
                 elif reason := ont.invalid_name_reason(c_name):
                     show_message(reason, "error")
-                elif str(ont._uri(c_name)) in {c["uri"] for c in concepts}:
-                    # Reject by target URI, not local name, so a base concept can
-                    # be recreated after an existing one is moved to a custom URI
-                    # (issue #87 part B).
-                    show_message(f"Concept '{c_name}' already exists!", "error")
+                # Rejected by target URI, not local name (issue #87 part B), and
+                # across every entity kind (issue #279), as for schemes above.
+                elif taken := ont.name_conflict_reason(c_name, "concept"):
+                    show_message(taken, "error")
                 else:
                     ont.add_concept(
                         c_name,

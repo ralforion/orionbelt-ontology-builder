@@ -39,6 +39,12 @@ def rdf_format_for_path(path, default: str = "turtle") -> str:
 
 _UNSET: Any = object()  # sentinel: "parameter not provided"
 
+
+def _with_article(noun: str) -> str:
+    """'class' -> 'a class', 'individual' -> 'an individual'."""
+    return f"{'an' if noun[:1].lower() in 'aeiou' else 'a'} {noun}"
+
+
 # A triple and a list of (old_triple, new_triple) rename operations.
 _Triple = tuple[Node, Node, Node]
 _TripleUpdates = list[tuple[_Triple, _Triple]]
@@ -532,8 +538,13 @@ class OntologyManager:
         prefix); when omitted the base namespace is used.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "class", namespace)
         if parent:
             self._require_valid_name(parent)
+            # The parent becomes a class by being one (and is declared as one by
+            # bulk_add_classes), so a parent owned by another kind of entity is
+            # the same collision one link removed.
+            self._require_free_name(parent, "class")
         class_uri = self._uri(name, namespace)
         self.graph.add((class_uri, RDF.type, OWL.Class))
 
@@ -577,21 +588,108 @@ class OntologyManager:
         if new_parent:
             self.graph.add((class_uri, RDFS.subClassOf, self._uri(new_parent)))
 
-    # Entity types that share the local-name space; a rename target must not
-    # already be any of these, since they would collide on the same URI.
-    _ENTITY_TYPES = (
-        OWL.Class,
-        OWL.ObjectProperty,
-        OWL.DatatypeProperty,
-        OWL.NamedIndividual,
-        SKOS.Concept,
-        SKOS.ConceptScheme,
-    )
+    # Entity types that share the local-name space, each with the word the app
+    # calls it by; a rename or creation target must not already be any of these,
+    # since they would collide on the same URI.
+    ENTITY_TYPE_NAMES: ClassVar[dict[URIRef, str]] = {
+        OWL.Class: "class",
+        OWL.ObjectProperty: "object property",
+        OWL.DatatypeProperty: "data property",
+        OWL.NamedIndividual: "individual",
+        SKOS.Concept: "SKOS concept",
+        SKOS.ConceptScheme: "SKOS concept scheme",
+    }
+    _ENTITY_TYPES = tuple(ENTITY_TYPE_NAMES)
+
+    # The entity kinds each resource type the app talks about covers, so a
+    # collision can be told apart from a clash with a different kind. "property"
+    # covers both flavours: they are one namespace of property names.
+    RESOURCE_TYPE_KINDS: ClassVar[dict[str, frozenset[str]]] = {
+        "class": frozenset({"class"}),
+        "property": frozenset({"object property", "data property"}),
+        "individual": frozenset({"individual"}),
+        "concept": frozenset({"SKOS concept"}),
+        "scheme": frozenset({"SKOS concept scheme"}),
+    }
 
     def _name_in_use(self, uri: URIRef) -> bool:
         """True if `uri` is already defined as any class, property, individual,
         SKOS concept or scheme. Guards renames against cross-type collisions."""
         return any((uri, RDF.type, t) in self.graph for t in self._ENTITY_TYPES)
+
+    def entity_kinds(self, name: str, namespace: str | None = None) -> list[str]:
+        """The kinds of entity the URI ``name`` resolves to is already defined as.
+
+        Empty when the name is free. More than one entry means the URI already
+        carries several types (OWL punning), which is legal RDF but is what makes
+        one entity show up on two pages of the app.
+        """
+        uri = self._uri(name, namespace)
+        return [
+            kind
+            for etype, kind in self.ENTITY_TYPE_NAMES.items()
+            if (uri, RDF.type, etype) in self.graph
+        ]
+
+    def name_conflict_reason(
+        self, name: str, resource_type: str, namespace: str | None = None
+    ) -> str | None:
+        """Why ``name`` cannot be created as ``resource_type``, or None if it can.
+
+        The name is checked against every entity kind, not only its own: classes,
+        properties, individuals and SKOS concepts all live in the same URI space,
+        so naming a class after an existing individual does not create a second
+        entity. It adds ``owl:Class`` to the individual, which the app then lists
+        as both, and deleting either one takes the whole thing (issue #279).
+        """
+        kinds = self.entity_kinds(name, namespace)
+        if not kinds:
+            return None
+        if any(kind in self._kinds_of(resource_type) for kind in kinds):
+            return f"{resource_type.capitalize()} '{name}' already exists!"
+        return self._cross_kind_message(name, kinds[0], resource_type)
+
+    def _kinds_of(self, resource_type: str) -> frozenset[str]:
+        """The entity kinds ``resource_type`` names. An engine kind ("object
+        property") stands for itself; the app's wider words are mapped."""
+        return self.RESOURCE_TYPE_KINDS.get(resource_type, frozenset({resource_type}))
+
+    def _cross_kind_message(self, name: str, other: str, resource_type: str) -> str:
+        return (
+            f"'{name}' is already {_with_article(other)} in this ontology. "
+            "Classes, properties, individuals and SKOS concepts share one set "
+            f"of names, so this would make that {other} "
+            f"{_with_article(resource_type)} as well instead of creating a new "
+            "one. Choose a different name."
+        )
+
+    def cross_kind_conflict(
+        self, name: str, resource_type: str, namespace: str | None = None
+    ) -> str | None:
+        """Why ``name`` cannot be used for a ``resource_type``, when *only* other
+        kinds of entity own it. None when the name is free, and None when it
+        already is this kind as well: re-adding an existing class is how
+        templates and bulk rows top one up, and an ontology that arrived punned
+        (PROV-O's EmptyCollection is a class and an individual) must stay usable
+        as the kind it is. Neither adds a type the name did not already carry.
+        """
+        kinds = self.entity_kinds(name, namespace)
+        if not kinds or any(kind in self._kinds_of(resource_type) for kind in kinds):
+            return None
+        return self._cross_kind_message(name, kinds[0], resource_type)
+
+    def _require_free_name(
+        self, name: str, resource_type: str, namespace: str | None = None
+    ) -> None:
+        """Raise ``ValueError`` if another kind of entity owns ``name``.
+
+        Every ``add_*`` runs this, so the guard holds for programmatic callers
+        too and not only for the app's create forms (issue #279). Loading and
+        merging graphs go around it: an ontology that arrives with a punned name
+        (PROV-O has one) is still read as it stands, and validation reports it.
+        """
+        if reason := self.cross_kind_conflict(name, resource_type, namespace):
+            raise ValueError(reason)
 
     def rename_class(self, old_name: str, new_name: str) -> bool:
         """Rename a class, updating all references.
@@ -636,7 +734,11 @@ class OntologyManager:
 
         Args:
             name: local name or full URI of the resource
-            resource_type: one of "class", "property", "individual"
+            resource_type: one of the keys of ``RESOURCE_TYPE_KINDS`` — "class",
+                "property", "individual", "concept" or "scheme". It selects both
+                the impact detail collected and which types count as the
+                resource's own, so passing the wrong one reports the resource as
+                punned with itself.
 
         Returns a dict with categorised impact counts and details.
         """
@@ -652,6 +754,14 @@ class OntologyManager:
             "annotations": 0,
             "relations": [],
             "property_assertions": [],
+            # Other kinds the same URI is typed as. Deletion removes every
+            # triple about it, so a punned name loses both definitions at once
+            # and the preview has to say so (issue #279).
+            "also_typed_as": [
+                kind
+                for kind in self.entity_kinds(name)
+                if kind not in self._kinds_of(resource_type)
+            ],
         }
 
         if resource_type == "class":
@@ -694,8 +804,9 @@ class OntologyManager:
                         f"{self._local_name(s)} {self._local_name(p)}"
                     )
 
-        elif resource_type == "concept":
-            # SKOS relations referencing this concept
+        elif resource_type in ("concept", "scheme"):
+            # SKOS links pointing here: broader/narrower/related for a concept,
+            # the inScheme of every concept in it for a scheme.
             for s, p in self.graph.subject_predicates(uri):
                 if isinstance(s, URIRef) and p not in (RDF.type,):
                     impact["relations"].append(
@@ -744,6 +855,12 @@ class OntologyManager:
             f"Deleting {rt} **{impact['resource']}** will remove {impact['total_triples']} triple(s)."
         )
 
+        if impact["also_typed_as"]:
+            kinds = ", ".join(_with_article(k) for k in impact["also_typed_as"])
+            parts.append(
+                f"- **This name is also {kinds}**: it is one resource, so "
+                f"deleting the {rt} deletes that too"
+            )
         if impact["subclasses"]:
             parts.append(
                 f"- {len(impact['subclasses'])} subclass link(s) lost: {', '.join(impact['subclasses'])}"
@@ -967,6 +1084,16 @@ class OntologyManager:
             namespace = entry.get("namespace", "").strip() or None
             parent = entry.get("parent", "").strip() or None
             uri = str(self._uri(name, namespace))
+            # Both halves of the row are checked before anything is written: a
+            # parent owned by another kind of entity would otherwise be linked
+            # to (and then declared a class by the backfill), leaving the class
+            # listed under an individual (issue #279).
+            conflict = self.cross_kind_conflict(name, "class", namespace)
+            if not conflict and parent:
+                conflict = self.cross_kind_conflict(parent, "class")
+            if conflict:
+                result["errors"].append({"name": name, "error": conflict})
+                continue
             if uri in existing:
                 # Existing class: add a newly named parent as an extra
                 # subClassOf rather than silently dropping the whole row (#157).
@@ -1004,6 +1131,8 @@ class OntologyManager:
 
         # Backfill: any referenced parent that no successful row declared as a
         # class becomes a bare owl:Class, so the hierarchy has no dangling target.
+        # Only parents from rows that got this far are here, so none of them is
+        # owned by another kind of entity; add_class refuses one anyway.
         for parent_uri in sorted(referenced_parents - existing):
             try:
                 created_uri = self.add_class(parent_uri)
@@ -1039,6 +1168,9 @@ class OntologyManager:
             if uri in existing:
                 result["skipped"].append(name)
                 continue
+            # add_object_property/add_data_property refuse a name another kind
+            # of entity owns (including the other flavour of property), so a
+            # clashing row lands in errors (issue #279).
             try:
                 domain = entry.get("domain", "").strip() or None
                 range_ = entry.get("range", "").strip() or None
@@ -1090,6 +1222,8 @@ class OntologyManager:
             if uri in existing:
                 result["skipped"].append(name)
                 continue
+            # add_individual refuses a name a class, property or concept
+            # already owns, so a clashing row lands in errors (issue #279).
             try:
                 self.add_individual(
                     name,
@@ -1213,6 +1347,7 @@ class OntologyManager:
         prefix); when omitted the base namespace is used.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "object property", namespace)
         for ref in (domain, range_, inverse_of):
             if ref:
                 self._require_valid_name(ref)
@@ -1264,6 +1399,7 @@ class OntologyManager:
         prefix); when omitted the base namespace is used.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "data property", namespace)
         if domain:
             self._require_valid_name(domain)
         prop_uri = self._uri(name, namespace)
@@ -1534,6 +1670,7 @@ class OntologyManager:
         namespace than its type.
         """
         self._require_valid_name(name)
+        self._require_free_name(name, "individual", namespace)
         self._require_valid_name(class_name)
         ind_uri = self._uri(name, namespace)
         class_uri = self._uri(class_name)
@@ -2432,6 +2569,7 @@ class OntologyManager:
     ) -> URIRef:
         """Add a new SKOS ConceptScheme."""
         self._require_valid_name(name)
+        self._require_free_name(name, "SKOS concept scheme")
         scheme_uri = self._uri(name)
         self.graph.add((scheme_uri, RDF.type, SKOS.ConceptScheme))
         if label:
@@ -2540,6 +2678,7 @@ class OntologyManager:
     ) -> URIRef:
         """Add a SKOS Concept with optional scheme/broader links."""
         self._require_valid_name(name)
+        self._require_free_name(name, "SKOS concept")
         for ref in (scheme, broader):
             if ref:
                 self._require_valid_name(ref)
@@ -4279,6 +4418,27 @@ class OntologyManager:
                                 "message": f"Individual '{ind_name}' uses data property '{self._local_name(pred)}' but is not typed as '{self._local_name(domain)}'",
                             }
                         )
+
+        # Names carrying more than one entity type (issue #279). Legal OWL 2
+        # punning, but in this app that one resource is listed as, say, both a
+        # class and an individual, and deleting either listing deletes the whole
+        # resource. The create flows refuse to make this; a loaded ontology can
+        # still arrive with it, so say so instead of letting it look like two
+        # entities that happen to share a name.
+        for subj in set(self.graph.subjects(RDF.type, None)):
+            if not isinstance(subj, URIRef):
+                continue
+            kinds = self.entity_kinds(str(subj))
+            if len(kinds) > 1:
+                name = self._local_name(subj)
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "type": "punned_name",
+                        "subject": name,
+                        "message": f"'{name}' is defined as {' and '.join(_with_article(k) for k in kinds)} at once: one resource listed in both places, so deleting either listing deletes all of it",
+                    }
+                )
 
         # Check for duplicate rdfs:label values across resources
         from collections import defaultdict
