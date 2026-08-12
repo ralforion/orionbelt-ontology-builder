@@ -75,5 +75,9 @@ Dependencies: streamlit, rdflib, owlrl, networkx, pyvis. Python >= 3.10.
 
 Hosted on **Streamlit Community Cloud** at `orionbelt.streamlit.app`, deployed from
 this repo (`ralforion/orionbelt-ontology-builder`), branch `main`, entry `app.py`.
-A push webhook (`share.streamlit.io/hook`) auto-rebuilds the app on every push to
-`main` — no manual redeploy needed.
+A push webhook (`share.streamlit.io/hook`) is meant to rebuild the app on every
+push to `main`, but it does not fire reliably: after the v1.21.2 release the
+hosted app still served the previous version half an hour later. Treat a manual
+**Manage app → Reboot** at share.streamlit.io as part of releasing, and check the
+version in the app's sidebar (`APP_VERSION` in `orionbelt_ontology_builder/ui.py`)
+rather than assuming a merge to `main` reached the hosted app.
