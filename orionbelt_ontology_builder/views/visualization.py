@@ -38,6 +38,7 @@ from ..ui import (
     build_filter_entries,
     filter_entry_token,
     focus_seeds_from_selection,
+    follow_focus_seed_renames,
     graph_node_cap,
     local_store,
     panel_subject_uri,
@@ -52,6 +53,7 @@ from ..ui import (
     viz_hidden_caption,
     viz_hidden_note_style,
     viz_mark_ontology_seen,
+    viz_node_id,
     viz_ontology_was_replaced,
     viz_sync,
 )
@@ -375,18 +377,38 @@ def render_visualization():
         focus_targets: dict[str, str] = {}
         if show_classes:
             for e in class_entries:
-                focus_targets[f"Class: {e['display']}"] = _uid(e["uri"])
+                focus_targets[f"Class: {e['display']}"] = viz_node_id("class", e["uri"])
         if show_individuals:
             for e in ind_entries:
-                focus_targets[f"Individual: {e['display']}"] = f"ind_{_uid(e['uri'])}"
+                focus_targets[f"Individual: {e['display']}"] = viz_node_id(
+                    "individual", e["uri"]
+                )
         if show_data_props:
             for prop in data_props:
-                focus_targets[f"Data Property: {prop['name']}"] = (
-                    f"dprop_{_uid(prop['uri'])}"
+                focus_targets[f"Data Property: {prop['name']}"] = viz_node_id(
+                    "property", prop["uri"]
                 )
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
-                focus_targets[f"Concept: {concept['name']}"] = f"skos_{concept['name']}"
+                focus_targets[f"Concept: {concept['name']}"] = viz_node_id(
+                    "concept", concept["name"]
+                )
+
+        # A seed whose entity was renamed is held under a label that no longer
+        # exists; re-point it at the new one first, or the prune below reads the
+        # rename as "the class is gone" and focus mode falls back to an
+        # arbitrary node (issue #275).
+        _renames = st.session_state.pop("_viz_pending_renames", None)
+        if _renames and "_viz_cfg_focus_seeds" in st.session_state:
+            (
+                st.session_state["_viz_cfg_focus_seeds"],
+                st.session_state["_viz_cfg_focus_seed_ids_by_label"],
+            ) = follow_focus_seed_renames(
+                st.session_state["_viz_cfg_focus_seeds"],
+                st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
+                focus_targets,
+                _renames,
+            )
 
         # Seeds whose label now names a *different* entity than it did last
         # render belong to an ontology that has since been swapped out, so drop

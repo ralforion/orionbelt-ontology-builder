@@ -153,6 +153,7 @@ from .ui import (  # noqa: F401
     display_flash_message,
     filter_entry_token,
     focus_seeds_from_selection,
+    follow_focus_seed_renames,
     format_label_name,
     get_ontology_manager_class,
     graph_node_cap,
@@ -195,6 +196,8 @@ from .ui import (  # noqa: F401
     viz_hidden_caption,
     viz_hidden_note_style,
     viz_mark_ontology_seen,
+    viz_node_id,
+    viz_note_rename,
     viz_ontology_was_replaced,
     viz_sync,
 )

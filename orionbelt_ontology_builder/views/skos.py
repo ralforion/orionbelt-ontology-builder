@@ -22,6 +22,7 @@ from ..ui import (
     save_checkpoint,
     set_flash_message,
     show_message,
+    viz_note_rename,
 )
 
 
@@ -468,6 +469,15 @@ def render_skos_vocabulary():
                                         if renamed
                                         else concept["uri"]
                                     )
+                                    if renamed:
+                                        # Concept nodes are keyed by local name,
+                                        # which is what a custom-URI rename
+                                        # leaves behind too.
+                                        viz_note_rename(
+                                            "concept",
+                                            concept["name"],
+                                            ont._local_name(target),
+                                        )
                                     # Handle broader change (resolve by URI)
                                     broader_val = _broader_lookup.get(new_broader) or ""
                                     old_broader = _cur_broader_uri or ""
