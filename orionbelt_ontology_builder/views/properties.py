@@ -255,6 +255,7 @@ def render_properties():
                                 # Rename/move first so later updates hit the new URI.
                                 ok, current_ref = _rename_or_move(
                                     ont,
+                                    "property",
                                     ont.rename_property,
                                     prop["uri"],
                                     prop["name"],
@@ -478,6 +479,7 @@ def render_properties():
                                 # Rename/move first so later updates hit the new URI.
                                 ok, current_ref = _rename_or_move(
                                     ont,
+                                    "property",
                                     ont.rename_property,
                                     prop["uri"],
                                     prop["name"],

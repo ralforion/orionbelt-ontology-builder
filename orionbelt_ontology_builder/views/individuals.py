@@ -229,6 +229,7 @@ def render_individuals():
                                 # Rename/move first so later updates hit the new URI.
                                 ok, current_ref = _rename_or_move(
                                     ont,
+                                    "individual",
                                     ont.rename_individual,
                                     ind["uri"],
                                     ind["name"],

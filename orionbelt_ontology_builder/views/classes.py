@@ -29,6 +29,7 @@ from ..ui import (
     save_checkpoint,
     set_flash_message,
     show_message,
+    viz_note_rename,
 )
 
 
@@ -187,6 +188,9 @@ def render_classes():
                                         # Rename preserves the class's namespace.
                                         current_ref = _renamed_ref(
                                             ont, cls["uri"], new_name
+                                        )
+                                        viz_note_rename(
+                                            "class", cls["uri"], current_ref
                                         )
                                         save_checkpoint("Rename class")
                                         show_message(

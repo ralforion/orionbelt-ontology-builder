@@ -613,6 +613,9 @@ def viz_drop_focus_seeds() -> None:
     """Forget the focus seeds so they re-derive from the current selection."""
     st.session_state.pop("_viz_cfg_focus_seeds", None)
     st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
+    # Notes about entities the seeds were meant to follow; with no seeds left
+    # there is nothing to re-point (see viz_note_rename).
+    st.session_state.pop("_viz_pending_renames", None)
 
 
 def _viz_widget_missing(wid_key: str) -> bool:
@@ -726,6 +729,98 @@ def prune_reused_focus_seeds(seeds, seen_ids_by_label, focus_targets):
         for s in seeds
         if s not in seen_ids_by_label or seen_ids_by_label[s] == focus_targets.get(s)
     ]
+
+
+_VIZ_NODE_ID_PREFIX = {"class": "", "individual": "ind_", "property": "dprop_"}
+
+
+def viz_node_id(kind: str, ref: str) -> str:
+    """The graph node id an entity of ``kind`` gets, as the builder assigns it.
+
+    ``ref`` is the entity's URI, except for SKOS concepts, whose nodes are keyed
+    by name. The focus-target map and the rename notes below both go through
+    here because they have to agree on the id: a rename that computed it any
+    other way would re-point nothing.
+    """
+    if kind == "concept":
+        return f"skos_{ref}"
+    return f"{_VIZ_NODE_ID_PREFIX[kind]}{_uid(ref)}"
+
+
+def viz_note_rename(kind: str, old_ref: str, new_ref: str) -> None:
+    """Record a rename so the focus seeds can follow the entity (issue #275).
+
+    Seeds are held as the labels the multiselect shows, and a rename mints a new
+    URI: on the next render the old label names nothing, so the seed was pruned
+    and focus mode fell back to an arbitrary first node. Renaming the very class
+    you were focused on therefore dropped it out of the graph.
+
+    Nothing in the rebuilt state ties the two names together — the label changed
+    and ``_uid`` hashes the URI, so the node id changed with it — which is why
+    the rename itself has to leave the note. It is consumed by the next
+    Visualization render (see :func:`follow_focus_seed_renames`).
+    """
+    if old_ref == new_ref:
+        return
+    renames = st.session_state.setdefault("_viz_pending_renames", {})
+    renames[viz_node_id(kind, old_ref)] = viz_node_id(kind, new_ref)
+
+
+def _renamed_node_id(node_id, renames):
+    """Where ``node_id`` ended up after the recorded renames, following a chain
+    of them (the seeds are only re-pointed on a Visualization render, so an
+    entity can be renamed more than once in between). Guarded against a cycle,
+    which a rename back to an earlier name produces."""
+    seen = set()
+    while node_id in renames and node_id not in seen:
+        seen.add(node_id)
+        node_id = renames[node_id]
+    return node_id
+
+
+def follow_renamed_node_ids(node_ids, renames):
+    """Where ``node_ids`` ended up after the recorded renames (issue #275).
+
+    The seeds saved against a linked file are node ids rather than labels
+    (#164), and one saved before a rename made this session resolves to nothing
+    when it is read back. Same notes and same chain-following as
+    :func:`follow_focus_seed_renames`, one level down: that works in the labels
+    the seeds are shown under, this in the ids they are stored as.
+    """
+    if not renames:
+        return list(node_ids or [])
+    return [_renamed_node_id(i, renames) for i in node_ids or []]
+
+
+def follow_focus_seed_renames(seeds, seen_ids_by_label, focus_targets, renames):
+    """Re-point focus seeds at entities that were renamed (issue #275).
+
+    Returns ``(seeds, seen_ids_by_label)`` with every seed whose entity now
+    answers to a new label swapped for that label, and its recorded id brought
+    up to date so the reuse prune that follows still recognises it.
+
+    A seed is only moved when the renamed entity is actually in ``focus_targets``
+    — if its type has been toggled off it is not focusable, and leaving the seed
+    alone lets the existing prune drop it as it always did.
+    """
+    if not seeds or not renames or not seen_ids_by_label:
+        return list(seeds or []), dict(seen_ids_by_label or {})
+    label_by_id = {node_id: label for label, node_id in focus_targets.items()}
+    out_seeds: list = []
+    out_ids = dict(seen_ids_by_label)
+    for s in seeds:
+        old_id = seen_ids_by_label.get(s)
+        new_id = _renamed_node_id(old_id, renames) if old_id else None
+        label = label_by_id.get(new_id) if new_id and new_id != old_id else None
+        if label is None:
+            if s not in out_seeds:
+                out_seeds.append(s)
+            continue
+        out_ids.pop(s, None)
+        out_ids[label] = new_id
+        if label not in out_seeds:
+            out_seeds.append(label)
+    return out_seeds, out_ids
 
 
 def _clear_viz_file_session_state() -> None:
@@ -1503,7 +1598,7 @@ def _namespace_option_index(ont, ns_options, ns_lookup, uri):
 _KEEP_NAMESPACE = object()  # sentinel: leave a resource in its current namespace
 
 
-def _rename_or_move(ont, rename_fn, old_uri, old_local, new_name, new_namespace):
+def _rename_or_move(ont, kind, rename_fn, old_uri, old_local, new_name, new_namespace):
     """Resolve the target URI from the (possibly changed) local name and
     namespace and rename via ``rename_fn`` if it differs from ``old_uri``.
 
@@ -1512,7 +1607,8 @@ def _rename_or_move(ont, rename_fn, old_uri, old_local, new_name, new_namespace)
     ``(ok, current_ref)``: ``ok`` is False only when ``rename_fn`` refuses
     because the target URI already exists. ``new_namespace`` is ``None`` (base),
     a namespace URI, or the ``_KEEP_NAMESPACE`` sentinel to keep the current
-    namespace.
+    namespace. ``kind`` is what the entity is to the graph ("class",
+    "individual", "property"), so the move can be noted for the focus seeds.
     """
     target_ns = (
         ont._namespace_of(old_uri)
@@ -1523,6 +1619,7 @@ def _rename_or_move(ont, rename_fn, old_uri, old_local, new_name, new_namespace)
     if target_uri == old_uri:
         return True, old_uri
     if rename_fn(old_uri, target_uri):
+        viz_note_rename(kind, old_uri, target_uri)
         return True, target_uri
     return False, old_uri
 
@@ -1621,6 +1718,7 @@ def _apply_class_edit(
         return False
     ok, current_ref = _rename_or_move(
         ont,
+        "class",
         ont.rename_class,
         class_info["uri"],
         class_info["name"],
@@ -1884,6 +1982,7 @@ def _apply_property_edit(
             return False
         if ont.rename_property(prop["uri"], new_name):
             current_ref = _renamed_ref(ont, prop["uri"], new_name)
+            viz_note_rename("property", prop["uri"], current_ref)
         else:
             show_message(f"Cannot rename: '{new_name}' already exists!", "error")
             return False
@@ -1912,6 +2011,7 @@ def _apply_individual_edit(
             return False
         if ont.rename_individual(ind["uri"], new_name):
             current_ref = _renamed_ref(ont, ind["uri"], new_name)
+            viz_note_rename("individual", ind["uri"], current_ref)
         else:
             show_message(f"Cannot rename: '{new_name}' already exists!", "error")
             return False
