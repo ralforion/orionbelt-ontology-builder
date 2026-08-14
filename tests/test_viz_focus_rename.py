@@ -192,6 +192,44 @@ def test_no_renames_leaves_the_seeds_untouched(session):
     assert seen == {"Class: Person": targets["Class: Person"]}
 
 
+def test_saved_seed_ids_follow_a_rename_too(session):
+    """The seeds saved against a linked file are node ids (#164). Renaming the
+    entity before the first Visualization render of the session leaves the saved
+    id naming nothing, and there are no labels in session yet to follow."""
+    app.viz_note_rename("class", NS + "Person", NS + "Human")
+    saved = [app.viz_node_id("class", NS + "Person")]
+
+    followed = app.follow_renamed_node_ids(saved, session["_viz_pending_renames"])
+
+    assert followed == [app.viz_node_id("class", NS + "Human")]
+    # Which is what the restore turns back into a label.
+    after = _class_targets("Human", "Org")
+    label_by_id = {node_id: label for label, node_id in after.items()}
+    assert [label_by_id[i] for i in followed if i in label_by_id] == ["Class: Human"]
+
+
+def test_saved_seed_ids_follow_a_chain_of_renames(session):
+    """Same chain-following as the label path."""
+    app.viz_note_rename("class", NS + "Person", NS + "Human")
+    app.viz_note_rename("class", NS + "Human", NS + "Being")
+
+    followed = app.follow_renamed_node_ids(
+        [app.viz_node_id("class", NS + "Person")],
+        session["_viz_pending_renames"],
+    )
+
+    assert followed == [app.viz_node_id("class", NS + "Being")]
+
+
+def test_saved_seed_ids_are_untouched_without_notes(session):
+    """The common case: nothing was renamed, so the saved ids restore as they
+    always did, including ids that resolve to nothing."""
+    saved = [app.viz_node_id("class", NS + "Person"), "gone"]
+    assert app.follow_renamed_node_ids(saved, None) == saved
+    assert app.follow_renamed_node_ids(saved, {}) == saved
+    assert app.follow_renamed_node_ids(None, {}) == []
+
+
 def test_dropping_the_seeds_forgets_the_notes(session):
     """With no seeds left there is nothing for a note to re-point, and keeping
     them would apply a rename made against the file that was just closed."""

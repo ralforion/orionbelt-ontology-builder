@@ -39,6 +39,7 @@ from ..ui import (
     filter_entry_token,
     focus_seeds_from_selection,
     follow_focus_seed_renames,
+    follow_renamed_node_ids,
     graph_node_cap,
     local_store,
     panel_subject_uri,
@@ -397,8 +398,16 @@ def render_visualization():
         # A seed whose entity was renamed is held under a label that no longer
         # exists; re-point it at the new one first, or the prune below reads the
         # rename as "the class is gone" and focus mode falls back to an
-        # arbitrary node (issue #275).
+        # arbitrary node (issue #275). Both seed sources are re-pointed from this
+        # one pop: the labels already in session here, and the ids restored from
+        # the linked file further down.
         _renames = st.session_state.pop("_viz_pending_renames", None)
+        if replaced:
+            # The notes name entities of the ontology that has just been swapped
+            # out. Following them into the new one would re-point a seed at
+            # whatever happens to hold that URI now, which is the very thing the
+            # reuse prune below exists to stop (issue #180).
+            _renames = None
         if _renames and "_viz_cfg_focus_seeds" in st.session_state:
             (
                 st.session_state["_viz_cfg_focus_seeds"],
@@ -426,6 +435,10 @@ def render_visualization():
         # simply drops out, the same pruning the focus block does below.
         _pending_seed_ids = st.session_state.pop("_viz_pending_focus_seed_ids", None)
         if _pending_seed_ids and "_viz_cfg_focus_seeds" not in st.session_state:
+            # An id saved before a rename made earlier this session resolves to
+            # nothing, and there are no labels in session yet for the block above
+            # to have followed — this is the first look at the file's seeds.
+            _pending_seed_ids = follow_renamed_node_ids(_pending_seed_ids, _renames)
             _label_by_id = {node_id: label for label, node_id in focus_targets.items()}
             _restored_seeds = [
                 _label_by_id[i] for i in _pending_seed_ids if i in _label_by_id

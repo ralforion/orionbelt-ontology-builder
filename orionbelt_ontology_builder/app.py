@@ -154,6 +154,7 @@ from .ui import (  # noqa: F401
     filter_entry_token,
     focus_seeds_from_selection,
     follow_focus_seed_renames,
+    follow_renamed_node_ids,
     format_label_name,
     get_ontology_manager_class,
     graph_node_cap,

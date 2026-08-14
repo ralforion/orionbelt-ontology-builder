@@ -778,6 +778,20 @@ def _renamed_node_id(node_id, renames):
     return node_id
 
 
+def follow_renamed_node_ids(node_ids, renames):
+    """Where ``node_ids`` ended up after the recorded renames (issue #275).
+
+    The seeds saved against a linked file are node ids rather than labels
+    (#164), and one saved before a rename made this session resolves to nothing
+    when it is read back. Same notes and same chain-following as
+    :func:`follow_focus_seed_renames`, one level down: that works in the labels
+    the seeds are shown under, this in the ids they are stored as.
+    """
+    if not renames:
+        return list(node_ids or [])
+    return [_renamed_node_id(i, renames) for i in node_ids or []]
+
+
 def follow_focus_seed_renames(seeds, seen_ids_by_label, focus_targets, renames):
     """Re-point focus seeds at entities that were renamed (issue #275).
 
