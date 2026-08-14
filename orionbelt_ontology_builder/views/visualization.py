@@ -37,6 +37,7 @@ from ..ui import (
     build_class_options,
     build_filter_entries,
     filter_entry_token,
+    focus_seeds_after_request,
     focus_seeds_from_selection,
     follow_focus_seed_renames,
     follow_renamed_node_ids,
@@ -1836,8 +1837,9 @@ def render_visualization():
                     except (OSError, ValueError) as e:
                         st.toast(f"Could not save image: {e}", icon="⚠️")
 
-            # Ctrl/Cmd-click in the graph requests focusing on a node: add it to
-            # the "Focus on one node" seeds and enable focus mode (issue #56). The
+            # A modifier-click in the graph requests focusing on a node: add it
+            # to the "Focus on one node" seeds and enable focus mode (issue #56),
+            # or replace them with it when the click was an Alt-click (#276). The
             # reqId guard ensures each click is applied once (the component value
             # persists across reruns).
             if isinstance(selection, dict) and selection.get("focusRequest"):
@@ -1847,14 +1849,20 @@ def render_visualization():
                     _id_to_label = {v: k for k, v in focus_targets.items()}
                     _focus_label = _id_to_label.get(selection.get("nodeId"))
                     if _focus_label:
+                        _replace = bool(selection.get("replace"))
                         st.session_state["_viz_cfg_focus_mode"] = True
-                        _seeds = list(
-                            st.session_state.get("_viz_cfg_focus_seeds") or []
+                        st.session_state["_viz_cfg_focus_seeds"] = (
+                            focus_seeds_after_request(
+                                st.session_state.get("_viz_cfg_focus_seeds"),
+                                _focus_label,
+                                replace=_replace,
+                            )
                         )
-                        if _focus_label not in _seeds:
-                            _seeds.append(_focus_label)
-                        st.session_state["_viz_cfg_focus_seeds"] = _seeds
-                        st.toast(f"Focusing on {_focus_label}", icon="🎯")
+                        st.toast(
+                            f"Focusing on {_focus_label}"
+                            + (" only" if _replace else ""),
+                            icon="🎯",
+                        )
                         st.rerun()
                     else:
                         st.toast(
@@ -1961,7 +1969,8 @@ def render_visualization():
                         )
                     elif not has_selection:
                         st.caption(
-                            "Click a node to see details. Ctrl/Cmd-click focuses on it."
+                            "Click a node to see details. Ctrl/Cmd-click adds it to "
+                            "the focus, Alt-click focuses on it alone."
                         )
                         _render_panel_add_buttons(classes, None, None, None)
                     else:
@@ -2010,7 +2019,8 @@ def render_visualization():
                 else:
                     sel_html = (
                         "Click a node or edge to see details · "
-                        "Ctrl/Cmd-click a node to focus on it"
+                        "Ctrl/Cmd-click a node to add it to the focus · "
+                        "Alt-click to focus on it alone"
                     )
 
                 # Inject CSS to remove gap between status bar columns

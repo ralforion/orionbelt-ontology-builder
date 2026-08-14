@@ -1054,17 +1054,26 @@ function renderGraph(args) {
 
     // Ctrl/Cmd-click a node to add it to the "Focus on one node" selection, so
     // the graph narrows to that node's neighbourhood without typing its name
-    // into the focus picker (issue #56). reqId makes each request distinct so
-    // the Python side applies it once. Sent after the normal selectNode value,
-    // so this is the value Streamlit keeps for this interaction.
+    // into the focus picker (issue #56). Alt-click focuses on that node alone,
+    // replacing whatever was focused before: hopping from one node to the next
+    // otherwise means emptying the picker by hand between hops (issue #276).
+    // Alt is checked first so it still means "only this one" when a stray
+    // Ctrl or Cmd is held with it. reqId makes each request distinct so the
+    // Python side applies it once. Sent after the normal selectNode value, so
+    // this is the value Streamlit keeps for this interaction.
     network.on('click', function(params) {
         var wasFresh = hlJustSelected;
         hlJustSelected = false;
         if (!params.nodes.length) return;
         var ev = params.event && params.event.srcEvent;
-        if (ev && (ev.ctrlKey || ev.metaKey)) {
+        if (ev && (ev.altKey || ev.ctrlKey || ev.metaKey)) {
             sendToStreamlit("streamlit:setComponentValue", {
-                value: {focusRequest: true, reqId: Date.now(), nodeId: params.nodes[0]}
+                value: {
+                    focusRequest: true,
+                    reqId: Date.now(),
+                    nodeId: params.nodes[0],
+                    replace: !!ev.altKey
+                }
             });
             return;
         }

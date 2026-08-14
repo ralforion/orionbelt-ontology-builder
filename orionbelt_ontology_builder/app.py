@@ -152,6 +152,7 @@ from .ui import (  # noqa: F401
     confirm_delete,
     display_flash_message,
     filter_entry_token,
+    focus_seeds_after_request,
     focus_seeds_from_selection,
     follow_focus_seed_renames,
     follow_renamed_node_ids,

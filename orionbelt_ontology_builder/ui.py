@@ -673,6 +673,26 @@ def focus_seeds_from_selection(selected_classes, class_count):
     return labels
 
 
+def focus_seeds_after_request(seeds, label, replace=False):
+    """The focus seeds a modifier-click in the graph leaves behind.
+
+    Ctrl/Cmd-click adds the node to whatever is focused already (issue #56),
+    which is what building a neighbourhood up out of several nodes needs.
+    Alt-click focuses on that node alone (issue #276): wanting one node at a
+    time is the common case, and it otherwise means emptying the picker by hand
+    between hops.
+
+    Clicking a node that is already a seed changes nothing either way, rather
+    than duplicating it in the multiselect.
+    """
+    if replace:
+        return [label]
+    seeds = list(seeds or [])
+    if label not in seeds:
+        seeds.append(label)
+    return seeds
+
+
 def viz_focus_toggle():
     """Persist the focus toggle, seeding the focus nodes on first use.
 
