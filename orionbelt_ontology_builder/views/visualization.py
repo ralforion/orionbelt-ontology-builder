@@ -535,7 +535,9 @@ def render_visualization():
                 help=(
                     "Show only a chosen node plus everything linked to it within "
                     "N hops, across all node types — handy for large ontologies "
-                    "where showing everything at once is overwhelming."
+                    "where showing everything at once is overwhelming. "
+                    "Annotations come along with whatever is shown; the "
+                    "Annotations checkbox above still turns them off."
                 ),
             )
             if focus_mode and focus_targets:
@@ -767,8 +769,10 @@ def render_visualization():
         # Bump to invalidate cached graph data after code changes. 19: annotation
         # nodes gained a stable id, ntype and ename (issue #223), and a session
         # holding a pre-#223 payload would otherwise keep serving nodes a click
-        # cannot resolve until some unrelated change happened to evict it.
-        _graph_ver = 19
+        # cannot resolve until some unrelated change happened to evict it. 20:
+        # focus mode stopped charging an annotation a hop (issue #272), so a
+        # cached focus payload is one built under the old pruning.
+        _graph_ver = 20
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -1569,8 +1573,20 @@ def render_visualization():
                 present_ids = {n["id"] for n in net.nodes}
                 seeds = {sid for sid in focus_seed_ids if sid in present_ids}
                 if seeds:
+                    # An annotation node hangs off the one entity it annotates
+                    # and leads nowhere else, so it rides along with whatever
+                    # survives instead of costing a hop (issue #272). Charging it
+                    # one meant a depth-1 focus drew its neighbours stripped of
+                    # their annotations while the Annotations toggle was on, and
+                    # the only way to bring them back — a deeper focus — pulled in
+                    # a whole ring of unrelated entities with them.
+                    ann_ids = {
+                        n["id"] for n in net.nodes if n.get("ntype") == "Annotation"
+                    }
                     adj: dict = {}
                     for edge in net.edges:
+                        if edge["from"] in ann_ids or edge["to"] in ann_ids:
+                            continue
                         adj.setdefault(edge["from"], set()).add(edge["to"])
                         adj.setdefault(edge["to"], set()).add(edge["from"])
                     # Ring by ring, starting with the seeds themselves, and never
@@ -1599,6 +1615,26 @@ def render_visualization():
                         for nid in ring:
                             nxt |= adj.get(nid, set())
                         ring = nxt - keep
+                    # The annotations of everything kept, hung back on now that
+                    # the hops are counted, and still inside what can be drawn.
+                    if ann_ids:
+                        riders = {
+                            e["to"]
+                            for e in net.edges
+                            if e["to"] in ann_ids and e["from"] in keep
+                        } - keep
+                        room = GRAPH_MAX_NODES - len(keep)
+                        if len(riders) > room:
+                            riders = set(sorted(riders)[:room])
+                            if not graph_notice:
+                                graph_notice = (
+                                    f"This focus and its annotations cover more "
+                                    f"than the {GRAPH_MAX_NODES} nodes the graph "
+                                    f"can draw, so only part of them is shown. "
+                                    f"Turn Annotations off, or pick fewer focus "
+                                    f"nodes, to see the rest."
+                                )
+                        keep |= riders
                     net.nodes = [n for n in net.nodes if n["id"] in keep]
                     net.edges = [
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
