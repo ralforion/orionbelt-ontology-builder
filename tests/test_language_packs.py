@@ -305,6 +305,23 @@ def test_a_stored_pack_that_no_longer_validates_is_dropped(monkeypatch, patch_ui
     assert app.active_language_pack() == languages.DEFAULT_PACK
 
 
+def test_a_stored_pack_cannot_take_a_built_in_pack_s_name(monkeypatch, patch_ui):
+    """Saving one is refused, so only an edited config can get one in — and a
+    pack under a built-in's name would be used in its place (custom packs are
+    looked up first) while the tab still showed it as read-only."""
+    state: dict = {}
+    monkeypatch.setattr(app.st, "session_state", state)
+    app._apply_language_packs(
+        {
+            "active": languages.ALPHA3_PACK,
+            "packs": {languages.ALPHA3_PACK: [{"code": "x-a", "label": "A"}]},
+        }
+    )
+    assert app.custom_language_packs() == {}
+    assert app.language_pack_entries() == languages.builtin_pack(languages.ALPHA3_PACK)
+    assert app.language_pack_names() == list(languages.BUILTIN_PACKS)
+
+
 def test_an_empty_pack_is_still_the_active_one_after_a_restart(monkeypatch, patch_ui):
     # It was dropped on restore, which silently reset the pack in use too.
     state: dict = {}

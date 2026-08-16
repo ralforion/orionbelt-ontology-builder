@@ -15,6 +15,8 @@ from rdflib.collection import Collection
 from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 from rdflib.term import Node
 
+from .languages import invalid_tag_reason
+
 logger = logging.getLogger(__name__)
 
 #: RDF serialization format for a file, keyed by lower-case extension. Used so a
@@ -2319,6 +2321,14 @@ class OntologyManager:
         subj_uri = self._uri(subject)
         pred_uri = self._resolve_predicate_uri(predicate)
 
+        # The object is built before anything is written, because building it is
+        # what refuses a bad IRI or a language tag rdflib will not take. Declared
+        # first, the annotation property below outlived the write it was for: the
+        # caller was told the annotation had failed and was left with a new,
+        # zero-use annotation type in the ontology — reachable from Bulk Edit,
+        # which reports the row and carries on (review of PR #291).
+        obj = self._annotation_object(value, lang, datatype, value_is_uri)
+
         if (
             str(pred_uri).startswith(str(self.namespace))
             and (
@@ -2330,6 +2340,20 @@ class OntologyManager:
         ):
             self.graph.add((pred_uri, RDF.type, OWL.AnnotationProperty))
 
+        self.graph.add((subj_uri, pred_uri, obj))
+
+    def _annotation_object(
+        self,
+        value: str,
+        lang: str | None,
+        datatype: str | None,
+        value_is_uri: bool,
+    ) -> Node:
+        """The object an annotation writes, or ``ValueError`` saying why not.
+
+        Split out of :meth:`add_annotation` so every refusal happens before the
+        graph is touched. See that method for what each argument means.
+        """
         if value_is_uri:
             # Keep a resource-valued annotation a resource. Writing it back as a
             # literal would leave the original triple in place beside a string
@@ -2341,17 +2365,19 @@ class OntologyManager:
             # Raising instead lets the caller's rollback put the original back.
             if reason := self.invalid_uri_reason(value):
                 raise ValueError(reason)
-            obj: Node = URIRef(value)
-        elif lang:
-            obj = Literal(value, lang=lang)
-        elif datatype:
-            obj = Literal(
+            return URIRef(value)
+        if lang:
+            # Asked before rdflib is handed the tag, so the refusal names what a
+            # language tag may look like and what to use for a language no
+            # standard names, rather than only that this one is not one.
+            if reason := invalid_tag_reason(lang):
+                raise ValueError(reason)
+            return Literal(value, lang=lang)
+        if datatype:
+            return Literal(
                 value, datatype=self.XSD_DATATYPES.get(datatype, URIRef(datatype))
             )
-        else:
-            obj = Literal(value)
-
-        self.graph.add((subj_uri, pred_uri, obj))
+        return Literal(value)
 
     def get_annotations(self, subject: str) -> list[dict[str, Any]]:
         """Get all annotations/predicates for a resource (like Protege shows)."""

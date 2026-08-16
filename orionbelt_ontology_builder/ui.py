@@ -706,6 +706,13 @@ def _apply_language_packs(data) -> None:
                 continue
             if not isinstance(entries, list):
                 continue
+            # The same refusal :func:`save_custom_language_pack` makes, applied
+            # again on the way in: storage is a file the user can edit, and a
+            # custom pack under a built-in's name would take that name's place
+            # (entries are looked up in the custom packs first) while the tab
+            # still showed it as a read-only built-in with no way back.
+            if name in languages.BUILTIN_PACKS:
+                continue
             cleaned, errors = languages.normalize_pack(entries)
             # An empty list is a pack that has been started and not filled in,
             # which is savable — dropping it here would also drop the choice of
