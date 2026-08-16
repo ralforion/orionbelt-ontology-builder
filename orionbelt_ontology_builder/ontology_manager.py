@@ -2475,6 +2475,172 @@ class OntologyManager:
         result = sorted(predicates.values(), key=lambda x: x["local_name"].lower())
         return result
 
+    # Vocabularies whose terms are defined elsewhere, as a rename *target*: a
+    # custom type can be moved to a URI of the user's own choosing, but not onto
+    # a standard vocabulary term, which would give a private meaning to a term
+    # every other tool already understands (issue #287).
+    _EXTERNAL_ANNOTATION_NAMESPACES: ClassVar[frozenset[str]] = frozenset(
+        {str(RDF), str(RDFS), str(OWL), str(XSD), str(SKOS), str(DC), str(DCTERMS)}
+    )
+
+    def annotation_property_rename_reason(self, predicate: str) -> str | None:
+        """Why the annotation type ``predicate`` cannot be renamed, or ``None``.
+
+        Only a type in this ontology's own namespace can be renamed — the same
+        test :meth:`add_annotation` uses to decide that a type is one the user
+        invented here. ``rdfs:label``, ``skos:definition`` and the terms of any
+        imported vocabulary are defined by that vocabulary, so renaming one here
+        would not rename anything: it would fork the vocabulary and leave every
+        annotation pointing at a term no other tool knows (issue #287).
+        """
+        uri = self._resolve_predicate_uri(predicate)
+        if not str(uri).startswith(str(self.namespace)):
+            return (
+                f"'{predicate}' is defined by another vocabulary, not by this "
+                "ontology, so renaming it here would fork that vocabulary. Only "
+                f"annotation types in this ontology's own namespace "
+                f"({self.base_uri}) can be renamed."
+            )
+        return None
+
+    def get_custom_annotation_properties(self) -> list[dict[str, Any]]:
+        """The annotation types this ontology defines itself.
+
+        Everything the Annotations page can show as an annotation type, minus
+        the ones belonging to another vocabulary (see
+        :meth:`annotation_property_rename_reason`) and minus the predicates that
+        are declared as some other kind of entity — an object or data property
+        assertion also reads as an annotation here, but it is renamed on the
+        Properties page, not this one.
+
+        A type is listed whether it is declared as an ``owl:AnnotationProperty``
+        or only used, so one that came in from a loaded file is renameable too.
+        Each entry carries ``uri``, ``local_name``, ``prefix``, ``display`` (the
+        prefixed form) and ``usage`` (how many annotations use it).
+        """
+        candidates: dict[str, dict[str, Any]] = {
+            p["uri"]: dict(p) for p in self.get_used_annotation_predicates()
+        }
+        # Declared but unused: the values were deleted and the declaration
+        # stayed, so the type is still part of the ontology.
+        for pred in self.graph.subjects(RDF.type, OWL.AnnotationProperty):
+            if isinstance(pred, URIRef) and str(pred) not in candidates:
+                candidates[str(pred)] = {
+                    "uri": str(pred),
+                    "local_name": self._local_name(pred),
+                    "prefix": self._get_prefix_for_uri(str(pred)),
+                }
+
+        result: list[dict[str, Any]] = []
+        for uri, info in candidates.items():
+            if self.annotation_property_rename_reason(uri):
+                continue
+            pred_uri = URIRef(uri)
+            if set(self.graph.objects(pred_uri, RDF.type)) - {OWL.AnnotationProperty}:
+                continue
+            entry = dict(info)
+            entry["display"] = (
+                f"{info['prefix']}:{info['local_name']}"
+                if info["prefix"]
+                else info["local_name"]
+            )
+            entry["usage"] = sum(1 for _ in self.graph.triples((None, pred_uri, None)))
+            result.append(entry)
+
+        result.sort(key=lambda e: e["local_name"].lower())
+        return result
+
+    def _resolve_renamed_annotation_uri(self, name: str, namespace: str) -> URIRef:
+        """Resolve the new name of an annotation type being renamed.
+
+        Takes the same forms as :meth:`_resolve_predicate_uri` except a bare
+        name, which stays in ``namespace`` — the namespace the type already
+        lives in, the way the entity renames keep theirs. Mapping it the usual
+        way would turn renaming a custom type to 'label' into a silent merge
+        into ``rdfs:label``, and minting it in the base namespace would move a
+        type out of its own namespace as a side effect of renaming it.
+        """
+        name = name.strip()
+        if name.startswith(("http://", "https://")):
+            return URIRef(name)
+        if ":" in name:
+            return self._resolve_predicate_uri(name)
+        return URIRef(namespace + name)
+
+    def _annotation_predicate_in_use(self, uri: URIRef) -> bool:
+        """True if ``uri`` already names something in this graph — an entity, an
+        annotation type, or any resource carrying triples of its own."""
+        return (
+            self._name_in_use(uri)
+            or (uri, None, None) in self.graph
+            or (None, uri, None) in self.graph
+        )
+
+    def rename_annotation_property(self, old_name: str, new_name: str) -> bool:
+        """Rename a custom annotation type, updating every use of it (#287).
+
+        ``old_name`` may be written any way :meth:`_resolve_predicate_uri`
+        accepts — a full URI, a ``prefix:local`` CURIE or a local name. A bare
+        ``new_name`` keeps the type in its current namespace (see
+        :meth:`_resolve_renamed_annotation_uri`); a CURIE or a full URI moves it
+        where it says.
+
+        Every triple that mentions the type moves with it: its declaration and
+        any other statement about it, the annotations that use it as their
+        predicate, and any reference to it as an object. That is the whole point
+        of doing this here rather than by hand — a search-and-replace over the
+        Turtle catches the same triples only as long as the file uses one prefix
+        for them.
+
+        Returns False when the new name is already taken, so nothing is merged
+        into an existing term by accident. Raises ``ValueError`` when the new
+        name is unusable, when the type belongs to another vocabulary (see
+        :meth:`annotation_property_rename_reason`), or when the new name would
+        land on a standard vocabulary term.
+        """
+        old_uri = self._resolve_predicate_uri(old_name)
+        if reason := self.annotation_property_rename_reason(str(old_uri)):
+            raise ValueError(reason)
+        self._require_valid_annotation_predicate(new_name)
+
+        new_uri = self._resolve_renamed_annotation_uri(
+            new_name, self._namespace_of(old_uri)
+        )
+        if new_uri == old_uri:
+            return True
+        if self._namespace_of(new_uri) in self._EXTERNAL_ANNOTATION_NAMESPACES:
+            raise ValueError(
+                f"'{new_name}' is a standard vocabulary term. Renaming a type "
+                "onto one would give a private meaning to a term every other "
+                "tool already understands."
+            )
+        if self._annotation_predicate_in_use(new_uri):
+            return False
+
+        # Every triple mentioning the type, whichever position it stands in:
+        # statements about it (its owl:AnnotationProperty declaration, its
+        # label), the annotations that use it as their predicate, and references
+        # to it as an object (rdfs:subPropertyOf, seeAlso). Collected as one set
+        # and rewritten in all three positions at once, because a triple can
+        # mention it more than once — ``ex:tag rdfs:seeAlso ex:tag`` — and moving
+        # one position at a time would leave the old URI standing in the other.
+        mentions: set[_Triple] = {
+            *self.graph.triples((old_uri, None, None)),
+            *self.graph.triples((None, old_uri, None)),
+            *self.graph.triples((None, None, old_uri)),
+        }
+        for s, p, o in mentions:
+            self.graph.remove((s, p, o))
+            self.graph.add(
+                (
+                    new_uri if s == old_uri else s,
+                    new_uri if p == old_uri else p,
+                    new_uri if o == old_uri else o,
+                )
+            )
+
+        return True
+
     def _get_prefix_for_uri(self, uri: str) -> str:
         """Get the prefix for a URI if bound in the graph."""
         for prefix, namespace in self.graph.namespaces():

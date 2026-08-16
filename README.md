@@ -74,7 +74,9 @@ Every entity page has a Bulk Operations tab:
 - **Edit** - spreadsheet view of all entities with editable labels, comments, parents
 - **Delete** - multi-select and remove in one go
 
-Annotations have their own bulk editor with per-row add/delete actions.
+Annotations have their own bulk editor with per-row add/delete actions, and an
+Annotation Types tab that renames a type you invented — every annotation using
+it is rewritten, so no values are lost.
 
 ### SKOS vocabularies
 
@@ -354,7 +356,7 @@ the 200 MB default; raise the value only when self-hosting with enough memory.
 | **Relations**       | Class, property, and individual relations                      |
 | **Restrictions**    | OWL restrictions and cardinality constraints                   |
 | **Advanced**        | Advanced OWL features                                          |
-| **Annotations**     | RDFS, SKOS, Dublin Core annotations with bulk editing          |
+| **Annotations**     | RDFS, SKOS, DC and custom annotations, bulk edit, rename       |
 | **SKOS Vocabulary** | Concept schemes, concepts, hierarchy, SKOS validation          |
 | **Import / Export** | File import with merge review, export, new ontology, templates |
 | **Source**          | Live Turtle source view of the ontology                        |

@@ -208,7 +208,10 @@ from .ui import (  # noqa: F401
 # They live in ``views`` rather than ``pages`` because Streamlit reads a
 # ``pages`` directory next to an entry script as a legacy multipage app (#269).
 from .views.advanced import render_advanced
-from .views.annotations import render_annotations
+from .views.annotations import (  # noqa: F401 - render_annotation_types is a tab, re-exported like the ui block's
+    render_annotation_types,
+    render_annotations,
+)
 from .views.classes import render_classes
 from .views.dashboard import render_dashboard
 from .views.import_export import render_import_export
