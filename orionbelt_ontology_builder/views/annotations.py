@@ -10,6 +10,7 @@ from ..ui import (
     _is_open,
     _uid,
     active_language_pack,
+    annotation_resource_options,
     clearable_selectbox,
     delete_custom_language_pack,
     format_label_name,
@@ -441,9 +442,9 @@ def render_view_annotations(
                 r for r in all_resources if r["type"] == selected_type
             ]
 
+        _view_opts, _view_lookup = annotation_resource_options(filtered_resources)
         with col2:
             if filtered_resources:
-                _view_opts = [r["display"] for r in filtered_resources]
                 selected = clearable_selectbox(
                     "Select Resource",
                     _view_opts,
@@ -455,10 +456,10 @@ def render_view_annotations(
                 st.info(f"No {selected_type} resources found.")
 
         if selected:
-            # Find the actual resource name from display string
-            resource = next(
-                (r for r in filtered_resources if r["display"] == selected), None
-            )
+            # The option the picker holds, not the first resource that renders
+            # the same way: two of the same local name used to share an option,
+            # so the namesake's annotations could not be reached from here.
+            resource = _view_lookup.get(selected)
             if resource:
                 resource_name = resource["name"]
                 # By URI, as the editor below already addresses it: read by

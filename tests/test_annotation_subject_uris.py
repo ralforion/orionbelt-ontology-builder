@@ -27,9 +27,14 @@ COMMENT = "http://www.w3.org/2000/01/rdf-schema#comment"
 
 
 def _om():
-    """An ontology with one class of its own and one from another namespace."""
+    """An ontology with one class of its own and one from another namespace.
+
+    The prefix is bound as an import would bind it, so a namesake reads
+    ``Account (gist)`` rather than falling back to the whole namespace.
+    """
     m = OntologyManager(base_uri=BASE)
     m.add_class("Invoice")
+    m.graph.bind("gist", GIST)
     m.graph.add((URIRef(ACCOUNT), RDF.type, OWL.Class))
     return m
 
@@ -220,7 +225,7 @@ def test_the_view_tab_offers_to_move_a_stray_onto_the_resource():
     """Reading by URI means those annotations are no longer listed, so the tab
     has to say where they went or they are invisible as well as unreachable."""
     at = _run(_view_script, _om_with_stray())
-    assert at.selectbox(key="view_annotations_select").value == "Account"
+    assert at.selectbox(key="view_annotations_select").value == "Account [Class]"
     assert BASE + "Account" in at.warning[0].value
 
     at.button(key=f"adopt_ann_{app._uid(ACCOUNT)}").click().run(timeout=120)
@@ -369,3 +374,65 @@ def test_a_bulk_round_trip_reaches_an_imported_resource(action, value, expected)
     assert result["applied"] == 1
     assert not result["errors"]
     assert sorted(a["value"] for a in m.get_annotations(ACCOUNT)) == expected
+
+
+# --- picking between two resources of the same local name -------------------
+
+
+def _om_with_namesakes():
+    """Two classes called Account: one imported, one this ontology's own."""
+    m = _om()
+    m.add_class("Account")
+    return m
+
+
+def test_two_resources_of_one_local_name_get_an_option_each():
+    """They rendered identically, so the second could not be picked at all: the
+    Add form resolved by position and the View list by first match, and both
+    landed on the first of the two."""
+    options, lookup = app.annotation_resource_options(_resources(_om_with_namesakes()))
+    assert len(set(options)) == len(options)
+
+    picked = {lookup[o]["uri"] for o in options if o.startswith("Account")}
+    assert picked == {ACCOUNT, BASE + "Account"}
+    # Tagged with what tells them apart, as the sidebar search already does.
+    # The bound prefix ("Account (gist)") needs the session's ontology to
+    # resolve it, so outside an app run this is the namespace it falls back to.
+    assert any(GIST in o for o in options)
+
+
+def test_a_local_name_only_one_resource_answers_to_is_left_plain():
+    options, _ = app.annotation_resource_options(_resources(_om()))
+    assert "Invoice [Class]" in options
+
+
+def test_the_add_form_annotates_the_namesake_that_was_chosen():
+    at = _run(_add_script, _om_with_namesakes())
+    option = next(
+        o
+        for o in at.selectbox(key="ann_resource").options
+        if o.strip().startswith("Account (gist)")
+    )
+    _add(at, option.strip(), "the imported one")
+
+    ont = at.session_state["ontology"]
+    assert [a["value"] for a in ont.get_annotations(ACCOUNT)] == ["the imported one"]
+    assert ont.get_annotations(BASE + "Account") == []
+
+
+def test_the_view_tab_lists_the_namesake_that_was_chosen():
+    om = _om_with_namesakes()
+    om.add_annotation(ACCOUNT, "comment", "the imported one")
+    om.add_annotation(BASE + "Account", "comment", "the local one")
+    at = _run(_view_script, om)
+
+    picker = at.selectbox(key="view_annotations_select")
+    option = next(
+        o for o in picker.options if o.strip().startswith("Account (gist)")
+    ).strip()
+    picker.set_value(option).run(timeout=120)
+    assert not at.exception, at.exception
+
+    shown = " ".join(m.value for m in at.markdown)
+    assert "the imported one" in shown
+    assert "the local one" not in shown

@@ -148,6 +148,7 @@ from .ui import (  # noqa: F401
     annotation_matches_ename,
     annotation_option_for_predicate,
     annotation_predicate_options,
+    annotation_resource_options,
     annotation_subject_options,
     build_class_hierarchy_text,
     build_class_options,
