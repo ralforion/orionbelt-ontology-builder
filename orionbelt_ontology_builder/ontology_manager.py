@@ -2379,41 +2379,42 @@ class OntologyManager:
             )
         return Literal(value)
 
+    #: What a resource says about its place in the ontology rather than about
+    #: itself, and so is not an annotation. A class constant because the repair
+    #: below has to move exactly what :meth:`get_annotations` reports.
+    _STRUCTURAL_PREDICATES: ClassVar[set] = {
+        RDF.type,
+        RDFS.subClassOf,
+        RDFS.subPropertyOf,
+        RDFS.domain,
+        RDFS.range,
+        OWL.equivalentClass,
+        OWL.equivalentProperty,
+        OWL.disjointWith,
+        OWL.inverseOf,
+        OWL.propertyChainAxiom,
+        OWL.onProperty,
+        OWL.someValuesFrom,
+        OWL.allValuesFrom,
+        OWL.hasValue,
+        OWL.minCardinality,
+        OWL.maxCardinality,
+        OWL.cardinality,
+        OWL.unionOf,
+        OWL.intersectionOf,
+        OWL.complementOf,
+        OWL.oneOf,
+        OWL.imports,
+    }
+
     def get_annotations(self, subject: str) -> list[dict[str, Any]]:
         """Get all annotations/predicates for a resource (like Protege shows)."""
         subj_uri = self._uri(subject)
         annotations: list[dict[str, Any]] = []
 
-        # Get all predicates for this subject, excluding rdf:type, rdfs:subClassOf,
-        # rdfs:domain, rdfs:range, and other structural predicates
-        structural_predicates = {
-            RDF.type,
-            RDFS.subClassOf,
-            RDFS.subPropertyOf,
-            RDFS.domain,
-            RDFS.range,
-            OWL.equivalentClass,
-            OWL.equivalentProperty,
-            OWL.disjointWith,
-            OWL.inverseOf,
-            OWL.propertyChainAxiom,
-            OWL.onProperty,
-            OWL.someValuesFrom,
-            OWL.allValuesFrom,
-            OWL.hasValue,
-            OWL.minCardinality,
-            OWL.maxCardinality,
-            OWL.cardinality,
-            OWL.unionOf,
-            OWL.intersectionOf,
-            OWL.complementOf,
-            OWL.oneOf,
-            OWL.imports,
-        }
-
         for pred, obj in self.graph.predicate_objects(subj_uri):
             # Skip structural predicates
-            if pred in structural_predicates:
+            if pred in self._STRUCTURAL_PREDICATES:
                 continue
             # Skip blank nodes (restrictions, etc.)
             if isinstance(obj, BNode):
@@ -2452,37 +2453,56 @@ class OntologyManager:
         annotations.sort(key=lambda x: x["predicate"])
         return annotations
 
+    def stray_annotation_subject(self, subject: str) -> str | None:
+        """The base-namespace namesake holding annotations meant for ``subject``.
+
+        Until this was fixed, the Annotations page addressed the resource it was
+        annotating by local name, and a local name resolves into *this*
+        ontology's namespace — so annotating an imported class (``gist:Account``)
+        wrote to ``:Account``, a subject nothing declares. The page listed those
+        annotations, because it read them back the same way, but the editor and
+        the row delete aimed at the real URI and quietly did nothing.
+
+        Returns the namesake's URI when it holds something to adopt, else
+        ``None``. Only an *undeclared* subject qualifies: a base-namespace
+        resource of the same local name that this ontology actually defines is a
+        resource in its own right, and its annotations are its own.
+        """
+        subj_uri = self._uri(subject)
+        stray = self.namespace[self._local_name(subj_uri)]
+        if stray == subj_uri or (stray, RDF.type, None) in self.graph:
+            return None
+        return str(stray) if self.get_annotations(str(stray)) else None
+
+    def adopt_stray_annotations(self, subject: str) -> int:
+        """Move a namesake's annotations onto ``subject``, returning how many.
+
+        The repair for what :meth:`stray_annotation_subject` finds. The triples
+        are moved rather than copied, so the namesake is left with nothing and
+        running this again finds nothing to do.
+        """
+        stray = self.stray_annotation_subject(subject)
+        if stray is None:
+            return 0
+        subj_uri = self._uri(subject)
+        stray_uri = URIRef(stray)
+        moved = 0
+        for pred, obj in list(self.graph.predicate_objects(stray_uri)):
+            # Exactly what get_annotations reports, so nothing structural and no
+            # blank node (a restriction) is dragged along with it.
+            if pred in self._STRUCTURAL_PREDICATES or isinstance(obj, BNode):
+                continue
+            self.graph.remove((stray_uri, pred, obj))
+            self.graph.add((subj_uri, pred, obj))
+            moved += 1
+        return moved
+
     def get_used_annotation_predicates(self) -> list[dict[str, str]]:
         """Get all unique annotation predicates used in the ontology."""
-        structural_predicates = {
-            RDF.type,
-            RDFS.subClassOf,
-            RDFS.subPropertyOf,
-            RDFS.domain,
-            RDFS.range,
-            OWL.equivalentClass,
-            OWL.equivalentProperty,
-            OWL.disjointWith,
-            OWL.inverseOf,
-            OWL.propertyChainAxiom,
-            OWL.onProperty,
-            OWL.someValuesFrom,
-            OWL.allValuesFrom,
-            OWL.hasValue,
-            OWL.minCardinality,
-            OWL.maxCardinality,
-            OWL.cardinality,
-            OWL.unionOf,
-            OWL.intersectionOf,
-            OWL.complementOf,
-            OWL.oneOf,
-            OWL.imports,
-        }
-
         predicates = {}
         for subj, pred, obj in self.graph:
             # Skip structural predicates
-            if pred in structural_predicates:
+            if pred in self._STRUCTURAL_PREDICATES:
                 continue
             # Skip blank node objects
             if isinstance(obj, BNode):

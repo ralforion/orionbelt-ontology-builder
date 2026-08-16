@@ -4592,9 +4592,18 @@ def render_add_annotation(ont, all_resources):
                 else:
                     # Find the resource by matching the option string
                     idx = resource_options.index(selected)
-                    resource_name = all_resources[idx]["name"]
+                    # By URI, not by local name: a local name resolves into this
+                    # ontology's own namespace, so annotating an imported class
+                    # wrote to a namesake nothing declares. It looked right —
+                    # the page read the annotations back the same way — but the
+                    # editor and the row delete aimed at the real URI and
+                    # quietly did nothing (the same reason every other form here
+                    # picks by URI).
+                    resource_ref = (
+                        all_resources[idx].get("uri") or (all_resources[idx]["name"])
+                    )
                     ont.add_annotation(
-                        resource_name,
+                        resource_ref,
                         predicate_uri,
                         value,
                         lang=language if language else None,
