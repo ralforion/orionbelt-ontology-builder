@@ -63,6 +63,58 @@ from ..ui import (
 logger = logging.getLogger(__name__)
 
 
+def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
+    """Hang ``subject_uri``'s annotations off its node, at most ``room`` of them.
+
+    Returns ``(added, left_out)`` — how many nodes were drawn, and how many were
+    left for want of room, so the caller can say so.
+
+    Shared by the plain build and the pass focus mode runs after its prune
+    (issue #272), so an annotation node looks the same however it got there.
+    ``label`` and ``comment`` are skipped: they are already in the node's
+    tooltip. Annotations are read by URI, not local name — two classes sharing a
+    name would otherwise each show the other's.
+    """
+    added = 0
+    left_out = 0
+    for ann in ont.get_annotations(subject_uri):
+        if ann["predicate"] in ("label", "comment"):
+            continue
+        if added >= room:
+            left_out += 1
+            continue
+        ann_ename = annotation_ename(subject_uri, ann)
+        ann_id = f"ann_{_uid(ann_ename)}"
+        pred_display = ann.get("predicate_prefixed", ann["predicate"])
+        value_display = (
+            ann["value"][:30] + "..." if len(ann["value"]) > 30 else ann["value"]
+        )
+        # Count what was actually drawn: an id already in the graph is dropped by
+        # the builder, and charging the budget for it would leave room unused.
+        before = len(net.nodes)
+        net.add_node(
+            ann_id,
+            label=value_display,
+            title=f"{pred_display}: {ann['value']}",
+            color={"background": "#795548", "border": "#5D4037"},
+            shape="box",
+            size=8,
+            font={"size": 10, "color": "#f0f0f0"},
+            ntype="Annotation",
+            ename=ann_ename,
+        )
+        net.add_edge(
+            subject_node_id,
+            ann_id,
+            title=f"Annotation: {pred_display}",
+            color="#A1887F",
+            arrows="to",
+            dashes=True,
+        )
+        added += len(net.nodes) - before
+    return added, left_out
+
+
 def render_visualization():
     """Render the visualization page."""
     st.header("Visualization")
@@ -535,7 +587,9 @@ def render_visualization():
                 help=(
                     "Show only a chosen node plus everything linked to it within "
                     "N hops, across all node types — handy for large ontologies "
-                    "where showing everything at once is overwhelming."
+                    "where showing everything at once is overwhelming. "
+                    "Annotations come along with whatever is shown; the "
+                    "Annotations checkbox above still turns them off."
                 ),
             )
             if focus_mode and focus_targets:
@@ -767,8 +821,10 @@ def render_visualization():
         # Bump to invalidate cached graph data after code changes. 19: annotation
         # nodes gained a stable id, ntype and ename (issue #223), and a session
         # holding a pre-#223 payload would otherwise keep serving nodes a click
-        # cannot resolve until some unrelated change happened to evict it.
-        _graph_ver = 19
+        # cannot resolve until some unrelated change happened to evict it. 20:
+        # focus mode stopped charging an annotation a hop (issue #272), so a
+        # cached focus payload is one built under the old pruning.
+        _graph_ver = 20
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -924,6 +980,10 @@ def render_visualization():
             displayed_class_uris: set = set()
             displayed_ind_ids: set = set()
             skos_node_ids: set = set()
+            # Node id -> the resource it stands for, for everything annotations
+            # can hang off. Focus mode adds them after its prune, so it needs a
+            # way back from a node it kept to the resource to read (issue #272).
+            annotatable: dict = {}
 
             # Add classes as nodes (only selected classes)
             if show_classes and (selected_classes or _find_is_class):
@@ -982,6 +1042,7 @@ def render_visualization():
                         ename=cls_node_id,
                     )
                     displayed_class_uris.add(cls["uri"])
+                    annotatable[cls_node_id] = cls["uri"]
                     node_count += 1
 
                 # Add class hierarchy edges (URI-based so cross-namespace collisions don't merge)
@@ -1187,6 +1248,7 @@ def render_visualization():
                         ename=_uid(ind["uri"]),
                     )
                     displayed_ind_ids.add(ind_node_id)
+                    annotatable[ind_node_id] = ind["uri"]
                     node_count += 1
 
                     # Connect to classes via URI so the edge points to the
@@ -1270,8 +1332,15 @@ def render_visualization():
                                 ename=rel_ename,
                             )
 
-            # Add annotations for classes and individuals
-            if show_annotations and node_count < max_nodes:
+            # Add annotations for classes and individuals.
+            #
+            # Not under a focus: that build is allowed past the render cap
+            # because the prune brings it back down, so an annotation added here
+            # could be spent on an entity the focus then throws away — and the
+            # ones belonging to the entities it keeps would never be reached at
+            # all (issue #272 review). The focus pass below adds them once it
+            # knows what survived.
+            if show_annotations and not focus_pruning and node_count < max_nodes:
                 # Annotations for classes
                 if show_classes and classes:
                     for cls in classes:
@@ -1282,50 +1351,14 @@ def render_visualization():
                         if cls["uri"] not in displayed_class_uris:
                             continue
                         try:
-                            # By URI, not local name: two classes sharing a name
-                            # would otherwise each show the other's annotations.
-                            annotations = ont.get_annotations(cls["uri"])
-                            for ann in annotations:
-                                if node_count >= max_nodes:
-                                    break
-                                # Skip label and comment as they're already shown in tooltip
-                                if ann["predicate"] in ["label", "comment"]:
-                                    continue
-                                ann_ename = annotation_ename(cls["uri"], ann)
-                                ann_id = f"ann_{_uid(ann_ename)}"
-                                # Use prefixed predicate name
-                                pred_display = ann.get(
-                                    "predicate_prefixed", ann["predicate"]
-                                )
-                                # Truncate long values
-                                value_display = (
-                                    ann["value"][:30] + "..."
-                                    if len(ann["value"]) > 30
-                                    else ann["value"]
-                                )
-                                net.add_node(
-                                    ann_id,
-                                    label=value_display,
-                                    title=f"{pred_display}: {ann['value']}",
-                                    color={
-                                        "background": "#795548",
-                                        "border": "#5D4037",
-                                    },
-                                    shape="box",
-                                    size=8,
-                                    font={"size": 10, "color": "#f0f0f0"},
-                                    ntype="Annotation",
-                                    ename=ann_ename,
-                                )
-                                node_count += 1
-                                net.add_edge(
-                                    _uid(cls["uri"]),
-                                    ann_id,
-                                    title=f"Annotation: {pred_display}",
-                                    color="#A1887F",
-                                    arrows="to",
-                                    dashes=True,
-                                )
+                            added, _left = _add_annotation_nodes(
+                                net,
+                                ont,
+                                cls["uri"],
+                                _uid(cls["uri"]),
+                                max_nodes - node_count,
+                            )
+                            node_count += added
                         except Exception:
                             logger.debug(
                                 "Skipping a class annotation node", exc_info=True
@@ -1340,45 +1373,14 @@ def render_visualization():
                         if ind_node_id not in displayed_ind_ids:
                             continue
                         try:
-                            annotations = ont.get_annotations(ind["uri"])
-                            for ann in annotations:
-                                if node_count >= max_nodes:
-                                    break
-                                if ann["predicate"] in ["label", "comment"]:
-                                    continue
-                                ann_ename = annotation_ename(ind["uri"], ann)
-                                ann_id = f"ann_{_uid(ann_ename)}"
-                                pred_display = ann.get(
-                                    "predicate_prefixed", ann["predicate"]
-                                )
-                                value_display = (
-                                    ann["value"][:30] + "..."
-                                    if len(ann["value"]) > 30
-                                    else ann["value"]
-                                )
-                                net.add_node(
-                                    ann_id,
-                                    label=value_display,
-                                    title=f"{pred_display}: {ann['value']}",
-                                    color={
-                                        "background": "#795548",
-                                        "border": "#5D4037",
-                                    },
-                                    shape="box",
-                                    size=8,
-                                    font={"size": 10, "color": "#f0f0f0"},
-                                    ntype="Annotation",
-                                    ename=ann_ename,
-                                )
-                                node_count += 1
-                                net.add_edge(
-                                    ind_node_id,
-                                    ann_id,
-                                    title=f"Annotation: {pred_display}",
-                                    color="#A1887F",
-                                    arrows="to",
-                                    dashes=True,
-                                )
+                            added, _left = _add_annotation_nodes(
+                                net,
+                                ont,
+                                ind["uri"],
+                                ind_node_id,
+                                max_nodes - node_count,
+                            )
+                            node_count += added
                         except Exception:
                             logger.debug(
                                 "Skipping an individual annotation node", exc_info=True
@@ -1604,6 +1606,47 @@ def render_visualization():
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
                     ]
                     focus_hidden = _before_prune - len(net.nodes)
+
+                    # Now that the hops are counted, hang the annotations off
+                    # what survived (issue #272). An annotation node belongs to
+                    # the one entity it annotates and leads nowhere else, so it
+                    # is no part of the neighbourhood walk — it used to cost a
+                    # hop, which drew the seed's neighbours stripped of their
+                    # annotations. Built here rather than with the rest of the
+                    # graph so the ones that end up drawn are the ones the focus
+                    # kept, whatever the assembly ran out of before it
+                    # (issue #272 review). Counted after focus_hidden, which is
+                    # about the entities the focus hid.
+                    if show_annotations:
+                        room = GRAPH_MAX_NODES - len(net.nodes)
+                        ann_left_out = 0
+                        # Sorted, so which annotations a tight budget reaches is
+                        # the same on every render of the same graph.
+                        for node_id in sorted(keep & set(annotatable)):
+                            try:
+                                added, left_out = _add_annotation_nodes(
+                                    net,
+                                    ont,
+                                    annotatable[node_id],
+                                    node_id,
+                                    max(room, 0),
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Skipping a focused annotation node",
+                                    exc_info=True,
+                                )
+                                continue
+                            room -= added
+                            ann_left_out += left_out
+                        if ann_left_out and not graph_notice:
+                            graph_notice = (
+                                f"This focus and its annotations cover more than "
+                                f"the {GRAPH_MAX_NODES} nodes the graph can draw, "
+                                f"so {ann_left_out} annotation(s) are not shown. "
+                                f"Pick fewer focus nodes, a lower depth, or turn "
+                                f"Annotations off."
+                            )
                 else:
                     # No seed was built (past the assembly cap, or its type
                     # toggled off) — show nothing rather than the whole graph,
