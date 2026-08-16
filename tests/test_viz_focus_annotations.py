@@ -153,6 +153,33 @@ def test_the_app_says_when_annotations_were_cut(patch_ui):
     assert "annotations" in notice.lower(), notice
 
 
+def test_annotations_survive_an_assembly_that_ran_out_of_room(patch_ui):
+    """The focus build is allowed past the render cap because the prune brings it
+    back down, so the annotations cannot be built with the rest of the graph: the
+    budget is spent on entities the focus then throws away, and the ones the
+    focus keeps are never reached. They are built after the prune instead, from
+    what it kept (issue #272 review)."""
+    patch_ui("FOCUS_BUILD_MAX_NODES", 4)
+    nodes, edges = _graph(seed="Class: C", depth=1)
+
+    # The assembly stops at 4 entity nodes, well before any annotation would
+    # have been added under the old order.
+    assert "C" in _class_labels(nodes)
+    assert "Q-C" in _annotation_labels(nodes)
+    kept = {n["id"] for n in nodes}
+    assert all(e["from"] in kept and e["to"] in kept for e in edges)
+
+
+def test_annotations_do_not_eat_the_focus_assembly_budget(patch_ui):
+    """The entity the assembly cap can just reach is still reachable with
+    Annotations on: they are no longer competing for that budget."""
+    patch_ui("FOCUS_BUILD_MAX_NODES", 3)
+    with_anns, _ = _graph(seed="Class: C", depth=1, annotations=True)
+    without, _ = _graph(seed="Class: C", depth=1, annotations=False)
+
+    assert _class_labels(with_anns) == _class_labels(without)
+
+
 def test_the_graph_cache_version_moved_with_the_pruning():
     """A session holding a payload built under the old prune would keep serving
     a focus without its annotations until something unrelated evicted it."""
