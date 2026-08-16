@@ -8,7 +8,7 @@ that is already taken.
 """
 
 import pytest
-from rdflib import OWL, RDF, RDFS, URIRef
+from rdflib import OWL, RDF, RDFS, Literal, URIRef
 
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
 
@@ -59,6 +59,22 @@ def test_rename_moves_references_to_the_type(annotated_om):
         RDFS.subPropertyOf,
         URIRef(NS + "wikidataItem"),
     ) in annotated_om.graph
+
+
+def test_rename_moves_a_triple_that_mentions_the_type_twice(annotated_om):
+    """A triple can name the type in two positions at once. Rewriting one
+    position at a time left the old URI standing in the other."""
+    old, new = URIRef(NS + "wikidataId"), URIRef(NS + "wikidataItem")
+    annotated_om.graph.add((old, RDFS.seeAlso, old))  # subject and object
+    annotated_om.graph.add((old, old, Literal("self-annotated")))  # and predicate
+
+    annotated_om.rename_annotation_property("wikidataId", "wikidataItem")
+
+    assert (new, RDFS.seeAlso, new) in annotated_om.graph
+    assert (new, new, Literal("self-annotated")) in annotated_om.graph
+    assert (old, None, None) not in annotated_om.graph
+    assert (None, old, None) not in annotated_om.graph
+    assert (None, None, old) not in annotated_om.graph
 
 
 def test_rename_accepts_the_full_uri_as_the_old_name(annotated_om):

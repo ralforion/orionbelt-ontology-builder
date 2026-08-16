@@ -2617,21 +2617,27 @@ class OntologyManager:
         if self._annotation_predicate_in_use(new_uri):
             return False
 
-        updates: _TripleUpdates = []
-        # Statements about the type itself (its owl:AnnotationProperty
-        # declaration, its label, ...).
-        for p, o in self.graph.predicate_objects(old_uri):
-            updates.append(((old_uri, p, o), (new_uri, p, o)))
-        # References to it as an object (rdfs:subPropertyOf, seeAlso, ...).
-        for s, p in self.graph.subject_predicates(old_uri):
-            updates.append(((s, p, old_uri), (s, p, new_uri)))
-        # The annotations themselves.
-        for s, o in self.graph.subject_objects(old_uri):
-            updates.append(((s, old_uri, o), (s, new_uri, o)))
-
-        for old_triple, new_triple in updates:
-            self.graph.remove(old_triple)
-            self.graph.add(new_triple)
+        # Every triple mentioning the type, whichever position it stands in:
+        # statements about it (its owl:AnnotationProperty declaration, its
+        # label), the annotations that use it as their predicate, and references
+        # to it as an object (rdfs:subPropertyOf, seeAlso). Collected as one set
+        # and rewritten in all three positions at once, because a triple can
+        # mention it more than once — ``ex:tag rdfs:seeAlso ex:tag`` — and moving
+        # one position at a time would leave the old URI standing in the other.
+        mentions: set[_Triple] = {
+            *self.graph.triples((old_uri, None, None)),
+            *self.graph.triples((None, old_uri, None)),
+            *self.graph.triples((None, None, old_uri)),
+        }
+        for s, p, o in mentions:
+            self.graph.remove((s, p, o))
+            self.graph.add(
+                (
+                    new_uri if s == old_uri else s,
+                    new_uri if p == old_uri else p,
+                    new_uri if o == old_uri else o,
+                )
+            )
 
         return True
 
