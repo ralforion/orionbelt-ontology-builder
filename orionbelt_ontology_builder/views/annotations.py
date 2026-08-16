@@ -17,6 +17,99 @@ from ..ui import (
 )
 
 
+def _rename_annotation_type(ont, ann_type, new_name):
+    """Apply one annotation-type rename, reporting why it was refused (#287).
+
+    Returns True when the graph changed; the caller reruns. The engine tells the
+    two refusals apart: a name it cannot use at all raises, a name already taken
+    comes back as False, and only the second is about this ontology's contents.
+    """
+    new_name = (new_name or "").strip()
+    if not new_name:
+        show_message("Annotation type name is required!", "error")
+        return False
+    try:
+        renamed = ont.rename_annotation_property(ann_type["uri"], new_name)
+    except ValueError as exc:
+        show_message(str(exc), "error")
+        return False
+    if not renamed:
+        show_message(f"Cannot rename: '{new_name}' is already in use!", "error")
+        return False
+    save_checkpoint("Rename annotation type")
+    return True
+
+
+def render_annotation_types(ont):
+    """Render the "Annotation Types" tab.
+
+    A separate function so it can be driven directly in tests, for the reason
+    given on :func:`render_add_annotation`: the page's tab picker is a
+    ``segmented_control``, which AppTest mis-serializes.
+    """
+    st.subheader("Annotation Types")
+    st.caption(
+        "The annotation types this ontology defines itself. Renaming one "
+        "rewrites every annotation that uses it, so no values are lost. Types "
+        "from another vocabulary (rdfs:label, skos:definition, an imported "
+        "ontology's) are defined there, not here, and are not listed."
+    )
+
+    ann_types = ont.get_custom_annotation_properties()
+    if not ann_types:
+        st.info(
+            "No custom annotation types yet. Add an annotation under "
+            "'Add Annotation' with a type of your own to create one."
+        )
+        return
+
+    for ann_type in ann_types:
+        row_key = _uid(ann_type["uri"])
+        col1, col2, col3 = st.columns([3, 3, 0.7])
+        with col1:
+            st.write(f"**{ann_type['display']}**")
+        with col2:
+            uses = ann_type["usage"]
+            st.write(f"{uses} annotation{'' if uses == 1 else 's'}")
+        with col3:
+            st.button(
+                "✏️",
+                key=f"edit_anntype_{row_key}",
+                help="Rename this annotation type",
+                on_click=_cb_toggle_edit,
+                args=("anntype", row_key),
+            )
+
+        if _is_open("anntype", row_key, "edit"):
+            with st.form(f"rename_anntype_form_{row_key}"):
+                new_name = st.text_input(
+                    "Name",
+                    value=ann_type["local_name"],
+                    key=f"anntype_name_{row_key}",
+                    help="A name keeps the type in its current namespace. A "
+                    "bound prefix ('ex:note') or a full URI moves it.",
+                )
+                fcol1, fcol2 = st.columns(2)
+                with fcol1:
+                    submitted = st.form_submit_button(
+                        "Rename", type="primary", use_container_width=True
+                    )
+                with fcol2:
+                    cancelled = st.form_submit_button(
+                        "Cancel", use_container_width=True
+                    )
+
+            if cancelled:
+                _close_entity("anntype")
+                st.rerun()
+            if submitted and _rename_annotation_type(ont, ann_type, new_name):
+                _close_entity("anntype")
+                set_flash_message(
+                    f"Annotation type renamed to '{new_name.strip()}'", "success"
+                )
+                st.rerun()
+
+
 def render_annotations():
     """Render the annotations management page."""
     st.header("Annotations")
@@ -79,7 +172,7 @@ def render_annotations():
 
     _ann_tab = st.segmented_control(
         "Section",
-        ["View Annotations", "Add Annotation", "Bulk Edit"],
+        ["View Annotations", "Add Annotation", "Annotation Types", "Bulk Edit"],
         default="View Annotations",
         key="ann_active_tab",
         label_visibility="collapsed",
@@ -208,6 +301,9 @@ def render_annotations():
 
     if _ann_tab == "Add Annotation":
         render_add_annotation(ont, all_resources)
+
+    if _ann_tab == "Annotation Types":
+        render_annotation_types(ont)
 
     if _ann_tab == "Bulk Edit":
         st.subheader("Bulk Edit Annotations")
