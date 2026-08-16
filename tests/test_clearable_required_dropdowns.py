@@ -106,12 +106,16 @@ def test_no_form_checks_without_offering_one():
 
 # The dropdowns the rule below cannot read off the call itself, because their
 # options were built a line earlier and passed by name: three fixed sets from
-# the engine (the restriction types, the relation types) and one "All" filter.
+# the engine (the restriction types, the relation types), one "All" filter, and
+# the two language-pack pickers, whose options are the packs that exist and
+# where "no pack" is not a state the Language fields can be in (issue #252).
 ALLOWED_BY_NAME = {
     ("render_restriction_form", "Restriction Type"),
     ("_render_panel_add_restriction_form", "Restriction Type"),
     ("render_relation_form", "Relation"),
     ("render_annotations", "Filter by Type"),
+    ("render_language_pack_sidebar", "Language pack"),
+    ("render_language_packs", "Pack"),
 }
 
 

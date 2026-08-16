@@ -17,6 +17,8 @@ from ..ui import (
     clearable_selectbox,
     confirm_delete,
     format_label_name,
+    language_selectbox,
+    language_tag_error,
     missing_required,
     required_selectbox,
     save_checkpoint,
@@ -538,7 +540,7 @@ def render_skos_vocabulary():
                 current_display="None",
                 format_func=_pad_option,
             )
-            c_lang = st.text_input("Language Tag (e.g., en, de)", key="concept_lang")
+            c_lang = language_selectbox("Language Tag", key="concept_lang")
             if st.form_submit_button("Add Concept"):
                 if not c_name:
                     show_message("Concept name is required!", "error")
@@ -548,6 +550,8 @@ def render_skos_vocabulary():
                 # across every entity kind (issue #279), as for schemes above.
                 elif taken := ont.name_conflict_reason(c_name, "concept"):
                     show_message(taken, "error")
+                elif lang_error := language_tag_error(c_lang):
+                    show_message(lang_error, "error")
                 else:
                     ont.add_concept(
                         c_name,

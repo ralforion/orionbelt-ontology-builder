@@ -24,7 +24,7 @@ from pathlib import Path as _Path
 
 import streamlit as st
 
-from . import local_store
+from . import languages, local_store
 
 """
 OrionBelt Ontology Builder - A Streamlit application for building, editing,
@@ -63,6 +63,16 @@ _VIZ_INT_RANGES = {
 }
 VIZ_FILE_STATE_KEY = "viz_file_state"
 VIZ_FILE_STATE_MAX_FILES = 20
+#: Where the chosen language pack and any custom ones are stored (issue #252) —
+#: the local config file when the launcher allows disk, browser localStorage on
+#: the cloud, the same two places the viz settings use.
+LANG_PACKS_KEY = "orionbelt_language_packs"
+#: Session key holding the active pack's name; also the sidebar picker's widget
+#: key, so the widget and what is persisted are one value, never two.
+ACTIVE_LANG_PACK_KEY = "lang_pack_active"
+#: Session key holding ``{pack name: [{"code", "label"}, ...]}`` of the user's
+#: own packs.
+CUSTOM_LANG_PACKS_KEY = "lang_packs_custom"
 AUTOSAVE_DEBOUNCE_SECONDS = 2.0
 # The package directory, not this module's: assets are the package's, and a
 # module that moves into a subpackage must not take their paths with it — the
@@ -588,6 +598,263 @@ def _persist_viz_settings() -> None:
             VIZ_SETTINGS_KEY, payload, key=f"orionbelt_viz_settings_set_{h[:12]}"
         )
     st.session_state["_viz_settings_saved_json"] = payload
+
+
+def custom_language_packs() -> dict[str, list[dict]]:
+    """The user's own language packs, ``{name: [{"code", "label"}, ...]}``."""
+    packs = st.session_state.get(CUSTOM_LANG_PACKS_KEY)
+    return packs if isinstance(packs, dict) else {}
+
+
+def language_pack_names() -> list[str]:
+    """Every pack the picker offers: the built-in ones, then the user's."""
+    return [*languages.BUILTIN_PACKS, *sorted(custom_language_packs())]
+
+
+def active_language_pack() -> str:
+    """The pack the Language fields are currently drawing their codes from.
+
+    Falls back to the default when the saved name names nothing — the choice
+    outlives the session that made it, and a custom pack deleted since must not
+    empty every Language dropdown in the app.
+    """
+    name = st.session_state.get(ACTIVE_LANG_PACK_KEY)
+    if isinstance(name, str) and name in language_pack_names():
+        return name
+    return languages.DEFAULT_PACK
+
+
+def language_pack_entries(pack: str | None = None) -> list[dict]:
+    """``[{"code", "label"}, ...]`` for a pack, the active one by default."""
+    name = pack or active_language_pack()
+    custom = custom_language_packs()
+    if name in custom:
+        return [dict(e) for e in custom[name]]
+    return languages.builtin_pack(name)
+
+
+def _mark_language_packs_dirty() -> None:
+    """Note that the packs or the choice of one changed, so it is worth saving.
+
+    Same gate as the viz settings: writing on every run would let a cloud reload
+    put the starting defaults back over the saved set before localStorage had
+    answered.
+    """
+    st.session_state["_lang_packs_dirty"] = True
+
+
+def save_custom_language_pack(name: str, entries) -> str | None:
+    """Store one custom pack, returning the reason it was refused, or ``None``.
+
+    Refuses a built-in's name rather than shadowing it: the built-ins are how
+    you get back to a known list, and a pack that quietly replaced one would
+    leave no way back.
+    """
+    name = (name or "").strip()
+    if not name:
+        return "A pack name is required."
+    if name in languages.BUILTIN_PACKS:
+        return f"'{name}' is a built-in pack. Choose another name."
+    cleaned, errors = languages.normalize_pack(entries)
+    if errors:
+        return errors[0]
+    # An empty pack is allowed: it is what starting one from scratch looks like
+    # before the first row is typed, and a Language field with no options still
+    # takes a typed tag.
+    st.session_state[CUSTOM_LANG_PACKS_KEY] = {**custom_language_packs(), name: cleaned}
+    _mark_language_packs_dirty()
+    return None
+
+
+def delete_custom_language_pack(name: str) -> None:
+    """Drop one custom pack.
+
+    Deleting the pack that is in use deliberately leaves its name in
+    :data:`ACTIVE_LANG_PACK_KEY`: that key belongs to the sidebar picker, which
+    is drawn before the page that deletes from, and assigning a widget's value
+    after the widget exists raises rather than falling back — which took the
+    page down with it. :func:`active_language_pack` resolves the dangling name
+    for every reader in the meantime, and the sidebar re-seeds itself on the
+    next run.
+    """
+    packs = {k: v for k, v in custom_language_packs().items() if k != name}
+    st.session_state[CUSTOM_LANG_PACKS_KEY] = packs
+    _mark_language_packs_dirty()
+
+
+def _language_packs_payload() -> str:
+    """Serialize the packs and the active choice for change detection/storage."""
+    return json.dumps(
+        {"active": active_language_pack(), "packs": custom_language_packs()},
+        sort_keys=True,
+    )
+
+
+def _apply_language_packs(data) -> None:
+    """Seed the session from a stored payload, dropping anything malformed.
+
+    Storage is a file or a browser the user can edit, so every pack is put back
+    through the same validation an edited one goes through.
+    """
+    if not isinstance(data, dict):
+        return
+    raw = data.get("packs")
+    packs: dict[str, list[dict]] = {}
+    if isinstance(raw, dict):
+        for name, entries in raw.items():
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(entries, list):
+                continue
+            cleaned, errors = languages.normalize_pack(entries)
+            # An empty list is a pack that has been started and not filled in,
+            # which is savable — dropping it here would also drop the choice of
+            # it as the active pack on the next launch.
+            if not errors:
+                packs[name] = cleaned
+    st.session_state[CUSTOM_LANG_PACKS_KEY] = packs
+    active = data.get("active")
+    if isinstance(active, str) and (
+        active in languages.BUILTIN_PACKS or active in packs
+    ):
+        st.session_state[ACTIVE_LANG_PACK_KEY] = active
+
+
+def restore_language_packs() -> None:
+    """Restore the saved packs and pack choice once per session (issue #252).
+
+    Mirrors :func:`_restore_viz_settings`, including its retry: on the cloud the
+    localStorage value only arrives on a later rerun, so this is not finished
+    until a real value is read. It must run before the sidebar picker is drawn —
+    seeding a widget's key after the widget exists is an error, and the picker's
+    key *is* the stored value.
+    """
+    if st.session_state.get("_lang_packs_restored"):
+        return
+    if st.session_state.get("_lang_packs_dirty"):
+        st.session_state["_lang_packs_restored"] = True
+        return
+    if local_store.local_persist_enabled():
+        _apply_language_packs(local_store.load_config().get(LANG_PACKS_KEY))
+        st.session_state["_lang_packs_restored"] = True
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        st.session_state["_lang_packs_restored"] = True
+        return
+    saved = ls.getItem(LANG_PACKS_KEY)
+    if isinstance(saved, dict):
+        saved = saved.get(LANG_PACKS_KEY) or next(
+            (v for v in saved.values() if isinstance(v, str)), None
+        )
+    if isinstance(saved, str) and saved.strip():
+        try:
+            _apply_language_packs(json.loads(saved))
+        except (ValueError, TypeError):
+            pass
+        st.session_state["_lang_packs_restored"] = True
+
+
+def persist_language_packs() -> None:
+    """Save the packs and the active choice after a change. No-op otherwise."""
+    if not st.session_state.get("_lang_packs_dirty"):
+        return
+    payload = _language_packs_payload()
+    if payload == st.session_state.get("_lang_packs_saved_json"):
+        return
+    if local_store.local_persist_enabled():
+        try:
+            cfg = local_store.load_config()
+            cfg[LANG_PACKS_KEY] = json.loads(payload)
+            local_store.save_config(cfg)
+        except OSError as e:
+            log_error(e, context="Language packs save")
+            return
+    else:
+        ls = _get_local_storage()
+        if ls is None:
+            return
+        h = _content_hash(payload)
+        ls.setItem(LANG_PACKS_KEY, payload, key=f"orionbelt_lang_packs_set_{h[:12]}")
+    st.session_state["_lang_packs_saved_json"] = payload
+
+
+def render_language_pack_sidebar() -> None:
+    """The app-wide language-pack picker (issue #252).
+
+    One control in the sidebar rather than one beside each Language field: the
+    fields sit on three pages and in the graph panel, and a per-field switch
+    would have to be set four times over to mean one thing.
+    """
+    restore_language_packs()
+    names = language_pack_names()
+    # Put the resolved name back before the widget reads it: a saved pack that
+    # has since been deleted is a value the selectbox has no option for, which
+    # is an exception rather than a fallback. The selection is carried by
+    # session state alone, with no ``index`` — passing both is what Streamlit
+    # warns about as "created with a default value but also had its value set
+    # via the Session State API".
+    active = active_language_pack()
+    if st.session_state.get(ACTIVE_LANG_PACK_KEY) != active:
+        st.session_state[ACTIVE_LANG_PACK_KEY] = active
+    st.sidebar.selectbox(
+        "Language pack",
+        names,
+        key=ACTIVE_LANG_PACK_KEY,
+        on_change=_mark_language_packs_dirty,
+        help="Which codes the Language fields offer. Build your own under "
+        "Annotations → Language Packs.",
+    )
+    persist_language_packs()
+
+
+def language_selectbox(label, key, value="", help=None):
+    """A searchable code picker for a Language field, returning the bare tag.
+
+    Options come from the active pack and read ``eng · English``, so a code can
+    be found by either half. Typing is still accepted, so a tag no pack lists
+    (``pt-BR``, ``x-inhouse``) can be entered as before — the picker adds codes,
+    it does not fence them off. A value already on the annotation is offered
+    even when the active pack has no entry for it, so switching packs cannot
+    silently rewrite the tag of an annotation you open to edit.
+    """
+    options = [
+        languages.format_option(e["code"], e["label"]) for e in language_pack_entries()
+    ]
+    current = (value or "").strip()
+    display = None
+    if current:
+        display = next(
+            (o for o in options if languages.code_from_option(o) == current), None
+        )
+        if display is None:
+            display = current
+            options = [display, *options]
+    choice = clearable_selectbox(
+        label,
+        options,
+        key=key,
+        current_display=display,
+        accept_new_options=True,
+        format_func=_pad_option,
+        help=help
+        or (
+            "Optional. Pick a code from the active language pack, or type any "
+            "BCP 47 tag (`de`, `grc`, `pt-BR`) to use it as it stands."
+        ),
+    )
+    return languages.code_from_option(choice)
+
+
+def language_tag_error(tag: str) -> str | None:
+    """The message for a language tag the graph would reject, or ``None``.
+
+    Empty is not an error: the tag is optional everywhere it is asked for. A
+    tag rdflib refuses raises out of the write, which without this surfaces as
+    a page-level crash rather than as something to fix in the field.
+    """
+    tag = (tag or "").strip()
+    return languages.invalid_tag_reason(tag) if tag else None
 
 
 def _viz_file_state_id() -> str | None:
@@ -2174,10 +2441,10 @@ def render_annotation_form(
             # it stays a resource through the rewrite.
             st.caption("Points at a resource, not a literal.")
         else:
-            new_lang = st.text_input(
+            new_lang = language_selectbox(
                 "Language",
+                key=f"ann_lang_{form_key}",
                 value=ann.get("language") or "",
-                help="Optional BCP 47 tag such as en or de. Leave empty for none.",
             )
         if ann.get("datatype") and not ann.get("is_uri"):
             # Not editable here, but say it is there: it is carried through the
@@ -2224,6 +2491,8 @@ def render_annotation_form(
             show_message(_missing, "error")
         elif not new_value.strip():
             show_message("Annotation value is required!", "error")
+        elif lang_error := language_tag_error(new_lang):
+            show_message(lang_error, "error")
         elif _apply_annotation_edit(
             ont,
             subject_uri,
@@ -2475,11 +2744,7 @@ def _render_panel_add_annotation_form(ont, subject_uri, subject_label):
             ),
         )
         value = st.text_area("Value *", key="panel_ann_value")
-        lang = st.text_input(
-            "Language",
-            key="panel_ann_lang",
-            help="Optional BCP 47 tag such as en or de. Leave empty for none.",
-        )
+        lang = language_selectbox("Language", key="panel_ann_lang")
         add_col, cancel_col = st.columns(2)
         with add_col:
             submitted = st.form_submit_button(
@@ -2497,6 +2762,9 @@ def _render_panel_add_annotation_form(ont, subject_uri, subject_label):
             return
         if not value.strip():
             show_message("Annotation value is required!", "error")
+            return
+        if lang_error := language_tag_error(lang):
+            show_message(lang_error, "error")
             return
         predicate = lookup.get(predicate_display, predicate_display)
         try:
@@ -4232,14 +4500,14 @@ def render_add_annotation(ont, all_resources):
     else:
         predicate_options, predicate_lookup = annotation_predicate_options(ont)
 
-        # Clear the value/language of the annotation just saved, on the run
-        # after it was added: a widget's state can't be changed once it has
-        # been instantiated, so the add flags it here instead. The type and
-        # the resource are left alone, so the same type can be applied to one
-        # resource after another without re-picking it.
+        # Clear the value of the annotation just saved, on the run after it was
+        # added: a widget's state can't be changed once it has been
+        # instantiated, so the add flags it here instead. The type, the
+        # resource and the language are left alone, so the same type can be
+        # applied to one resource after another without re-picking it, and a
+        # run of labels in one language is entered without re-picking that.
         if st.session_state.pop("_ann_clear_value", False):
             st.session_state["ann_value"] = ""
-            st.session_state["ann_lang"] = ""
 
         # Re-select the type just used. The picker holds whatever was typed
         # ("wikidataId"), but once the annotation exists the options carry that
@@ -4291,11 +4559,7 @@ def render_add_annotation(ont, all_resources):
 
             value = st.text_area("Value", key="ann_value")
 
-            language = st.text_input(
-                "Language Tag (optional)",
-                placeholder="en, de, fr...",
-                key="ann_lang",
-            )
+            language = language_selectbox("Language Tag (optional)", key="ann_lang")
 
             submitted = st.form_submit_button("Add Annotation")
             if submitted:
@@ -4316,6 +4580,8 @@ def render_add_annotation(ont, all_resources):
                     show_message("Value is required!", "error")
                 elif predicate_reason:
                     show_message(predicate_reason, "error")
+                elif lang_error := language_tag_error(language):
+                    show_message(lang_error, "error")
                 else:
                     # Find the resource by matching the option string
                     idx = resource_options.index(selected)
