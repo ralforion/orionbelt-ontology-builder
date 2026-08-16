@@ -78,6 +78,17 @@ Annotations have their own bulk editor with per-row add/delete actions, and an
 Annotation Types tab that renames a type you invented — every annotation using
 it is rewritten, so no values are lost.
 
+### Language codes
+
+Every Language field is a searchable list of codes with the language they name
+(`eng · English`), so a tag can be found by either half. Two packs ship with the
+app — ISO 639-3 (alpha-3, including the historical languages ISO 639-1 has no
+code for) and ISO 639-1 (alpha-2) — and the sidebar switches between them. A
+Language Packs tab under Annotations builds packs of your own: the short list of
+languages one ontology actually uses, or private codes for a language no
+standard names, importable and exportable as JSON. Any BCP 47 tag can still be
+typed straight into the field, pack or no pack.
+
 ### SKOS vocabularies
 
 A dedicated page for building controlled vocabularies:
@@ -356,7 +367,7 @@ the 200 MB default; raise the value only when self-hosting with enough memory.
 | **Relations**       | Class, property, and individual relations                      |
 | **Restrictions**    | OWL restrictions and cardinality constraints                   |
 | **Advanced**        | Advanced OWL features                                          |
-| **Annotations**     | RDFS, SKOS, DC and custom annotations, bulk edit, rename       |
+| **Annotations**     | RDFS, SKOS, DC and custom annotations, language packs, bulk edit, rename |
 | **SKOS Vocabulary** | Concept schemes, concepts, hierarchy, SKOS validation          |
 | **Import / Export** | File import with merge review, export, new ontology, templates |
 | **Source**          | Live Turtle source view of the ontology                        |

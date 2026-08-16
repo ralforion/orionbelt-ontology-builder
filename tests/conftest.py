@@ -1,6 +1,29 @@
+import os
+
 import pytest
 
 from ontology_manager import OntologyManager
+from orionbelt_ontology_builder.local_store import ENV_FLAG
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_local_persist():
+    """Keep ``ORIONBELT_LOCAL_PERSIST`` from leaking out of one test into the rest.
+
+    The launcher tests call ``cli``/``desktop`` ``main()``, which sets that env
+    var to opt the *process* into filesystem persistence, and nothing unset it
+    again — so every test that ran later (they sort after ``test_c...``)
+    believed it was the desktop app. Anything that then saved a setting saved it
+    into the developer's real ``~/.orionbelt_ontology_builder/config.json``,
+    which is also where it read from on the next run, so tests polluted each
+    other through the home directory.
+    """
+    before = os.environ.get(ENV_FLAG)
+    yield
+    if before is None:
+        os.environ.pop(ENV_FLAG, None)
+    else:
+        os.environ[ENV_FLAG] = before
 
 
 @pytest.fixture

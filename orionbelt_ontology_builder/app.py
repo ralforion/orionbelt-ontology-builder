@@ -35,15 +35,18 @@ from .ui import (  # noqa: F401
     _SEARCH_ANY,
     _VIZ_INT_RANGES,
     _VIZ_PERSIST_KEYS,
+    ACTIVE_LANG_PACK_KEY,
     APP_NAME,
     APP_VERSION,
     AUTOSAVE_DEBOUNCE_SECONDS,
     AUTOSAVE_KEY,
     AUTOSAVE_MAX_BYTES,
+    CUSTOM_LANG_PACKS_KEY,
     FOCUS_BUILD_MAX_NODES,
     GITHUB_ISSUES_URL,
     GRAPH_MAX_NODES,
     LABEL_NAME_SEPARATOR,
+    LANG_PACKS_KEY,
     LIST_PAGE_SIZE,
     PKG_DIR,
     SEARCH_PAD_WIDTH,
@@ -54,6 +57,7 @@ from .ui import (  # noqa: F401
     _apply_class_edit,
     _apply_class_relation_add,
     _apply_individual_edit,
+    _apply_language_packs,
     _apply_property_edit,
     _apply_restriction_add,
     _apply_viz_settings,
@@ -85,6 +89,7 @@ from .ui import (  # noqa: F401
     _is_open,
     _load_linked_file,
     _mark_disk_source_saved,
+    _mark_language_packs_dirty,
     _matches_slots,
     _namespace_option_index,
     _nav_open_entity,
@@ -138,6 +143,7 @@ from .ui import (  # noqa: F401
     _viz_selection_key,
     _viz_settings_payload,
     _viz_widget_missing,
+    active_language_pack,
     annotation_ename,
     annotation_matches_ename,
     annotation_option_for_predicate,
@@ -150,6 +156,8 @@ from .ui import (  # noqa: F401
     build_uri_options,
     clearable_selectbox,
     confirm_delete,
+    custom_language_packs,
+    delete_custom_language_pack,
     display_flash_message,
     filter_entry_token,
     focus_seeds_after_request,
@@ -160,6 +168,10 @@ from .ui import (  # noqa: F401
     get_ontology_manager_class,
     graph_node_cap,
     init_session_state,
+    language_pack_entries,
+    language_pack_names,
+    language_selectbox,
+    language_tag_error,
     log_error,
     maybe_restore_autosave,
     missing_required,
@@ -168,6 +180,7 @@ from .ui import (  # noqa: F401
     parse_filter_text,
     parse_search_query,
     persist_autosave,
+    persist_language_packs,
     prioritise_find_target,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
@@ -175,6 +188,7 @@ from .ui import (  # noqa: F401
     render_add_class_form,
     render_add_restriction,
     render_annotation_form,
+    render_language_pack_sidebar,
     render_relation_form,
     render_relation_rows,
     render_restriction_editor,
@@ -184,10 +198,12 @@ from .ui import (  # noqa: F401
     required_selectbox,
     resolve_annotation_predicate_choice,
     resolve_picked_object,
+    restore_language_packs,
     restriction_references_class,
     restriction_takes_on_class,
     restriction_value_is_class,
     save_checkpoint,
+    save_custom_language_pack,
     seed_filter_from_saved,
     set_flash_message,
     show_message,
@@ -208,9 +224,10 @@ from .ui import (  # noqa: F401
 # They live in ``views`` rather than ``pages`` because Streamlit reads a
 # ``pages`` directory next to an entry script as a legacy multipage app (#269).
 from .views.advanced import render_advanced
-from .views.annotations import (  # noqa: F401 - render_annotation_types is a tab, re-exported like the ui block's
+from .views.annotations import (  # noqa: F401 - the tabs are re-exported like the ui block's
     render_annotation_types,
     render_annotations,
+    render_language_packs,
 )
 from .views.classes import render_classes
 from .views.dashboard import render_dashboard
@@ -554,6 +571,13 @@ def main():
                         st.rerun()
         else:
             st.sidebar.caption("No results found.")
+
+    st.sidebar.divider()
+
+    # Which language codes every Language field offers (issue #252). It sits in
+    # the sidebar because those fields are on three pages and in the graph
+    # panel, and one pack is meant to hold for all of them.
+    render_language_pack_sidebar()
 
     st.sidebar.divider()
 

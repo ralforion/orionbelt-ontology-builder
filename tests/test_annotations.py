@@ -1,5 +1,7 @@
 """Tests for annotation operations, including language-tagged and typed literals."""
 
+import pytest
+
 
 def test_add_annotation(populated_om):
     populated_om.add_annotation("Person", "label", "Persona", lang="es")
@@ -96,3 +98,50 @@ def test_add_delete_roundtrip_all_common_predicates(populated_om):
         populated_om.delete_annotation("Person", local, f"v-{local}")
     anns = populated_om.get_annotations("Person")
     assert not any(a["value"].startswith("v-") for a in anns)
+
+
+def test_a_refused_annotation_leaves_nothing_behind(populated_om):
+    """A rejected write must not declare the annotation type it was for.
+
+    The type was declared before the object was built, so a language tag rdflib
+    refuses left a new, zero-use annotation property in the ontology while the
+    caller was told the annotation had failed. Bulk Edit reaches this and
+    carries on to the next row, so nothing undid it (review of PR #291).
+    """
+    before = populated_om.get_custom_annotation_properties()
+    with pytest.raises(ValueError, match="not a valid language tag"):
+        populated_om.add_annotation("Person", "badLangNote", "value", lang="xx1")
+
+    assert populated_om.get_custom_annotation_properties() == before
+    assert not any(
+        a["value"] == "value" for a in populated_om.get_annotations("Person")
+    )
+
+
+def test_a_refused_iri_annotation_leaves_nothing_behind(populated_om):
+    """The same, for the other refusal on that path: a value that is no IRI."""
+    before = populated_om.get_custom_annotation_properties()
+    with pytest.raises(ValueError):
+        populated_om.add_annotation(
+            "Person", "badIriNote", "not an iri", value_is_uri=True
+        )
+
+    assert populated_om.get_custom_annotation_properties() == before
+
+
+def test_a_bad_language_tag_is_reported_per_row_in_a_bulk_edit(populated_om):
+    """One bad row is refused with advice and changes nothing."""
+    result = populated_om.bulk_update_annotations(
+        [
+            {
+                "resource": "Person",
+                "predicate": "badLangNote",
+                "value": "value",
+                "lang": "xx1",
+                "action": "add",
+            }
+        ]
+    )
+    assert result["applied"] == 0
+    assert "x-mycode" in result["errors"][0]["error"]
+    assert populated_om.get_custom_annotation_properties() == []
