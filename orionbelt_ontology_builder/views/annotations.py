@@ -4,12 +4,13 @@ import streamlit as st
 
 from .. import languages
 from ..ui import (
+    LANG_PACK_TAB_KEY,
     _cb_toggle_edit,
     _close_entity,
     _download_or_save,
     _is_open,
+    _language_pack_picked,
     _uid,
-    active_language_pack,
     annotation_resource_options,
     clearable_selectbox,
     delete_custom_language_pack,
@@ -20,6 +21,8 @@ from ..ui import (
     render_annotation_form,
     save_checkpoint,
     save_custom_language_pack,
+    seed_language_pack_picker,
+    set_active_language_pack,
     set_flash_message,
     show_message,
 )
@@ -140,8 +143,13 @@ def _pack_rows_to_entries(frame) -> list[dict]:
 def render_language_packs():
     """Render the "Language Packs" tab (issue #252).
 
-    Where packs are made; *which* pack is in use is the sidebar's picker, since
-    it applies to the Language fields on three pages and in the graph panel.
+    Where packs are made, and — as of issue #293 — where one is chosen: the pack
+    this tab shows is the pack the Language fields draw from, the same choice the
+    sidebar picker carries between pages. Two controls for it rather than one
+    because the fields are on three pages and in the graph panel, but the pack
+    picked here holds for all of them, so a pack can be built and then used
+    without hunting for a second switch.
+
     The built-in packs are read-only lists to copy from — they are the way back
     to a known set of codes, so nothing here can overwrite one.
     """
@@ -151,29 +159,27 @@ def render_language_packs():
     st.caption(
         "Which codes the Language fields offer. Two packs ship with the app; "
         "a pack of your own can be the short list of languages this ontology "
-        "actually uses, or codes for a language no standard names. Pick the "
-        "pack in use in the sidebar."
+        "actually uses, or codes for a language no standard names. The pack "
+        "picked here is the one in use, everywhere, and the sidebar shows it."
     )
 
-    # A widget's value can't be assigned once it has been instantiated, so the
-    # create / import / delete paths flag which pack to show next and it is
-    # applied here, before the picker is drawn — the same deferral the
-    # annotation type picker uses.
-    if _next := st.session_state.pop("_lang_pack_select_next", None):
-        st.session_state["lang_pack_edit_select"] = _next
     if st.session_state.pop("_lang_pack_clear_new_name", False):
         st.session_state["lang_pack_new_name"] = ""
 
     names = language_pack_names()
-    # Opens on the pack in use, then follows this picker. Seeded into session
-    # state rather than passed as ``index``: a widget given both a default and
-    # a session-state value draws a warning above the page.
-    if "lang_pack_edit_select" not in st.session_state:
-        _active = active_language_pack()
-        st.session_state["lang_pack_edit_select"] = (
-            _active if _active in names else names[0]
-        )
-    viewing = st.selectbox("Pack", names, key="lang_pack_edit_select")
+    # One choice, two pickers: seeded from the active pack before this one is
+    # drawn, and pushing what it now shows back on change. That is also how the
+    # create / import / delete paths re-point it — a widget's value cannot be
+    # assigned once it has been instantiated, and they run below it.
+    seed_language_pack_picker(LANG_PACK_TAB_KEY)
+    viewing = st.selectbox(
+        "Pack",
+        names,
+        key=LANG_PACK_TAB_KEY,
+        on_change=_language_pack_picked,
+        args=(LANG_PACK_TAB_KEY,),
+        help="The pack every Language field offers its codes from.",
+    )
     entries = language_pack_entries(viewing)
     frame = pd.DataFrame(
         [{"Code": e["code"], "Language": e["label"]} for e in entries],
@@ -249,7 +255,10 @@ def render_language_packs():
                 ):
                     delete_custom_language_pack(viewing)
                     st.session_state.pop("_lang_pack_confirm_delete", None)
-                    st.session_state["_lang_pack_select_next"] = languages.DEFAULT_PACK
+                    # The pack it was in use as has gone: fall back rather than
+                    # leave every Language field pointed at a name nothing
+                    # answers to.
+                    set_active_language_pack(languages.DEFAULT_PACK)
                     set_flash_message(f"Pack '{viewing}' deleted.", "success")
                     st.rerun()
             with no_col:
@@ -290,9 +299,10 @@ def render_language_packs():
         elif reason := save_custom_language_pack(new_name, seed):
             show_message(reason, "error")
         else:
-            # Point the pack picker at what was just created, so the editor
-            # below it is the new pack's rather than the one copied from.
-            st.session_state["_lang_pack_select_next"] = new_name.strip()
+            # Put the new pack in use, so the editor below is its rows rather
+            # than the pack it was copied from, and the Language fields offer
+            # what was just made without a second switch to find.
+            set_active_language_pack(new_name.strip())
             st.session_state["_lang_pack_clear_new_name"] = True
             set_flash_message(f"Pack '{new_name.strip()}' created!", "success")
             st.rerun()
@@ -315,6 +325,9 @@ def render_language_packs():
         except (ValueError, UnicodeDecodeError) as exc:
             show_message(str(exc), "error")
             return
+        # Both halves arrive stripped, which the checks below rely on: a pack
+        # saves under its trimmed name, so a padded one would miss the
+        # duplicate check and then name no pack to put in use.
         target = import_name.strip() or file_name
         if not target:
             show_message("The file has no name in it — name it above.", "error")
@@ -323,7 +336,7 @@ def render_language_packs():
         elif reason := save_custom_language_pack(target, file_entries):
             show_message(reason, "error")
         else:
-            st.session_state["_lang_pack_select_next"] = target
+            set_active_language_pack(target)
             set_flash_message(
                 f"Pack '{target}' imported ({len(file_entries)} codes).", "success"
             )
