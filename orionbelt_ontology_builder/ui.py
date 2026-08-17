@@ -4492,6 +4492,35 @@ def annotation_predicate_options(ont):
     return predicate_options, predicate_lookup
 
 
+def annotation_resource_options(resources) -> tuple:
+    """``(options, lookup)`` for the pickers that choose what to annotate.
+
+    Two resources can share a local name across namespaces (issue #119), and
+    both annotation pickers identified the chosen one by its display string —
+    positionally in the Add form, by first match in the View list. Either way
+    the namesake was unreachable: choosing it annotated the first one instead,
+    which is the same class of bug as writing by local name, one step earlier.
+
+    Options carry the namespace tag the rest of the app already uses for this
+    (``Organization (foaf)``) and the resource kind, and the lookup returns the
+    resource itself, so nothing has to be matched back by string.
+    """
+    collisions = _build_name_collision_set(resources)
+    options: list[str] = []
+    lookup: dict[str, dict] = {}
+    for r in resources:
+        display = format_label_name(_disambiguated_name(r, collisions), r.get("label"))
+        option = f"{display} [{r['type']}]"
+        if option in lookup:
+            # Nothing else tells them apart (the same name, kind and namespace
+            # under two URIs, or an entry listed twice): name the URI rather
+            # than let one option stand for both resources.
+            option = f"{option} <{r.get('uri') or r['name']}>"
+        options.append(option)
+        lookup[option] = r
+    return options, lookup
+
+
 def render_add_annotation(ont, all_resources):
     """Render the "Add Annotation" tab.
 
@@ -4531,8 +4560,10 @@ def render_add_annotation(ont, all_resources):
                 st.session_state["ann_predicate"] = _ann_option
 
         with st.form("add_annotation_form"):
-            # Use display format with label
-            resource_options = [f"{r['display']} [{r['type']}]" for r in all_resources]
+            # Display, kind, and a namespace tag where two share a local name.
+            resource_options, resource_lookup = annotation_resource_options(
+                all_resources
+            )
             selected = required_selectbox(
                 "Select Resource",
                 resource_options,
@@ -4590,11 +4621,20 @@ def render_add_annotation(ont, all_resources):
                 elif lang_error := language_tag_error(language):
                     show_message(lang_error, "error")
                 else:
-                    # Find the resource by matching the option string
-                    idx = resource_options.index(selected)
-                    resource_name = all_resources[idx]["name"]
+                    # The option the picker holds, not its position: two
+                    # resources of the same local name used to produce the same
+                    # option, and the second one resolved to the first.
+                    picked = resource_lookup[selected]
+                    # By URI, not by local name: a local name resolves into this
+                    # ontology's own namespace, so annotating an imported class
+                    # wrote to a namesake nothing declares. It looked right —
+                    # the page read the annotations back the same way — but the
+                    # editor and the row delete aimed at the real URI and
+                    # quietly did nothing (the same reason every other form here
+                    # picks by URI).
+                    resource_ref = picked.get("uri") or picked["name"]
                     ont.add_annotation(
-                        resource_name,
+                        resource_ref,
                         predicate_uri,
                         value,
                         lang=language if language else None,

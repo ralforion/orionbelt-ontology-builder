@@ -148,6 +148,7 @@ from .ui import (  # noqa: F401
     annotation_matches_ename,
     annotation_option_for_predicate,
     annotation_predicate_options,
+    annotation_resource_options,
     annotation_subject_options,
     build_class_hierarchy_text,
     build_class_options,
@@ -225,9 +226,11 @@ from .ui import (  # noqa: F401
 # ``pages`` directory next to an entry script as a legacy multipage app (#269).
 from .views.advanced import render_advanced
 from .views.annotations import (  # noqa: F401 - the tabs are re-exported like the ui block's
+    bulk_annotation_updates,
     render_annotation_types,
     render_annotations,
     render_language_packs,
+    render_view_annotations,
 )
 from .views.classes import render_classes
 from .views.dashboard import render_dashboard

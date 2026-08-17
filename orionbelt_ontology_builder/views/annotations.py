@@ -10,6 +10,7 @@ from ..ui import (
     _is_open,
     _uid,
     active_language_pack,
+    annotation_resource_options,
     clearable_selectbox,
     delete_custom_language_pack,
     format_label_name,
@@ -329,6 +330,216 @@ def render_language_packs():
             st.rerun()
 
 
+def bulk_annotation_updates(frame, uris_by_name):
+    """The Bulk Edit rows as engine updates, plus the names it could not resolve.
+
+    Rows are labelled with the resource's local name, which is what a
+    spreadsheet can be read and typed in, but they are applied by URI: a local
+    name resolves into this ontology's namespace, so a row about an imported
+    resource used to annotate a namesake that does not exist. A name that more
+    than one resource answers to is returned as ambiguous rather than guessed
+    at, and a name nothing answers to is passed through as typed, so a row
+    written by hand still behaves as it did.
+
+    ``fillna`` first, for the reason :func:`_pack_rows_to_entries` gives: a cell
+    the user never touched arrives as NaN, and the engine strips the language
+    tag before its per-row guard, so one such cell used to abort the whole batch
+    with an AttributeError.
+
+    Split out of the page so it can be tested directly: the tab picker is a
+    ``segmented_control``, which AppTest mis-serializes.
+    """
+    updates: list[dict] = []
+    ambiguous: list[str] = []
+    for row in frame.fillna("").astype(str).to_dict("records"):
+        action = row.get("Action", "keep")
+        if action not in ("add", "delete"):
+            continue
+        named = row.get("Resource", "").strip()
+        known = uris_by_name.get(named, set())
+        if len(known) > 1:
+            # Two namespaces, one local name: which one the row means cannot be
+            # read off it, and either guess writes to the wrong resource.
+            ambiguous.append(named)
+            continue
+        updates.append(
+            {
+                "resource": next(iter(known), named),
+                "predicate": row.get("Predicate", ""),
+                "value": row.get("Value", ""),
+                "lang": row.get("Language", ""),
+                "action": action,
+            }
+        )
+    return updates, ambiguous
+
+
+def _render_stray_annotation_repair(ont, resource_uri, resource_name):
+    """Offer to move annotations an older version put on the wrong subject.
+
+    Adding an annotation used to address the resource by local name, which
+    resolves into this ontology's namespace — so anything annotated on an
+    imported class landed on a namesake nothing declares. Reading by URI now
+    means those annotations are no longer listed here, which would leave them
+    invisible as well as unreachable, so where one exists it is named and can be
+    moved onto the resource it was meant for.
+    """
+    stray = ont.stray_annotation_subject(resource_uri)
+    if not stray:
+        return
+    count = len(ont.get_annotations(stray))
+    one = count == 1
+    st.warning(
+        f"{count} annotation{'' if one else 's'} for '{resource_name}' "
+        f"{'sits' if one else 'sit'} on `{stray}`, where an earlier version of "
+        f"this app wrote {'it' if one else 'them'}. Nothing here can edit or "
+        f"delete {'it' if one else 'them'} while "
+        f"{'it is' if one else 'they are'} there."
+    )
+    if st.button(
+        f"Move {'it' if one else 'them'} onto {resource_name}",
+        key=f"adopt_ann_{_uid(resource_uri)}",
+        type="primary",
+    ):
+        moved = ont.adopt_stray_annotations(resource_uri)
+        save_checkpoint("Move misplaced annotations")
+        set_flash_message(
+            f"Moved {moved} annotation{'' if moved == 1 else 's'} "
+            f"onto '{resource_name}'.",
+            "success",
+        )
+        st.rerun()
+
+
+def render_view_annotations(
+    ont, all_resources, classes, object_props, data_props, individuals
+):
+    """Render the "View Annotations" tab.
+
+    A separate function so it can be driven directly in tests, for the reason
+    given on :func:`render_add_annotation`: the page's tab picker is a
+    ``segmented_control``, which AppTest mis-serializes, so a row's buttons
+    cannot be clicked from a page run.
+    """
+    if not all_resources:
+        st.info(
+            "No resources to annotate. Create classes, properties, or individuals first."
+        )
+    else:
+        # Filter by resource type
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            filter_types = ["All"] + list({r["type"] for r in all_resources})
+            selected_type = st.selectbox(
+                "Filter by Type", options=filter_types, key="filter_type"
+            )
+
+        # Filter resources based on selection
+        if selected_type == "All":
+            filtered_resources = all_resources
+        else:
+            filtered_resources = [
+                r for r in all_resources if r["type"] == selected_type
+            ]
+
+        _view_opts, _view_lookup = annotation_resource_options(filtered_resources)
+        with col2:
+            if filtered_resources:
+                selected = clearable_selectbox(
+                    "Select Resource",
+                    _view_opts,
+                    key="view_annotations_select",
+                    current_display=_view_opts[0] if _view_opts else None,
+                )
+            else:
+                selected = None
+                st.info(f"No {selected_type} resources found.")
+
+        if selected:
+            # The option the picker holds, not the first resource that renders
+            # the same way: two of the same local name used to share an option,
+            # so the namesake's annotations could not be reached from here.
+            resource = _view_lookup.get(selected)
+            if resource:
+                resource_name = resource["name"]
+                # By URI, as the editor below already addresses it: read by
+                # local name, an imported resource's annotations were looked
+                # for in this ontology's namespace instead of its own.
+                resource_uri = resource.get("uri") or resource_name
+                annotations = ont.get_annotations(resource_uri)
+                _render_stray_annotation_repair(ont, resource_uri, resource_name)
+
+                if not annotations:
+                    st.info(f"No annotations found for '{resource_name}'")
+                else:
+                    st.subheader(f"Annotations for {selected}")
+                    for _ai, ann in enumerate(annotations):
+                        # By position, the way the restriction rows are
+                        # keyed: a resource can carry two annotations that
+                        # differ only in language, and they would otherwise
+                        # share a key and open each other's editor.
+                        row_key = f"{_uid(resource_uri)}_{_ai}"
+                        col1, col2, col3, col4 = st.columns([2, 4, 0.7, 0.7])
+                        with col1:
+                            # Show prefixed predicate (e.g., rdfs:label, skos:prefLabel)
+                            predicate_display = ann.get(
+                                "predicate_prefixed", ann["predicate"]
+                            )
+                            st.write(f"**{predicate_display}**")
+                        with col2:
+                            lang_str = (
+                                f" @{ann['language']}" if ann.get("language") else ""
+                            )
+                            dtype_str = (
+                                f" ({ann['datatype']})" if ann.get("datatype") else ""
+                            )
+                            st.write(f"{ann['value']}{lang_str}{dtype_str}")
+                        with col3:
+                            st.button(
+                                "✏️",
+                                key=f"edit_ann_{row_key}",
+                                help="Edit this annotation",
+                                on_click=_cb_toggle_edit,
+                                args=("ann", row_key),
+                            )
+                        with col4:
+                            if st.button(
+                                "🗑️",
+                                key=f"del_ann_{row_key}",
+                                help="Delete this annotation",
+                            ):
+                                ont.delete_annotation(
+                                    resource_uri,
+                                    ann.get("predicate_uri", ann["predicate"]),
+                                    ann["value"],
+                                    lang=ann.get("language"),
+                                    # Full URI, and the resource/literal
+                                    # distinction: passing the display local
+                                    # name or treating an IRI object as a
+                                    # literal deletes nothing while
+                                    # reporting success (issue #223 review).
+                                    datatype=ann.get("datatype_uri")
+                                    or ann.get("datatype"),
+                                    value_is_uri=bool(ann.get("is_uri")),
+                                )
+                                save_checkpoint("Delete annotation")
+                                set_flash_message("Annotation deleted!", "success")
+                                st.rerun()
+
+                        if _is_open("ann", row_key, "edit"):
+                            render_annotation_form(
+                                ont,
+                                resource_uri,
+                                ann,
+                                row_key,
+                                classes,
+                                object_props,
+                                data_props,
+                                individuals,
+                                on_close=lambda: _close_entity("ann"),
+                            )
+
+
 def render_annotations():
     """Render the annotations management page."""
     st.header("Annotations")
@@ -406,123 +617,9 @@ def render_annotations():
         _ann_tab = "View Annotations"
 
     if _ann_tab == "View Annotations":
-        if not all_resources:
-            st.info(
-                "No resources to annotate. Create classes, properties, or individuals first."
-            )
-        else:
-            # Filter by resource type
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                filter_types = ["All"] + list({r["type"] for r in all_resources})
-                selected_type = st.selectbox(
-                    "Filter by Type", options=filter_types, key="filter_type"
-                )
-
-            # Filter resources based on selection
-            if selected_type == "All":
-                filtered_resources = all_resources
-            else:
-                filtered_resources = [
-                    r for r in all_resources if r["type"] == selected_type
-                ]
-
-            with col2:
-                if filtered_resources:
-                    _view_opts = [r["display"] for r in filtered_resources]
-                    selected = clearable_selectbox(
-                        "Select Resource",
-                        _view_opts,
-                        key="view_annotations_select",
-                        current_display=_view_opts[0] if _view_opts else None,
-                    )
-                else:
-                    selected = None
-                    st.info(f"No {selected_type} resources found.")
-
-            if selected:
-                # Find the actual resource name from display string
-                resource = next(
-                    (r for r in filtered_resources if r["display"] == selected), None
-                )
-                if resource:
-                    resource_name = resource["name"]
-                    annotations = ont.get_annotations(resource_name)
-
-                    if not annotations:
-                        st.info(f"No annotations found for '{resource_name}'")
-                    else:
-                        st.subheader(f"Annotations for {selected}")
-                        resource_uri = resource.get("uri") or resource_name
-                        for _ai, ann in enumerate(annotations):
-                            # By position, the way the restriction rows are
-                            # keyed: a resource can carry two annotations that
-                            # differ only in language, and they would otherwise
-                            # share a key and open each other's editor.
-                            row_key = f"{_uid(resource_uri)}_{_ai}"
-                            col1, col2, col3, col4 = st.columns([2, 4, 0.7, 0.7])
-                            with col1:
-                                # Show prefixed predicate (e.g., rdfs:label, skos:prefLabel)
-                                predicate_display = ann.get(
-                                    "predicate_prefixed", ann["predicate"]
-                                )
-                                st.write(f"**{predicate_display}**")
-                            with col2:
-                                lang_str = (
-                                    f" @{ann['language']}"
-                                    if ann.get("language")
-                                    else ""
-                                )
-                                dtype_str = (
-                                    f" ({ann['datatype']})"
-                                    if ann.get("datatype")
-                                    else ""
-                                )
-                                st.write(f"{ann['value']}{lang_str}{dtype_str}")
-                            with col3:
-                                st.button(
-                                    "✏️",
-                                    key=f"edit_ann_{row_key}",
-                                    help="Edit this annotation",
-                                    on_click=_cb_toggle_edit,
-                                    args=("ann", row_key),
-                                )
-                            with col4:
-                                if st.button(
-                                    "🗑️",
-                                    key=f"del_ann_{row_key}",
-                                    help="Delete this annotation",
-                                ):
-                                    ont.delete_annotation(
-                                        resource_name,
-                                        ann.get("predicate_uri", ann["predicate"]),
-                                        ann["value"],
-                                        lang=ann.get("language"),
-                                        # Full URI, and the resource/literal
-                                        # distinction: passing the display local
-                                        # name or treating an IRI object as a
-                                        # literal deletes nothing while
-                                        # reporting success (issue #223 review).
-                                        datatype=ann.get("datatype_uri")
-                                        or ann.get("datatype"),
-                                        value_is_uri=bool(ann.get("is_uri")),
-                                    )
-                                    save_checkpoint("Delete annotation")
-                                    set_flash_message("Annotation deleted!", "success")
-                                    st.rerun()
-
-                            if _is_open("ann", row_key, "edit"):
-                                render_annotation_form(
-                                    ont,
-                                    resource_uri,
-                                    ann,
-                                    row_key,
-                                    classes,
-                                    object_props,
-                                    data_props,
-                                    individuals,
-                                    on_close=lambda: _close_entity("ann"),
-                                )
+        render_view_annotations(
+            ont, all_resources, classes, object_props, data_props, individuals
+        )
 
     if _ann_tab == "Add Annotation":
         render_add_annotation(ont, all_resources)
@@ -539,10 +636,17 @@ def render_annotations():
             "Edit annotations in a spreadsheet. Add rows to create, mark action as 'delete' to remove."
         )
 
+        # Which URIs each local name answers to, for bulk_annotation_updates.
+        uris_by_name: dict[str, set[str]] = {}
+        for res in all_resources:
+            uris_by_name.setdefault(res["name"], set()).add(
+                res.get("uri") or res["name"]
+            )
+
         # Build initial data from existing annotations
         annotation_data = []
         for res in all_resources:
-            annots = ont.get_annotations(res["name"])
+            annots = ont.get_annotations(res.get("uri") or res["name"])
             for a in annots:
                 annotation_data.append(
                     {
@@ -580,27 +684,26 @@ def render_annotations():
         )
 
         if st.button("Apply Changes", type="primary", key="bulk_apply_annotations"):
-            updates = []
-            for _, row in edited_df.iterrows():
-                action = row.get("Action", "keep")
-                if action in ("add", "delete"):
-                    updates.append(
-                        {
-                            "resource": row["Resource"],
-                            "predicate": row["Predicate"],
-                            "value": row["Value"],
-                            "lang": row.get("Language", ""),
-                            "action": action,
-                        }
-                    )
-            if updates:
-                result = ont.bulk_update_annotations(updates)
-                save_checkpoint("Bulk edit annotations")
-                msg = f"Applied {result['applied']} change(s)"
-                if result["errors"]:
-                    msg += f", {len(result['errors'])} error(s)"
+            updates, ambiguous = bulk_annotation_updates(edited_df, uris_by_name)
+            if updates or ambiguous:
+                result = ont.bulk_update_annotations(updates) if updates else None
+                applied = result["applied"] if result else 0
+                errors = list(result["errors"]) if result else []
+                errors += [
+                    {
+                        "resource": name,
+                        "error": f"'{name}' names more than one resource. "
+                        "Use its full URI in this column.",
+                    }
+                    for name in ambiguous
+                ]
+                if applied:
+                    save_checkpoint("Bulk edit annotations")
+                msg = f"Applied {applied} change(s)"
+                if errors:
+                    msg += f", {len(errors)} error(s): {errors[0]['error']}"
                 # Flash (not show_message) so the summary survives the rerun below.
-                set_flash_message(msg, "success" if not result["errors"] else "warning")
+                set_flash_message(msg, "success" if not errors else "warning")
                 st.rerun()
             else:
                 show_message(

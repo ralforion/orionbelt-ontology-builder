@@ -113,7 +113,7 @@ ALLOWED_BY_NAME = {
     ("render_restriction_form", "Restriction Type"),
     ("_render_panel_add_restriction_form", "Restriction Type"),
     ("render_relation_form", "Relation"),
-    ("render_annotations", "Filter by Type"),
+    ("render_view_annotations", "Filter by Type"),
     ("render_language_pack_sidebar", "Language pack"),
     ("render_language_packs", "Pack"),
 }
