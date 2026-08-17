@@ -1,9 +1,12 @@
 """The Language Packs tab: making, switching and deleting a pack (issue #252).
 
 The pack's rows are a ``data_editor``, which AppTest cannot type into, so what
-is driven here is everything around it — create, delete, and the deferred
-re-selection each of those does, since assigning a widget's value after the
-widget has been drawn is an exception rather than a no-op.
+is driven here is everything around it — create, delete, and the re-selection
+each of those does, since assigning a widget's value after the widget has been
+drawn is an exception rather than a no-op.
+
+The tab's picker and the sidebar's are one choice (issue #293), so what either
+one is set to is checked on both, and on the pack the Language fields read.
 
 The script draws the sidebar picker *before* the page, as the app does. That
 ordering is the point rather than scenery: deleting the pack in use used to
@@ -74,7 +77,33 @@ def _create(at, name, start_from="Empty"):
 
 def test_the_tab_opens_on_the_pack_that_is_in_use():
     at = _run(**{app.ACTIVE_LANG_PACK_KEY: languages.ALPHA2_PACK})
-    assert at.selectbox(key="lang_pack_edit_select").value == languages.ALPHA2_PACK
+    assert at.selectbox(key=app.LANG_PACK_TAB_KEY).value == languages.ALPHA2_PACK
+    assert at.selectbox(key=app.LANG_PACK_SIDEBAR_KEY).value == languages.ALPHA2_PACK
+
+
+def test_the_tab_switches_the_pack_every_language_field_reads():
+    """Issue #293: the pack picked here is the pack in use, not a preview."""
+    at = _run(**{app.ACTIVE_LANG_PACK_KEY: languages.ALPHA3_PACK})
+    at.selectbox(key=app.LANG_PACK_TAB_KEY).set_value(languages.ALPHA2_PACK).run(
+        timeout=120
+    )
+    assert not at.exception, at.exception
+
+    assert at.session_state[app.ACTIVE_LANG_PACK_KEY] == languages.ALPHA2_PACK
+    # And the sidebar, which is the same choice seen from every other page.
+    assert at.selectbox(key=app.LANG_PACK_SIDEBAR_KEY).value == languages.ALPHA2_PACK
+
+
+def test_the_sidebar_switches_the_pack_the_tab_shows():
+    """The mirror of the above: whichever picker moves, both follow."""
+    at = _run(**{app.ACTIVE_LANG_PACK_KEY: languages.ALPHA3_PACK})
+    at.selectbox(key=app.LANG_PACK_SIDEBAR_KEY).set_value(languages.ALPHA2_PACK).run(
+        timeout=120
+    )
+    assert not at.exception, at.exception
+
+    assert at.session_state[app.ACTIVE_LANG_PACK_KEY] == languages.ALPHA2_PACK
+    assert at.selectbox(key=app.LANG_PACK_TAB_KEY).value == languages.ALPHA2_PACK
 
 
 def test_a_new_pack_is_created_and_becomes_the_one_being_edited():
@@ -82,7 +111,9 @@ def test_a_new_pack_is_created_and_becomes_the_one_being_edited():
     _create(at, "Project codes")
 
     assert _packs(at) == {"Project codes": []}
-    assert at.selectbox(key="lang_pack_edit_select").value == "Project codes"
+    assert at.selectbox(key=app.LANG_PACK_TAB_KEY).value == "Project codes"
+    # And in use, so the codes typed into it are the codes the fields offer.
+    assert at.session_state[app.ACTIVE_LANG_PACK_KEY] == "Project codes"
     # The name box is cleared, so the next create doesn't reuse it by accident.
     assert at.text_input(key="lang_pack_new_name").value == ""
 
@@ -117,7 +148,7 @@ def test_deleting_the_pack_in_use_asks_first_and_then_falls_back():
     # Put it in use first: deleting the *active* pack is the case that took the
     # page down, because the fallback was written to the sidebar picker's own
     # key from the page body, after the picker had been drawn.
-    at.selectbox(key=app.ACTIVE_LANG_PACK_KEY).set_value("Mine").run(timeout=120)
+    at.selectbox(key=app.LANG_PACK_SIDEBAR_KEY).set_value("Mine").run(timeout=120)
     assert not at.exception, at.exception
 
     at.button(key=f"lang_pack_del_{pack_key}").click().run(timeout=120)
@@ -128,6 +159,6 @@ def test_deleting_the_pack_in_use_asks_first_and_then_falls_back():
     at.button(key=f"lang_pack_del_yes_{pack_key}").click().run(timeout=120)
     assert not at.exception, at.exception
     assert _packs(at) == {}
-    assert at.selectbox(key="lang_pack_edit_select").value == languages.DEFAULT_PACK
+    assert at.selectbox(key=app.LANG_PACK_TAB_KEY).value == languages.DEFAULT_PACK
     # And the sidebar, whose pack has gone out from under it.
-    assert at.selectbox(key=app.ACTIVE_LANG_PACK_KEY).value == languages.DEFAULT_PACK
+    assert at.selectbox(key=app.LANG_PACK_SIDEBAR_KEY).value == languages.DEFAULT_PACK

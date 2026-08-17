@@ -67,9 +67,15 @@ VIZ_FILE_STATE_MAX_FILES = 20
 #: the local config file when the launcher allows disk, browser localStorage on
 #: the cloud, the same two places the viz settings use.
 LANG_PACKS_KEY = "orionbelt_language_packs"
-#: Session key holding the active pack's name; also the sidebar picker's widget
-#: key, so the widget and what is persisted are one value, never two.
+#: Session key holding the active pack's name. Deliberately not a widget's key:
+#: two pickers choose the pack (the sidebar's and the Language Packs tab's, which
+#: are one choice, issue #293), and a widget's key cannot be assigned once its
+#: widget is on the page — this one can be written from anywhere.
 ACTIVE_LANG_PACK_KEY = "lang_pack_active"
+#: The sidebar pack picker's own widget key, mirrored from the key above.
+LANG_PACK_SIDEBAR_KEY = "lang_pack_sidebar_select"
+#: The Language Packs tab's pack picker, the app's other view of the same choice.
+LANG_PACK_TAB_KEY = "lang_pack_edit_select"
 #: Session key holding ``{pack name: [{"code", "label"}, ...]}`` of the user's
 #: own packs.
 CUSTOM_LANG_PACKS_KEY = "lang_packs_custom"
@@ -643,6 +649,52 @@ def _mark_language_packs_dirty() -> None:
     st.session_state["_lang_packs_dirty"] = True
 
 
+def set_active_language_pack(name: str) -> None:
+    """Make ``name`` the pack every Language field draws from (issue #293).
+
+    The one place the choice is made, whoever makes it: the sidebar picker, the
+    Language Packs tab's picker, and creating or deleting a pack all come through
+    here, so the pack being edited and the pack in use are never two things.
+
+    A name no pack answers to is ignored rather than stored — the callers offer
+    the pack names as options, so a name that is not one is a stale value, not a
+    choice. The write goes to the plain session key rather than to either
+    picker's widget key, which is what lets a page drawn *after* the sidebar set
+    the pack: assigning a widget's key once its widget exists is an exception.
+    """
+    if name not in language_pack_names():
+        return
+    if name == st.session_state.get(ACTIVE_LANG_PACK_KEY):
+        return
+    st.session_state[ACTIVE_LANG_PACK_KEY] = name
+    _mark_language_packs_dirty()
+
+
+def seed_language_pack_picker(widget_key: str) -> str:
+    """Point one pack picker at the active pack, returning that pack's name.
+
+    Called by each picker before it is drawn, which is how the two of them stay
+    one choice. A seed rather than an ``index``: a widget given both a default
+    and a session-state value draws a warning above the page. It also resolves a
+    pack deleted since it was chosen to a name the options actually include —
+    a selectbox value with no matching option is an exception, not a fallback.
+    """
+    active = active_language_pack()
+    if st.session_state.get(widget_key) != active:
+        st.session_state[widget_key] = active
+    return active
+
+
+def _language_pack_picked(widget_key: str) -> None:
+    """``on_change`` for a pack picker: what it now shows becomes the pack in use.
+
+    Necessary rather than incidental: the seed above runs on every rerun, so
+    without this the run that follows a pick would put the old pack straight
+    back into the picker.
+    """
+    set_active_language_pack(st.session_state.get(widget_key, ""))
+
+
 def save_custom_language_pack(name: str, entries) -> str | None:
     """Store one custom pack, returning the reason it was refused, or ``None``.
 
@@ -669,13 +721,11 @@ def save_custom_language_pack(name: str, entries) -> str | None:
 def delete_custom_language_pack(name: str) -> None:
     """Drop one custom pack.
 
-    Deleting the pack that is in use deliberately leaves its name in
-    :data:`ACTIVE_LANG_PACK_KEY`: that key belongs to the sidebar picker, which
-    is drawn before the page that deletes from, and assigning a widget's value
-    after the widget exists raises rather than falling back — which took the
-    page down with it. :func:`active_language_pack` resolves the dangling name
-    for every reader in the meantime, and the sidebar re-seeds itself on the
-    next run.
+    Deleting the pack that is in use may leave its name in
+    :data:`ACTIVE_LANG_PACK_KEY`; the caller is what points the choice somewhere
+    else. Either way nothing is left dangling for a reader:
+    :func:`active_language_pack` resolves a name no pack answers to back to the
+    default, and both pickers re-seed from it on the next run.
     """
     packs = {k: v for k, v in custom_language_packs().items() if k != name}
     st.session_state[CUSTOM_LANG_PACKS_KEY] = packs
@@ -791,26 +841,20 @@ def render_language_pack_sidebar() -> None:
 
     One control in the sidebar rather than one beside each Language field: the
     fields sit on three pages and in the graph panel, and a per-field switch
-    would have to be set four times over to mean one thing.
+    would have to be set four times over to mean one thing. The Language Packs
+    tab's picker is this same choice seen from there (issue #293).
     """
     restore_language_packs()
     names = language_pack_names()
-    # Put the resolved name back before the widget reads it: a saved pack that
-    # has since been deleted is a value the selectbox has no option for, which
-    # is an exception rather than a fallback. The selection is carried by
-    # session state alone, with no ``index`` — passing both is what Streamlit
-    # warns about as "created with a default value but also had its value set
-    # via the Session State API".
-    active = active_language_pack()
-    if st.session_state.get(ACTIVE_LANG_PACK_KEY) != active:
-        st.session_state[ACTIVE_LANG_PACK_KEY] = active
+    seed_language_pack_picker(LANG_PACK_SIDEBAR_KEY)
     st.sidebar.selectbox(
         "Language pack",
         names,
-        key=ACTIVE_LANG_PACK_KEY,
-        on_change=_mark_language_packs_dirty,
+        key=LANG_PACK_SIDEBAR_KEY,
+        on_change=_language_pack_picked,
+        args=(LANG_PACK_SIDEBAR_KEY,),
         help="Which codes the Language fields offer. Build your own under "
-        "Annotations → Language Packs.",
+        "Annotations → Language Packs, which switches packs too.",
     )
     persist_language_packs()
 

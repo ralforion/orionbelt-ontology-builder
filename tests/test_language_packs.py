@@ -221,6 +221,43 @@ def test_a_stale_saved_pack_name_falls_back(monkeypatch, patch_ui):
     assert app.active_language_pack() == languages.DEFAULT_PACK
 
 
+def test_choosing_a_pack_switches_the_codes_and_is_worth_saving(monkeypatch, patch_ui):
+    """Issue #293: one call behind every picker, and the choice is persisted."""
+    state: dict = {}
+    monkeypatch.setattr(app.st, "session_state", state)
+    app.save_custom_language_pack("Mine", [{"code": "x-a", "label": "A"}])
+    state.pop("_lang_packs_dirty", None)
+
+    app.set_active_language_pack("Mine")
+    assert app.active_language_pack() == "Mine"
+    assert app.language_pack_entries() == [{"code": "x-a", "label": "A"}]
+    assert state["_lang_packs_dirty"]
+
+
+def test_choosing_a_pack_that_is_not_one_leaves_the_choice_alone(monkeypatch, patch_ui):
+    # A picker only offers pack names, so a name that is not one is a stale
+    # value rather than a choice — and it would empty every Language field.
+    state: dict = {}
+    monkeypatch.setattr(app.st, "session_state", state)
+    app.set_active_language_pack(languages.ALPHA2_PACK)
+    app.set_active_language_pack("Deleted last week")
+    assert app.active_language_pack() == languages.ALPHA2_PACK
+
+
+def test_a_pack_picker_is_seeded_from_the_pack_in_use(monkeypatch, patch_ui):
+    """How the sidebar's picker and the tab's stay one choice (issue #293)."""
+    state: dict = {app.ACTIVE_LANG_PACK_KEY: languages.ALPHA2_PACK}
+    monkeypatch.setattr(app.st, "session_state", state)
+    assert app.seed_language_pack_picker("a_picker") == languages.ALPHA2_PACK
+    assert state["a_picker"] == languages.ALPHA2_PACK
+
+    # And a pack that has gone is resolved to one the options include, rather
+    # than left as a selectbox value with no matching option.
+    state[app.ACTIVE_LANG_PACK_KEY] = "Deleted last week"
+    assert app.seed_language_pack_picker("a_picker") == languages.DEFAULT_PACK
+    assert state["a_picker"] == languages.DEFAULT_PACK
+
+
 # --- persistence ------------------------------------------------------------
 
 
