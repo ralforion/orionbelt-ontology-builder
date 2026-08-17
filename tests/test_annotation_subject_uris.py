@@ -14,7 +14,7 @@ which AppTest mis-serializes.
 
 import pandas as pd
 import pytest
-from rdflib import OWL, RDF, BNode, Literal, URIRef
+from rdflib import OWL, RDF, BNode, Graph, Literal, URIRef
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -436,3 +436,91 @@ def test_the_view_tab_lists_the_namesake_that_was_chosen():
     shown = " ".join(m.value for m in at.markdown)
     assert "the imported one" in shown
     assert "the local one" not in shown
+
+
+# --- resources whose URI is not http ----------------------------------------
+
+URN_ACCOUNT = "urn:example:Account"
+
+
+def test_a_uri_of_any_scheme_is_left_as_it_is():
+    """``_uri`` only passed ``http(s)`` through, so every other scheme was read
+    as a local name and placed in the base namespace."""
+    m = _om()
+    assert str(m._uri(URN_ACCOUNT)) == URN_ACCOUNT
+    assert str(m._uri("did:example:123")) == "did:example:123"
+    assert str(m._uri("file:///tmp/o.ttl")) == "file:///tmp/o.ttl"
+    # A name is still a name: no colon can appear in one, so the two never meet.
+    assert str(m._uri("Account")) == BASE + "Account"
+    assert str(m._uri("Account", namespace=GIST)) == ACCOUNT
+
+
+def _om_with_urn_class():
+    m = _om()
+    m.graph.add((URIRef(URN_ACCOUNT), RDF.type, OWL.Class))
+    return m
+
+
+def test_a_urn_resource_is_annotated_read_and_deleted_as_itself():
+    m = _om_with_urn_class()
+    m.add_annotation(URN_ACCOUNT, "comment", "an account")
+
+    assert [str(s) for s, _p, o in m.graph if str(o) == "an account"] == [URN_ACCOUNT]
+    assert [a["value"] for a in m.get_annotations(URN_ACCOUNT)] == ["an account"]
+    m.delete_annotation(URN_ACCOUNT, "comment", "an account")
+    assert m.get_annotations(URN_ACCOUNT) == []
+
+
+def test_a_urn_resources_annotation_survives_a_round_trip_through_turtle():
+    """Read back through a plain graph, not through the manager: asking the
+    manager was what hid this, since reading minted the same wrong subject as
+    writing. Only the exported triples say where the annotation really went."""
+    m = _om_with_urn_class()
+    m.add_annotation(URN_ACCOUNT, "comment", "an account")
+
+    exported = Graph().parse(data=m.graph.serialize(format="turtle"), format="turtle")
+    assert (URIRef(URN_ACCOUNT), URIRef(COMMENT), Literal("an account")) in exported
+
+
+def test_the_add_form_annotates_a_urn_resource_as_itself():
+    at = _run(_add_script, _om_with_urn_class())
+    option = next(
+        o for o in at.selectbox(key="ann_resource").options if URN_ACCOUNT in o
+    ).strip()
+    _add(at, option, "an account")
+
+    # Against the graph, for the reason the turtle test gives.
+    ont = at.session_state["ontology"]
+    assert (URIRef(URN_ACCOUNT), URIRef(COMMENT), Literal("an account")) in ont.graph
+
+
+def test_a_bulk_row_reaches_a_urn_resource():
+    m = _om_with_urn_class()
+    updates, ambiguous = app.bulk_annotation_updates(
+        _frame(
+            [
+                {
+                    "Resource": URN_ACCOUNT,
+                    "Predicate": "rdfs:comment",
+                    "Value": "an account",
+                    "Action": "add",
+                }
+            ]
+        ),
+        {URN_ACCOUNT: {URN_ACCOUNT}},
+    )
+    assert ambiguous == []
+    assert m.bulk_update_annotations(updates)["applied"] == 1
+    assert (URIRef(URN_ACCOUNT), URIRef(COMMENT), Literal("an account")) in m.graph
+
+
+def test_what_the_old_behaviour_wrote_for_a_urn_resource_can_be_adopted():
+    """The wrong subject was the base namespace plus the whole URN, which is
+    exactly where the repair looks."""
+    m = _om_with_urn_class()
+    m.graph.add(
+        (URIRef(BASE + URN_ACCOUNT), URIRef(COMMENT), Literal("an account")),
+    )
+    assert m.stray_annotation_subject(URN_ACCOUNT) == BASE + URN_ACCOUNT
+    assert m.adopt_stray_annotations(URN_ACCOUNT) == 1
+    assert [a["value"] for a in m.get_annotations(URN_ACCOUNT)] == ["an account"]

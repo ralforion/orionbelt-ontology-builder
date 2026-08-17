@@ -370,15 +370,27 @@ class OntologyManager:
         # Re-bind the default namespace
         self.graph.bind("", self.namespace)
 
+    #: The ``scheme:`` an absolute IRI opens with (RFC 3986). A local name can
+    #: never match it: :attr:`_LOCAL_NAME_RE` allows no colon, so "already a
+    #: URI" and "a name to place in a namespace" cannot be the same string.
+    _IRI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+
     def _uri(self, local_name: str, namespace: str | None = None) -> URIRef:
         """Create a URI from a local name.
 
-        A value that is already a full ``http(s)`` URI is returned unchanged.
+        A value that is already an absolute URI is returned unchanged.
         Otherwise the local name is placed in ``namespace`` when one is given
         (any bound namespace, e.g. a custom prefix), or in the base namespace
         by default.
+
+        Any scheme counts, not only ``http(s)``: an imported ontology can name
+        its resources ``urn:``, ``did:``, ``file:`` or anything else, and
+        passing one of those through here used to mint
+        ``http://base#urn:example:Account`` instead. The UI hid it, because
+        reading the annotations back minted the same wrong subject, but an
+        export carried them on a resource nothing declares (review of PR #292).
         """
-        if local_name.startswith(("http://", "https://")):
+        if self._IRI_SCHEME_RE.match(local_name):
             return URIRef(local_name)
         if namespace:
             return URIRef(namespace + local_name)
