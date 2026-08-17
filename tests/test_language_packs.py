@@ -134,6 +134,15 @@ def test_a_pack_file_round_trips():
     assert (name, read_back) == ("Mine", entries)
 
 
+def test_a_padded_name_in_a_file_is_read_as_the_name_it_saves_under():
+    # Saving strips the name, so an import that kept the padding would check the
+    # padded string for a clash and then put a name no pack answers to in use.
+    name, _ = languages.pack_from_json(
+        '{"name": "  Mine  ", "entries": [{"code": "x-a"}]}'
+    )
+    assert name == "Mine"
+
+
 def test_a_bare_list_of_entries_is_read_as_a_nameless_pack():
     name, entries = languages.pack_from_json('[{"code": "x-a", "label": "A"}]')
     assert name == ""

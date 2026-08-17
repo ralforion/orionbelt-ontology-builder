@@ -325,6 +325,9 @@ def render_language_packs():
         except (ValueError, UnicodeDecodeError) as exc:
             show_message(str(exc), "error")
             return
+        # Both halves arrive stripped, which the checks below rely on: a pack
+        # saves under its trimmed name, so a padded one would miss the
+        # duplicate check and then name no pack to put in use.
         target = import_name.strip() or file_name
         if not target:
             show_message("The file has no name in it — name it above.", "error")

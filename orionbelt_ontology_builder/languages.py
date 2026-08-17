@@ -379,12 +379,16 @@ def pack_from_json(text: str) -> tuple[str, list[dict]]:
 
     Accepts the shape :func:`pack_to_json` writes and, for a hand-written file,
     a bare list of entries (which carries no name — the caller names it).
+
+    The name comes back stripped, the same name saving the pack would store it
+    under: a hand-written file can pad it, and a padded name would be checked
+    for a clash and put in use as a name no saved pack answers to.
     """
     try:
         data = json.loads(text)
     except (ValueError, TypeError) as exc:
         raise ValueError(f"Not a readable JSON file: {exc}") from exc
-    name = str(data.get("name") or "") if isinstance(data, dict) else ""
+    name = str(data.get("name") or "").strip() if isinstance(data, dict) else ""
     raw = data if isinstance(data, list) else None
     if isinstance(data, dict) and isinstance(data.get("entries"), list):
         raw = data["entries"]
