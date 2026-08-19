@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 from rdflib import Literal, URIRef
-from rdflib.namespace import SKOS
+from rdflib.namespace import RDF, SKOS
 
 from ontology_manager import OntologyManager
 
@@ -327,6 +327,84 @@ class TestIssueShape:
         assert severities == sorted(
             severities, key=lambda s: {"error": 0, "warning": 1, "info": 2}[s]
         )
+
+
+class TestOneDirectionalImports:
+    """A published vocabulary asserts one side of an inverse, not both.
+
+    SKOS declares broader/narrower inverses and related symmetric, but almost
+    every real file carries only ``B skos:broader A``. Our own writes
+    materialise both sides, so a validator that reads one direction works on a
+    graph this app built and quietly fails on an imported one, which is the
+    graph validation is actually for.
+    """
+
+    @staticmethod
+    def _seed(om, *names):
+        """Concepts written straight into the graph, no inverses materialised."""
+        base = "http://test.org/ont#"
+        om.add_concept_scheme("S")
+        for name in names:
+            uri = URIRef(base + name)
+            om.graph.add((uri, RDF.type, SKOS.Concept))
+            om.graph.add((uri, SKOS.inScheme, URIRef(base + "S")))
+            om.graph.add((uri, SKOS.prefLabel, Literal(name, lang="en")))
+            om.graph.add((uri, SKOS.definition, Literal("A definition", lang="en")))
+        return base
+
+    def test_a_parent_with_only_broader_asserted_is_not_an_orphan(self, om):
+        base = self._seed(om, "Animal", "Dog")
+        om.graph.add((URIRef(base + "Dog"), SKOS.broader, URIRef(base + "Animal")))
+        assert "orphan" not in _types(om)
+
+    def test_a_child_with_only_narrower_asserted_is_not_an_orphan(self, om):
+        base = self._seed(om, "Animal", "Dog")
+        om.graph.add((URIRef(base + "Animal"), SKOS.narrower, URIRef(base + "Dog")))
+        assert "orphan" not in _types(om)
+
+    def test_hierarchy_is_visible_through_a_narrower_only_import(self, om):
+        """S27 has to see the hierarchy however it was asserted."""
+        base = self._seed(om, "Animal", "Dog")
+        om.graph.add((URIRef(base + "Animal"), SKOS.narrower, URIRef(base + "Dog")))
+        om.graph.add((URIRef(base + "Dog"), SKOS.related, URIRef(base + "Animal")))
+        assert "relation_clash" in _types(om)
+
+    def test_a_cycle_asserted_only_as_narrower_is_found(self, om):
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.narrower, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "B"), SKOS.narrower, URIRef(base + "A")))
+        assert "broader_cycle" in _types(om)
+
+    def test_related_asserted_one_way_reaches_both_concepts(self, om):
+        base = self._seed(om, "Cat", "Dog")
+        om.graph.add((URIRef(base + "Cat"), SKOS.related, URIRef(base + "Dog")))
+        assert "orphan" not in _types(om)
+
+
+class TestLanguageIsPartOfLiteralIdentity:
+    def test_same_text_in_different_languages_is_not_an_overlap(self, vocab):
+        """S13 is about the same object, and a language tag is part of one."""
+        vocab.set_concept_label("Dog", "altLabel", "Dog", lang="de")
+        assert "label_overlap" not in _types(vocab)
+
+    def test_same_text_in_the_same_language_still_is(self, vocab):
+        vocab.set_concept_label("Dog", "altLabel", "Dog", lang="en")
+        assert "label_overlap" in _types(vocab)
+
+
+class TestEveryNotationIsChecked:
+    def test_a_tagged_notation_alongside_a_typed_one(self, vocab):
+        """``graph.value`` returns one arbitrary object, so this was a coin flip."""
+        dog = URIRef("http://test.org/ont#Dog")
+        vocab.graph.add(
+            (
+                dog,
+                SKOS.notation,
+                Literal("636.7", datatype=URIRef("http://example.org/ddc")),
+            )
+        )
+        vocab.graph.add((dog, SKOS.notation, Literal("bad", lang="en")))
+        assert "notation_lang_tagged" in _types(vocab)
 
 
 class TestCheckCatalogue:

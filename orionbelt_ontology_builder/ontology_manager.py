@@ -2875,8 +2875,8 @@ class OntologyManager:
         "label_overlap": {
             "severity": "warning",
             "summary": (
-                "The same text is used as a prefLabel and as an altLabel or "
-                "hiddenLabel on one concept."
+                "The same text in the same language is used as a prefLabel "
+                "and as an altLabel or hiddenLabel on one concept."
             ),
             "source": "SKOS Reference S13",
         },
@@ -3725,12 +3725,48 @@ class OntologyManager:
         }
 
     @staticmethod
-    def _skos_parent_map(concepts: list[dict[str, Any]]) -> dict[str, list[str]]:
-        """URI -> its broader URIs, restricted to concepts this graph knows."""
+    def _skos_link_maps(
+        concepts: list[dict[str, Any]],
+    ) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
+        """``(parents, children, related)``, each read from both directions.
+
+        SKOS declares broader and narrower inverses of each other, and related
+        symmetric, but a published vocabulary usually asserts only one side:
+        ``B skos:broader A`` with no matching ``A skos:narrower B``. Our own
+        writes materialise both, so reading one direction works on a graph this
+        app built and quietly fails on an imported one, which is exactly the
+        graph validation exists for. A broader-only import made every parent
+        look like an orphan; a narrower-only import hid the hierarchy from the
+        checks that walk it.
+        """
         known = {c["uri"] for c in concepts}
-        return {
-            c["uri"]: [u for u in c["broader_uris"] if u in known] for c in concepts
-        }
+        parents: dict[str, set[str]] = {uri: set() for uri in known}
+        children: dict[str, set[str]] = {uri: set() for uri in known}
+        related: dict[str, set[str]] = {uri: set() for uri in known}
+        for concept in concepts:
+            uri = concept["uri"]
+            for target in concept["broader_uris"]:
+                if target in known:
+                    parents[uri].add(target)
+                    children[target].add(uri)
+            for target in concept["narrower_uris"]:
+                if target in known:
+                    children[uri].add(target)
+                    parents[target].add(uri)
+            for target in concept["related_uris"]:
+                if target in known:
+                    related[uri].add(target)
+                    related[target].add(uri)
+        return (
+            {uri: sorted(v) for uri, v in parents.items()},
+            {uri: sorted(v) for uri, v in children.items()},
+            {uri: sorted(v) for uri, v in related.items()},
+        )
+
+    @classmethod
+    def _skos_parent_map(cls, concepts: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """URI -> its broader URIs, from both asserted directions."""
+        return cls._skos_link_maps(concepts)[0]
 
     @staticmethod
     def _skos_ancestors(parents: dict[str, list[str]], start: str) -> set[str]:
@@ -3785,7 +3821,12 @@ class OntologyManager:
                         )
                     )
 
-            pref_values = {item["value"] for item in labels["prefLabel"]}
+            # (value, language), not value alone: an RDF literal's language is
+            # part of its identity, so a prefLabel "Bank"@en and an altLabel
+            # "Bank"@de are different objects and S13 is not violated.
+            pref_values = {
+                (item["value"], item["lang"]) for item in labels["prefLabel"]
+            }
             for kind in self.SKOS_LABEL_KINDS:
                 for item in labels[kind]:
                     if not item["value"].strip():
@@ -3811,7 +3852,10 @@ class OntologyManager:
                     # the Literal is constructed, by the API and by the parser
                     # alike, and it refuses exactly what languages.py refuses,
                     # so such a literal cannot reach this graph to be found.
-                    if kind != "prefLabel" and item["value"] in pref_values:
+                    if (
+                        kind != "prefLabel"
+                        and (item["value"], item["lang"]) in pref_values
+                    ):
                         issues.append(
                             self._skos_issue(
                                 "warning",
@@ -3823,18 +3867,22 @@ class OntologyManager:
                             )
                         )
 
-            notation = self.graph.value(URIRef(concept["uri"]), SKOS.notation)
-            if isinstance(notation, Literal) and notation.language:
-                issues.append(
-                    self._skos_issue(
-                        "warning",
-                        "notation_lang_tagged",
-                        concept,
-                        f"notation '{notation}' on '{name}' carries a language "
-                        "tag; a notation is a code in a symbol scheme and takes "
-                        "a datatype instead (SKOS Reference 6.5)",
+            # Every notation, not ``graph.value``'s arbitrary one: a concept
+            # carrying a correct typed notation alongside a language-tagged one
+            # would otherwise be reported or not depending on iteration order.
+            for notation in self.graph.objects(URIRef(concept["uri"]), SKOS.notation):
+                if isinstance(notation, Literal) and notation.language:
+                    issues.append(
+                        self._skos_issue(
+                            "warning",
+                            "notation_lang_tagged",
+                            concept,
+                            f"notation '{notation}' on '{name}' carries a "
+                            "language tag; a notation is a code in a symbol "
+                            "scheme and takes a datatype instead "
+                            "(SKOS Reference 6.5)",
+                        )
                     )
-                )
         return issues
 
     def _skos_relation_issues(
@@ -3843,7 +3891,7 @@ class OntologyManager:
         """Semantic relations: self-links, dangling targets, and S27 clashes."""
         issues: list[dict[str, str]] = []
         shown = self._skos_display_names(concepts)
-        parents = self._skos_parent_map(concepts)
+        parents, _children, related_map = self._skos_link_maps(concepts)
         known = set(shown)
 
         for concept in concepts:
@@ -3875,7 +3923,7 @@ class OntologyManager:
                         )
 
             ancestry = self._skos_ancestors(parents, uri)
-            for target in concept["related_uris"]:
+            for target in related_map[uri]:
                 if target not in known or target == uri:
                     continue
                 if target in ancestry or uri in self._skos_ancestors(parents, target):
@@ -3898,7 +3946,7 @@ class OntologyManager:
         """Shape of the hierarchy: redundant edges and stranded concepts."""
         issues: list[dict[str, str]] = []
         shown = self._skos_display_names(concepts)
-        parents = self._skos_parent_map(concepts)
+        parents, children, related_map = self._skos_link_maps(concepts)
 
         for concept in concepts:
             uri, name = concept["uri"], concept["name"]
@@ -3924,9 +3972,9 @@ class OntologyManager:
                     )
 
             if (
-                not concept["broader_uris"]
-                and not concept["narrower_uris"]
-                and not concept["related_uris"]
+                not parents[uri]
+                and not children[uri]
+                and not related_map[uri]
                 and not concept["top_of_uris"]
             ):
                 issues.append(
@@ -3940,7 +3988,7 @@ class OntologyManager:
                 )
 
             for scheme_uri in concept["top_of_uris"]:
-                if set(concept["broader_uris"]) & set(
+                if set(parents[uri]) & set(
                     self._skos_concepts_in_scheme(concepts, scheme_uri)
                 ):
                     issues.append(
@@ -4070,7 +4118,7 @@ class OntologyManager:
         """Completeness and shape, all advisory: nothing here is a SKOS error."""
         issues: list[dict[str, str]] = []
         shown = self._skos_display_names(concepts)
-        parents = self._skos_parent_map(concepts)
+        parents, _children, related_map = self._skos_link_maps(concepts)
 
         for concept in concepts:
             if not concept["notes"]["definition"] and not concept["notes"]["scopeNote"]:
@@ -4087,7 +4135,7 @@ class OntologyManager:
             # Two concepts under the same parent are related by that parent
             # already; saying so again with skos:related adds nothing.
             direct = set(parents.get(concept["uri"], ()))
-            for target in concept["related_uris"]:
+            for target in related_map[concept["uri"]]:
                 if target in shown and direct & set(parents.get(target, ())):
                     issues.append(
                         self._skos_issue(
