@@ -910,8 +910,12 @@ def render_skos_literal_editor(ont, concept, ck):
             "Kind", list(kinds), key=f"add_lit_kind_{ck}", label_visibility="collapsed"
         )
     with col_lang:
+        # Collapsed like the other two: a visible label here pushes the picker
+        # onto its own line and the add row stops reading as a row.
         new_lang = language_selectbox(
-            "Language", key=f"add_lit_lang_{ck}", help="Optional."
+            "Language",
+            key=f"add_lit_lang_{ck}",
+            label_visibility="collapsed",
         )
     with col_text:
         new_text = st.text_input(
@@ -935,7 +939,7 @@ def render_skos_literal_editor(ont, concept, ck):
                 st.rerun()
 
 
-def language_selectbox(label, key, value="", help=None):
+def language_selectbox(label, key, value="", help=None, label_visibility="visible"):
     """A searchable code picker for a Language field, returning the bare tag.
 
     Options come from the active pack and read ``eng · English``, so a code can
@@ -964,6 +968,7 @@ def language_selectbox(label, key, value="", help=None):
         current_display=display,
         accept_new_options=True,
         format_func=_pad_option,
+        label_visibility=label_visibility,
         help=help
         or (
             "Optional. Pick a code from the active language pack, or type any "
