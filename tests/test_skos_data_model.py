@@ -271,6 +271,37 @@ class TestCycleGuard:
         assert _concept(chain, "Dog")["broader"] == []
         assert _concept(chain, "Mammal")["narrower"] == []
 
+    def test_add_concept_cannot_bypass_the_guard(self, om):
+        """``broader`` at creation time went straight into the graph."""
+        with pytest.raises(ValueError, match="its own broader"):
+            om.add_concept("A", broader="A")
+        assert om.get_concepts() == []
+
+    def test_rollback_survives_an_already_cyclic_graph(self, om):
+        """Restoring must put the original triples back, not re-assert them.
+
+        An imported cycle was never checked by the guard, so re-asserting one of
+        its edges during rollback is itself refused: the concept loses the
+        parent anyway and the caller sees the rollback's error rather than the
+        real one.
+        """
+        for name in ("X", "Y", "Z"):
+            om.add_concept(name)
+        # An imported X <-> Y cycle, with Z beneath X.
+        for subject, prop, obj in (
+            ("X", SKOS.broader, "Y"),
+            ("Y", SKOS.narrower, "X"),
+            ("Y", SKOS.broader, "X"),
+            ("X", SKOS.narrower, "Y"),
+            ("Z", SKOS.broader, "X"),
+        ):
+            om.graph.add((om._uri(subject), prop, om._uri(obj)))
+
+        with pytest.raises(ValueError, match="'Z' is already a narrower concept"):
+            om.set_concept_broader("X", ["Z"])
+        assert _concept(om, "X")["broader"] == ["Y"]
+        assert _concept(om, "Y")["narrower"] == ["X"]
+
     def test_poly_hierarchy_is_allowed(self, om):
         for name in ("Animal", "Pet", "Dog"):
             om.add_concept(name)

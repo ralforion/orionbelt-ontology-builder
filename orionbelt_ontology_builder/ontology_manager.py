@@ -2964,6 +2964,11 @@ class OntologyManager:
             if ref:
                 self._require_valid_name(ref)
         concept_uri = self._uri(name)
+        # Before anything is written: a broader given at creation time went
+        # straight into the graph, so ``add_concept("A", broader="A")`` minted a
+        # self-cycle the editing paths refuse.
+        if broader:
+            self._refuse_broader_cycle(concept_uri, self._uri(broader))
         self.graph.add((concept_uri, RDF.type, SKOS.Concept))
 
         if scheme:
@@ -3341,30 +3346,39 @@ class OntologyManager:
         they had. On any refusal this restores the exact prior state and
         re-raises.
 
-        Restoring cannot itself be refused: the rollback removes what this call
-        added before putting the original edges back, so the graph it writes
-        into is a subset of the one those edges were already valid in.
+        The rollback puts the original triples back verbatim rather than
+        re-asserting them through :meth:`add_concept_relation`. Those edges
+        were never checked by the guard in the first place when they arrived by
+        import, so an already-cyclic vocabulary would have its restore refused
+        too, losing the edge and reporting the rollback's error instead of the
+        real one.
         """
         uri = self._uri(concept)
         want = [self._uri(t) for t in targets]
+
+        def _edges() -> set:
+            """This concept's broader triples, with their narrower inverses."""
+            return set(self.graph.triples((uri, SKOS.broader, None))) | set(
+                self.graph.triples((None, SKOS.narrower, uri))
+            )
+
+        before = _edges()
         have = [
             o for o in self.graph.objects(uri, SKOS.broader) if isinstance(o, URIRef)
         ]
-        dropped = [o for o in have if o not in want]
-        for gone in dropped:
-            self.remove_concept_relation(uri, "broader", gone)
+        for gone in have:
+            if gone not in want:
+                self.remove_concept_relation(uri, "broader", gone)
 
-        added: list[URIRef] = []
         try:
             for target in want:
                 if target not in have:
                     self.add_concept_relation(uri, "broader", target)
-                    added.append(target)
         except ValueError:
-            for target in added:
-                self.remove_concept_relation(uri, "broader", target)
-            for gone in dropped:
-                self.add_concept_relation(uri, "broader", gone)
+            for triple in _edges():
+                self.graph.remove(triple)
+            for triple in before:
+                self.graph.add(triple)
             raise
 
     def add_concept_mapping(self, concept: str, relation: str, target: str) -> None:
@@ -3578,40 +3592,60 @@ class OntologyManager:
                     else:
                         labels_seen[key] = concept["name"]
 
-        # Broader/narrower cycle detection
+        # Broader/narrower cycle detection, over *every* parent.
+        #
+        # This used to follow ``broader[0]`` only, so a cycle reachable through
+        # a second parent was invisible. That was survivable while the UI could
+        # only set one broader; poly-hierarchy makes it reachable, so this is an
+        # iterative three-colour DFS instead. Iterative because a deep imported
+        # vocabulary would otherwise blow the recursion limit, and each cycle is
+        # canonicalised by its member set so it is reported once rather than
+        # once per member.
         concept_names = {c["name"] for c in concepts}
-        for concept in concepts:
-            visited: set[str] = set()
-            current = concept["name"]
-            chain = [current]
-            has_cycle = False
-            while True:
-                broader_list = []
-                for c in concepts:
-                    if c["name"] == current:
-                        broader_list = c["broader"]
-                        break
-                if not broader_list:
-                    break
-                next_name = broader_list[0]
-                if next_name in visited:
-                    has_cycle = True
-                    break
-                if next_name not in concept_names:
-                    break
-                visited.add(current)
-                current = next_name
-                chain.append(current)
+        parents = {
+            c["name"]: [p for p in c["broader"] if p in concept_names] for c in concepts
+        }
+        WHITE, GREY, BLACK = 0, 1, 2
+        colour = dict.fromkeys(parents, WHITE)
+        seen_cycles: set[frozenset] = set()
 
-            if has_cycle:
-                issues.append(
-                    {
-                        "severity": "error",
-                        "type": "broader_cycle",
-                        "subject": concept["name"],
-                        "message": f"Broader/narrower cycle detected: {' -> '.join(chain)}",
-                    }
-                )
+        for root in sorted(parents):
+            if colour[root] != WHITE:
+                continue
+            colour[root] = GREY
+            path = [root]
+            stack = [(root, iter(parents[root]))]
+            while stack:
+                node, remaining = stack[-1]
+                descended = False
+                for nxt in remaining:
+                    if colour.get(nxt) == GREY:
+                        # A grey node is on the current path, so we just closed
+                        # a loop. Slice the path from it to name the real cycle.
+                        cycle = path[path.index(nxt) :]
+                        if frozenset(cycle) not in seen_cycles:
+                            seen_cycles.add(frozenset(cycle))
+                            issues.append(
+                                {
+                                    "severity": "error",
+                                    "type": "broader_cycle",
+                                    "subject": cycle[0],
+                                    "message": (
+                                        "Broader/narrower cycle detected: "
+                                        + " -> ".join([*cycle, nxt])
+                                    ),
+                                }
+                            )
+                    elif colour.get(nxt, BLACK) == WHITE:
+                        colour[nxt] = GREY
+                        path.append(nxt)
+                        stack.append((nxt, iter(parents[nxt])))
+                        descended = True
+                        break
+                if not descended:
+                    colour[node] = BLACK
+                    stack.pop()
+                    path.pop()
 
         return issues
 
