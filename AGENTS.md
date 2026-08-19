@@ -59,7 +59,14 @@ pytest                                    # testpaths/pythonpath configured in p
 pytest tests/test_classes.py -q           # a single file
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx, pyvis. Python >= 3.10.
+Dependencies: streamlit, rdflib, owlrl, networkx, pyvis. Python >= 3.12.
+
+The floor is 3.12 because that is the oldest runtime CI keeps green, and
+because both deployment targets are at or above it (Streamlit Community
+Cloud defaults to 3.12, the Docker image ships 3.14). Raising it is a
+three-file change guarded by a test: `pyproject.toml`, the README badge,
+and the CI matrix in `.github/workflows/ci.yml` must agree, and
+`tests/test_python_floor.py` fails if they drift.
 
 ## Conventions
 
