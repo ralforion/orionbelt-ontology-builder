@@ -730,16 +730,72 @@ def render_skos_vocabulary():
 
     if _skos_tab == "SKOS Validation":
         st.subheader("SKOS Validation")
+        st.caption(
+            "Errors are conditions the SKOS Reference states outright. "
+            "Conventions are thesaurus practice; editorial checks are about "
+            "completeness. Both advisory tiers can be switched off, which is "
+            "what makes this usable on a large imported vocabulary."
+        )
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            _conventions = st.checkbox(
+                "Conventions (warnings)", value=True, key="skos_check_conventions"
+            )
+        with _c2:
+            _editorial = st.checkbox(
+                "Editorial (info)", value=True, key="skos_check_editorial"
+            )
+
+        # Rendered from the engine's catalogue, not retyped here: a check code
+        # like `hierarchy_redundancy` means nothing on its own, and a reference
+        # maintained separately from the checks drifts from them.
+        with st.expander("What is checked", expanded=False):
+            for _sev, _title in (
+                ("error", "Errors — always checked"),
+                ("warning", "Conventions — the warnings checkbox"),
+                ("info", "Editorial — the info checkbox"),
+            ):
+                st.markdown(f"**{_title}**")
+                for _kind, _entry in ont.SKOS_CHECKS.items():
+                    if _entry["severity"] == _sev:
+                        st.markdown(
+                            f"- `{_kind}` — {_entry['summary']} "
+                            f"<span style='opacity:.6'>({_entry['source']})</span>",
+                            unsafe_allow_html=True,
+                        )
+
         if st.button("Run SKOS Validation", key="run_skos_validation"):
-            issues = ont.validate_skos()
-            if not issues:
+            st.session_state["_skos_issues"] = ont.validate_skos(
+                check_conventions=_conventions, check_editorial=_editorial
+            )
+
+        if (_issues := st.session_state.get("_skos_issues")) is not None:
+            if not _issues:
                 st.success("No SKOS issues found!")
             else:
-                for issue in issues:
-                    severity = issue["severity"]
-                    icon = {"error": "🔴", "warning": "🟡", "info": "🔵"}.get(
-                        severity, "⚪"
+                _icons = {"error": "🔴", "warning": "🟡", "info": "🔵"}
+                _counts: dict[str, int] = {}
+                for _issue in _issues:
+                    _counts[_issue["severity"]] = _counts.get(_issue["severity"], 0) + 1
+                st.write(
+                    " · ".join(
+                        f"{_icons[_sev]} {_counts[_sev]} "
+                        f"{_sev}{'s' if _counts[_sev] != 1 else ''}"
+                        for _sev in ("error", "warning", "info")
+                        if _counts.get(_sev)
                     )
-                    st.markdown(
-                        f"{icon} **{issue['type']}** — {issue['subject']}: {issue['message']}"
-                    )
+                )
+
+                # Grouped by check, not a flat list: a real vocabulary produces
+                # hundreds of issues and "37 concepts have no definition" is one
+                # decision, while thirty-seven lines of it is a wall.
+                _by_type: dict[str, list[dict[str, str]]] = {}
+                for _issue in _issues:
+                    _by_type.setdefault(_issue["type"], []).append(_issue)
+                for _kind, _group in _by_type.items():
+                    _sev = _group[0]["severity"]
+                    with st.expander(
+                        f"{_icons[_sev]} {_kind} — {len(_group)}", expanded=False
+                    ):
+                        for _issue in _group:
+                            st.markdown(f"- {_issue['message']}")
