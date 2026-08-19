@@ -3570,7 +3570,11 @@ class OntologyManager:
         # prefLabel in several languages, and flattening picks one, so a clash
         # in any other language went unreported.
         for scheme in schemes:
-            scheme_concepts = self.get_concepts(scheme=scheme["name"])
+            # By URI, not by local name: two schemes can share a local name
+            # across namespaces (issue #87 part B), and resolving by name picks
+            # whichever the store yields first, so one scheme's concepts get
+            # checked twice and the other's not at all.
+            scheme_concepts = self.get_concepts(scheme=scheme["uri"])
             labels_seen: dict[tuple[str, str], str] = {}
             for concept in scheme_concepts:
                 for item in concept["labels"]["prefLabel"]:
@@ -3601,9 +3605,24 @@ class OntologyManager:
         # vocabulary would otherwise blow the recursion limit, and each cycle is
         # canonicalised by its member set so it is reported once rather than
         # once per member.
-        concept_names = {c["name"] for c in concepts}
+        # Keyed by URI, for the same reason as the scheme lookup above: two
+        # concepts can share a local name across namespaces, and a name-keyed
+        # map silently collapses them into one node. That both hides real
+        # cycles and invents false ones, depending on which of the two the
+        # store happens to yield last.
+        known = {c["uri"] for c in concepts}
         parents = {
-            c["name"]: [p for p in c["broader"] if p in concept_names] for c in concepts
+            c["uri"]: [u for u in c["broader_uris"] if u in known] for c in concepts
+        }
+        # Local name where it identifies the concept, full URI where it does
+        # not: a cycle between two concepts that share a name renders as
+        # "A -> A -> A", which says nothing about which A.
+        name_counts: dict[str, int] = {}
+        for c in concepts:
+            name_counts[c["name"]] = name_counts.get(c["name"], 0) + 1
+        shown = {
+            c["uri"]: (c["name"] if name_counts[c["name"]] == 1 else c["uri"])
+            for c in concepts
         }
         WHITE, GREY, BLACK = 0, 1, 2
         colour = dict.fromkeys(parents, WHITE)
@@ -3629,10 +3648,10 @@ class OntologyManager:
                                 {
                                     "severity": "error",
                                     "type": "broader_cycle",
-                                    "subject": cycle[0],
+                                    "subject": shown[cycle[0]],
                                     "message": (
                                         "Broader/narrower cycle detected: "
-                                        + " -> ".join([*cycle, nxt])
+                                        + " -> ".join(shown[u] for u in [*cycle, nxt])
                                     ),
                                 }
                             )

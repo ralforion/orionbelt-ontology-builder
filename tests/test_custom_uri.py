@@ -319,6 +319,53 @@ def test_get_concepts_exposes_uris():
     assert narrow["broader_uris"] == [BASE + "Broad"]
 
 
+def test_skos_validation_keys_cycles_by_uri_not_local_name():
+    """Two concepts sharing a local name are two nodes, not one.
+
+    ``validate_skos`` built its hierarchy from local names, so both collapsed
+    into a single node. Depending on which the store yielded last, that either
+    hid the edge entirely or turned an acyclic ``base#A broader ext#A`` into a
+    self-cycle on "A".
+    """
+    om = _om()
+    om.add_concept("A")
+    om.add_concept("Tmp")
+    om.rename_concept("Tmp", EXT + "A")  # same local name, other namespace
+    om.graph.add((URIRef(BASE + "A"), SKOS.broader, URIRef(EXT + "A")))
+
+    assert not [i for i in om.validate_skos() if i["type"] == "broader_cycle"]
+
+
+def test_skos_validation_still_finds_a_real_cycle_across_namespaces():
+    om = _om()
+    om.add_concept("A")
+    om.add_concept("Tmp")
+    om.rename_concept("Tmp", EXT + "A")
+    om.graph.add((URIRef(BASE + "A"), SKOS.broader, URIRef(EXT + "A")))
+    om.graph.add((URIRef(EXT + "A"), SKOS.broader, URIRef(BASE + "A")))
+
+    cycles = [i for i in om.validate_skos() if i["type"] == "broader_cycle"]
+    assert len(cycles) == 1
+    # Named by URI, since "A -> A -> A" would not say which A.
+    assert BASE + "A" in cycles[0]["message"]
+    assert EXT + "A" in cycles[0]["message"]
+
+
+def test_duplicate_pref_label_resolves_the_scheme_by_uri():
+    """Resolving the scheme by local name checked one twice and the other not
+    at all, so a duplicate in the second scheme went unreported."""
+    om = _om()
+    om.add_concept_scheme("Scheme")  # base#Scheme, left empty
+    om.add_concept_scheme("Tmp")
+    om.rename_concept_scheme("Tmp", EXT + "Scheme")
+    for name in ("X", "Y"):
+        om.add_concept(name, scheme=EXT + "Scheme")
+        om.set_concept_label(name, "prefLabel", "Same", lang="en")
+
+    dupes = [i for i in om.validate_skos() if i["type"] == "duplicate_prefLabel"]
+    assert len(dupes) == 1
+
+
 def test_get_concepts_filter_by_scheme_uri_disambiguates():
     om = _om()
     om.add_concept_scheme("Scheme")  # base#Scheme
