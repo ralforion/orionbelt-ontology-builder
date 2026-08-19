@@ -3191,11 +3191,7 @@ class OntologyManager:
                 continue
 
             # Filter by scheme if specified
-            if (
-                scheme
-                and scheme_uri
-                and not self._concept_in_scheme(uri, scheme_uri)
-            ):
+            if scheme and scheme_uri and not self._concept_in_scheme(uri, scheme_uri):
                 continue
 
             name = self._local_name(uri)
