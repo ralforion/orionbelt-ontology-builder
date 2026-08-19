@@ -96,11 +96,61 @@ into the field, pack or no pack.
 A dedicated page for building controlled vocabularies:
 
 - Concept schemes with concept counts
-- Concepts with prefLabel, definition, broader/narrower (inverses auto-managed)
+- Concepts with labels and notes in any number of languages: `prefLabel`,
+  `altLabel`, `hiddenLabel`, `definition`, `scopeNote` and the rest
+- `notation`, top concepts, and poly-hierarchy (a concept may have several parents)
+- Full SKOS relation support (broader, narrower, related, all match types),
+  with mapping properties able to point at an external IRI such as Wikidata
+- An edge that would make a concept its own ancestor is refused as you save it
 - Hierarchy tree view, filterable by scheme
-- Full SKOS relation support (broader, narrower, related, all match types)
-- SKOS validation: missing prefLabels, orphans, duplicate labels, cycles
 
+#### What SKOS validation checks
+
+Twenty checks in three tiers. The page groups results by check and lets you
+switch either advisory tier off, which is what makes it usable on a large
+imported vocabulary. `validate_skos()` returns the same list to Python callers,
+each issue carrying a stable `type`, a `severity`, the `subject` concept and its
+`subject_uri`.
+
+**Errors.** Broken data, or a condition the SKOS Reference states outright. Always checked.
+
+| Check | What it means | Source |
+|---|---|---|
+| `missing_prefLabel` | The concept has no skos:prefLabel in any language. | Practice |
+| `multi_prefLabel_per_lang` | More than one skos:prefLabel shares a language tag. | SKOS Reference S14 |
+| `empty_label` | A label literal is empty or only whitespace. | Practice |
+| `self_relation` | The concept is its own broader, narrower or related. | Practice |
+| `dangling_relation` | A broader, narrower or related link points at something that is not a Concept here. Mapping properties are exempt: reaching outside the vocabulary is what they are for. | Practice |
+| `relation_clash` | Two concepts are skos:related and also connected up or down the hierarchy. | SKOS Reference S27 |
+| `broader_cycle` | A chain of skos:broader links returns to its start. | qSKOS |
+
+**Conventions.** Thesaurus practice rather than broken data. Switch off with `check_conventions=False`.
+
+| Check | What it means | Source |
+|---|---|---|
+| `missing_lang` | A label carries no language tag. | Practice |
+| `label_overlap` | The same text is used as a prefLabel and as an altLabel or hiddenLabel on one concept. | SKOS Reference S13 |
+| `duplicate_prefLabel` | Two concepts in one scheme share a prefLabel in the same language. | qSKOS |
+| `ambiguous_prefLabel` | Two concepts anywhere in the vocabulary share a prefLabel in the same language, without sharing a scheme. | qSKOS |
+| `orphan` | The concept has no broader, narrower or related concept and is not a top concept, so nothing reaches it. | qSKOS |
+| `top_with_broader` | A top concept of a scheme also has a broader concept in that same scheme. Having one in another scheme is fine. | Practice |
+| `hierarchy_redundancy` | A direct broader concept is already reachable through another parent, so the edge says nothing new. | qSKOS |
+| `mapping_within_scheme` | A mapping property links two concepts of the same scheme; it is meant for links between vocabularies. | Practice |
+| `notation_lang_tagged` | A skos:notation carries a language tag. A notation is a code in a symbol scheme and takes a datatype instead. | SKOS Reference 6.5 |
+
+**Editorial.** Completeness and vocabulary shape. Switch off with `check_editorial=False`.
+
+| Check | What it means | Source |
+|---|---|---|
+| `no_scheme` | The concept belongs to no ConceptScheme. | Practice |
+| `undocumented` | The concept has neither a definition nor a scopeNote. | Practice |
+| `valueless_association` | Two concepts are skos:related and already share a parent, which relates them anyway. | qSKOS |
+| `disconnected_components` | A cluster of concepts has no link to the main body of the vocabulary. | qSKOS |
+
+Sources cite the SKOS Reference integrity condition where the condition is
+stated there, [qSKOS](https://github.com/cmader/qSKOS) where the check comes
+from that tool's published quality criteria, and say "practice" where it is
+thesaurus convention rather than anything normative.
 ### Templates
 
 Five starter templates you can merge into or replace your current ontology: Organization, Product Catalog, Event, Person/Contact, and SKOS Thesaurus. Each is a valid Turtle snippet with a preview before you apply it.

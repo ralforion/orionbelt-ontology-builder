@@ -2807,6 +2807,162 @@ class OntologyManager:
         "changeNote": SKOS.changeNote,
     }
 
+    #: What :meth:`validate_skos` checks, keyed by the ``type`` on each issue.
+    #:
+    #: The single source of truth for the check list: the page renders its
+    #: reference from this, the README documents it from this, and
+    #: ``tests/test_skos_validation.py`` fails if the validator emits a check
+    #: this does not describe, or describes one it cannot emit.
+    #:
+    #: ``source`` cites the SKOS Reference by its integrity-condition number
+    #: where the condition is stated there, qSKOS where the check comes from
+    #: that tool's published quality criteria, and says "practice" where it is
+    #: thesaurus convention rather than anything normative. It does not invent
+    #: a citation for a check that has none.
+    SKOS_CHECKS: ClassVar[dict[str, dict[str, str]]] = {
+        # Errors: broken or contradicted by the standard. Always checked.
+        "missing_prefLabel": {
+            "severity": "error",
+            "summary": "The concept has no skos:prefLabel in any language.",
+            "source": "Practice",
+        },
+        "multi_prefLabel_per_lang": {
+            "severity": "error",
+            "summary": "More than one skos:prefLabel shares a language tag.",
+            "source": "SKOS Reference S14",
+        },
+        "empty_label": {
+            "severity": "error",
+            "summary": "A label literal is empty or only whitespace.",
+            "source": "Practice",
+        },
+        "self_relation": {
+            "severity": "error",
+            "summary": "The concept is its own broader, narrower or related.",
+            "source": "Practice",
+        },
+        "dangling_relation": {
+            "severity": "error",
+            "summary": (
+                "A broader, narrower or related link points at something that "
+                "is not a Concept here. Mapping properties are exempt: reaching "
+                "outside the vocabulary is what they are for."
+            ),
+            "source": "Practice",
+        },
+        "relation_clash": {
+            "severity": "error",
+            "summary": (
+                "Two concepts are skos:related and also connected up or down "
+                "the hierarchy."
+            ),
+            "source": "SKOS Reference S27",
+        },
+        "broader_cycle": {
+            "severity": "error",
+            "summary": "A chain of skos:broader links returns to its start.",
+            # Not a SKOS Reference integrity condition: the standard does not
+            # forbid a cycle. It is an error here because a cyclic hierarchy
+            # breaks tree rendering and every ancestor query built on it.
+            "source": "qSKOS",
+        },
+        # Conventions: stated practice rather than broken data.
+        "missing_lang": {
+            "severity": "warning",
+            "summary": "A label carries no language tag.",
+            "source": "Practice",
+        },
+        "label_overlap": {
+            "severity": "warning",
+            "summary": (
+                "The same text is used as a prefLabel and as an altLabel or "
+                "hiddenLabel on one concept."
+            ),
+            "source": "SKOS Reference S13",
+        },
+        "duplicate_prefLabel": {
+            "severity": "warning",
+            "summary": (
+                "Two concepts in one scheme share a prefLabel in the same language."
+            ),
+            "source": "qSKOS",
+        },
+        "ambiguous_prefLabel": {
+            "severity": "warning",
+            "summary": (
+                "Two concepts anywhere in the vocabulary share a prefLabel in "
+                "the same language, without sharing a scheme."
+            ),
+            "source": "qSKOS",
+        },
+        "orphan": {
+            "severity": "warning",
+            "summary": (
+                "The concept has no broader, narrower or related concept and is "
+                "not a top concept, so nothing reaches it."
+            ),
+            "source": "qSKOS",
+        },
+        "top_with_broader": {
+            "severity": "warning",
+            "summary": (
+                "A top concept of a scheme also has a broader concept in that "
+                "same scheme. Having one in another scheme is fine."
+            ),
+            "source": "Practice",
+        },
+        "hierarchy_redundancy": {
+            "severity": "warning",
+            "summary": (
+                "A direct broader concept is already reachable through another "
+                "parent, so the edge says nothing new."
+            ),
+            "source": "qSKOS",
+        },
+        "mapping_within_scheme": {
+            "severity": "warning",
+            "summary": (
+                "A mapping property links two concepts of the same scheme; it "
+                "is meant for links between vocabularies."
+            ),
+            "source": "Practice",
+        },
+        "notation_lang_tagged": {
+            "severity": "warning",
+            "summary": (
+                "A skos:notation carries a language tag. A notation is a code "
+                "in a symbol scheme and takes a datatype instead."
+            ),
+            "source": "SKOS Reference 6.5",
+        },
+        # Editorial: completeness and shape. Nothing here is wrong as such.
+        "no_scheme": {
+            "severity": "info",
+            "summary": "The concept belongs to no ConceptScheme.",
+            "source": "Practice",
+        },
+        "undocumented": {
+            "severity": "info",
+            "summary": "The concept has neither a definition nor a scopeNote.",
+            "source": "Practice",
+        },
+        "valueless_association": {
+            "severity": "info",
+            "summary": (
+                "Two concepts are skos:related and already share a parent, "
+                "which relates them anyway."
+            ),
+            "source": "qSKOS",
+        },
+        "disconnected_components": {
+            "severity": "info",
+            "summary": (
+                "A cluster of concepts has no link to the main body of the vocabulary."
+            ),
+            "source": "qSKOS",
+        },
+    }
+
     #: The subset of :attr:`SKOS_RELATIONS` that links across vocabularies, and
     #: so may point at a URI this graph does not otherwise know about.
     SKOS_MAPPING_RELATIONS: ClassVar[tuple[str, ...]] = (
@@ -3527,56 +3683,334 @@ class OntologyManager:
 
         return hierarchy
 
-    def validate_skos(self) -> list[dict[str, str]]:
-        """Validate SKOS concepts and schemes.
+    # SKOS validation is split into one method per family of checks. Each takes
+    # the already-fetched concept list so ``get_concepts()`` is walked once, and
+    # each returns issue dicts rather than appending to shared state, so a check
+    # can be read, tested and switched off on its own.
+    #
+    # Every index here is keyed by URI, never by local name: two concepts can
+    # share a local name across namespaces (issue #87 part B), and a name-keyed
+    # map silently merges them.
 
-        Checks:
-        - Missing prefLabel
-        - Concept not in any scheme
-        - Orphan concepts (no broader and not top concept)
-        - Duplicate prefLabels within a scheme
-        - Broader/narrower cycles
+    @staticmethod
+    def _skos_issue(
+        severity: str, kind: str, concept: dict[str, Any], message: str
+    ) -> dict[str, str]:
+        """One issue, carrying the subject's URI as well as its display name.
+
+        ``subject_uri`` is what the UI navigates by; resolving ``subject``
+        through the base namespace would land on the wrong concept whenever two
+        share a local name.
         """
-        issues = []
+        return {
+            "severity": severity,
+            "type": kind,
+            "subject": concept["name"],
+            "subject_uri": concept["uri"],
+            "message": message,
+        }
 
-        concepts = self.get_concepts()
-        schemes = self.get_concept_schemes()
+    def _skos_display_names(self, concepts: list[dict[str, Any]]) -> dict[str, str]:
+        """URI -> the shortest label that still identifies the concept.
+
+        The local name where it is unique, the full URI where it is not, so a
+        message about two concepts sharing a name does not read as one concept.
+        """
+        counts: dict[str, int] = {}
+        for concept in concepts:
+            counts[concept["name"]] = counts.get(concept["name"], 0) + 1
+        return {
+            c["uri"]: (c["name"] if counts[c["name"]] == 1 else c["uri"])
+            for c in concepts
+        }
+
+    @staticmethod
+    def _skos_parent_map(concepts: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """URI -> its broader URIs, restricted to concepts this graph knows."""
+        known = {c["uri"] for c in concepts}
+        return {
+            c["uri"]: [u for u in c["broader_uris"] if u in known] for c in concepts
+        }
+
+    @staticmethod
+    def _skos_ancestors(parents: dict[str, list[str]], start: str) -> set[str]:
+        """Every concept above ``start``, cycle-safe.
+
+        A vocabulary that arrived by import may already contain a cycle, so this
+        carries a visited set rather than trusting the hierarchy to be acyclic.
+        """
+        seen: set[str] = set()
+        stack = list(parents.get(start, ()))
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            stack.extend(parents.get(node, ()))
+        return seen
+
+    def _skos_label_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Labels: presence, language tagging, and the SKOS disjointness rules."""
+        issues: list[dict[str, str]] = []
+        for concept in concepts:
+            labels = concept["labels"]
+            name = concept["name"]
+
+            if not labels["prefLabel"]:
+                issues.append(
+                    self._skos_issue(
+                        "error",
+                        "missing_prefLabel",
+                        concept,
+                        f"Concept '{name}' has no prefLabel",
+                    )
+                )
+
+            by_lang: dict[str, int] = {}
+            for item in labels["prefLabel"]:
+                by_lang[item["lang"]] = by_lang.get(item["lang"], 0) + 1
+            for lang, count in sorted(by_lang.items()):
+                if count > 1:
+                    tag = f"@{lang}" if lang else " (untagged)"
+                    issues.append(
+                        self._skos_issue(
+                            "error",
+                            "multi_prefLabel_per_lang",
+                            concept,
+                            f"Concept '{name}' has {count} prefLabels{tag}; SKOS "
+                            "allows at most one per language tag "
+                            "(SKOS Reference S14)",
+                        )
+                    )
+
+            pref_values = {item["value"] for item in labels["prefLabel"]}
+            for kind in self.SKOS_LABEL_KINDS:
+                for item in labels[kind]:
+                    if not item["value"].strip():
+                        issues.append(
+                            self._skos_issue(
+                                "error",
+                                "empty_label",
+                                concept,
+                                f"Concept '{name}' has an empty {kind}",
+                            )
+                        )
+                    elif not item["lang"]:
+                        issues.append(
+                            self._skos_issue(
+                                "warning",
+                                "missing_lang",
+                                concept,
+                                f"{kind} '{item['value']}' on '{name}' has no "
+                                "language tag",
+                            )
+                        )
+                    # No malformed-tag check here. rdflib refuses a bad tag when
+                    # the Literal is constructed, by the API and by the parser
+                    # alike, and it refuses exactly what languages.py refuses,
+                    # so such a literal cannot reach this graph to be found.
+                    if kind != "prefLabel" and item["value"] in pref_values:
+                        issues.append(
+                            self._skos_issue(
+                                "warning",
+                                "label_overlap",
+                                concept,
+                                f"'{item['value']}' is both a prefLabel and a "
+                                f"{kind} on '{name}'; the three label properties "
+                                "are pairwise disjoint (SKOS Reference S13)",
+                            )
+                        )
+
+            notation = self.graph.value(URIRef(concept["uri"]), SKOS.notation)
+            if isinstance(notation, Literal) and notation.language:
+                issues.append(
+                    self._skos_issue(
+                        "warning",
+                        "notation_lang_tagged",
+                        concept,
+                        f"notation '{notation}' on '{name}' carries a language "
+                        "tag; a notation is a code in a symbol scheme and takes "
+                        "a datatype instead (SKOS Reference 6.5)",
+                    )
+                )
+        return issues
+
+    def _skos_relation_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Semantic relations: self-links, dangling targets, and S27 clashes."""
+        issues: list[dict[str, str]] = []
+        shown = self._skos_display_names(concepts)
+        parents = self._skos_parent_map(concepts)
+        known = set(shown)
 
         for concept in concepts:
-            # Missing prefLabel
-            if not concept["prefLabel"]:
+            uri, name = concept["uri"], concept["name"]
+
+            for kind in ("broader", "narrower", "related"):
+                targets = concept[f"{kind}_uris"]
+                if uri in targets:
+                    issues.append(
+                        self._skos_issue(
+                            "error",
+                            "self_relation",
+                            concept,
+                            f"Concept '{name}' is its own {kind}",
+                        )
+                    )
+                # Mapping properties are excluded on purpose: pointing outside
+                # this graph is the whole point of exactMatch and friends.
+                for target in targets:
+                    if target not in known:
+                        issues.append(
+                            self._skos_issue(
+                                "error",
+                                "dangling_relation",
+                                concept,
+                                f"{kind} on '{name}' points at {target}, which "
+                                "is not a Concept in this vocabulary",
+                            )
+                        )
+
+            ancestry = self._skos_ancestors(parents, uri)
+            for target in concept["related_uris"]:
+                if target not in known or target == uri:
+                    continue
+                if target in ancestry or uri in self._skos_ancestors(parents, target):
+                    issues.append(
+                        self._skos_issue(
+                            "error",
+                            "relation_clash",
+                            concept,
+                            f"'{name}' is related to '{shown[target]}' and also "
+                            "hierarchically connected to it; skos:related is "
+                            "disjoint with skos:broaderTransitive "
+                            "(SKOS Reference S27)",
+                        )
+                    )
+        return issues
+
+    def _skos_hierarchy_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Shape of the hierarchy: redundant edges and stranded concepts."""
+        issues: list[dict[str, str]] = []
+        shown = self._skos_display_names(concepts)
+        parents = self._skos_parent_map(concepts)
+
+        for concept in concepts:
+            uri, name = concept["uri"], concept["name"]
+
+            # A direct parent that is also an ancestor through another parent
+            # says nothing the hierarchy does not already say.
+            direct = parents.get(uri, [])
+            for parent in direct:
+                via_others = set()
+                for other in direct:
+                    if other != parent:
+                        via_others |= self._skos_ancestors(parents, other)
+                if parent in via_others:
+                    issues.append(
+                        self._skos_issue(
+                            "warning",
+                            "hierarchy_redundancy",
+                            concept,
+                            f"broader '{shown[parent]}' on '{name}' is already "
+                            "reachable through another parent (qSKOS: "
+                            "hierarchical redundancy)",
+                        )
+                    )
+
+            if (
+                not concept["broader_uris"]
+                and not concept["narrower_uris"]
+                and not concept["related_uris"]
+                and not concept["top_of_uris"]
+            ):
                 issues.append(
-                    {
-                        "severity": "warning",
-                        "type": "missing_prefLabel",
-                        "subject": concept["name"],
-                        "message": f"Concept '{concept['name']}' has no prefLabel",
-                    }
+                    self._skos_issue(
+                        "warning",
+                        "orphan",
+                        concept,
+                        f"Concept '{name}' has no broader, narrower or related "
+                        "concept and is not a top concept (qSKOS: orphan concept)",
+                    )
                 )
 
-            # Not in any scheme
-            if not concept["schemes"] and schemes:
+            for scheme_uri in concept["top_of_uris"]:
+                if set(concept["broader_uris"]) & set(
+                    self._skos_concepts_in_scheme(concepts, scheme_uri)
+                ):
+                    issues.append(
+                        self._skos_issue(
+                            "warning",
+                            "top_with_broader",
+                            concept,
+                            f"'{name}' is a top concept of "
+                            f"'{self._local_name(URIRef(scheme_uri))}' but also "
+                            "has a broader concept in that same scheme",
+                        )
+                    )
+        return issues
+
+    @staticmethod
+    def _skos_concepts_in_scheme(
+        concepts: list[dict[str, Any]], scheme_uri: str
+    ) -> set[str]:
+        """URIs of the concepts in one scheme, addressed by the scheme's URI."""
+        return {c["uri"] for c in concepts if scheme_uri in c["scheme_uris"]}
+
+    def _skos_scheme_issues(
+        self, concepts: list[dict[str, Any]], schemes: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Scheme membership, label clashes, and cross-scheme mapping misuse."""
+        issues: list[dict[str, str]] = []
+        shown = self._skos_display_names(concepts)
+
+        for concept in concepts:
+            if not concept["scheme_uris"] and schemes:
                 issues.append(
-                    {
-                        "severity": "info",
-                        "type": "no_scheme",
-                        "subject": concept["name"],
-                        "message": f"Concept '{concept['name']}' is not in any ConceptScheme",
-                    }
+                    self._skos_issue(
+                        "info",
+                        "no_scheme",
+                        concept,
+                        f"Concept '{concept['name']}' is not in any ConceptScheme",
+                    )
                 )
 
-        # Duplicate prefLabels within schemes. Compared per language tag, not
-        # through the flattened compatibility value: a concept may carry a
-        # prefLabel in several languages, and flattening picks one, so a clash
-        # in any other language went unreported.
+            # A mapping property is for reaching another vocabulary. Between two
+            # concepts of the same scheme, a semantic relation is meant instead.
+            for relation in self.SKOS_MAPPING_RELATIONS:
+                for target in concept["mappings"][relation]:
+                    shared = set(concept["scheme_uris"]) & {
+                        s
+                        for c in concepts
+                        if c["uri"] == target
+                        for s in c["scheme_uris"]
+                    }
+                    if shared:
+                        issues.append(
+                            self._skos_issue(
+                                "warning",
+                                "mapping_within_scheme",
+                                concept,
+                                f"{relation} links '{concept['name']}' to "
+                                f"'{shown.get(target, target)}' in the same "
+                                "scheme; mapping properties are for links "
+                                "between vocabularies",
+                            )
+                        )
+
+        # Duplicate prefLabels within a scheme. Compared per language tag rather
+        # than through the flattened compatibility value, and the scheme is
+        # addressed by URI: two schemes can share a local name, and resolving by
+        # name checks one twice and the other not at all.
+        same_scheme_pairs: set[tuple[str, str, str, str]] = set()
         for scheme in schemes:
-            # By URI, not by local name: two schemes can share a local name
-            # across namespaces (issue #87 part B), and resolving by name picks
-            # whichever the store yields first, so one scheme's concepts get
-            # checked twice and the other's not at all.
-            scheme_concepts = self.get_concepts(scheme=scheme["uri"])
-            labels_seen: dict[tuple[str, str], str] = {}
-            for concept in scheme_concepts:
+            seen: dict[tuple[str, str], dict[str, Any]] = {}
+            for concept in self.get_concepts(scheme=scheme["uri"]):
                 for item in concept["labels"]["prefLabel"]:
                     key = (item["lang"], item["value"])
                     tagged = (
@@ -3584,46 +4018,157 @@ class OntologyManager:
                         if item["lang"]
                         else f"'{item['value']}'"
                     )
-                    if key in labels_seen:
+                    if key in seen:
+                        first = seen[key]
+                        same_scheme_pairs.add((*key, first["uri"], concept["uri"]))
                         issues.append(
-                            {
-                                "severity": "warning",
-                                "type": "duplicate_prefLabel",
-                                "subject": concept["name"],
-                                "message": f"Duplicate prefLabel {tagged} in scheme '{scheme['name']}' (also on '{labels_seen[key]}')",
-                            }
+                            self._skos_issue(
+                                "warning",
+                                "duplicate_prefLabel",
+                                concept,
+                                f"Duplicate prefLabel {tagged} in scheme "
+                                f"'{scheme['name']}' (also on "
+                                f"'{shown[first['uri']]}')",
+                            )
                         )
                     else:
-                        labels_seen[key] = concept["name"]
+                        seen[key] = concept
 
-        # Broader/narrower cycle detection, over *every* parent.
-        #
-        # This used to follow ``broader[0]`` only, so a cycle reachable through
-        # a second parent was invisible. That was survivable while the UI could
-        # only set one broader; poly-hierarchy makes it reachable, so this is an
-        # iterative three-colour DFS instead. Iterative because a deep imported
-        # vocabulary would otherwise blow the recursion limit, and each cycle is
-        # canonicalised by its member set so it is reported once rather than
-        # once per member.
-        # Keyed by URI, for the same reason as the scheme lookup above: two
-        # concepts can share a local name across namespaces, and a name-keyed
-        # map silently collapses them into one node. That both hides real
-        # cycles and invents false ones, depending on which of the two the
-        # store happens to yield last.
-        known = {c["uri"] for c in concepts}
-        parents = {
-            c["uri"]: [u for u in c["broader_uris"] if u in known] for c in concepts
-        }
-        # Local name where it identifies the concept, full URI where it does
-        # not: a cycle between two concepts that share a name renders as
-        # "A -> A -> A", which says nothing about which A.
-        name_counts: dict[str, int] = {}
-        for c in concepts:
-            name_counts[c["name"]] = name_counts.get(c["name"], 0) + 1
-        shown = {
-            c["uri"]: (c["name"] if name_counts[c["name"]] == 1 else c["uri"])
-            for c in concepts
-        }
+        # The same clash across the whole vocabulary. Pairs already reported
+        # above are skipped rather than reported twice: within-scheme and
+        # vocabulary-wide duplication are different problems, and a reader who
+        # has seen the first does not need the second for the same two concepts.
+        vocabulary: dict[tuple[str, str], dict[str, Any]] = {}
+        for concept in concepts:
+            for item in concept["labels"]["prefLabel"]:
+                key = (item["lang"], item["value"])
+                tagged = (
+                    f"'{item['value']}'@{item['lang']}"
+                    if item["lang"]
+                    else f"'{item['value']}'"
+                )
+                earlier = vocabulary.get(key)
+                if earlier is None:
+                    vocabulary[key] = concept
+                    continue
+                if (*key, earlier["uri"], concept["uri"]) in same_scheme_pairs:
+                    continue
+                issues.append(
+                    self._skos_issue(
+                        "warning",
+                        "ambiguous_prefLabel",
+                        concept,
+                        f"prefLabel {tagged} is also on '{shown[earlier['uri']]}' "
+                        "elsewhere in this vocabulary (qSKOS: ambiguous label)",
+                    )
+                )
+        return issues
+
+    def _skos_editorial_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Completeness and shape, all advisory: nothing here is a SKOS error."""
+        issues: list[dict[str, str]] = []
+        shown = self._skos_display_names(concepts)
+        parents = self._skos_parent_map(concepts)
+
+        for concept in concepts:
+            if not concept["notes"]["definition"] and not concept["notes"]["scopeNote"]:
+                issues.append(
+                    self._skos_issue(
+                        "info",
+                        "undocumented",
+                        concept,
+                        f"Concept '{concept['name']}' has neither a definition "
+                        "nor a scopeNote",
+                    )
+                )
+
+            # Two concepts under the same parent are related by that parent
+            # already; saying so again with skos:related adds nothing.
+            direct = set(parents.get(concept["uri"], ()))
+            for target in concept["related_uris"]:
+                if target in shown and direct & set(parents.get(target, ())):
+                    issues.append(
+                        self._skos_issue(
+                            "info",
+                            "valueless_association",
+                            concept,
+                            f"'{concept['name']}' is related to "
+                            f"'{shown[target]}' and both share a parent "
+                            "(qSKOS: valueless associative relation)",
+                        )
+                    )
+
+        issues.extend(self._skos_component_issues(concepts))
+        return issues
+
+    def _skos_component_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Clusters with no connection to the bulk of the vocabulary.
+
+        Reported per stranded cluster rather than once for the vocabulary, so
+        each issue names a concept the user can open. The largest cluster is
+        taken as the vocabulary proper and is not reported.
+        """
+        known = {c["uri"]: c for c in concepts}
+        adjacency: dict[str, set[str]] = {uri: set() for uri in known}
+        for concept in concepts:
+            for key in ("broader_uris", "narrower_uris", "related_uris"):
+                for target in concept[key]:
+                    if target in known:
+                        adjacency[concept["uri"]].add(target)
+                        adjacency[target].add(concept["uri"])
+
+        seen: set[str] = set()
+        components: list[list[str]] = []
+        for uri in sorted(known):
+            if uri in seen:
+                continue
+            stack, cluster = [uri], []
+            seen.add(uri)
+            while stack:
+                node = stack.pop()
+                cluster.append(node)
+                for neighbour in sorted(adjacency[node]):
+                    if neighbour not in seen:
+                        seen.add(neighbour)
+                        stack.append(neighbour)
+            components.append(sorted(cluster))
+
+        if len(components) < 2:
+            return []
+        components.sort(key=lambda c: (-len(c), c[0]))
+        biggest = len(components[0])
+        return [
+            self._skos_issue(
+                "info",
+                "disconnected_components",
+                known[cluster[0]],
+                f"'{known[cluster[0]]['name']}' is in a cluster of "
+                f"{len(cluster)} concept{'s' if len(cluster) != 1 else ''} with "
+                f"no link to the main body of {biggest} "
+                "(qSKOS: disconnected concept cluster)",
+            )
+            for cluster in components[1:]
+        ]
+
+    def _skos_cycle_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Every distinct ``skos:broader`` cycle, reported once.
+
+        An iterative three-colour DFS over *all* parents. Iterative because an
+        imported vocabulary can be deeper than the recursion limit, over all
+        parents because following only the first missed any cycle reachable
+        through a second, and canonicalised by member set so a cycle is not
+        reported once per member.
+        """
+        issues: list[dict[str, str]] = []
+        parents = self._skos_parent_map(concepts)
+        shown = self._skos_display_names(concepts)
+        by_uri = {c["uri"]: c for c in concepts}
         WHITE, GREY, BLACK = 0, 1, 2
         colour = dict.fromkeys(parents, WHITE)
         seen_cycles: set[frozenset] = set()
@@ -3645,15 +4190,13 @@ class OntologyManager:
                         if frozenset(cycle) not in seen_cycles:
                             seen_cycles.add(frozenset(cycle))
                             issues.append(
-                                {
-                                    "severity": "error",
-                                    "type": "broader_cycle",
-                                    "subject": shown[cycle[0]],
-                                    "message": (
-                                        "Broader/narrower cycle detected: "
-                                        + " -> ".join(shown[u] for u in [*cycle, nxt])
-                                    ),
-                                }
+                                self._skos_issue(
+                                    "error",
+                                    "broader_cycle",
+                                    by_uri[cycle[0]],
+                                    "Broader/narrower cycle detected: "
+                                    + " -> ".join(shown[u] for u in [*cycle, nxt]),
+                                )
                             )
                     elif colour.get(nxt, BLACK) == WHITE:
                         colour[nxt] = GREY
@@ -3665,8 +4208,55 @@ class OntologyManager:
                     colour[node] = BLACK
                     stack.pop()
                     path.pop()
-
         return issues
+
+    def validate_skos(
+        self,
+        *,
+        check_editorial: bool = True,
+        check_conventions: bool = True,
+    ) -> list[dict[str, str]]:
+        """Validate a SKOS vocabulary against the Reference and common practice.
+
+        Three tiers, so a large imported vocabulary can be checked for real
+        errors without drowning in advice:
+
+        - **error** — conditions the SKOS Reference states outright, plus
+          structural breakage (a cycle, a relation to something that is not a
+          concept). Always checked.
+        - **warning** — stated conventions and thesaurus practice. Gated by
+          ``check_conventions``.
+        - **info** — editorial completeness and vocabulary shape. Gated by
+          ``check_editorial``.
+
+        Each issue carries ``severity``, ``type``, ``subject``, ``subject_uri``
+        and ``message``. ``type`` is stable, so the UI can group by it and the
+        autofixers can target it; ``subject_uri`` is what to navigate by, since
+        two concepts may share a local name.
+        """
+        concepts = self.get_concepts()
+        schemes = self.get_concept_schemes()
+
+        issues = self._skos_label_issues(concepts)
+        issues += self._skos_relation_issues(concepts)
+        issues += self._skos_cycle_issues(concepts)
+        issues += self._skos_scheme_issues(concepts, schemes)
+        if check_editorial:
+            issues += self._skos_editorial_issues(concepts)
+        # Hierarchy shape is the most expensive family (an ancestor walk per
+        # parent per concept) and every issue in it is advisory, so it is
+        # skipped wholesale rather than computed and filtered away.
+        if check_conventions:
+            issues += self._skos_hierarchy_issues(concepts)
+        else:
+            issues = [i for i in issues if i["severity"] != "warning"]
+        if not check_editorial:
+            issues = [i for i in issues if i["severity"] != "info"]
+
+        order = {"error": 0, "warning": 1, "info": 2}
+        return sorted(
+            issues, key=lambda i: (order[i["severity"]], i["type"], i["subject"])
+        )
 
     # ==================== RELATIONS OPERATIONS ====================
 

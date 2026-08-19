@@ -217,6 +217,35 @@ class TestValidateSKOS:
                 om.graph.add((om._uri(f"c{i}"), SKOS.broader, om._uri(f"c{i - 1}")))
         assert not [i for i in om.validate_skos() if i["type"] == "broader_cycle"]
 
-    def test_valid_skos_no_issues(self, skos_om):
-        issues = skos_om.validate_skos()
-        assert len(issues) == 0
+    def test_valid_skos_no_errors(self, skos_om):
+        """The fixture is well-formed SKOS, so nothing is an error.
+
+        It is not fully *documented* SKOS: its labels carry no language tag and
+        its concepts have no definitions, which the convention and editorial
+        tiers rightly mention. Turning those off is what "is this valid?" means.
+        """
+        issues = skos_om.validate_skos(check_editorial=False, check_conventions=False)
+        assert issues == []
+
+    def test_a_fully_documented_vocabulary_is_silent_at_every_tier(self):
+        """The stronger guarantee: a vocabulary with nothing to say about it.
+
+        Worth having as well as the error-only check above, because most of the
+        new checks are advisory and a false positive in one of them would
+        otherwise only show up as noise on a real vocabulary.
+        """
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_concept_scheme("Scheme", label="Scheme")
+        om.add_concept("Animal", scheme="Scheme")
+        om.set_concept_label("Animal", "prefLabel", "Animal", lang="en")
+        om.set_concept_note("Animal", "definition", "A living organism", lang="en")
+        om.set_top_concept("Animal", "Scheme")
+        for name, label, text in (
+            ("Dog", "Dog", "A domesticated canine"),
+            ("Cat", "Cat", "A domesticated feline"),
+        ):
+            om.add_concept(name, scheme="Scheme", broader="Animal")
+            om.set_concept_label(name, "prefLabel", label, lang="en")
+            om.set_concept_note(name, "definition", text, lang="en")
+
+        assert om.validate_skos() == []
