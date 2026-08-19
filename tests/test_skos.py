@@ -1,6 +1,7 @@
 """Tests for SKOS vocabulary operations."""
 
 import pytest
+from rdflib.namespace import SKOS
 
 from ontology_manager import OntologyManager
 
@@ -134,10 +135,18 @@ class TestValidateSKOS:
     def test_broader_cycle(self, om):
         om.add_concept("X", pref_label="X")
         om.add_concept("Y", pref_label="Y", broader="X")
-        # Create cycle: X broader Y (but Y is already broader X)
-        om.add_concept_relation("X", "broader", "Y")
+        # Write the closing edge straight into the graph rather than through
+        # ``add_concept_relation``, which now refuses it. A cycle can still
+        # reach the validator by import, which is what this covers.
+        om.graph.add((om._uri("X"), SKOS.broader, om._uri("Y")))
         issues = om.validate_skos()
         assert any(i["type"] == "broader_cycle" for i in issues)
+
+    def test_broader_cycle_refused_at_write_time(self, om):
+        om.add_concept("X", pref_label="X")
+        om.add_concept("Y", pref_label="Y", broader="X")
+        with pytest.raises(ValueError, match="cycle"):
+            om.add_concept_relation("X", "broader", "Y")
 
     def test_valid_skos_no_issues(self, skos_om):
         issues = skos_om.validate_skos()

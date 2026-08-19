@@ -150,13 +150,29 @@ def _options_of(node):
     return next((k.value for k in node.keywords if k.arg == "options"), None)
 
 
+def _is_a_fixed_enum(options):
+    """Whether an options expression is a closed set the user picks from.
+
+    A list or tuple literal, or one built straight from an engine constant with
+    ``list()``/``sorted()``. A conditional between two such expressions still
+    is one: offering mapping properties for an external target and all relations
+    for an internal one narrows the enum, it does not make the value clearable.
+    """
+    if isinstance(options, (ast.List, ast.Tuple)):
+        return True
+    if isinstance(options, ast.Call) and isinstance(options.func, ast.Name):
+        return options.func.id in ("list", "sorted")
+    if isinstance(options, ast.IfExp):
+        return _is_a_fixed_enum(options.body) and _is_a_fixed_enum(options.orelse)
+    return False
+
+
 def _is_exempt(func, label, node):
     """A plain dropdown is fine when clearing it would mean nothing.
 
     Three shapes qualify: it already passes ``index=None`` (so it draws the
     cross itself), its options carry an explicit "All" (empty already has a
-    name), or its options are a fixed enum — a list literal, or one built
-    straight from an engine constant.
+    name), or its options are a fixed enum — see :func:`_is_a_fixed_enum`.
     """
     if func == "clearable_selectbox":
         return True
@@ -167,10 +183,8 @@ def _is_exempt(func, label, node):
         return True
     if any(isinstance(c, ast.Constant) and c.value == "All" for c in ast.walk(options)):
         return True
-    if isinstance(options, (ast.List, ast.Tuple)):
+    if _is_a_fixed_enum(options):
         return True
-    if isinstance(options, ast.Call) and isinstance(options.func, ast.Name):
-        return options.func.id in ("list", "sorted")
     return (func, label) in ALLOWED_BY_NAME
 
 
