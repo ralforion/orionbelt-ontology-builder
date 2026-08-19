@@ -520,11 +520,10 @@ def render_skos_vocabulary():
                             _broader_opts, _broader_lookup = build_uri_options(
                                 [c for c in concepts if c["uri"] != concept["uri"]]
                             )
-                            _have_broader = set(concept["broader_uris"])
                             _cur_broader_disp = [
                                 d
                                 for d, u in _broader_lookup.items()
-                                if u in _have_broader
+                                if u in set(concept["broader_uris"])
                             ]
                             new_broader = st.multiselect(
                                 "Broader Concepts",
@@ -640,27 +639,23 @@ def render_skos_vocabulary():
                                         remove_scheme=remove_s,
                                     )
 
-                                    # Broader diff. Remove before adding, so
-                                    # re-parenting under a former descendant is
-                                    # not refused by the cycle guard for an edge
-                                    # this very save is removing.
-                                    _want = {
-                                        _broader_lookup[d]
-                                        for d in new_broader
-                                        if d in _broader_lookup
-                                    }
-                                    for _gone in _have_broader - _want:
-                                        ont.remove_concept_relation(
-                                            target, "broader", _gone
-                                        )
+                                    # One atomic call, not a remove-then-add
+                                    # loop here: the engine restores the prior
+                                    # parents if any new edge is refused, so a
+                                    # rejected re-parent cannot also cost the
+                                    # user the hierarchy they already had.
                                     _refused = []
-                                    for _added in sorted(_want - _have_broader):
-                                        try:
-                                            ont.add_concept_relation(
-                                                target, "broader", _added
-                                            )
-                                        except ValueError as exc:
-                                            _refused.append(str(exc))
+                                    try:
+                                        ont.set_concept_broader(
+                                            target,
+                                            [
+                                                _broader_lookup[d]
+                                                for d in new_broader
+                                                if d in _broader_lookup
+                                            ],
+                                        )
+                                    except ValueError as exc:
+                                        _refused.append(str(exc))
 
                                     ont.set_concept_notation(target, new_notation)
 

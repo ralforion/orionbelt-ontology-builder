@@ -3331,6 +3331,42 @@ class OntologyManager:
             self.graph.remove((concept_uri, SKOS.topConceptOf, scheme_uri))
             self.graph.remove((scheme_uri, SKOS.hasTopConcept, concept_uri))
 
+    def set_concept_broader(self, concept: str, targets: list[str]) -> None:
+        """Replace a concept's ``skos:broader`` edges with ``targets``.
+
+        All or nothing. Removing the old parents first is what lets a concept
+        be re-parented under one of its own former descendants, but it means a
+        refusal partway through would otherwise leave the concept with no
+        parent at all: the edit is rejected *and* the user loses the hierarchy
+        they had. On any refusal this restores the exact prior state and
+        re-raises.
+
+        Restoring cannot itself be refused: the rollback removes what this call
+        added before putting the original edges back, so the graph it writes
+        into is a subset of the one those edges were already valid in.
+        """
+        uri = self._uri(concept)
+        want = [self._uri(t) for t in targets]
+        have = [
+            o for o in self.graph.objects(uri, SKOS.broader) if isinstance(o, URIRef)
+        ]
+        dropped = [o for o in have if o not in want]
+        for gone in dropped:
+            self.remove_concept_relation(uri, "broader", gone)
+
+        added: list[URIRef] = []
+        try:
+            for target in want:
+                if target not in have:
+                    self.add_concept_relation(uri, "broader", target)
+                    added.append(target)
+        except ValueError:
+            for target in added:
+                self.remove_concept_relation(uri, "broader", target)
+            for gone in dropped:
+                self.add_concept_relation(uri, "broader", gone)
+            raise
+
     def add_concept_mapping(self, concept: str, relation: str, target: str) -> None:
         """Link a concept to a resource in another vocabulary.
 
@@ -3348,6 +3384,12 @@ class OntologyManager:
         if not self._IRI_SCHEME_RE.match(target):
             shown = target or "(empty)"
             raise ValueError(f"A mapping target must be an absolute IRI, got: {shown}")
+        # Having a scheme is not enough. rdflib accepts any string as a URIRef
+        # and only objects when asked to serialize, so a target with a space in
+        # it would be stored happily and then break every export of the whole
+        # ontology.
+        if reason := self.invalid_uri_reason(target):
+            raise ValueError(reason)
         self.add_concept_relation(concept, relation, target)
 
     def remove_concept_relation(
@@ -3509,23 +3551,32 @@ class OntologyManager:
                     }
                 )
 
-        # Duplicate prefLabels within schemes
+        # Duplicate prefLabels within schemes. Compared per language tag, not
+        # through the flattened compatibility value: a concept may carry a
+        # prefLabel in several languages, and flattening picks one, so a clash
+        # in any other language went unreported.
         for scheme in schemes:
             scheme_concepts = self.get_concepts(scheme=scheme["name"])
-            labels_seen: dict[str, str] = {}
+            labels_seen: dict[tuple[str, str], str] = {}
             for concept in scheme_concepts:
-                lbl = concept["prefLabel"]
-                if lbl and lbl in labels_seen:
-                    issues.append(
-                        {
-                            "severity": "warning",
-                            "type": "duplicate_prefLabel",
-                            "subject": concept["name"],
-                            "message": f"Duplicate prefLabel '{lbl}' in scheme '{scheme['name']}' (also on '{labels_seen[lbl]}')",
-                        }
+                for item in concept["labels"]["prefLabel"]:
+                    key = (item["lang"], item["value"])
+                    tagged = (
+                        f"'{item['value']}'@{item['lang']}"
+                        if item["lang"]
+                        else f"'{item['value']}'"
                     )
-                elif lbl:
-                    labels_seen[lbl] = concept["name"]
+                    if key in labels_seen:
+                        issues.append(
+                            {
+                                "severity": "warning",
+                                "type": "duplicate_prefLabel",
+                                "subject": concept["name"],
+                                "message": f"Duplicate prefLabel {tagged} in scheme '{scheme['name']}' (also on '{labels_seen[key]}')",
+                            }
+                        )
+                    else:
+                        labels_seen[key] = concept["name"]
 
         # Broader/narrower cycle detection
         concept_names = {c["name"] for c in concepts}

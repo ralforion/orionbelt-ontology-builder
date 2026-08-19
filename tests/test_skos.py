@@ -148,6 +148,30 @@ class TestValidateSKOS:
         with pytest.raises(ValueError, match="cycle"):
             om.add_concept_relation("X", "broader", "Y")
 
+    def test_duplicate_pref_label_found_in_any_language(self, om):
+        """Duplicates are compared per language tag.
+
+        Flattening a multi-language concept to one value picks one language, so
+        a clash in any other language went unreported.
+        """
+        om.add_concept_scheme("S")
+        om.add_concept("A", scheme="S")
+        om.add_concept("B", scheme="S")
+        om.set_concept_label("A", "prefLabel", "Hund", lang="de")
+        om.set_concept_label("A", "prefLabel", "Dog", lang="en")
+        om.set_concept_label("B", "prefLabel", "Dog", lang="en")
+        dupes = [i for i in om.validate_skos() if i["type"] == "duplicate_prefLabel"]
+        assert len(dupes) == 1
+        assert "@en" in dupes[0]["message"]
+
+    def test_same_label_in_different_languages_is_not_a_duplicate(self, om):
+        om.add_concept_scheme("S")
+        om.add_concept("A", scheme="S")
+        om.add_concept("B", scheme="S")
+        om.set_concept_label("A", "prefLabel", "Dog", lang="en")
+        om.set_concept_label("B", "prefLabel", "Dog", lang="de")
+        assert not [i for i in om.validate_skos() if i["type"] == "duplicate_prefLabel"]
+
     def test_valid_skos_no_issues(self, skos_om):
         issues = skos_om.validate_skos()
         assert len(issues) == 0

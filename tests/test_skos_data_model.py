@@ -165,6 +165,18 @@ class TestMappings:
         with pytest.raises(ValueError, match="mapping property"):
             dogs.add_concept_mapping("Dogs", "broader", WIKIDATA_DOG)
 
+    def test_target_that_cannot_be_serialised_is_refused(self, dogs):
+        """A scheme is not enough: rdflib stores any string and only objects
+        when asked to serialize, so this would break every later export."""
+        with pytest.raises(ValueError, match="no spaces"):
+            dogs.add_concept_mapping(
+                "Dogs", "exactMatch", "http://example.org/bad path"
+            )
+
+    def test_an_accepted_target_still_serialises(self, dogs):
+        dogs.add_concept_mapping("Dogs", "exactMatch", WIKIDATA_DOG)
+        assert "Q144" in dogs.graph.serialize(format="turtle")
+
 
 class TestRemoveRelation:
     def test_removes_the_auto_added_inverse(self, om):
@@ -228,6 +240,36 @@ class TestCycleGuard:
             chain.update_concept("Mammal", new_broader="Dog")
         assert _concept(chain, "Mammal")["broader"] == ["Animal"]
         assert _concept(chain, "Animal")["narrower"] == ["Mammal"]
+
+    def test_replacing_broader_is_all_or_nothing(self, chain):
+        """A refused re-parent must not also drop the parent that was there.
+
+        ``set_concept_broader`` removes the old parents before adding the new
+        ones, which is what lets a concept move under a former descendant. A
+        refusal partway through would otherwise reject the edit *and* leave the
+        concept with no parent at all.
+        """
+        with pytest.raises(ValueError, match="cycle"):
+            chain.set_concept_broader("Mammal", ["Dog"])
+        assert _concept(chain, "Mammal")["broader"] == ["Animal"]
+        assert _concept(chain, "Animal")["narrower"] == ["Mammal"]
+        assert _concept(chain, "Dog")["broader"] == ["Mammal"]
+
+    def test_replacing_broader_allows_a_legal_swap(self, chain):
+        chain.add_concept("Pet")
+        chain.set_concept_broader("Dog", ["Pet"])
+        assert _concept(chain, "Dog")["broader"] == ["Pet"]
+        assert _concept(chain, "Mammal")["narrower"] == []
+
+    def test_replacing_broader_sets_several(self, chain):
+        chain.add_concept("Pet")
+        chain.set_concept_broader("Dog", ["Mammal", "Pet"])
+        assert sorted(_concept(chain, "Dog")["broader"]) == ["Mammal", "Pet"]
+
+    def test_replacing_broader_with_nothing_clears_it(self, chain):
+        chain.set_concept_broader("Dog", [])
+        assert _concept(chain, "Dog")["broader"] == []
+        assert _concept(chain, "Mammal")["narrower"] == []
 
     def test_poly_hierarchy_is_allowed(self, om):
         for name in ("Animal", "Pet", "Dog"):
