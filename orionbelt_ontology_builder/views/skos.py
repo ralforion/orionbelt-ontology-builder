@@ -20,12 +20,21 @@ from ..ui import (
     language_selectbox,
     language_tag_error,
     missing_required,
+    render_skos_literal_editor,
     required_selectbox,
     save_checkpoint,
     set_flash_message,
     show_message,
     viz_note_rename,
 )
+
+
+def _fmt_tagged(items):
+    """Render ``[{"value","lang"}]`` as ``value (lang), value (lang)``."""
+    return ", ".join(
+        f"{item['value']} ({item['lang']})" if item["lang"] else item["value"]
+        for item in items
+    )
 
 
 def render_skos_vocabulary():
@@ -211,6 +220,56 @@ def render_skos_vocabulary():
 
     if _skos_tab == "Concepts":
         st.subheader("Concepts")
+        # Above the list, not below it: adding a concept meant scrolling
+        # past every concept already there. Collapsed by default, and the
+        # label never changes — a changed expander label force-closes it.
+        with (
+            st.expander("➕ Add Concept", expanded=False),
+            st.form("add_concept_form"),
+        ):
+            c_name = st.text_input("Concept Name *")
+            c_pref = st.text_input("Preferred Label")
+            c_def = st.text_area("Definition")
+            c_scheme = clearable_selectbox(
+                "Scheme",
+                ["None"] + scheme_opts,
+                key="concept_scheme_select",
+                current_display="None",
+                format_func=_pad_option,
+            )
+            _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
+            c_broader = clearable_selectbox(
+                "Broader Concept",
+                ["None"] + _add_broader_opts,
+                key="concept_broader_select",
+                current_display="None",
+                format_func=_pad_option,
+            )
+            c_lang = language_selectbox("Language Tag", key="concept_lang")
+            if st.form_submit_button("Add Concept"):
+                if not c_name:
+                    show_message("Concept name is required!", "error")
+                elif reason := ont.invalid_name_reason(c_name):
+                    show_message(reason, "error")
+                # Rejected by target URI, not local name (issue #87 part B), and
+                # across every entity kind (issue #279), as for schemes above.
+                elif taken := ont.name_conflict_reason(c_name, "concept"):
+                    show_message(taken, "error")
+                elif lang_error := language_tag_error(c_lang):
+                    show_message(lang_error, "error")
+                else:
+                    ont.add_concept(
+                        c_name,
+                        scheme=scheme_lookup.get(c_scheme),
+                        pref_label=c_pref or None,
+                        definition=c_def or None,
+                        broader=_add_broader_lookup.get(c_broader),
+                        lang=c_lang or None,
+                    )
+                    save_checkpoint("Add concept")
+                    show_message(f"Concept '{c_name}' added!", "success")
+                    st.rerun()
+
         if not concepts:
             st.info("No concepts defined yet.")
         else:
@@ -291,12 +350,40 @@ def render_skos_vocabulary():
                     if _is_open("skos", _ck, "view"):
                         st.divider()
                         st.write(f"**Name:** {concept['name']}")
-                        st.write(f"**prefLabel:** {concept['prefLabel'] or '—'}")
-                        st.write(f"**definition:** {concept['definition'] or '—'}")
-                        if concept["altLabels"]:
+                        for _kind in ont.SKOS_LABEL_KINDS:
+                            if concept["labels"][_kind]:
+                                st.write(
+                                    f"**{_kind}:** "
+                                    f"{_fmt_tagged(concept['labels'][_kind])}"
+                                )
+                        if concept["notation"]:
+                            st.write(f"**notation:** {concept['notation']}")
+                        for _kind in ont.SKOS_NOTE_KINDS:
+                            if concept["notes"][_kind]:
+                                st.write(
+                                    f"**{_kind}:** "
+                                    f"{_fmt_tagged(concept['notes'][_kind])}"
+                                )
+                        if concept["top_of"]:
                             st.write(
-                                f"**altLabels:** {', '.join(concept['altLabels'])}"
+                                f"**topConceptOf:** {', '.join(concept['top_of'])}"
                             )
+                        for _rel in ont.SKOS_MAPPING_RELATIONS:
+                            for _i, _target in enumerate(concept["mappings"][_rel]):
+                                _mc1, _mc2 = st.columns([8, 0.7])
+                                with _mc1:
+                                    st.write(f"**{_rel}:** {_target}")
+                                with _mc2:
+                                    if st.button(
+                                        "🗑️",
+                                        key=f"del_map_{_ck}_{_rel}_{_i}",
+                                        help="Remove this mapping",
+                                    ):
+                                        ont.remove_concept_relation(
+                                            concept["uri"], _rel, _target
+                                        )
+                                        save_checkpoint("Remove concept mapping")
+                                        st.rerun()
                         if concept["broader"]:
                             st.write(f"**broader:** {', '.join(concept['broader'])}")
                         if concept["narrower"]:
@@ -308,25 +395,53 @@ def render_skos_vocabulary():
 
                         # Add relation inline
                         with st.popover("Add Relation"):
+                            # A mapping property is the one kind of SKOS link
+                            # meant to leave the vocabulary, so an external
+                            # target offers only those. Before this, the engine
+                            # accepted an exactMatch to Wikidata but the UI had
+                            # no way to express one.
+                            _target_mode = st.radio(
+                                "Target",
+                                ["Concept in this vocabulary", "External URI"],
+                                key=f"rel_mode_{_ck}",
+                                horizontal=True,
+                            )
+                            _external = _target_mode == "External URI"
                             rel_type = st.selectbox(
                                 "Relation",
-                                list(ont.SKOS_RELATIONS.keys()),
-                                key=f"rel_type_{_ck}",
+                                list(ont.SKOS_MAPPING_RELATIONS)
+                                if _external
+                                else list(ont.SKOS_RELATIONS.keys()),
+                                key=f"rel_type_{_ck}_{'ext' if _external else 'int'}",
                             )
-                            _rel_opts, _rel_lookup = build_uri_options(
-                                [c for c in concepts if c["uri"] != concept["uri"]]
-                            )
-                            rel_target = required_selectbox(
-                                "Target Concept",
-                                _rel_opts,
-                                key=f"rel_target_{_ck}",
-                                current_display=_rel_opts[0] if _rel_opts else None,
-                                format_func=_pad_option,
-                            )
+                            if _external:
+                                rel_target = st.text_input(
+                                    "Target URI",
+                                    key=f"rel_uri_{_ck}",
+                                    placeholder=("http://www.wikidata.org/entity/Q144"),
+                                    help="An absolute IRI in another "
+                                    "vocabulary — Wikidata, EuroVoc, AGROVOC, "
+                                    "anything addressable.",
+                                )
+                                _resolved = rel_target
+                                _required_label = "Target URI"
+                            else:
+                                _rel_opts, _rel_lookup = build_uri_options(
+                                    [c for c in concepts if c["uri"] != concept["uri"]]
+                                )
+                                rel_target = required_selectbox(
+                                    "Target Concept",
+                                    _rel_opts,
+                                    key=f"rel_target_{_ck}",
+                                    current_display=_rel_opts[0] if _rel_opts else None,
+                                    format_func=_pad_option,
+                                )
+                                _resolved = _rel_lookup.get(rel_target)
+                                _required_label = "Target Concept"
                             _add_rel = st.button("Add", key=f"add_rel_{_ck}")
                             if _add_rel and (
                                 _missing := missing_required(
-                                    **{"Target Concept": rel_target}
+                                    **{_required_label: rel_target}
                                 )
                             ):
                                 show_message(_missing, "error")
@@ -336,14 +451,23 @@ def render_skos_vocabulary():
                                 # custom URI) would not resolve through the base
                                 # namespace, and two concepts can share a local
                                 # name across namespaces (issue #87 part B).
-                                ont.add_concept_relation(
-                                    concept["uri"],
-                                    rel_type,
-                                    _rel_lookup.get(rel_target),
-                                )
-                                save_checkpoint("Add concept relation")
-                                show_message(f"Added {rel_type} relation!", "success")
-                                st.rerun()
+                                try:
+                                    if _external:
+                                        ont.add_concept_mapping(
+                                            concept["uri"], rel_type, _resolved
+                                        )
+                                    else:
+                                        ont.add_concept_relation(
+                                            concept["uri"], rel_type, _resolved
+                                        )
+                                except ValueError as exc:
+                                    show_message(str(exc), "error")
+                                else:
+                                    save_checkpoint("Add concept relation")
+                                    show_message(
+                                        f"Added {rel_type} relation!", "success"
+                                    )
+                                    st.rerun()
 
                         st.button(
                             "✏️ Edit",
@@ -363,6 +487,14 @@ def render_skos_vocabulary():
                     # Inline edit form
                     if _is_open("skos", _ck, "edit"):
                         st.divider()
+                        # Labels and notes are repeatable and language-tagged,
+                        # so they are edited as rows with their own add/delete
+                        # rather than as fields in the form below: a button
+                        # inside a form cannot act until the form is submitted.
+                        st.markdown("**Labels and notes**")
+                        render_skos_literal_editor(ont, concept, _ck)
+
+                        st.divider()
                         with st.form(f"edit_concept_form_{_ck}"):
                             new_name = st.text_input(
                                 "Name (URI local part)",
@@ -372,44 +504,36 @@ def render_skos_vocabulary():
                                 "concept (broader/narrower, inScheme, etc.) — "
                                 "nothing is lost, unlike delete-and-recreate.",
                             )
-                            new_pref = st.text_input(
-                                "Preferred Label",
-                                value=concept["prefLabel"] or "",
-                                key=f"pref_{_ck}",
-                            )
-                            new_def = st.text_area(
-                                "Definition",
-                                value=concept["definition"] or "",
-                                key=f"def_{_ck}",
+                            new_notation = st.text_input(
+                                "Notation",
+                                value=concept["notation"],
+                                key=f"notation_{_ck}",
+                                help="A code in a classification scheme "
+                                "(e.g. `636.7`). Carries a datatype, never a "
+                                "language tag.",
                             )
 
-                            # Broader concept — URI-keyed so a broader concept in
-                            # a non-base namespace resolves unambiguously (#87).
+                            # Broader concepts — multi-valued: SKOS allows a
+                            # concept more than one parent (poly-hierarchy), and
+                            # URI-keyed so a parent in a non-base namespace
+                            # resolves unambiguously (#87).
                             _broader_opts, _broader_lookup = build_uri_options(
                                 [c for c in concepts if c["uri"] != concept["uri"]]
                             )
-                            _cur_broader_uri = (
-                                concept["broader_uris"][0]
-                                if concept["broader_uris"]
-                                else None
-                            )
-                            _cur_broader_disp = next(
-                                (
-                                    d
-                                    for d, u in _broader_lookup.items()
-                                    if u == _cur_broader_uri
-                                ),
-                                "None",
-                            )
-                            broader_options = ["None"] + _broader_opts
-                            new_broader = clearable_selectbox(
-                                "Broader Concept",
-                                broader_options,
+                            _cur_broader_disp = [
+                                d
+                                for d, u in _broader_lookup.items()
+                                if u in set(concept["broader_uris"])
+                            ]
+                            new_broader = st.multiselect(
+                                "Broader Concepts",
+                                _broader_opts,
+                                default=_cur_broader_disp,
                                 key=f"broader_{_ck}",
-                                current_display=_cur_broader_disp
-                                if _cur_broader_disp in broader_options
-                                else "None",
                                 format_func=_pad_option,
+                                help="A concept may have several parents. An "
+                                "edge that would make this concept its own "
+                                "ancestor is refused.",
                             )
 
                             # Scheme — URI-keyed for the same reason.
@@ -436,6 +560,20 @@ def render_skos_vocabulary():
                                 else "None",
                                 format_func=_pad_option,
                             )
+
+                            # Top concepts: checked writes skos:topConceptOf and
+                            # the scheme's skos:hasTopConcept together, and puts
+                            # the concept in that scheme if it was not already.
+                            _top_now = set(concept["top_of_uris"])
+                            _top_choices = {}
+                            for _scheme in schemes:
+                                _su = _scheme["uri"]
+                                _top_choices[_su] = st.checkbox(
+                                    f"Top concept of {_scheme['name']}",
+                                    value=_su in _top_now,
+                                    key=f"top_{_ck}_{str(abs(hash(_su)))[:8]}",
+                                )
+
                             new_name = _custom_uri_field(
                                 concept["uri"],
                                 new_name,
@@ -480,10 +618,6 @@ def render_skos_vocabulary():
                                             concept["name"],
                                             ont._local_name(target),
                                         )
-                                    # Handle broader change (resolve by URI)
-                                    broader_val = _broader_lookup.get(new_broader) or ""
-                                    old_broader = _cur_broader_uri or ""
-                                    broader_changed = broader_val != old_broader
 
                                     # Handle scheme change (resolve by URI)
                                     old_scheme = _cur_scheme_uri or ""
@@ -499,71 +633,51 @@ def render_skos_vocabulary():
                                         if old_scheme and old_scheme != new_scheme_val
                                         else None
                                     )
+                                    ont.update_concept(
+                                        target,
+                                        add_scheme=add_s,
+                                        remove_scheme=remove_s,
+                                    )
 
-                                    _update_kwargs = {
-                                        "new_pref_label": new_pref,
-                                        "new_definition": new_def,
-                                        "add_scheme": add_s,
-                                        "remove_scheme": remove_s,
-                                    }
-                                    if broader_changed:
-                                        _update_kwargs["new_broader"] = broader_val
-                                    ont.update_concept(target, **_update_kwargs)
+                                    # One atomic call, not a remove-then-add
+                                    # loop here: the engine restores the prior
+                                    # parents if any new edge is refused, so a
+                                    # rejected re-parent cannot also cost the
+                                    # user the hierarchy they already had.
+                                    _refused = []
+                                    try:
+                                        ont.set_concept_broader(
+                                            target,
+                                            [
+                                                _broader_lookup[d]
+                                                for d in new_broader
+                                                if d in _broader_lookup
+                                            ],
+                                        )
+                                    except ValueError as exc:
+                                        _refused.append(str(exc))
+
+                                    ont.set_concept_notation(target, new_notation)
+
+                                    for _su, _checked in _top_choices.items():
+                                        if _checked != (_su in _top_now):
+                                            ont.set_top_concept(target, _su, _checked)
+
                                     save_checkpoint("Update concept")
                                     _new_ck = (
                                         str(abs(hash(target)))[:8] if renamed else _ck
                                     )
                                     _open_entity("skos", _new_ck)
-                                    show_message(
-                                        f"Concept '{target}' updated!", "success"
-                                    )
+                                    # A flash, not show_message: the rerun below
+                                    # throws away anything rendered in this run,
+                                    # so a refusal reported that way is silent.
+                                    if _refused:
+                                        set_flash_message(" ".join(_refused), "error")
+                                    else:
+                                        set_flash_message(
+                                            f"Concept '{target}' updated!", "success"
+                                        )
                                     st.rerun()
-
-        st.divider()
-        st.subheader("Add Concept")
-        with st.form("add_concept_form"):
-            c_name = st.text_input("Concept Name *")
-            c_pref = st.text_input("Preferred Label")
-            c_def = st.text_area("Definition")
-            c_scheme = clearable_selectbox(
-                "Scheme",
-                ["None"] + scheme_opts,
-                key="concept_scheme_select",
-                current_display="None",
-                format_func=_pad_option,
-            )
-            _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
-            c_broader = clearable_selectbox(
-                "Broader Concept",
-                ["None"] + _add_broader_opts,
-                key="concept_broader_select",
-                current_display="None",
-                format_func=_pad_option,
-            )
-            c_lang = language_selectbox("Language Tag", key="concept_lang")
-            if st.form_submit_button("Add Concept"):
-                if not c_name:
-                    show_message("Concept name is required!", "error")
-                elif reason := ont.invalid_name_reason(c_name):
-                    show_message(reason, "error")
-                # Rejected by target URI, not local name (issue #87 part B), and
-                # across every entity kind (issue #279), as for schemes above.
-                elif taken := ont.name_conflict_reason(c_name, "concept"):
-                    show_message(taken, "error")
-                elif lang_error := language_tag_error(c_lang):
-                    show_message(lang_error, "error")
-                else:
-                    ont.add_concept(
-                        c_name,
-                        scheme=scheme_lookup.get(c_scheme),
-                        pref_label=c_pref or None,
-                        definition=c_def or None,
-                        broader=_add_broader_lookup.get(c_broader),
-                        lang=c_lang or None,
-                    )
-                    save_checkpoint("Add concept")
-                    show_message(f"Concept '{c_name}' added!", "success")
-                    st.rerun()
 
     if _skos_tab == "Concept Hierarchy":
         st.subheader("Concept Hierarchy")
@@ -586,18 +700,27 @@ def render_skos_vocabulary():
                 all_children.update(children)
             roots = [name for name in hierarchy if name not in all_children]
 
-            def render_tree(name, indent=0):
+            def render_tree(name, indent=0, trail=()):
+                pad = "&nbsp;&nbsp;&nbsp;&nbsp;" * indent
+                arm = "└─ " if indent > 0 else ""
+                # The trail is the current path, not a global visited set: under
+                # poly-hierarchy a concept legitimately appears beneath several
+                # parents, and de-duplicating that would hide real structure.
+                # Only a repeat *on the same path* is a cycle, and without this
+                # guard an imported cyclic vocabulary recurses until the app
+                # dies, before the warning below ever renders.
+                if name in trail:
+                    st.markdown(f"{pad}{arm}↻ **{name}** — cycle, not expanded")
+                    return
                 concept_data = next((c for c in concepts if c["name"] == name), None)
                 pref = (
                     concept_data["prefLabel"]
                     if concept_data and concept_data["prefLabel"]
                     else name
                 )
-                st.markdown(
-                    f"{'&nbsp;&nbsp;&nbsp;&nbsp;' * indent}{'└─ ' if indent > 0 else ''}**{pref}** ({name})"
-                )
+                st.markdown(f"{pad}{arm}**{pref}** ({name})")
                 for child in sorted(hierarchy.get(name, [])):
-                    render_tree(child, indent + 1)
+                    render_tree(child, indent + 1, (*trail, name))
 
             for root in sorted(roots):
                 render_tree(root)

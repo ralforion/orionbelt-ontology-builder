@@ -1,6 +1,7 @@
 """Tests for SKOS vocabulary operations."""
 
 import pytest
+from rdflib.namespace import RDF, SKOS
 
 from ontology_manager import OntologyManager
 
@@ -134,10 +135,87 @@ class TestValidateSKOS:
     def test_broader_cycle(self, om):
         om.add_concept("X", pref_label="X")
         om.add_concept("Y", pref_label="Y", broader="X")
-        # Create cycle: X broader Y (but Y is already broader X)
-        om.add_concept_relation("X", "broader", "Y")
+        # Write the closing edge straight into the graph rather than through
+        # ``add_concept_relation``, which now refuses it. A cycle can still
+        # reach the validator by import, which is what this covers.
+        om.graph.add((om._uri("X"), SKOS.broader, om._uri("Y")))
         issues = om.validate_skos()
         assert any(i["type"] == "broader_cycle" for i in issues)
+
+    def test_broader_cycle_refused_at_write_time(self, om):
+        om.add_concept("X", pref_label="X")
+        om.add_concept("Y", pref_label="Y", broader="X")
+        with pytest.raises(ValueError, match="cycle"):
+            om.add_concept_relation("X", "broader", "Y")
+
+    def test_duplicate_pref_label_found_in_any_language(self, om):
+        """Duplicates are compared per language tag.
+
+        Flattening a multi-language concept to one value picks one language, so
+        a clash in any other language went unreported.
+        """
+        om.add_concept_scheme("S")
+        om.add_concept("A", scheme="S")
+        om.add_concept("B", scheme="S")
+        om.set_concept_label("A", "prefLabel", "Hund", lang="de")
+        om.set_concept_label("A", "prefLabel", "Dog", lang="en")
+        om.set_concept_label("B", "prefLabel", "Dog", lang="en")
+        dupes = [i for i in om.validate_skos() if i["type"] == "duplicate_prefLabel"]
+        assert len(dupes) == 1
+        assert "@en" in dupes[0]["message"]
+
+    def test_same_label_in_different_languages_is_not_a_duplicate(self, om):
+        om.add_concept_scheme("S")
+        om.add_concept("A", scheme="S")
+        om.add_concept("B", scheme="S")
+        om.set_concept_label("A", "prefLabel", "Dog", lang="en")
+        om.set_concept_label("B", "prefLabel", "Dog", lang="de")
+        assert not [i for i in om.validate_skos() if i["type"] == "duplicate_prefLabel"]
+
+    def test_cycle_through_a_second_parent_is_found(self, om):
+        """The detector used to follow ``broader[0]`` only.
+
+        Survivable while a concept could have one parent; poly-hierarchy makes
+        it reachable, and B being listed first hid the A -> C -> A loop.
+        """
+        for name in ("A", "B", "C"):
+            om.add_concept(name)
+        om.add_concept_relation("A", "broader", "B")
+        om.add_concept_relation("A", "broader", "C")
+        om.graph.add((om._uri("C"), SKOS.broader, om._uri("A")))
+        cycles = [i for i in om.validate_skos() if i["type"] == "broader_cycle"]
+        assert len(cycles) == 1
+        assert "A -> C -> A" in cycles[0]["message"]
+
+    def test_a_cycle_is_reported_once_not_once_per_member(self, om):
+        for name in ("A", "B", "C"):
+            om.add_concept(name)
+        om.add_concept_relation("A", "broader", "B")
+        om.add_concept_relation("B", "broader", "C")
+        om.graph.add((om._uri("C"), SKOS.broader, om._uri("A")))
+        assert len([i for i in om.validate_skos() if i["type"] == "broader_cycle"]) == 1
+
+    def test_poly_hierarchy_without_a_cycle_is_clean(self, om):
+        for name in ("Animal", "Pet", "Dog"):
+            om.add_concept(name)
+        om.add_concept_relation("Dog", "broader", "Animal")
+        om.add_concept_relation("Dog", "broader", "Pet")
+        assert not [i for i in om.validate_skos() if i["type"] == "broader_cycle"]
+
+    def test_a_deep_chain_does_not_exhaust_the_stack(self, om):
+        """Iterative, not recursive: an imported vocabulary can be deep.
+
+        Written straight into the graph rather than through ``add_concept``,
+        which checks the name against every existing entity and would make
+        seeding this quadratic. Depth is past the default recursion limit,
+        which is the whole point of the test.
+        """
+        depth = 1500
+        for i in range(depth):
+            om.graph.add((om._uri(f"c{i}"), RDF.type, SKOS.Concept))
+            if i:
+                om.graph.add((om._uri(f"c{i}"), SKOS.broader, om._uri(f"c{i - 1}")))
+        assert not [i for i in om.validate_skos() if i["type"] == "broader_cycle"]
 
     def test_valid_skos_no_issues(self, skos_om):
         issues = skos_om.validate_skos()

@@ -2788,6 +2788,63 @@ class OntologyManager:
         SKOS.relatedMatch,
     }
 
+    #: The three SKOS lexical labels. A concept may carry many of each, and at
+    #: most one ``prefLabel`` per language tag (SKOS Reference S14).
+    SKOS_LABEL_KINDS: ClassVar[dict[str, URIRef]] = {
+        "prefLabel": SKOS.prefLabel,
+        "altLabel": SKOS.altLabel,
+        "hiddenLabel": SKOS.hiddenLabel,
+    }
+
+    #: SKOS documentation properties. All are repeatable and language-tagged.
+    SKOS_NOTE_KINDS: ClassVar[dict[str, URIRef]] = {
+        "definition": SKOS.definition,
+        "scopeNote": SKOS.scopeNote,
+        "example": SKOS.example,
+        "note": SKOS.note,
+        "editorialNote": SKOS.editorialNote,
+        "historyNote": SKOS.historyNote,
+        "changeNote": SKOS.changeNote,
+    }
+
+    #: The subset of :attr:`SKOS_RELATIONS` that links across vocabularies, and
+    #: so may point at a URI this graph does not otherwise know about.
+    SKOS_MAPPING_RELATIONS: ClassVar[tuple[str, ...]] = (
+        "broadMatch",
+        "narrowMatch",
+        "exactMatch",
+        "closeMatch",
+        "relatedMatch",
+    )
+
+    def _tagged_literals(self, uri: Node, prop: URIRef) -> list[dict[str, str]]:
+        """Return ``prop``'s literal objects as ``{"value", "lang"}`` records.
+
+        Sorted untagged-first, then by language tag, so the order a caller sees
+        does not depend on the store's iteration order. ``lang`` is ``""`` for
+        an untagged literal, never ``None``, so the UI can render it without a
+        null check.
+        """
+        values = [
+            {"value": str(o), "lang": o.language or ""}
+            for o in self.graph.objects(uri, prop)
+            if isinstance(o, Literal)
+        ]
+        return sorted(values, key=lambda v: (v["lang"] != "", v["lang"], v["value"]))
+
+    @staticmethod
+    def _flatten_literal(values: list[dict[str, str]]) -> str:
+        """Pick one value out of :meth:`_tagged_literals` output.
+
+        The flat ``prefLabel`` / ``definition`` keys predate language-aware
+        editing and are still read by the visualization, the dashboard and the
+        hierarchy tree. They stay, as a computed view over the structured list,
+        so those callers keep working. Untagged wins, then the first tag
+        alphabetically; both are deterministic, which is what those callers
+        actually need.
+        """
+        return values[0]["value"] if values else ""
+
     def add_concept_scheme(
         self, name: str, label: str | None = None, comment: str | None = None
     ) -> URIRef:
@@ -2907,6 +2964,11 @@ class OntologyManager:
             if ref:
                 self._require_valid_name(ref)
         concept_uri = self._uri(name)
+        # Before anything is written: a broader given at creation time went
+        # straight into the graph, so ``add_concept("A", broader="A")`` minted a
+        # self-cycle the editing paths refuse.
+        if broader:
+            self._refuse_broader_cycle(concept_uri, self._uri(broader))
         self.graph.add((concept_uri, RDF.type, SKOS.Concept))
 
         if scheme:
@@ -2963,10 +3025,32 @@ class OntologyManager:
 
             name = self._local_name(uri)
 
-            pref_label = str(self.graph.value(uri, SKOS.prefLabel) or "")
-            definition = str(self.graph.value(uri, SKOS.definition) or "")
+            labels = {
+                kind: self._tagged_literals(uri, prop)
+                for kind, prop in self.SKOS_LABEL_KINDS.items()
+            }
+            notes = {
+                kind: self._tagged_literals(uri, prop)
+                for kind, prop in self.SKOS_NOTE_KINDS.items()
+            }
+            pref_label = self._flatten_literal(labels["prefLabel"])
+            definition = self._flatten_literal(notes["definition"])
+            alt_labels = [v["value"] for v in labels["altLabel"]]
 
-            alt_labels = [str(o) for o in self.graph.objects(uri, SKOS.altLabel)]
+            notation = str(self.graph.value(uri, SKOS.notation) or "")
+            top_of_uris = [
+                str(o)
+                for o in self.graph.objects(uri, SKOS.topConceptOf)
+                if isinstance(o, URIRef)
+            ]
+            mappings = {
+                rel: sorted(
+                    str(o)
+                    for o in self.graph.objects(uri, self.SKOS_RELATIONS[rel])
+                    if isinstance(o, URIRef)
+                )
+                for rel in self.SKOS_MAPPING_RELATIONS
+            }
 
             broader_uris = [
                 str(o)
@@ -3007,6 +3091,14 @@ class OntologyManager:
                     "narrower_uris": narrower_uris,
                     "related_uris": related_uris,
                     "scheme_uris": scheme_uris,
+                    # Structured, language-aware views. The flat keys above are
+                    # computed from these and kept for existing readers.
+                    "labels": labels,
+                    "notes": notes,
+                    "notation": notation,
+                    "top_of_uris": top_of_uris,
+                    "top_of": [self._local_name(URIRef(u)) for u in top_of_uris],
+                    "mappings": mappings,
                 }
             )
 
@@ -3039,6 +3131,10 @@ class OntologyManager:
                 self.graph.add((uri, SKOS.definition, Literal(new_definition)))
 
         if new_broader is not _UNSET:
+            # Check before removing the old parent: a refusal must leave the
+            # concept's hierarchy exactly as it was, not orphaned.
+            if new_broader:
+                self._refuse_broader_cycle(uri, self._uri(new_broader))
             # Remove old broader/narrower links
             for old_broader in list(self.graph.objects(uri, SKOS.broader)):
                 self.graph.remove((uri, SKOS.broader, old_broader))
@@ -3054,6 +3150,286 @@ class OntologyManager:
 
         if remove_scheme:
             self.graph.remove((uri, SKOS.inScheme, self._uri(remove_scheme)))
+
+    def _label_property(self, kind: str) -> URIRef:
+        """Resolve a label kind, or say which kinds exist."""
+        prop = self.SKOS_LABEL_KINDS.get(kind)
+        if prop is None:
+            known = ", ".join(self.SKOS_LABEL_KINDS)
+            raise ValueError(
+                f"Unknown SKOS label kind: {kind} (expected one of {known})"
+            )
+        return prop
+
+    def _note_property(self, kind: str) -> URIRef:
+        """Resolve a documentation-property kind, or say which kinds exist."""
+        prop = self.SKOS_NOTE_KINDS.get(kind)
+        if prop is None:
+            known = ", ".join(self.SKOS_NOTE_KINDS)
+            raise ValueError(
+                f"Unknown SKOS note kind: {kind} (expected one of {known})"
+            )
+        return prop
+
+    @staticmethod
+    def _literal_text(value: str, what: str) -> str:
+        """Reject a blank literal before it reaches the graph."""
+        text = (value or "").strip()
+        if not text:
+            raise ValueError(f"A {what} cannot be empty.")
+        return text
+
+    def _checked_lang(self, lang: str | None) -> str | None:
+        """Return a usable language tag, or ``None``; raise on a malformed one."""
+        tag = (lang or "").strip()
+        if not tag:
+            return None
+        if reason := invalid_tag_reason(tag):
+            raise ValueError(reason)
+        return tag
+
+    def _broader_ancestors(self, uri: Node) -> set[Node]:
+        """Every concept reachable from ``uri`` by following ``skos:broader``.
+
+        Carries a visited set rather than recursing, because an imported
+        vocabulary can already contain a cycle and this must terminate on one
+        rather than be the thing that discovers it.
+        """
+        seen: set[Node] = set()
+        stack = [uri]
+        while stack:
+            for parent in self.graph.objects(stack.pop(), SKOS.broader):
+                if isinstance(parent, URIRef) and parent not in seen:
+                    seen.add(parent)
+                    stack.append(parent)
+        return seen
+
+    def _refuse_broader_cycle(self, child: Node, parent: Node) -> None:
+        """Reject a ``child skos:broader parent`` edge that would close a cycle.
+
+        Refusing at write time is worth more than reporting later: the user is
+        looking at the form and can pick a different parent. The validation-side
+        detector still earns its place, for cycles that arrive through import.
+        """
+        if child == parent:
+            raise ValueError(
+                f"'{self._local_name(child)}' cannot be its own broader concept."
+            )
+        if child in self._broader_ancestors(parent):
+            raise ValueError(
+                f"'{self._local_name(parent)}' is already a narrower concept of "
+                f"'{self._local_name(child)}'; this would create a hierarchy cycle."
+            )
+
+    def set_concept_label(
+        self, concept: str, kind: str, value: str, lang: str | None = None
+    ) -> None:
+        """Add a ``prefLabel``/``altLabel``/``hiddenLabel`` to a concept.
+
+        A ``prefLabel`` **replaces** any existing prefLabel carrying the same
+        language tag, because SKOS allows at most one per tag (SKOS Reference
+        S14). ``altLabel`` and ``hiddenLabel`` are repeatable and are appended.
+        Adding the same value and tag twice is a no-op either way, since the
+        graph is a set.
+        """
+        prop = self._label_property(kind)
+        text = self._literal_text(value, kind)
+        tag = self._checked_lang(lang)
+        uri = self._uri(concept)
+
+        if kind == "prefLabel":
+            for existing in list(self.graph.objects(uri, prop)):
+                if isinstance(existing, Literal) and (existing.language or "") == (
+                    tag or ""
+                ):
+                    self.graph.remove((uri, prop, existing))
+
+        self.graph.add((uri, prop, Literal(text, lang=tag) if tag else Literal(text)))
+
+    def remove_concept_label(
+        self, concept: str, kind: str, value: str, lang: str | None = None
+    ) -> bool:
+        """Remove one label literal. Returns whether anything was removed."""
+        prop = self._label_property(kind)
+        uri = self._uri(concept)
+        target_lang = (lang or "").strip()
+        removed = False
+        for existing in list(self.graph.objects(uri, prop)):
+            if (
+                isinstance(existing, Literal)
+                and str(existing) == value
+                and (existing.language or "") == target_lang
+            ):
+                self.graph.remove((uri, prop, existing))
+                removed = True
+        return removed
+
+    def set_concept_note(
+        self, concept: str, kind: str, value: str, lang: str | None = None
+    ) -> None:
+        """Add a documentation property (definition, scopeNote, example, …).
+
+        All SKOS documentation properties are repeatable, so this appends. Use
+        :meth:`remove_concept_note` to drop one.
+        """
+        prop = self._note_property(kind)
+        text = self._literal_text(value, kind)
+        tag = self._checked_lang(lang)
+        uri = self._uri(concept)
+        self.graph.add((uri, prop, Literal(text, lang=tag) if tag else Literal(text)))
+
+    def remove_concept_note(
+        self, concept: str, kind: str, value: str, lang: str | None = None
+    ) -> bool:
+        """Remove one documentation literal. Returns whether anything was removed."""
+        prop = self._note_property(kind)
+        uri = self._uri(concept)
+        target_lang = (lang or "").strip()
+        removed = False
+        for existing in list(self.graph.objects(uri, prop)):
+            if (
+                isinstance(existing, Literal)
+                and str(existing) == value
+                and (existing.language or "") == target_lang
+            ):
+                self.graph.remove((uri, prop, existing))
+                removed = True
+        return removed
+
+    def set_concept_notation(
+        self, concept: str, value: str, datatype: str | None = None
+    ) -> None:
+        """Set (or clear, with an empty value) a concept's ``skos:notation``.
+
+        A notation carries a datatype, never a language tag: it is a code in a
+        symbol scheme, not text in a language (SKOS Reference 6.5.1). Passing a
+        language tag here is not possible by construction, which is the point.
+        """
+        uri = self._uri(concept)
+        self.graph.remove((uri, SKOS.notation, None))
+        text = (value or "").strip()
+        if not text:
+            return
+        if datatype:
+            self.graph.add(
+                (uri, SKOS.notation, Literal(text, datatype=URIRef(datatype)))
+            )
+        else:
+            self.graph.add((uri, SKOS.notation, Literal(text)))
+
+    def set_top_concept(self, concept: str, scheme: str, is_top: bool = True) -> None:
+        """Assert or retract that a concept is a top concept of a scheme.
+
+        Writes both directions: ``skos:topConceptOf`` on the concept and
+        ``skos:hasTopConcept`` on the scheme. They are declared inverses, and
+        leaving one behind is the half-edge problem the relation helpers exist
+        to avoid.
+        """
+        concept_uri = self._uri(concept)
+        scheme_uri = self._uri(scheme)
+        if is_top:
+            self.graph.add((concept_uri, SKOS.topConceptOf, scheme_uri))
+            self.graph.add((scheme_uri, SKOS.hasTopConcept, concept_uri))
+            # A top concept is in its scheme by definition (SKOS Reference S6).
+            self.graph.add((concept_uri, SKOS.inScheme, scheme_uri))
+        else:
+            self.graph.remove((concept_uri, SKOS.topConceptOf, scheme_uri))
+            self.graph.remove((scheme_uri, SKOS.hasTopConcept, concept_uri))
+
+    def set_concept_broader(self, concept: str, targets: list[str]) -> None:
+        """Replace a concept's ``skos:broader`` edges with ``targets``.
+
+        All or nothing. Removing the old parents first is what lets a concept
+        be re-parented under one of its own former descendants, but it means a
+        refusal partway through would otherwise leave the concept with no
+        parent at all: the edit is rejected *and* the user loses the hierarchy
+        they had. On any refusal this restores the exact prior state and
+        re-raises.
+
+        The rollback puts the original triples back verbatim rather than
+        re-asserting them through :meth:`add_concept_relation`. Those edges
+        were never checked by the guard in the first place when they arrived by
+        import, so an already-cyclic vocabulary would have its restore refused
+        too, losing the edge and reporting the rollback's error instead of the
+        real one.
+        """
+        uri = self._uri(concept)
+        want = [self._uri(t) for t in targets]
+
+        def _edges() -> set:
+            """This concept's broader triples, with their narrower inverses."""
+            return set(self.graph.triples((uri, SKOS.broader, None))) | set(
+                self.graph.triples((None, SKOS.narrower, uri))
+            )
+
+        before = _edges()
+        have = [
+            o for o in self.graph.objects(uri, SKOS.broader) if isinstance(o, URIRef)
+        ]
+        for gone in have:
+            if gone not in want:
+                self.remove_concept_relation(uri, "broader", gone)
+
+        try:
+            for target in want:
+                if target not in have:
+                    self.add_concept_relation(uri, "broader", target)
+        except ValueError:
+            for triple in _edges():
+                self.graph.remove(triple)
+            for triple in before:
+                self.graph.add(triple)
+            raise
+
+    def add_concept_mapping(self, concept: str, relation: str, target: str) -> None:
+        """Link a concept to a resource in another vocabulary.
+
+        Unlike :meth:`add_concept_relation`, ``target`` is an absolute IRI that
+        need not exist in this graph — the whole point of a mapping property is
+        to reach Wikidata, EuroVoc, AGROVOC or anything else. Only the five
+        mapping properties are accepted; the semantic relations stay internal.
+        """
+        if relation not in self.SKOS_MAPPING_RELATIONS:
+            known = ", ".join(self.SKOS_MAPPING_RELATIONS)
+            raise ValueError(
+                f"Not a SKOS mapping property: {relation} (expected one of {known})"
+            )
+        target = (target or "").strip()
+        if not self._IRI_SCHEME_RE.match(target):
+            shown = target or "(empty)"
+            raise ValueError(f"A mapping target must be an absolute IRI, got: {shown}")
+        # Having a scheme is not enough. rdflib accepts any string as a URIRef
+        # and only objects when asked to serialize, so a target with a space in
+        # it would be stored happily and then break every export of the whole
+        # ontology.
+        if reason := self.invalid_uri_reason(target):
+            raise ValueError(reason)
+        self.add_concept_relation(concept, relation, target)
+
+    def remove_concept_relation(
+        self, concept1: str, relation: str, concept2: str
+    ) -> bool:
+        """Remove a SKOS relation, and the inverse or symmetric triple with it.
+
+        The mirror of :meth:`add_concept_relation`. Removing only the asserted
+        direction would leave the auto-added inverse behind as a half-edge,
+        which reads as a relation the UI cannot see or delete.
+        """
+        rel_uri = self.SKOS_RELATIONS.get(relation)
+        if not rel_uri:
+            raise ValueError(f"Unknown SKOS relation: {relation}")
+
+        c1_uri = self._uri(concept1)
+        c2_uri = self._uri(concept2)
+        removed = (c1_uri, rel_uri, c2_uri) in self.graph
+        self.graph.remove((c1_uri, rel_uri, c2_uri))
+
+        inverse = self.SKOS_INVERSES.get(rel_uri)
+        if inverse:
+            self.graph.remove((c2_uri, inverse, c1_uri))
+        if rel_uri in self.SKOS_SYMMETRIC:
+            self.graph.remove((c2_uri, rel_uri, c1_uri))
+        return removed
 
     def rename_concept(self, old_name: str, new_name: str) -> bool:
         """Rename a SKOS concept, updating all references.
@@ -3096,6 +3472,13 @@ class OntologyManager:
         rel_uri = self.SKOS_RELATIONS.get(relation)
         if not rel_uri:
             raise ValueError(f"Unknown SKOS relation: {relation}")
+
+        if relation == "broader":
+            self._refuse_broader_cycle(c1_uri, c2_uri)
+        elif relation == "narrower":
+            self._refuse_broader_cycle(c2_uri, c1_uri)
+        elif c1_uri == c2_uri:
+            raise ValueError(f"A concept cannot be its own '{relation}'.")
 
         self.graph.add((c1_uri, rel_uri, c2_uri))
 
@@ -3182,58 +3565,106 @@ class OntologyManager:
                     }
                 )
 
-        # Duplicate prefLabels within schemes
+        # Duplicate prefLabels within schemes. Compared per language tag, not
+        # through the flattened compatibility value: a concept may carry a
+        # prefLabel in several languages, and flattening picks one, so a clash
+        # in any other language went unreported.
         for scheme in schemes:
-            scheme_concepts = self.get_concepts(scheme=scheme["name"])
-            labels_seen: dict[str, str] = {}
+            # By URI, not by local name: two schemes can share a local name
+            # across namespaces (issue #87 part B), and resolving by name picks
+            # whichever the store yields first, so one scheme's concepts get
+            # checked twice and the other's not at all.
+            scheme_concepts = self.get_concepts(scheme=scheme["uri"])
+            labels_seen: dict[tuple[str, str], str] = {}
             for concept in scheme_concepts:
-                lbl = concept["prefLabel"]
-                if lbl and lbl in labels_seen:
-                    issues.append(
-                        {
-                            "severity": "warning",
-                            "type": "duplicate_prefLabel",
-                            "subject": concept["name"],
-                            "message": f"Duplicate prefLabel '{lbl}' in scheme '{scheme['name']}' (also on '{labels_seen[lbl]}')",
-                        }
+                for item in concept["labels"]["prefLabel"]:
+                    key = (item["lang"], item["value"])
+                    tagged = (
+                        f"'{item['value']}'@{item['lang']}"
+                        if item["lang"]
+                        else f"'{item['value']}'"
                     )
-                elif lbl:
-                    labels_seen[lbl] = concept["name"]
+                    if key in labels_seen:
+                        issues.append(
+                            {
+                                "severity": "warning",
+                                "type": "duplicate_prefLabel",
+                                "subject": concept["name"],
+                                "message": f"Duplicate prefLabel {tagged} in scheme '{scheme['name']}' (also on '{labels_seen[key]}')",
+                            }
+                        )
+                    else:
+                        labels_seen[key] = concept["name"]
 
-        # Broader/narrower cycle detection
-        concept_names = {c["name"] for c in concepts}
-        for concept in concepts:
-            visited: set[str] = set()
-            current = concept["name"]
-            chain = [current]
-            has_cycle = False
-            while True:
-                broader_list = []
-                for c in concepts:
-                    if c["name"] == current:
-                        broader_list = c["broader"]
+        # Broader/narrower cycle detection, over *every* parent.
+        #
+        # This used to follow ``broader[0]`` only, so a cycle reachable through
+        # a second parent was invisible. That was survivable while the UI could
+        # only set one broader; poly-hierarchy makes it reachable, so this is an
+        # iterative three-colour DFS instead. Iterative because a deep imported
+        # vocabulary would otherwise blow the recursion limit, and each cycle is
+        # canonicalised by its member set so it is reported once rather than
+        # once per member.
+        # Keyed by URI, for the same reason as the scheme lookup above: two
+        # concepts can share a local name across namespaces, and a name-keyed
+        # map silently collapses them into one node. That both hides real
+        # cycles and invents false ones, depending on which of the two the
+        # store happens to yield last.
+        known = {c["uri"] for c in concepts}
+        parents = {
+            c["uri"]: [u for u in c["broader_uris"] if u in known] for c in concepts
+        }
+        # Local name where it identifies the concept, full URI where it does
+        # not: a cycle between two concepts that share a name renders as
+        # "A -> A -> A", which says nothing about which A.
+        name_counts: dict[str, int] = {}
+        for c in concepts:
+            name_counts[c["name"]] = name_counts.get(c["name"], 0) + 1
+        shown = {
+            c["uri"]: (c["name"] if name_counts[c["name"]] == 1 else c["uri"])
+            for c in concepts
+        }
+        WHITE, GREY, BLACK = 0, 1, 2
+        colour = dict.fromkeys(parents, WHITE)
+        seen_cycles: set[frozenset] = set()
+
+        for root in sorted(parents):
+            if colour[root] != WHITE:
+                continue
+            colour[root] = GREY
+            path = [root]
+            stack = [(root, iter(parents[root]))]
+            while stack:
+                node, remaining = stack[-1]
+                descended = False
+                for nxt in remaining:
+                    if colour.get(nxt) == GREY:
+                        # A grey node is on the current path, so we just closed
+                        # a loop. Slice the path from it to name the real cycle.
+                        cycle = path[path.index(nxt) :]
+                        if frozenset(cycle) not in seen_cycles:
+                            seen_cycles.add(frozenset(cycle))
+                            issues.append(
+                                {
+                                    "severity": "error",
+                                    "type": "broader_cycle",
+                                    "subject": shown[cycle[0]],
+                                    "message": (
+                                        "Broader/narrower cycle detected: "
+                                        + " -> ".join(shown[u] for u in [*cycle, nxt])
+                                    ),
+                                }
+                            )
+                    elif colour.get(nxt, BLACK) == WHITE:
+                        colour[nxt] = GREY
+                        path.append(nxt)
+                        stack.append((nxt, iter(parents[nxt])))
+                        descended = True
                         break
-                if not broader_list:
-                    break
-                next_name = broader_list[0]
-                if next_name in visited:
-                    has_cycle = True
-                    break
-                if next_name not in concept_names:
-                    break
-                visited.add(current)
-                current = next_name
-                chain.append(current)
-
-            if has_cycle:
-                issues.append(
-                    {
-                        "severity": "error",
-                        "type": "broader_cycle",
-                        "subject": concept["name"],
-                        "message": f"Broader/narrower cycle detected: {' -> '.join(chain)}",
-                    }
-                )
+                if not descended:
+                    colour[node] = BLACK
+                    stack.pop()
+                    path.pop()
 
         return issues
 

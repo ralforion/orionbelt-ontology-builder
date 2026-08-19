@@ -859,7 +859,87 @@ def render_language_pack_sidebar() -> None:
     persist_language_packs()
 
 
-def language_selectbox(label, key, value="", help=None):
+def render_skos_literal_editor(ont, concept, ck):
+    """One table of a concept's labels and notes, with add and delete.
+
+    Labels and notes are separate halves of the engine API but the same thing
+    to edit: a kind, a language and some text. Rendering them as one table with
+    one add row rather than two stacked sections halves the height of the
+    editor, which is what makes the panel usable without scrolling.
+
+    This renders *outside* the concept form on purpose. A form submits as a
+    unit, so per-row add and delete buttons inside one cannot take effect until
+    the whole form is saved, which reads as a dead button. It also renders for
+    the single open concept only, per the active-entity state model, so the
+    cost does not scale with the size of the vocabulary.
+    """
+    kinds = [*ont.SKOS_LABEL_KINDS, *ont.SKOS_NOTE_KINDS]
+
+    def _api(kind):
+        """(add, remove) for a kind, whichever half of the API owns it."""
+        if kind in ont.SKOS_LABEL_KINDS:
+            return ont.set_concept_label, ont.remove_concept_label
+        return ont.set_concept_note, ont.remove_concept_note
+
+    rows = [
+        (kind, item)
+        for kind in kinds
+        for item in (
+            concept["labels"] if kind in ont.SKOS_LABEL_KINDS else concept["notes"]
+        )[kind]
+    ]
+    for i, (kind, item) in enumerate(rows):
+        col_kind, col_lang, col_text, col_del = st.columns([2, 1, 5, 0.7])
+        with col_kind:
+            st.write(f"`{kind}`")
+        with col_lang:
+            st.write(item["lang"] or "—")
+        with col_text:
+            st.write(item["value"])
+        with col_del:
+            if st.button("🗑️", key=f"del_lit_{ck}_{i}", help=f"Delete this {kind}"):
+                _api(kind)[1](concept["uri"], kind, item["value"], item["lang"])
+                save_checkpoint(f"Delete {kind}")
+                st.rerun()
+    if not rows:
+        st.caption("No labels or notes yet.")
+
+    col_kind, col_lang, col_text, col_add = st.columns([2, 1, 5, 0.7])
+    with col_kind:
+        new_kind = st.selectbox(
+            "Kind", list(kinds), key=f"add_lit_kind_{ck}", label_visibility="collapsed"
+        )
+    with col_lang:
+        # Collapsed like the other two: a visible label here pushes the picker
+        # onto its own line and the add row stops reading as a row.
+        new_lang = language_selectbox(
+            "Language",
+            key=f"add_lit_lang_{ck}",
+            label_visibility="collapsed",
+        )
+    with col_text:
+        new_text = st.text_input(
+            "Text",
+            key=f"add_lit_text_{ck}",
+            placeholder="New label or note…",
+            label_visibility="collapsed",
+        )
+    with col_add:
+        if st.button("➕", key=f"add_lit_btn_{ck}", help="Add this label or note"):
+            try:
+                _api(new_kind)[0](concept["uri"], new_kind, new_text, new_lang or None)
+            except ValueError as exc:
+                show_message(str(exc), "error")
+            else:
+                save_checkpoint(f"Add {new_kind}")
+                # Clear the text but keep the kind and the language: adding
+                # several values in one language is the common case, and a
+                # value left in the box invites adding it twice.
+                st.session_state.pop(f"add_lit_text_{ck}", None)
+                st.rerun()
+
+
+def language_selectbox(label, key, value="", help=None, label_visibility="visible"):
     """A searchable code picker for a Language field, returning the bare tag.
 
     Options come from the active pack and read ``eng · English``, so a code can
@@ -888,6 +968,7 @@ def language_selectbox(label, key, value="", help=None):
         current_display=display,
         accept_new_options=True,
         format_func=_pad_option,
+        label_visibility=label_visibility,
         help=help
         or (
             "Optional. Pick a code from the active language pack, or type any "

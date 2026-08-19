@@ -1398,14 +1398,18 @@ def render_visualization():
                     ):
                         break
                     c_id = f"skos_{concept['name']}"
-                    label = concept.get("pref_label") or concept["name"]
+                    # ``get_concepts()`` returns ``prefLabel`` and ``schemes``.
+                    # This read ``pref_label`` and ``scheme``, which it has never
+                    # returned, so every SKOS node fell back to its local name
+                    # and the tooltip never showed a label or a scheme.
+                    label = concept.get("prefLabel") or concept["name"]
                     title = f"SKOS Concept: {concept['name']}"
-                    if concept.get("pref_label"):
-                        title += f"\nprefLabel: {concept['pref_label']}"
+                    if concept.get("prefLabel"):
+                        title += f"\nprefLabel: {concept['prefLabel']}"
                     if concept.get("definition"):
                         title += f"\nDefinition: {concept['definition'][:100]}"
-                    if concept.get("scheme"):
-                        title += f"\nScheme: {concept['scheme']}"
+                    if concept.get("schemes"):
+                        title += f"\nScheme: {', '.join(concept['schemes'])}"
                     net.add_node(
                         c_id,
                         label=label,
