@@ -14,6 +14,7 @@ from orionbelt_ontology_builder.ontology_manager import (  # noqa: F401
     IMPORT_MERGE,
     IMPORT_MERGE_OVERWRITE,
     IMPORT_REPLACE,
+    SKOSXL,
     OntologyManager,
     UndoManager,
 )

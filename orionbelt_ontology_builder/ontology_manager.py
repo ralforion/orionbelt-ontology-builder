@@ -52,6 +52,13 @@ _Triple = tuple[Node, Node, Node]
 _TripleUpdates = list[tuple[_Triple, _Triple]]
 
 # domainIncludes/rangeIncludes from Schema.org and gist
+#: SKOS-XL, the W3C extension that makes a label a resource rather than a
+#: literal, so statements can be made about the label itself. rdflib has no
+#: built-in binding for it. This app authors plain SKOS labels only; SKOS-XL is
+#: read so an imported vocabulary is not shown as unlabelled, and reported so
+#: the user knows why those labels are not editable here.
+SKOSXL = Namespace("http://www.w3.org/2008/05/skos-xl#")
+
 _SCHEMA = Namespace("https://schema.org/")
 _GIST = Namespace("https://w3id.org/semanticarts/ns/ontology/gist/")
 _DOMAIN_INCLUDES = (_SCHEMA.domainIncludes, _GIST.domainIncludes)
@@ -107,6 +114,7 @@ class OntologyManager:
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("xsd", XSD)
         self.graph.bind("skos", SKOS)
+        self.graph.bind("skosxl", SKOSXL)
         self.graph.bind("dc", DC)
         self.graph.bind("dcterms", DCTERMS)
         self.graph.bind("", self.namespace)
@@ -168,6 +176,9 @@ class OntologyManager:
         "rdfs",
         "xsd",
         "skos",
+        # SKOS-XL is a vocabulary this app reads, not one a user mints entities
+        # in, so it belongs here beside skos rather than in the creatable list.
+        "skosxl",
         "dc",
         "dcterms",
     }
@@ -2796,6 +2807,14 @@ class OntologyManager:
         "hiddenLabel": SKOS.hiddenLabel,
     }
 
+    #: The SKOS-XL counterpart of each label kind. Reading these is what keeps
+    #: an imported AGROVOC or EuroVoc from looking entirely unlabelled.
+    SKOS_XL_LABEL_KINDS: ClassVar[dict[str, URIRef]] = {
+        "prefLabel": SKOSXL.prefLabel,
+        "altLabel": SKOSXL.altLabel,
+        "hiddenLabel": SKOSXL.hiddenLabel,
+    }
+
     #: SKOS documentation properties. All are repeatable and language-tagged.
     SKOS_NOTE_KINDS: ClassVar[dict[str, URIRef]] = {
         "definition": SKOS.definition,
@@ -2954,6 +2973,14 @@ class OntologyManager:
             ),
             "source": "qSKOS",
         },
+        "skos_xl_labels": {
+            "severity": "info",
+            "summary": (
+                "The vocabulary uses SKOS-XL labels, which this editor shows "
+                "but does not edit."
+            ),
+            "source": "SKOS-XL",
+        },
         "disconnected_components": {
             "severity": "info",
             "summary": (
@@ -2986,6 +3013,21 @@ class OntologyManager:
             for o in self.graph.objects(uri, prop)
             if isinstance(o, Literal)
         ]
+        return sorted(values, key=lambda v: (v["lang"] != "", v["lang"], v["value"]))
+
+    def _xl_literals(self, uri: Node, prop: URIRef) -> list[dict[str, str]]:
+        """Label literals reached through a SKOS-XL label resource.
+
+        ``concept skosxl:prefLabel [ skosxl:literalForm "Dog"@en ]`` carries the
+        same information as ``skos:prefLabel "Dog"@en``, one indirection away.
+        A label resource without a ``literalForm`` contributes nothing, which is
+        why the value is filtered rather than rendered as an empty string.
+        """
+        values = []
+        for label in self.graph.objects(uri, prop):
+            for form in self.graph.objects(label, SKOSXL.literalForm):
+                if isinstance(form, Literal):
+                    values.append({"value": str(form), "lang": form.language or ""})
         return sorted(values, key=lambda v: (v["lang"] != "", v["lang"], v["value"]))
 
     @staticmethod
@@ -3204,7 +3246,19 @@ class OntologyManager:
                 kind: self._tagged_literals(uri, prop)
                 for kind, prop in self.SKOS_NOTE_KINDS.items()
             }
-            pref_label = self._flatten_literal(labels["prefLabel"])
+            # Kept in their own key rather than merged into ``labels``: the
+            # editor writes plain SKOS, so a SKOS-XL label offered in the same
+            # list would come with a delete button that silently does nothing.
+            xl_labels = {
+                kind: self._xl_literals(uri, prop)
+                for kind, prop in self.SKOS_XL_LABEL_KINDS.items()
+            }
+            # The flat key falls back to SKOS-XL so the graph, the dashboard and
+            # the concept list show a name for an imported vocabulary instead of
+            # a bare local name.
+            pref_label = self._flatten_literal(
+                labels["prefLabel"] or xl_labels["prefLabel"]
+            )
             definition = self._flatten_literal(notes["definition"])
             alt_labels = [v["value"] for v in labels["altLabel"]]
 
@@ -3281,6 +3335,7 @@ class OntologyManager:
                     # Structured, language-aware views. The flat keys above are
                     # computed from these and kept for existing readers.
                     "labels": labels,
+                    "xl_labels": xl_labels,
                     "notes": notes,
                     "notation": notation,
                     "top_of_uris": top_of_uris,
@@ -3825,7 +3880,11 @@ class OntologyManager:
             labels = concept["labels"]
             name = concept["name"]
 
-            if not labels["prefLabel"]:
+            # A SKOS-XL preferred label is a preferred label. Without this the
+            # check fires on every concept of a SKOS-XL vocabulary, at the one
+            # severity that cannot be switched off, and reports a valid file as
+            # broken.
+            if not labels["prefLabel"] and not concept["xl_labels"]["prefLabel"]:
                 issues.append(
                     self._skos_issue(
                         "error",
@@ -4191,7 +4250,35 @@ class OntologyManager:
                     )
 
         issues.extend(self._skos_component_issues(concepts))
+        issues.extend(self._skos_xl_issues(concepts))
         return issues
+
+    def _skos_xl_issues(self, concepts: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """One notice that this vocabulary carries SKOS-XL labels.
+
+        Once for the vocabulary, not once per concept: it is a fact about the
+        file rather than a defect in each concept, and AGROVOC would otherwise
+        produce forty thousand identical lines. The count is what the user needs
+        in order to recognise the situation.
+        """
+        using = [
+            c
+            for c in concepts
+            if any(c["xl_labels"][kind] for kind in self.SKOS_XL_LABEL_KINDS)
+        ]
+        if not using:
+            return []
+        return [
+            self._skos_issue(
+                "info",
+                "skos_xl_labels",
+                using[0],
+                f"{len(using)} concept{'s' if len(using) != 1 else ''} in this "
+                "vocabulary carry SKOS-XL labels. They are shown but not "
+                "editable here, which edits plain SKOS labels; editing one "
+                "means adding a skos:prefLabel alongside it.",
+            )
+        ]
 
     def _skos_component_issues(
         self, concepts: list[dict[str, Any]]

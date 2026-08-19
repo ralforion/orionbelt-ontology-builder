@@ -106,7 +106,7 @@ A dedicated page for building controlled vocabularies:
 
 #### What SKOS validation checks
 
-Twenty checks in three tiers. The page groups results by check and lets you
+21 checks in three tiers. The page groups results by check and lets you
 switch either advisory tier off, which is what makes it usable on a large
 imported vocabulary. `validate_skos()` returns the same list to Python callers,
 each issue carrying a stable `type`, a `severity`, the `subject` concept and its
@@ -145,6 +145,7 @@ each issue carrying a stable `type`, a `severity`, the `subject` concept and its
 | `no_scheme` | The concept belongs to no ConceptScheme. | Practice |
 | `undocumented` | The concept has neither a definition nor a scopeNote. | Practice |
 | `valueless_association` | Two concepts are skos:related and already share a parent, which relates them anyway. | qSKOS |
+| `skos_xl_labels` | The vocabulary uses SKOS-XL labels, which this editor shows but does not edit. | SKOS-XL |
 | `disconnected_components` | A cluster of concepts has no link to the main body of the vocabulary. | qSKOS |
 
 Sources cite the SKOS Reference integrity condition where the condition is

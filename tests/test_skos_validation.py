@@ -15,7 +15,7 @@ import pytest
 from rdflib import Literal, URIRef
 from rdflib.namespace import RDF, SKOS
 
-from ontology_manager import OntologyManager
+from ontology_manager import SKOSXL, OntologyManager
 
 
 @pytest.fixture
@@ -560,6 +560,12 @@ class TestCheckCatalogue:
             f"regenerate its table: {stale}"
         )
 
+    def test_the_readme_states_the_right_number_of_checks(self):
+        """A count in prose drifts the moment a check is added."""
+        readme = self._readme()
+        expected = f"{len(OntologyManager.SKOS_CHECKS)} checks in three tiers"
+        assert expected in readme, f"README.md should say {expected!r}"
+
     def test_the_readme_cites_the_same_sources(self):
         readme = self._readme()
         for kind, entry in OntologyManager.SKOS_CHECKS.items():
@@ -569,3 +575,95 @@ class TestCheckCatalogue:
             assert entry["source"] in row, (
                 f"{kind}: README cites something other than {entry['source']!r}"
             )
+
+
+class TestSkosXl:
+    """SKOS-XL labels are read, not authored.
+
+    Every fixture writes triples directly, because SKOS-XL only ever arrives by
+    import: this app has no way to author it, so a fixture built through the API
+    could not reach the case at all.
+    """
+
+    BASE = "http://test.org/ont#"
+
+    @classmethod
+    def _xl_labelled(cls, om, name, kind="prefLabel", text="Alpha", lang="en"):
+        """A concept whose only label of ``kind`` is a SKOS-XL one."""
+        concept = URIRef(cls.BASE + name)
+        label = URIRef(f"{cls.BASE}label_{name}_{kind}")
+        om.graph.add((URIRef(cls.BASE + "S"), RDF.type, SKOS.ConceptScheme))
+        om.graph.add((concept, RDF.type, SKOS.Concept))
+        om.graph.add((concept, SKOS.inScheme, URIRef(cls.BASE + "S")))
+        om.graph.add((concept, SKOS.definition, Literal("A definition", lang="en")))
+        om.graph.add((label, RDF.type, SKOSXL.Label))
+        om.graph.add((label, SKOSXL.literalForm, Literal(text, lang=lang)))
+        om.graph.add((concept, OntologyManager.SKOS_XL_LABEL_KINDS[kind], label))
+        return concept
+
+    def test_an_xl_pref_label_is_a_pref_label(self, om):
+        """Otherwise every concept of a SKOS-XL vocabulary is an error."""
+        self._xl_labelled(om, "A")
+        assert "missing_prefLabel" not in _types(om)
+
+    def test_a_concept_with_no_label_at_all_still_reports(self, om):
+        om.graph.add((URIRef(self.BASE + "S"), RDF.type, SKOS.ConceptScheme))
+        om.graph.add((URIRef(self.BASE + "A"), RDF.type, SKOS.Concept))
+        om.graph.add((URIRef(self.BASE + "A"), SKOS.inScheme, URIRef(self.BASE + "S")))
+        assert "missing_prefLabel" in _types(om)
+
+    def test_xl_labels_are_readable(self, om):
+        self._xl_labelled(om, "A")
+        concept = om.get_concepts()[0]
+        assert concept["xl_labels"]["prefLabel"] == [{"value": "Alpha", "lang": "en"}]
+
+    def test_xl_labels_are_not_mixed_into_the_editable_ones(self, om):
+        """The editor writes plain SKOS; merging them would give a SKOS-XL label
+        a delete button that does nothing."""
+        self._xl_labelled(om, "A")
+        assert om.get_concepts()[0]["labels"]["prefLabel"] == []
+
+    def test_the_flat_label_falls_back_to_xl(self, om):
+        """So the graph, the dashboard and the concept list show a name."""
+        self._xl_labelled(om, "A")
+        assert om.get_concepts()[0]["prefLabel"] == "Alpha"
+
+    def test_a_plain_label_wins_the_flat_key(self, om):
+        concept = self._xl_labelled(om, "A")
+        om.graph.add((concept, SKOS.prefLabel, Literal("Plain", lang="en")))
+        assert om.get_concepts()[0]["prefLabel"] == "Plain"
+
+    def test_a_label_resource_without_a_literal_form_contributes_nothing(self, om):
+        om.graph.add((URIRef(self.BASE + "S"), RDF.type, SKOS.ConceptScheme))
+        om.graph.add((URIRef(self.BASE + "A"), RDF.type, SKOS.Concept))
+        label = URIRef(self.BASE + "empty_label")
+        om.graph.add((label, RDF.type, SKOSXL.Label))
+        om.graph.add((URIRef(self.BASE + "A"), SKOSXL.prefLabel, label))
+        assert om.get_concepts()[0]["xl_labels"]["prefLabel"] == []
+        assert "missing_prefLabel" in _types(om)
+
+    def test_the_vocabulary_is_reported_once_not_once_per_concept(self, om):
+        """AGROVOC would otherwise produce one line per concept."""
+        for name in ("A", "B", "C"):
+            self._xl_labelled(om, name)
+        found = _of_type(om, "skos_xl_labels")
+        assert len(found) == 1
+        assert "3 concepts" in found[0]["message"]
+
+    def test_nothing_is_reported_for_a_plain_skos_vocabulary(self, vocab):
+        assert "skos_xl_labels" not in _types(vocab)
+
+    def test_the_notice_is_editorial(self, om):
+        self._xl_labelled(om, "A")
+        assert "skos_xl_labels" not in _types(om, check_editorial=False)
+
+    def test_alt_and_hidden_xl_labels_are_read_too(self, om):
+        for kind in ("altLabel", "hiddenLabel"):
+            self._xl_labelled(om, "A", kind=kind, text=f"XL {kind}")
+        concept = om.get_concepts()[0]
+        assert concept["xl_labels"]["altLabel"][0]["value"] == "XL altLabel"
+        assert concept["xl_labels"]["hiddenLabel"][0]["value"] == "XL hiddenLabel"
+
+    def test_skosxl_is_not_offered_as_a_place_to_create_entities(self, om):
+        """It is a vocabulary this app reads, not one the user mints in."""
+        assert str(SKOSXL) not in om.get_creatable_namespaces()
