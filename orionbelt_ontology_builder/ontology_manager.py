@@ -3001,6 +3001,20 @@ class OntologyManager:
         """
         return values[0]["value"] if values else ""
 
+    def _concept_in_scheme(self, concept: Node, scheme: Node) -> bool:
+        """Whether a concept belongs to a scheme, however that was asserted.
+
+        ``skos:topConceptOf`` is a sub-property of ``skos:inScheme``, and it has
+        ``skos:hasTopConcept`` as its inverse, so any of the three says the
+        concept is in the scheme. An import that carries only the scheme side
+        would otherwise have its top concepts counted in no scheme at all.
+        """
+        return (
+            (concept, SKOS.inScheme, scheme) in self.graph
+            or (concept, SKOS.topConceptOf, scheme) in self.graph
+            or (scheme, SKOS.hasTopConcept, concept) in self.graph
+        )
+
     def add_concept_scheme(
         self, name: str, label: str | None = None, comment: str | None = None
     ) -> URIRef:
@@ -3025,7 +3039,12 @@ class OntologyManager:
             label = str(self.graph.value(uri, RDFS.label) or "")
             comment = str(self.graph.value(uri, RDFS.comment) or "")
             # Count concepts in this scheme
-            concept_count = sum(1 for _ in self.graph.subjects(SKOS.inScheme, uri))
+            members = (
+                set(self.graph.subjects(SKOS.inScheme, uri))
+                | set(self.graph.subjects(SKOS.topConceptOf, uri))
+                | set(self.graph.objects(uri, SKOS.hasTopConcept))
+            )
+            concept_count = len({m for m in members if isinstance(m, URIRef)})
             schemes.append(
                 {
                     "name": name,
@@ -3175,7 +3194,7 @@ class OntologyManager:
             if (
                 scheme
                 and scheme_uri
-                and (uri, SKOS.inScheme, scheme_uri) not in self.graph
+                and not self._concept_in_scheme(uri, scheme_uri)
             ):
                 continue
 
@@ -3194,11 +3213,22 @@ class OntologyManager:
             alt_labels = [v["value"] for v in labels["altLabel"]]
 
             notation = str(self.graph.value(uri, SKOS.notation) or "")
-            top_of_uris = [
-                str(o)
-                for o in self.graph.objects(uri, SKOS.topConceptOf)
-                if isinstance(o, URIRef)
-            ]
+            # Both directions of the pair. ``set_top_concept`` writes both, but
+            # a published vocabulary often asserts only the scheme side,
+            # ``scheme skos:hasTopConcept concept``, and reading one direction
+            # made such a concept look like an orphan belonging to no scheme.
+            top_of_uris = sorted(
+                {
+                    str(o)
+                    for o in self.graph.objects(uri, SKOS.topConceptOf)
+                    if isinstance(o, URIRef)
+                }
+                | {
+                    str(s)
+                    for s in self.graph.subjects(SKOS.hasTopConcept, uri)
+                    if isinstance(s, URIRef)
+                }
+            )
             mappings = {
                 rel: sorted(
                     str(o)
@@ -3223,11 +3253,16 @@ class OntologyManager:
                 for o in self.graph.objects(uri, SKOS.related)
                 if isinstance(o, URIRef)
             ]
-            scheme_uris = [
-                str(o)
-                for o in self.graph.objects(uri, SKOS.inScheme)
-                if isinstance(o, URIRef)
-            ]
+            # skos:topConceptOf is a sub-property of skos:inScheme, so heading a
+            # scheme is membership of it whether or not inScheme was asserted.
+            scheme_uris = sorted(
+                {
+                    str(o)
+                    for o in self.graph.objects(uri, SKOS.inScheme)
+                    if isinstance(o, URIRef)
+                }
+                | set(top_of_uris)
+            )
 
             # Full URIs (``*_uris``) accompany the local-name lists so callers can
             # address a broader/related concept or scheme unambiguously even when

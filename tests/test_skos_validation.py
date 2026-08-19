@@ -340,14 +340,20 @@ class TestOneDirectionalImports:
     """
 
     @staticmethod
-    def _seed(om, *names):
-        """Concepts written straight into the graph, no inverses materialised."""
+    def _seed(om, *names, in_scheme=True):
+        """Concepts written straight into the graph, no inverses materialised.
+
+        ``in_scheme=False`` omits the skos:inScheme triple, for the tests about
+        membership implied by a top-concept assertion: seeding it would mask
+        the very thing they check.
+        """
         base = "http://test.org/ont#"
         om.add_concept_scheme("S")
         for name in names:
             uri = URIRef(base + name)
             om.graph.add((uri, RDF.type, SKOS.Concept))
-            om.graph.add((uri, SKOS.inScheme, URIRef(base + "S")))
+            if in_scheme:
+                om.graph.add((uri, SKOS.inScheme, URIRef(base + "S")))
             om.graph.add((uri, SKOS.prefLabel, Literal(name, lang="en")))
             om.graph.add((uri, SKOS.definition, Literal("A definition", lang="en")))
         return base
@@ -374,6 +380,41 @@ class TestOneDirectionalImports:
         om.graph.add((URIRef(base + "A"), SKOS.narrower, URIRef(base + "B")))
         om.graph.add((URIRef(base + "B"), SKOS.narrower, URIRef(base + "A")))
         assert "broader_cycle" in _types(om)
+
+    def test_a_scheme_side_top_concept_is_not_an_orphan(self, om):
+        """``scheme skos:hasTopConcept concept`` with no concept-side triple."""
+        base = self._seed(om, "Animal")
+        om.graph.add((URIRef(base + "S"), SKOS.hasTopConcept, URIRef(base + "Animal")))
+        assert "orphan" not in _types(om)
+
+    def test_a_scheme_side_top_concept_is_in_that_scheme(self, om):
+        """skos:topConceptOf is a sub-property of skos:inScheme."""
+        base = self._seed(om, "Animal")
+        om.graph.add((URIRef(base + "S"), SKOS.hasTopConcept, URIRef(base + "Animal")))
+        assert "no_scheme" not in _types(om)
+        concept = next(c for c in om.get_concepts() if c["name"] == "Animal")
+        assert concept["top_of"] == ["S"]
+        assert concept["schemes"] == ["S"]
+
+    def test_a_scheme_side_top_concept_is_found_by_scheme_filter(self, om):
+        base = self._seed(om, "Animal", in_scheme=False)
+        om.graph.add((URIRef(base + "S"), SKOS.hasTopConcept, URIRef(base + "Animal")))
+        assert [c["name"] for c in om.get_concepts(scheme=base + "S")] == ["Animal"]
+        assert om.get_concept_schemes()[0]["concept_count"] == 1
+
+    def test_membership_is_not_double_counted(self, om):
+        """All three assertions at once still describe one membership."""
+        base = self._seed(om, "Animal", in_scheme=False)
+        for triple in (
+            (URIRef(base + "S"), SKOS.hasTopConcept, URIRef(base + "Animal")),
+            (URIRef(base + "Animal"), SKOS.topConceptOf, URIRef(base + "S")),
+            (URIRef(base + "Animal"), SKOS.inScheme, URIRef(base + "S")),
+        ):
+            om.graph.add(triple)
+        concept = next(c for c in om.get_concepts() if c["name"] == "Animal")
+        assert concept["top_of"] == ["S"]
+        assert concept["schemes"] == ["S"]
+        assert om.get_concept_schemes()[0]["concept_count"] == 1
 
     def test_related_asserted_one_way_reaches_both_concepts(self, om):
         base = self._seed(om, "Cat", "Dog")
