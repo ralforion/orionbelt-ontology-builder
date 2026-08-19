@@ -432,6 +432,28 @@ class TestLanguageIsPartOfLiteralIdentity:
         vocab.set_concept_label("Dog", "altLabel", "Dog", lang="en")
         assert "label_overlap" in _types(vocab)
 
+    def test_alt_and_hidden_clash_without_a_pref_label_involved(self, vocab):
+        """S13 makes the three *pairwise* disjoint, not each disjoint from
+        prefLabel: an altLabel matching a hiddenLabel is as much a clash."""
+        vocab.set_concept_label("Dog", "altLabel", "Alias", lang="en")
+        vocab.set_concept_label("Dog", "hiddenLabel", "Alias", lang="en")
+        found = _of_type(vocab, "label_overlap")
+        assert len(found) == 1
+        assert "altLabel and hiddenLabel" in found[0]["message"]
+
+    def test_one_literal_in_all_three_kinds_is_reported_once(self, vocab):
+        vocab.set_concept_label("Dog", "prefLabel", "Alias", lang="en")
+        vocab.set_concept_label("Dog", "altLabel", "Alias", lang="en")
+        vocab.set_concept_label("Dog", "hiddenLabel", "Alias", lang="en")
+        found = _of_type(vocab, "label_overlap")
+        assert len(found) == 1
+        assert "prefLabel and altLabel and hiddenLabel" in found[0]["message"]
+
+    def test_alt_and_hidden_in_different_languages_do_not_clash(self, vocab):
+        vocab.set_concept_label("Dog", "altLabel", "Alias", lang="en")
+        vocab.set_concept_label("Dog", "hiddenLabel", "Alias", lang="de")
+        assert "label_overlap" not in _types(vocab)
+
 
 class TestEveryNotationIsChecked:
     def test_a_tagged_notation_alongside_a_typed_one(self, vocab):

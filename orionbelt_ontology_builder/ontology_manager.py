@@ -2875,8 +2875,8 @@ class OntologyManager:
         "label_overlap": {
             "severity": "warning",
             "summary": (
-                "The same text in the same language is used as a prefLabel "
-                "and as an altLabel or hiddenLabel on one concept."
+                "One concept uses the same text in the same language as two "
+                "of prefLabel, altLabel and hiddenLabel."
             ),
             "source": "SKOS Reference S13",
         },
@@ -3852,12 +3852,6 @@ class OntologyManager:
                         )
                     )
 
-            # (value, language), not value alone: an RDF literal's language is
-            # part of its identity, so a prefLabel "Bank"@en and an altLabel
-            # "Bank"@de are different objects and S13 is not violated.
-            pref_values = {
-                (item["value"], item["lang"]) for item in labels["prefLabel"]
-            }
             for kind in self.SKOS_LABEL_KINDS:
                 for item in labels[kind]:
                     if not item["value"].strip():
@@ -3883,20 +3877,37 @@ class OntologyManager:
                     # the Literal is constructed, by the API and by the parser
                     # alike, and it refuses exactly what languages.py refuses,
                     # so such a literal cannot reach this graph to be found.
-                    if (
-                        kind != "prefLabel"
-                        and (item["value"], item["lang"]) in pref_values
-                    ):
-                        issues.append(
-                            self._skos_issue(
-                                "warning",
-                                "label_overlap",
-                                concept,
-                                f"'{item['value']}' is both a prefLabel and a "
-                                f"{kind} on '{name}'; the three label properties "
-                                "are pairwise disjoint (SKOS Reference S13)",
-                            )
+
+            # S13 makes the three label properties *pairwise* disjoint, so an
+            # altLabel matching a hiddenLabel is as much a clash as either
+            # matching a prefLabel. Grouping by literal catches all three pairs
+            # and reports each clashing literal once rather than once per kind.
+            #
+            # Keyed by (value, language): a language tag is part of an RDF
+            # literal's identity, so "Bank"@en and "Bank"@de are different
+            # objects and S13 is not engaged.
+            by_literal: dict[tuple[str, str], list[str]] = {}
+            for kind in self.SKOS_LABEL_KINDS:
+                for item in labels[kind]:
+                    if item["value"].strip():
+                        by_literal.setdefault((item["value"], item["lang"]), []).append(
+                            kind
                         )
+            for (value, lang), kinds in by_literal.items():
+                clashing = [k for k in self.SKOS_LABEL_KINDS if k in kinds]
+                if len(clashing) > 1:
+                    tagged = f"'{value}'@{lang}" if lang else f"'{value}'"
+                    issues.append(
+                        self._skos_issue(
+                            "warning",
+                            "label_overlap",
+                            concept,
+                            f"{tagged} on '{name}' is used as "
+                            f"{' and '.join(clashing)}; the three label "
+                            "properties are pairwise disjoint "
+                            "(SKOS Reference S13)",
+                        )
+                    )
 
             # Every notation, not ``graph.value``'s arbitrary one: a concept
             # carrying a correct typed notation alongside a language-tagged one
