@@ -531,9 +531,41 @@ class TestCheckCatalogue:
             )
             assert entry["severity"] in {"error", "warning", "info"}, kind
 
-    def test_the_readme_documents_every_check(self):
-        readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(
+    @staticmethod
+    def _readme() -> str:
+        return (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(
             encoding="utf-8"
         )
+
+    def test_the_readme_documents_every_check(self):
+        readme = self._readme()
         missing = [k for k in OntologyManager.SKOS_CHECKS if f"`{k}`" not in readme]
         assert not missing, f"not documented in README.md: {missing}"
+
+    def test_the_readme_says_what_the_catalogue_says(self):
+        """The README table is generated from the catalogue but stored static.
+
+        Checking only that each check is *named* there let a description go two
+        revisions stale while the test stayed green. The wording is the part a
+        reader relies on, so it is the part worth pinning.
+        """
+        readme = self._readme()
+        stale = [
+            kind
+            for kind, entry in OntologyManager.SKOS_CHECKS.items()
+            if " ".join(entry["summary"].split()) not in readme
+        ]
+        assert not stale, (
+            "README.md describes these checks differently from SKOS_CHECKS, "
+            f"regenerate its table: {stale}"
+        )
+
+    def test_the_readme_cites_the_same_sources(self):
+        readme = self._readme()
+        for kind, entry in OntologyManager.SKOS_CHECKS.items():
+            summary = " ".join(entry["summary"].split())
+            row = next((line for line in readme.splitlines() if summary in line), None)
+            assert row is not None, kind
+            assert entry["source"] in row, (
+                f"{kind}: README cites something other than {entry['source']!r}"
+            )

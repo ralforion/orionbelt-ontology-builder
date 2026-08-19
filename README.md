@@ -129,7 +129,7 @@ each issue carrying a stable `type`, a `severity`, the `subject` concept and its
 | Check | What it means | Source |
 |---|---|---|
 | `missing_lang` | A label carries no language tag. | Practice |
-| `label_overlap` | The same text is used as a prefLabel and as an altLabel or hiddenLabel on one concept. | SKOS Reference S13 |
+| `label_overlap` | One concept uses the same text in the same language as two of prefLabel, altLabel and hiddenLabel. | SKOS Reference S13 |
 | `duplicate_prefLabel` | Two concepts in one scheme share a prefLabel in the same language. | qSKOS |
 | `ambiguous_prefLabel` | Two concepts anywhere in the vocabulary share a prefLabel in the same language, without sharing a scheme. | qSKOS |
 | `orphan` | The concept has no broader, narrower or related concept and is not a top concept, so nothing reaches it. | qSKOS |
