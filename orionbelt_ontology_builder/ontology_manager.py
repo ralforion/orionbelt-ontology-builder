@@ -108,16 +108,7 @@ class OntologyManager:
         self.base_uri = base_uri
         self.namespace = Namespace(base_uri)
 
-        # Bind common prefixes
-        self.graph.bind("owl", OWL)
-        self.graph.bind("rdf", RDF)
-        self.graph.bind("rdfs", RDFS)
-        self.graph.bind("xsd", XSD)
-        self.graph.bind("skos", SKOS)
-        self.graph.bind("skosxl", SKOSXL)
-        self.graph.bind("dc", DC)
-        self.graph.bind("dcterms", DCTERMS)
-        self.graph.bind("", self.namespace)
+        self._bind_standard_prefixes()
 
         # Prefixes the user explicitly bound via add_prefix (prefix -> namespace).
         # Tracked so the creation picker offers them even when the name collides
@@ -3871,20 +3862,52 @@ class OntologyManager:
             stack.extend(parents.get(node, ()))
         return seen
 
+    @classmethod
+    def _effective_labels(
+        cls, concept: dict[str, Any]
+    ) -> dict[str, list[dict[str, str]]]:
+        """A concept's labels as the SKOS entailment regime sees them.
+
+        A ``skosxl:prefLabel`` whose label resource carries a ``literalForm``
+        entails the corresponding ``skos:prefLabel`` (SKOS Reference B.3.4.2),
+        so a SKOS-XL label takes part in every integrity condition a plain one
+        does: S13 disjointness, S14's one-per-language rule, and the duplicate
+        and ambiguous label checks. Suppressing ``missing_prefLabel`` for them
+        and stopping there left the rest as false negatives.
+
+        Deduplicated by (value, language), because that entailment means a
+        plain label and an XL label carrying the same literal are the same
+        statement, not two labels that clash with each other.
+
+        Validation-only. The editor keeps the two apart, since it can write
+        plain labels and not SKOS-XL ones.
+        """
+        merged: dict[str, list[dict[str, str]]] = {}
+        for kind in cls.SKOS_LABEL_KINDS:
+            seen: set[tuple[str, str]] = set()
+            values = []
+            for item in [*concept["labels"][kind], *concept["xl_labels"][kind]]:
+                key = (item["value"], item["lang"])
+                if key not in seen:
+                    seen.add(key)
+                    values.append(item)
+            merged[kind] = values
+        return merged
+
     def _skos_label_issues(
         self, concepts: list[dict[str, Any]]
     ) -> list[dict[str, str]]:
         """Labels: presence, language tagging, and the SKOS disjointness rules."""
         issues: list[dict[str, str]] = []
         for concept in concepts:
-            labels = concept["labels"]
+            labels = self._effective_labels(concept)
             name = concept["name"]
 
             # A SKOS-XL preferred label is a preferred label. Without this the
             # check fires on every concept of a SKOS-XL vocabulary, at the one
             # severity that cannot be switched off, and reports a valid file as
             # broken.
-            if not labels["prefLabel"] and not concept["xl_labels"]["prefLabel"]:
+            if not labels["prefLabel"]:
                 issues.append(
                     self._skos_issue(
                         "error",
@@ -4160,7 +4183,7 @@ class OntologyManager:
         for scheme in schemes:
             seen: dict[tuple[str, str], dict[str, Any]] = {}
             for concept in self.get_concepts(scheme=scheme["uri"]):
-                for item in concept["labels"]["prefLabel"]:
+                for item in self._effective_labels(concept)["prefLabel"]:
                     key = (item["lang"], item["value"])
                     tagged = (
                         f"'{item['value']}'@{item['lang']}"
@@ -4189,7 +4212,7 @@ class OntologyManager:
         # has seen the first does not need the second for the same two concepts.
         vocabulary: dict[tuple[str, str], dict[str, Any]] = {}
         for concept in concepts:
-            for item in concept["labels"]["prefLabel"]:
+            for item in self._effective_labels(concept)["prefLabel"]:
                 key = (item["lang"], item["value"])
                 tagged = (
                     f"'{item['value']}'@{item['lang']}"
@@ -5083,9 +5106,28 @@ class OntologyManager:
                 # Current bindings take precedence
                 self.graph.bind(prefix, ns, override=False)
 
+    def _bind_standard_prefixes(self):
+        """Bind the prefixes this app always wants readable in an export.
+
+        Called after every graph replacement, not only at construction: loading
+        a file swaps ``self.graph`` for a fresh one, and only the prefixes
+        rdflib auto-binds survive that. ``skosxl`` is not one of them, so a
+        loaded SKOS-XL vocabulary exported as ``ns1:`` until this ran again.
+        """
+        self.graph.bind("owl", OWL)
+        self.graph.bind("rdf", RDF)
+        self.graph.bind("rdfs", RDFS)
+        self.graph.bind("xsd", XSD)
+        self.graph.bind("skos", SKOS)
+        self.graph.bind("skosxl", SKOSXL)
+        self.graph.bind("dc", DC)
+        self.graph.bind("dcterms", DCTERMS)
+        self.graph.bind("", self.namespace)
+
     def _update_namespace_from_graph(self):
         """Update namespace based on loaded ontology."""
         found_ontology = False
+        # Rebound at the end of this method, once self.namespace is settled.
 
         # Try to find the ontology URI
         for ont in self.graph.subjects(RDF.type, OWL.Ontology):
@@ -5106,14 +5148,9 @@ class OntologyManager:
                 self.ontology_uri = URIRef(self.base_uri.rstrip("#").rstrip("/"))
                 self.graph.add((self.ontology_uri, RDF.type, OWL.Ontology))
 
-        # Re-bind prefixes
-        self.graph.bind("owl", OWL)
-        self.graph.bind("rdf", RDF)
-        self.graph.bind("rdfs", RDFS)
-        self.graph.bind("xsd", XSD)
-        self.graph.bind("skos", SKOS)
-        self.graph.bind("dc", DC)
-        self.graph.bind("dcterms", DCTERMS)
+        # One list, bound from one place. This block used to repeat the set
+        # from __init__ and had silently fallen a prefix behind it.
+        self._bind_standard_prefixes()
 
     def _detect_base_uri(self, uri_str: str) -> str:
         """Detect the base URI with separator from an ontology URI string."""

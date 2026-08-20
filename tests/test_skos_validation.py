@@ -597,7 +597,13 @@ class TestSkosXl:
         om.graph.add((concept, SKOS.inScheme, URIRef(cls.BASE + "S")))
         om.graph.add((concept, SKOS.definition, Literal("A definition", lang="en")))
         om.graph.add((label, RDF.type, SKOSXL.Label))
-        om.graph.add((label, SKOSXL.literalForm, Literal(text, lang=lang)))
+        om.graph.add(
+            (
+                label,
+                SKOSXL.literalForm,
+                Literal(text, lang=lang) if lang else Literal(text),
+            )
+        )
         om.graph.add((concept, OntologyManager.SKOS_XL_LABEL_KINDS[kind], label))
         return concept
 
@@ -664,6 +670,69 @@ class TestSkosXl:
         assert concept["xl_labels"]["altLabel"][0]["value"] == "XL altLabel"
         assert concept["xl_labels"]["hiddenLabel"][0]["value"] == "XL hiddenLabel"
 
+    # --- SKOS-XL labels take part in the integrity conditions -------------
+    #
+    # A skosxl:prefLabel with a literalForm entails the plain skos:prefLabel
+    # (SKOS Reference B.3.4.2), so it is subject to every rule a plain label
+    # is. Suppressing missing_prefLabel and stopping there left the rest as
+    # false negatives.
+
+    def test_two_xl_pref_labels_in_one_language_break_s14(self, om):
+        concept = self._xl_labelled(om, "A", text="One")
+        second = URIRef(self.BASE + "label_A_second")
+        om.graph.add((second, RDF.type, SKOSXL.Label))
+        om.graph.add((second, SKOSXL.literalForm, Literal("Two", lang="en")))
+        om.graph.add((concept, SKOSXL.prefLabel, second))
+        assert "multi_prefLabel_per_lang" in _types(om)
+
+    def test_duplicate_xl_pref_labels_in_a_scheme_are_found(self, om):
+        self._xl_labelled(om, "A", text="Same")
+        self._xl_labelled(om, "B", text="Same")
+        assert "duplicate_prefLabel" in _types(om)
+
+    def test_a_plain_pref_label_clashes_with_an_xl_alt_label(self, om):
+        """S13 disjointness does not care which spelling asserted the label."""
+        concept = self._xl_labelled(om, "A", kind="altLabel", text="Dog")
+        om.graph.add((concept, SKOS.prefLabel, Literal("Dog", lang="en")))
+        assert "label_overlap" in _types(om)
+
+    def test_an_xl_label_entailing_a_plain_one_is_not_a_clash(self, om):
+        """The entailment makes them the same statement, not two labels.
+
+        Without deduplication, spelling a label both ways would report S14 and
+        S13 violations against itself.
+        """
+        concept = self._xl_labelled(om, "A", text="Dog")
+        om.graph.add((concept, SKOS.prefLabel, Literal("Dog", lang="en")))
+        types = _types(om)
+        assert "multi_prefLabel_per_lang" not in types
+        assert "label_overlap" not in types
+
+    def test_an_untagged_xl_label_is_reported_like_a_plain_one(self, om):
+        self._xl_labelled(om, "A", text="Alpha", lang=None)
+        assert "missing_lang" in _types(om)
+
     def test_skosxl_is_not_offered_as_a_place_to_create_entities(self, om):
         """It is a vocabulary this app reads, not one the user mints in."""
         assert str(SKOSXL) not in om.get_creatable_namespaces()
+
+    def test_the_prefix_survives_a_load(self, om, tmp_path):
+        """Loading replaces the graph, and only rdflib's own defaults survive.
+
+        skosxl is not one of them, so an imported SKOS-XL vocabulary exported
+        as `ns1:` until the standard prefixes were rebound.
+        """
+        source = tmp_path / "xl.ttl"
+        source.write_text(
+            "<http://example.org/o#A> a "
+            "<http://www.w3.org/2004/02/skos/core#Concept> ;\n"
+            "  <http://www.w3.org/2008/05/skos-xl#prefLabel> "
+            "<http://example.org/o#lbl> .\n"
+            "<http://example.org/o#lbl> a "
+            "<http://www.w3.org/2008/05/skos-xl#Label> ;\n"
+            '  <http://www.w3.org/2008/05/skos-xl#literalForm> "Alpha"@en .\n',
+            encoding="utf-8",
+        )
+        om.load_from_file(str(source))
+        assert "skosxl" in {prefix for prefix, _ in om.graph.namespaces()}
+        assert "skosxl:" in om.graph.serialize(format="turtle")
