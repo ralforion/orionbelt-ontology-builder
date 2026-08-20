@@ -4532,15 +4532,38 @@ class OntologyManager:
 
         fixed = 0
         for concept in self.get_concepts():
-            uri = URIRef(concept["uri"])
-            for kind, prop in self.SKOS_LABEL_KINDS.items():
+            effective = self._effective_labels(concept)
+            taken = {
+                (item["value"], item["lang"])
+                for kind in self.SKOS_LABEL_KINDS
+                for item in effective[kind]
+            }
+            pref_langs = {
+                item["lang"] for item in effective["prefLabel"] if item["lang"]
+            }
+            for kind in self.SKOS_LABEL_KINDS:
                 # Plain labels only: an untagged skosxl:literalForm would have to
                 # be edited on the label resource, which this app does not author.
                 for item in concept["labels"][kind]:
                     if item["lang"] or not item["value"].strip():
                         continue
-                    self.graph.remove((uri, prop, Literal(item["value"])))
-                    self.graph.add((uri, prop, Literal(item["value"], lang=tag)))
+                    # Refuse a re-tag that would trade this warning for a worse
+                    # problem: a second prefLabel in a language that already has
+                    # one breaks S14, and landing on a literal another kind holds
+                    # breaks S13. Both are left for the author.
+                    if kind == "prefLabel" and tag in pref_langs:
+                        continue
+                    if (item["value"], tag) in taken:
+                        continue
+                    # Through the helper, which matches the literal actually in
+                    # the graph. Rebuilding one with Literal(value) misses a
+                    # typed label such as "Dog"^^xsd:string, so the old literal
+                    # survived and a tagged duplicate was added beside it.
+                    self.remove_concept_label(concept["uri"], kind, item["value"])
+                    self.set_concept_label(concept["uri"], kind, item["value"], tag)
+                    taken.add((item["value"], tag))
+                    if kind == "prefLabel":
+                        pref_langs.add(tag)
                     fixed += 1
         return fixed
 
@@ -4594,7 +4617,6 @@ class OntologyManager:
         precedence = list(self.SKOS_LABEL_KINDS)
         fixed = 0
         for concept in self.get_concepts():
-            uri = URIRef(concept["uri"])
             xl_literals = {
                 (item["value"], item["lang"])
                 for kind in self.SKOS_XL_LABEL_KINDS
@@ -4614,13 +4636,10 @@ class OntologyManager:
                 if len(clashing) < 2:
                     continue
                 for kind in clashing[1:]:
-                    self.graph.remove(
-                        (
-                            uri,
-                            self.SKOS_LABEL_KINDS[kind],
-                            Literal(value, lang=tag) if tag else Literal(value),
-                        )
-                    )
+                    # The helper matches on (text, language) against the literal
+                    # in the graph, so a typed label is removed rather than
+                    # missed by a rebuilt plain one.
+                    self.remove_concept_label(concept["uri"], kind, value, tag)
                 # One per clashing literal, matching how the check reports it:
                 # a literal held under all three kinds is one issue, not two.
                 fixed += 1

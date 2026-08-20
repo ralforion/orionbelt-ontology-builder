@@ -821,18 +821,35 @@ def render_skos_vocabulary():
                                 except ValueError as exc:
                                     show_message(str(exc), "error")
                                 else:
-                                    save_checkpoint(f"Autofix: {_kind}")
-                                    st.session_state["_skos_issues"] = (
-                                        ont.validate_skos(
-                                            check_conventions=_conventions,
-                                            check_editorial=_editorial,
+                                    # A fixer can legitimately do nothing: every
+                                    # issue in the group may involve a SKOS-XL
+                                    # label, or be a re-tag that would break S14.
+                                    # Checkpointing an empty change and calling
+                                    # it success puts a no-op in the undo stack
+                                    # and leaves the group standing underneath a
+                                    # green message.
+                                    if not _n:
+                                        show_message(
+                                            f"Nothing to fix automatically in "
+                                            f"{_kind}. These need an editorial "
+                                            "decision: a SKOS-XL label this "
+                                            "editor cannot rewrite, or a repair "
+                                            "that would break another rule.",
+                                            "info",
                                         )
-                                    )
-                                    set_flash_message(
-                                        f"Fixed {_n} {_kind} issue"
-                                        f"{'s' if _n != 1 else ''}.",
-                                        "success",
-                                    )
-                                    st.rerun()
+                                    else:
+                                        save_checkpoint(f"Autofix: {_kind}")
+                                        st.session_state["_skos_issues"] = (
+                                            ont.validate_skos(
+                                                check_conventions=_conventions,
+                                                check_editorial=_editorial,
+                                            )
+                                        )
+                                        set_flash_message(
+                                            f"Fixed {_n} {_kind} issue"
+                                            f"{'s' if _n != 1 else ''}.",
+                                            "success",
+                                        )
+                                        st.rerun()
                         for _issue in _group:
                             st.markdown(f"- {_issue['message']}")

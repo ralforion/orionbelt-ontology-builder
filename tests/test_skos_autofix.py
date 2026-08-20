@@ -15,7 +15,7 @@ import pathlib
 
 import pytest
 from rdflib import Literal, URIRef
-from rdflib.namespace import RDF, SKOS
+from rdflib.namespace import RDF, SKOS, XSD
 
 from ontology_manager import SKOSXL, OntologyManager
 
@@ -67,6 +67,44 @@ def broken():
     return om
 
 
+@pytest.fixture
+def awkward():
+    """The shapes the first fixture could not reach.
+
+    Typed literals, a re-tag that would break S14, an untagged label whose text
+    already belongs to another kind, and a SKOS-XL label. Every one of these
+    slipped past the property tests below while `broken` was their only input,
+    which is the argument for having two.
+    """
+    om = OntologyManager(base_uri=BASE)
+    om.graph.add((_uri("S"), RDF.type, SKOS.ConceptScheme))
+
+    # A typed label reads as untagged and must still be replaced, not duplicated.
+    typed = _concept(om, "Typed", labelled=False)
+    om.graph.add((typed, SKOS.prefLabel, Literal("Typed", datatype=XSD.string)))
+    om.graph.add((typed, SKOS.altLabel, Literal("Typed", datatype=XSD.string)))
+
+    # Re-tagging this to en would put two prefLabels in one language.
+    clash = _concept(om, "Clash")
+    om.graph.add((clash, SKOS.prefLabel, Literal("Hund")))
+
+    # Re-tagging this to en would collide with its own prefLabel.
+    overlap = _concept(om, "Overlap")
+    om.graph.add((overlap, SKOS.altLabel, Literal("Overlap")))
+
+    # A SKOS-XL label, which no fixer may touch.
+    xl_concept = _concept(om, "Xl", labelled=False)
+    label = _uri("xl_label")
+    om.graph.add((label, RDF.type, SKOSXL.Label))
+    om.graph.add((label, SKOSXL.literalForm, Literal("Untagged")))
+    om.graph.add((xl_concept, SKOSXL.prefLabel, label))
+
+    for name in ("Typed", "Clash", "Overlap", "Xl"):
+        om.graph.add((_uri(name), SKOS.topConceptOf, _uri("S")))
+        om.graph.add((_uri("S"), SKOS.hasTopConcept, _uri(name)))
+    return om
+
+
 def _fix(om, kind):
     """Run one fixer, supplying the language the tag fixer needs."""
     if kind == "missing_lang":
@@ -91,16 +129,36 @@ class TestEveryFixerAgreesWithItsCheck:
         _fix(broken, kind)
         assert kind not in _counts(broken)
 
+    @pytest.mark.parametrize("fixture", ["broken", "awkward"])
     @pytest.mark.parametrize("kind", FIXABLE)
-    def test_no_other_class_of_issue_appears(self, broken, kind):
-        """A repair that trades one problem for another is not a repair."""
-        if kind == "broader_cycle":
-            broken.graph.add((_uri("Animal"), SKOS.broader, _uri("Dog")))
-        before = _counts(broken)
-        _fix(broken, kind)
-        after = _counts(broken)
+    def test_no_other_class_of_issue_appears(self, request, fixture, kind):
+        """A repair that trades one problem for another is not a repair.
+
+        Run over both fixtures: this property held on `broken` alone while the
+        fixers were still creating S14 violations out of untagged labels,
+        because that fixture had no concept where a re-tag could collide.
+        """
+        om = request.getfixturevalue(fixture)
+        if kind == "broader_cycle" and fixture == "broken":
+            om.graph.add((_uri("Animal"), SKOS.broader, _uri("Dog")))
+        before = _counts(om)
+        _fix(om, kind)
+        after = _counts(om)
         introduced = {k: after[k] for k in after if after[k] > before.get(k, 0)}
-        assert not introduced, f"{kind} introduced {introduced}"
+        assert not introduced, f"{kind} introduced {introduced} on {fixture}"
+
+    @pytest.mark.parametrize("fixture", ["broken", "awkward"])
+    @pytest.mark.parametrize("kind", FIXABLE)
+    def test_a_fixer_never_claims_more_than_it_did(self, request, fixture, kind):
+        """A count above zero has to mean the check reports fewer afterwards."""
+        om = request.getfixturevalue(fixture)
+        if kind == "broader_cycle" and fixture == "broken":
+            om.graph.add((_uri("Animal"), SKOS.broader, _uri("Dog")))
+        before = _counts(om).get(kind, 0)
+        if _fix(om, kind):
+            assert _counts(om).get(kind, 0) < before, (
+                f"{kind} reported work but {before} issues remain on {fixture}"
+            )
 
     @pytest.mark.parametrize("kind", FIXABLE)
     def test_running_it_twice_changes_nothing_the_second_time(self, broken, kind):
@@ -192,6 +250,67 @@ class TestSkosXlIsNeverTouched:
         before = len(xl.graph)
         assert xl.autofix_skos("label_overlap") == 0
         assert len(xl.graph) == before
+
+
+class TestLiteralIdentity:
+    """A label's datatype is part of the node, so a rebuilt literal misses it.
+
+    `_tagged_literals` reports a label as (value, language), which is all the
+    checks need. A fixer that turned that back into `Literal(value)` did not
+    match `"Dog"^^xsd:string` in the graph: the old literal survived, a tagged
+    one was added beside it, and the fixer reported success. Removals go through
+    `remove_concept_label`, which matches the node that is actually there.
+    """
+
+    @pytest.fixture
+    def typed(self):
+        om = OntologyManager(base_uri=BASE)
+        om.graph.add((_uri("S"), RDF.type, SKOS.ConceptScheme))
+        _concept(om, "A", labelled=False)
+        return om
+
+    def test_a_typed_label_is_replaced_not_duplicated(self, typed):
+        typed.graph.add(
+            (_uri("A"), SKOS.prefLabel, Literal("Dog", datatype=XSD.string))
+        )
+        assert typed.autofix_skos("missing_lang", lang="en") == 1
+        labels = list(typed.graph.objects(_uri("A"), SKOS.prefLabel))
+        assert len(labels) == 1
+        assert labels[0].language == "en"
+
+    def test_a_typed_label_clash_is_really_removed(self, typed):
+        for prop in (SKOS.prefLabel, SKOS.altLabel):
+            typed.graph.add((_uri("A"), prop, Literal("Dog", datatype=XSD.string)))
+        assert typed.autofix_skos("label_overlap") == 1
+        assert not [i for i in typed.validate_skos() if i["type"] == "label_overlap"]
+
+
+class TestARetagThatWouldBreakSomethingElseIsRefused:
+    """The fixer would rather leave a warning than create an error."""
+
+    @pytest.fixture
+    def om(self):
+        manager = OntologyManager(base_uri=BASE)
+        manager.graph.add((_uri("S"), RDF.type, SKOS.ConceptScheme))
+        _concept(manager, "A", labelled=False)
+        return manager
+
+    def test_a_second_pref_label_in_one_language_is_not_created(self, om):
+        om.graph.add((_uri("A"), SKOS.prefLabel, Literal("Dog", lang="en")))
+        om.graph.add((_uri("A"), SKOS.prefLabel, Literal("Hund")))
+        assert om.autofix_skos("missing_lang", lang="en") == 0
+        assert "multi_prefLabel_per_lang" not in [i["type"] for i in om.validate_skos()]
+
+    def test_an_overlap_is_not_created(self, om):
+        om.graph.add((_uri("A"), SKOS.prefLabel, Literal("Dog", lang="en")))
+        om.graph.add((_uri("A"), SKOS.altLabel, Literal("Dog")))
+        assert om.autofix_skos("missing_lang", lang="en") == 0
+        assert "label_overlap" not in [i["type"] for i in om.validate_skos()]
+
+    def test_a_re_tag_with_no_collision_still_happens(self, om):
+        om.graph.add((_uri("A"), SKOS.prefLabel, Literal("Dog", lang="en")))
+        om.graph.add((_uri("A"), SKOS.altLabel, Literal("Hound")))
+        assert om.autofix_skos("missing_lang", lang="en") == 1
 
 
 class TestLabelOverlapKeepsTheMoreVisibleLabel:
