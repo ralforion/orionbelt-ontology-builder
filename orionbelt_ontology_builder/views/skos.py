@@ -797,5 +797,42 @@ def render_skos_vocabulary():
                     with st.expander(
                         f"{_icons[_sev]} {_kind} — {len(_group)}", expanded=False
                     ):
+                        # One button per class, and no "fix everything": breaking
+                        # a cycle and dropping a redundant edge each discard
+                        # something the author may have meant, so the choice is
+                        # theirs one class at a time.
+                        if _fix := ont.SKOS_AUTOFIXES.get(_kind):
+                            st.caption(_fix)
+                            _lang = None
+                            if _kind == "missing_lang":
+                                # Asked for, not guessed: a vocabulary's labels
+                                # need not be in the repairer's language.
+                                _lang = language_selectbox(
+                                    "Tag these labels as",
+                                    key=f"autofix_lang_{_kind}",
+                                )
+                            if st.button(
+                                f"Fix {len(_group)} issue"
+                                f"{'s' if len(_group) != 1 else ''}",
+                                key=f"autofix_{_kind}",
+                            ):
+                                try:
+                                    _n = ont.autofix_skos(_kind, lang=_lang)
+                                except ValueError as exc:
+                                    show_message(str(exc), "error")
+                                else:
+                                    save_checkpoint(f"Autofix: {_kind}")
+                                    st.session_state["_skos_issues"] = (
+                                        ont.validate_skos(
+                                            check_conventions=_conventions,
+                                            check_editorial=_editorial,
+                                        )
+                                    )
+                                    set_flash_message(
+                                        f"Fixed {_n} {_kind} issue"
+                                        f"{'s' if _n != 1 else ''}.",
+                                        "success",
+                                    )
+                                    st.rerun()
                         for _issue in _group:
                             st.markdown(f"- {_issue['message']}")

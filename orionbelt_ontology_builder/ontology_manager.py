@@ -4354,21 +4354,21 @@ class OntologyManager:
             for cluster in components[1:]
         ]
 
-    def _skos_cycle_issues(
-        self, concepts: list[dict[str, Any]]
-    ) -> list[dict[str, str]]:
-        """Every distinct ``skos:broader`` cycle, reported once.
+    def _skos_cycles(self, concepts: list[dict[str, Any]]) -> list[list[str]]:
+        """Every distinct ``skos:broader`` cycle, as a list of URIs each.
 
         An iterative three-colour DFS over *all* parents. Iterative because an
         imported vocabulary can be deeper than the recursion limit, over all
         parents because following only the first missed any cycle reachable
         through a second, and canonicalised by member set so a cycle is not
-        reported once per member.
+        found once per member.
+
+        Shared by the check and its autofix on purpose: a fixer that rederived
+        the cycles its own way could break an edge the check never complained
+        about, or leave the one it did.
         """
-        issues: list[dict[str, str]] = []
+        cycles: list[list[str]] = []
         parents = self._skos_parent_map(concepts)
-        shown = self._skos_display_names(concepts)
-        by_uri = {c["uri"]: c for c in concepts}
         WHITE, GREY, BLACK = 0, 1, 2
         colour = dict.fromkeys(parents, WHITE)
         seen_cycles: set[frozenset] = set()
@@ -4389,15 +4389,7 @@ class OntologyManager:
                         cycle = path[path.index(nxt) :]
                         if frozenset(cycle) not in seen_cycles:
                             seen_cycles.add(frozenset(cycle))
-                            issues.append(
-                                self._skos_issue(
-                                    "error",
-                                    "broader_cycle",
-                                    by_uri[cycle[0]],
-                                    "Broader/narrower cycle detected: "
-                                    + " -> ".join(shown[u] for u in [*cycle, nxt]),
-                                )
-                            )
+                            cycles.append(cycle)
                     elif colour.get(nxt, BLACK) == WHITE:
                         colour[nxt] = GREY
                         path.append(nxt)
@@ -4408,7 +4400,24 @@ class OntologyManager:
                     colour[node] = BLACK
                     stack.pop()
                     path.pop()
-        return issues
+        return cycles
+
+    def _skos_cycle_issues(
+        self, concepts: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """One issue per distinct cycle found by :meth:`_skos_cycles`."""
+        shown = self._skos_display_names(concepts)
+        by_uri = {c["uri"]: c for c in concepts}
+        return [
+            self._skos_issue(
+                "error",
+                "broader_cycle",
+                by_uri[cycle[0]],
+                "Broader/narrower cycle detected: "
+                + " -> ".join(shown[u] for u in [*cycle, cycle[0]]),
+            )
+            for cycle in self._skos_cycles(concepts)
+        ]
 
     def validate_skos(
         self,
@@ -4457,6 +4466,211 @@ class OntologyManager:
         return sorted(
             issues, key=lambda i: (order[i["severity"]], i["type"], i["subject"])
         )
+
+    #: What :meth:`autofix_skos` can repair, keyed by the check ``type`` it
+    #: clears. Deliberately a subset: most checks describe something only the
+    #: author can decide (what a concept means, which scheme it belongs to), and
+    #: guessing would be worse than reporting.
+    SKOS_AUTOFIXES: ClassVar[dict[str, str]] = {
+        "missing_lang": "Stamp a language tag on labels that carry none.",
+        "self_relation": "Remove the self-referential relation, and its inverse.",
+        "dangling_relation": (
+            "Remove relations pointing at something that is not a Concept here."
+        ),
+        "top_with_broader": (
+            "Retract topConceptOf where the concept has a broader in that scheme."
+        ),
+        "label_overlap": "Remove the duplicate of a label held under two kinds.",
+        "hierarchy_redundancy": (
+            "Remove a broader edge already implied by another parent."
+        ),
+        "broader_cycle": "Break each hierarchy cycle by removing one edge.",
+    }
+
+    def autofix_skos(self, fix_type: str, *, lang: str | None = None) -> int:
+        """Repair one class of SKOS issue. Returns how many issues it resolved.
+
+        Counted in issues rather than triples, so the count matches what the
+        validation panel offered to fix. The two iterative fixers (cycles and
+        redundant edges) can resolve more than one reported issue per removal,
+        because one edge may close several cycles, so their count is what they
+        removed rather than what was reported.
+
+        One class at a time, never all of them: breaking a cycle and dropping a
+        redundant edge both discard something the author may have meant, so the
+        choice belongs to them, per issue class, with an undo checkpoint around
+        it.
+
+        Each fixer derives its targets from the same views the corresponding
+        check reads, rather than re-reading whichever property its author had in
+        mind. A fixer that disagreed with its check would either break an edge
+        nothing complained about or leave the one that did, and unlike a wrong
+        report a wrong repair is written into the user's graph.
+
+        SKOS-XL labels are never touched. This app writes plain SKOS, so
+        "repairing" one would mean editing a label resource it cannot author;
+        those issues are left for the author to resolve.
+        """
+        if fix_type not in self.SKOS_AUTOFIXES:
+            known = ", ".join(sorted(self.SKOS_AUTOFIXES))
+            raise ValueError(f"No autofix for '{fix_type}' (fixable: {known})")
+        fixer = getattr(self, f"_autofix_{fix_type}")
+        if fix_type == "missing_lang":
+            return fixer(lang)
+        return fixer()
+
+    def _autofix_missing_lang(self, lang: str | None) -> int:
+        """Re-tag untagged labels in ``lang``.
+
+        The tag is asked for rather than guessed: a vocabulary's labels are not
+        necessarily in the language of whoever is repairing it, and stamping the
+        wrong one is a lie the validator will then report as clean.
+        """
+        tag = self._checked_lang(lang)
+        if not tag:
+            raise ValueError("A language tag is required to fix untagged labels.")
+
+        fixed = 0
+        for concept in self.get_concepts():
+            uri = URIRef(concept["uri"])
+            for kind, prop in self.SKOS_LABEL_KINDS.items():
+                # Plain labels only: an untagged skosxl:literalForm would have to
+                # be edited on the label resource, which this app does not author.
+                for item in concept["labels"][kind]:
+                    if item["lang"] or not item["value"].strip():
+                        continue
+                    self.graph.remove((uri, prop, Literal(item["value"])))
+                    self.graph.add((uri, prop, Literal(item["value"], lang=tag)))
+                    fixed += 1
+        return fixed
+
+    def _autofix_self_relation(self) -> int:
+        fixed = 0
+        for concept in self.get_concepts():
+            uri = concept["uri"]
+            for kind in ("broader", "narrower", "related"):
+                if uri in concept[f"{kind}_uris"]:
+                    # Through the helper, so the auto-added inverse goes too.
+                    self.remove_concept_relation(uri, kind, uri)
+                    fixed += 1
+        return fixed
+
+    def _autofix_dangling_relation(self) -> int:
+        concepts = self.get_concepts()
+        known = {c["uri"] for c in concepts}
+        fixed = 0
+        for concept in concepts:
+            for kind in ("broader", "narrower", "related"):
+                for target in concept[f"{kind}_uris"]:
+                    if target not in known:
+                        self.remove_concept_relation(concept["uri"], kind, target)
+                        fixed += 1
+        return fixed
+
+    def _autofix_top_with_broader(self) -> int:
+        concepts = self.get_concepts()
+        parents, _children, _related = self._skos_link_maps(concepts)
+        fixed = 0
+        for concept in concepts:
+            uri = concept["uri"]
+            for scheme_uri in concept["top_of_uris"]:
+                in_scheme = self._skos_concepts_in_scheme(concepts, scheme_uri)
+                if set(parents[uri]) & in_scheme:
+                    # The broader is the assertion with content; being a top
+                    # concept is the one contradicted by it.
+                    self.set_top_concept(uri, scheme_uri, is_top=False)
+                    fixed += 1
+        return fixed
+
+    def _autofix_label_overlap(self) -> int:
+        """Drop the less specific of two label kinds holding one literal.
+
+        prefLabel is kept over altLabel, and altLabel over hiddenLabel: the
+        surviving one is the more visible, so the repair never hides a label
+        that was on show. A literal held by a SKOS-XL label is left alone, and
+        so is its plain counterpart, because removing either side of that pair
+        means guessing which spelling the author meant to keep.
+        """
+        precedence = list(self.SKOS_LABEL_KINDS)
+        fixed = 0
+        for concept in self.get_concepts():
+            uri = URIRef(concept["uri"])
+            xl_literals = {
+                (item["value"], item["lang"])
+                for kind in self.SKOS_XL_LABEL_KINDS
+                for item in concept["xl_labels"][kind]
+            }
+            by_literal: dict[tuple[str, str], list[str]] = {}
+            for kind in self.SKOS_LABEL_KINDS:
+                for item in concept["labels"][kind]:
+                    if item["value"].strip():
+                        by_literal.setdefault((item["value"], item["lang"]), []).append(
+                            kind
+                        )
+            for (value, tag), kinds in by_literal.items():
+                if (value, tag) in xl_literals:
+                    continue
+                clashing = [k for k in precedence if k in kinds]
+                if len(clashing) < 2:
+                    continue
+                for kind in clashing[1:]:
+                    self.graph.remove(
+                        (
+                            uri,
+                            self.SKOS_LABEL_KINDS[kind],
+                            Literal(value, lang=tag) if tag else Literal(value),
+                        )
+                    )
+                # One per clashing literal, matching how the check reports it:
+                # a literal held under all three kinds is one issue, not two.
+                fixed += 1
+        return fixed
+
+    def _autofix_hierarchy_redundancy(self) -> int:
+        """Remove a parent already reachable through another parent.
+
+        Recomputed after each removal: two redundant edges can each be implied
+        by the other, and removing both would detach the concept from a branch
+        it genuinely belongs to.
+        """
+        fixed = 0
+        while True:
+            concepts = self.get_concepts()
+            parents = self._skos_parent_map(concepts)
+            redundant = None
+            for concept in concepts:
+                uri = concept["uri"]
+                direct = parents.get(uri, [])
+                for parent in direct:
+                    via_others: set[str] = set()
+                    for other in direct:
+                        if other != parent:
+                            via_others |= self._skos_ancestors(parents, other)
+                    if parent in via_others:
+                        redundant = (uri, parent)
+                        break
+                if redundant:
+                    break
+            if not redundant:
+                return fixed
+            self.remove_concept_relation(redundant[0], "broader", redundant[1])
+            fixed += 1
+
+    def _autofix_broader_cycle(self) -> int:
+        """Break each cycle by removing the edge that closes it.
+
+        Recomputed after each break, because one edge can close more than one
+        cycle and removing it may resolve several at once.
+        """
+        fixed = 0
+        while True:
+            cycles = self._skos_cycles(self.get_concepts())
+            if not cycles:
+                return fixed
+            cycle = cycles[0]
+            # The closing edge: the last member's broader back to the first.
+            self.remove_concept_relation(cycle[-1], "broader", cycle[0])
+            fixed += 1
 
     # ==================== RELATIONS OPERATIONS ====================
 

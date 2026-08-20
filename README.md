@@ -148,6 +148,32 @@ each issue carrying a stable `type`, a `severity`, the `subject` concept and its
 | `skos_xl_labels` | The vocabulary uses SKOS-XL labels, which this editor shows but does not edit. | SKOS-XL |
 | `disconnected_components` | A cluster of concepts has no link to the main body of the vocabulary. | qSKOS |
 
+#### Fixing what it finds
+
+7 of the checks can be repaired automatically. Each is its own button on
+the validation panel, and each lands in the undo stack as a checkpoint.
+
+| Check | The fix |
+|---|---|
+| `missing_lang` | Stamp a language tag on labels that carry none. |
+| `self_relation` | Remove the self-referential relation, and its inverse. |
+| `dangling_relation` | Remove relations pointing at something that is not a Concept here. |
+| `top_with_broader` | Retract topConceptOf where the concept has a broader in that scheme. |
+| `label_overlap` | Remove the duplicate of a label held under two kinds. |
+| `hierarchy_redundancy` | Remove a broader edge already implied by another parent. |
+| `broader_cycle` | Break each hierarchy cycle by removing one edge. |
+
+There is deliberately no "fix everything" button. Breaking a hierarchy cycle
+and dropping a redundant edge both discard something the author may have
+meant, so the choice belongs to them, one class at a time. The rest of the
+checks describe things only an author can settle, such as what a concept
+means or which scheme it belongs to, and guessing would be worse than
+reporting. SKOS-XL labels are never modified, since this editor writes plain
+SKOS and repairing one would mean editing a label resource it cannot author.
+
+From Python: `autofix_skos("missing_lang", lang="en")` returns how many
+issues it resolved.
+
 Sources cite the SKOS Reference integrity condition where the condition is
 stated there, [qSKOS](https://github.com/cmader/qSKOS) where the check comes
 from that tool's published quality criteria, and say "practice" where it is
