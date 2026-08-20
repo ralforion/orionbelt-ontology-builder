@@ -901,8 +901,32 @@ def render_skos_literal_editor(ont, concept, ck):
                 _api(kind)[1](concept["uri"], kind, item["value"], item["lang"])
                 save_checkpoint(f"Delete {kind}")
                 st.rerun()
-    if not rows:
+    if not rows and not any(
+        concept["xl_labels"][kind] for kind in ont.SKOS_XL_LABEL_KINDS
+    ):
         st.caption("No labels or notes yet.")
+
+    # SKOS-XL labels are shown but not editable: this app writes plain SKOS, and
+    # a delete button next to one would silently do nothing. Rendering them at
+    # all is what keeps an imported AGROVOC or EuroVoc from looking unlabelled.
+    xl_rows = [
+        (kind, item)
+        for kind in ont.SKOS_XL_LABEL_KINDS
+        for item in concept["xl_labels"][kind]
+    ]
+    if xl_rows:
+        for kind, item in xl_rows:
+            col_kind, col_lang, col_text, _ = st.columns([2, 1, 5, 0.7])
+            with col_kind:
+                st.write(f"`skosxl:{kind}`")
+            with col_lang:
+                st.write(item["lang"] or "—")
+            with col_text:
+                st.write(item["value"])
+        st.caption(
+            "SKOS-XL labels are read-only here. To edit one, add a plain SKOS "
+            "label of the same kind below."
+        )
 
     col_kind, col_lang, col_text, col_add = st.columns([2, 1, 5, 0.7])
     with col_kind:
