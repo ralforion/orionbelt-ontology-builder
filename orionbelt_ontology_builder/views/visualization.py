@@ -517,7 +517,17 @@ def render_visualization():
         # does not run and the page crashed reading this further down (P1).
         focus_seeds: list = []
         focus_depth = 0
-        _find_col, _filter_col = st.columns([1, 3])
+        # Find, the mode switch, then the panel the mode chooses the contents
+        # of. Focus is not a node filter: turning it on *replaces* the filter
+        # controls with its own (see the branch below), so the switch belongs
+        # outside the panel it swaps, next to Find — the two are a pair, one
+        # picking an entity and the other narrowing to it. It used to sit inside
+        # that panel, one click deep, while ten display toggles that matter far
+        # less sat in the open (issue #305).
+        # The mode column is sized to the checkbox, not to an even third: the
+        # spare width goes to the panel, whose collapsed label carries the note
+        # about what the view is holding back.
+        _find_col, _mode_col, _filter_col = st.columns([1, 0.5, 2.5])
         with _find_col:
             if focus_targets:
                 _find_choice = st.selectbox(
@@ -574,12 +584,7 @@ def render_visualization():
         # string: Streamlit's expander snaps back to `expanded` whenever its
         # label changes, so a note that moves with the filter closed the panel
         # under the user on every edit (issue #267).
-        _hidden_note = st.session_state.get("_viz_hidden_note") or ""
-        with (
-            _filter_col.container(key="viz_filter_nodes"),
-            st.expander("Filter Nodes", expanded=False),
-        ):
-            st.html(viz_hidden_note_style(_hidden_note))
+        with _mode_col:
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
@@ -589,9 +594,17 @@ def render_visualization():
                     "N hops, across all node types — handy for large ontologies "
                     "where showing everything at once is overwhelming. "
                     "Annotations come along with whatever is shown; the "
-                    "Annotations checkbox above still turns them off."
+                    "Annotations checkbox above still turns them off. "
+                    "The panel beside this switches to the focus controls."
                 ),
             )
+
+        _hidden_note = st.session_state.get("_viz_hidden_note") or ""
+        with (
+            _filter_col.container(key="viz_filter_nodes"),
+            st.expander("Node options", expanded=False),
+        ):
+            st.html(viz_hidden_note_style(_hidden_note))
             if focus_mode and focus_targets:
                 focus_labels = list(focus_targets.keys())
                 label_set = set(focus_labels)
