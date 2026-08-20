@@ -4061,6 +4061,52 @@ class OntologyManager:
             {uri: sorted(v) for uri, v in related.items()},
         )
 
+    def _skos_ancestor_closure(
+        self, concepts: list[dict[str, Any]]
+    ) -> dict[str, set[str]]:
+        """Everything above each concept, for the checks that need reachability.
+
+        Deliberately not the map :meth:`_skos_link_maps` returns. That one is
+        *direct* parents, which is what ``hierarchy_redundancy`` needs: an edge
+        is redundant only when another direct edge already implies it. This one
+        is reachability, and it additionally follows ``skos:broaderTransitive``
+        and ``skos:narrowerTransitive`` where a vocabulary asserts them, because
+        S27 is stated in terms of ``skos:broaderTransitive`` rather than of
+        ``skos:broader``.
+
+        Keeping them apart is the whole point. Feeding transitive edges into the
+        direct map would make ``hierarchy_redundancy`` report them, and such an
+        edge is *meant* to skip levels.
+
+        The Reference discourages asserting the transitive properties directly,
+        treating them as something to infer, so this is an uncommon shape. It is
+        still a vocabulary a consumer can hand us.
+        """
+        known = {c["uri"] for c in concepts}
+        parents, _children, _related = self._skos_link_maps(concepts)
+        edges: dict[str, set[str]] = {uri: set(parents.get(uri, ())) for uri in known}
+        for concept in concepts:
+            subject = URIRef(concept["uri"])
+            for target in self.graph.objects(subject, SKOS.broaderTransitive):
+                if str(target) in known:
+                    edges[concept["uri"]].add(str(target))
+            for target in self.graph.objects(subject, SKOS.narrowerTransitive):
+                if str(target) in known:
+                    edges[str(target)].add(concept["uri"])
+
+        closure: dict[str, set[str]] = {}
+        for start in known:
+            seen: set[str] = set()
+            stack = list(edges.get(start, ()))
+            while stack:
+                node = stack.pop()
+                if node in seen:
+                    continue
+                seen.add(node)
+                stack.extend(edges.get(node, ()))
+            closure[start] = seen
+        return closure
+
     @classmethod
     def _skos_parent_map(cls, concepts: list[dict[str, Any]]) -> dict[str, list[str]]:
         """URI -> its broader URIs, from both asserted directions."""
@@ -4236,7 +4282,9 @@ class OntologyManager:
         """Semantic relations: self-links, dangling targets, and S27 clashes."""
         issues: list[dict[str, str]] = []
         shown = self._skos_display_names(concepts)
-        parents, _children, related_map = self._skos_link_maps(concepts)
+        _parents, _children, related_map = self._skos_link_maps(concepts)
+        # Reachability, not direct parents: S27 is about broaderTransitive.
+        ancestors = self._skos_ancestor_closure(concepts)
         known = set(shown)
 
         for concept in concepts:
@@ -4267,11 +4315,10 @@ class OntologyManager:
                             )
                         )
 
-            ancestry = self._skos_ancestors(parents, uri)
             for target in related_map[uri]:
                 if target not in known or target == uri:
                     continue
-                if target in ancestry or uri in self._skos_ancestors(parents, target):
+                if target in ancestors[uri] or uri in ancestors[target]:
                     issues.append(
                         self._skos_issue(
                             "error",
