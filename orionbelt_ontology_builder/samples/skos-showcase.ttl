@@ -1,0 +1,107 @@
+# A small SKOS vocabulary that exercises the parts of the standard a starter
+# template has no room for: poly-hierarchy, membership of two schemes, labels
+# in several languages, hidden labels for known misspellings, notations, and
+# mapping properties reaching other vocabularies.
+#
+# It reports nothing under SKOS Validation at any tier. That is the point: it
+# shows what a well-formed vocabulary looks like. For the opposite, see
+# geography-thesaurus.ttl, whose disconnected branches the validator finds.
+
+@prefix : <http://example.org/showcase#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# --- Two schemes. A concept may belong to both. ------------------------------
+
+:Animals a skos:ConceptScheme ;
+    rdfs:label "Animals" ;
+    skos:prefLabel "Animals"@en ;
+    dcterms:description "A small zoological taxonomy."@en ;
+    skos:hasTopConcept :Animal .
+
+:Husbandry a skos:ConceptScheme ;
+    rdfs:label "Husbandry" ;
+    skos:prefLabel "Husbandry"@en ;
+    dcterms:description "Terms from farming practice."@en ;
+    skos:hasTopConcept :FarmAnimal .
+
+# --- The zoological tree -----------------------------------------------------
+
+:Animal a skos:Concept ;
+    skos:prefLabel "Animal"@en , "Tier"@de , "Animal"@fr ;
+    skos:definition "A living organism that feeds on organic matter."@en ;
+    skos:notation "590" ;
+    skos:topConceptOf :Animals ;
+    skos:inScheme :Animals .
+
+:Mammal a skos:Concept ;
+    skos:prefLabel "Mammal"@en , "Säugetier"@de ;
+    skos:definition "A warm-blooded vertebrate that suckles its young."@en ;
+    skos:notation "599" ;
+    skos:broader :Animal ;
+    skos:inScheme :Animals .
+
+:Bird a skos:Concept ;
+    skos:prefLabel "Bird"@en , "Vogel"@de ;
+    skos:definition "A warm-blooded vertebrate with feathers and wings."@en ;
+    skos:notation "598" ;
+    skos:broader :Animal ;
+    skos:inScheme :Animals .
+
+:Dog a skos:Concept ;
+    skos:prefLabel "Dog"@en , "Hund"@de , "Chien"@fr ;
+    skos:altLabel "Domestic dog"@en ;
+    # A hidden label catches a known misspelling in search without showing it.
+    skos:hiddenLabel "Dogg"@en ;
+    skos:definition "A domesticated canine kept as a pet or working animal."@en ;
+    skos:scopeNote "Domestic breeds only; wild canines sit under their own concepts."@en ;
+    skos:notation "636.7" ;
+    skos:broader :Mammal ;
+    skos:inScheme :Animals ;
+    skos:exactMatch <http://www.wikidata.org/entity/Q144> .
+
+:Cat a skos:Concept ;
+    skos:prefLabel "Cat"@en , "Katze"@de ;
+    skos:definition "A domesticated feline kept as a pet."@en ;
+    skos:notation "636.8" ;
+    skos:broader :Mammal ;
+    skos:inScheme :Animals ;
+    skos:exactMatch <http://www.wikidata.org/entity/Q146> .
+
+:Chicken a skos:Concept ;
+    skos:prefLabel "Chicken"@en , "Huhn"@de ;
+    skos:definition "A domesticated fowl raised for eggs and meat."@en ;
+    skos:notation "636.5" ;
+    skos:broader :Bird ;
+    skos:inScheme :Animals .
+
+# --- The farming tree --------------------------------------------------------
+
+:FarmAnimal a skos:Concept ;
+    skos:prefLabel "Farm animal"@en , "Nutztier"@de ;
+    skos:definition "An animal kept for agricultural production."@en ;
+    skos:topConceptOf :Husbandry ;
+    skos:inScheme :Husbandry .
+
+:Herding a skos:Concept ;
+    skos:prefLabel "Herding"@en , "Hüten"@de ;
+    skos:definition "Moving and managing livestock as a group."@en ;
+    skos:broader :FarmAnimal ;
+    skos:inScheme :Husbandry ;
+    # Associative, not hierarchical: a dog is not a kind of herding, and the two
+    # share no parent, which would make the link say nothing new.
+    skos:related :Dog .
+
+# --- Poly-hierarchy: one concept, two parents, two schemes -------------------
+
+:Cattle a skos:Concept ;
+    skos:prefLabel "Cattle"@en , "Rind"@de , "Bovin"@fr ;
+    skos:altLabel "Cows"@en ;
+    skos:definition "Domesticated bovines raised for milk, meat or draught."@en ;
+    skos:notation "636.2" ;
+    # Zoologically a mammal, agriculturally a farm animal. Neither parent is an
+    # ancestor of the other, so neither edge is redundant.
+    skos:broader :Mammal , :FarmAnimal ;
+    skos:inScheme :Animals , :Husbandry ;
+    skos:closeMatch <http://aims.fao.org/aos/agrovoc/c_1391> .
