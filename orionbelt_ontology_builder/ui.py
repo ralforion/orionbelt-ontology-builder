@@ -144,7 +144,7 @@ _CUSTOM_CSS = """
        in the browser: this recovers ~270px, enough for the whole sidebar to
        fit without scrolling.
        NOTE: internal DOM again — re-verify on a Streamlit bump. */
-    /* The "what is hidden" note, which rides on the Filter Nodes label as
+    /* The "what is hidden" note, which rides on the Node options label as
        generated content — not as part of the label text, which would force the
        expander shut on every filter edit (see viz_hidden_note_style, #267).
        Quieter than the label it follows, and gone once the expander is open:
@@ -1224,7 +1224,7 @@ def viz_focus_toggle():
     first use, not something reapplied over a choice you have already made.
 
     That also decouples the two controls: after you have expressed a preference,
-    the focus seeds are their own list rather than a function of Filter Nodes.
+    the focus seeds are their own list rather than a function of Node options.
     An empty selection still falls back to the first node, downstream.
     """
     if _viz_widget_missing("viz_focus_mode"):
@@ -3704,6 +3704,12 @@ def _download_or_save(label, data, file_name, mime="text/plain", key=None):
 
 LIST_PAGE_SIZE = 50
 GRAPH_MAX_NODES = 500
+#: The label on the graph's node panel. Named once because it is spoken about
+#: elsewhere: the cap and focus notices tell the user to open it by name, and a
+#: rename that missed them left the guidance pointing at a panel that no longer
+#: existed under that name (review of PR #307).
+VIZ_NODE_PANEL = "Node options"
+
 FOCUS_BUILD_MAX_NODES = 5000
 
 
@@ -4994,7 +5000,7 @@ def viz_hidden_caption(
 
 
 def viz_hidden_note_style(note: str) -> str:
-    """A ``<style>`` block that writes ``note`` onto the Filter Nodes label.
+    """A ``<style>`` block that writes ``note`` onto the Node options label.
 
     The note cannot simply be appended to the expander's label text: Streamlit's
     expander resets its open/closed state to the ``expanded`` argument whenever

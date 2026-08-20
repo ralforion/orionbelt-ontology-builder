@@ -211,7 +211,7 @@ def test_a_seed_past_the_assembly_cap_says_why_the_graph_is_empty(
 
     assert nodes == [] and edges == []
     assert "Nothing to focus on" in notice
-    assert "Filter Nodes" in notice
+    assert "Node options" in notice
 
 
 def test_the_assembly_cap_is_only_raised_for_focus():

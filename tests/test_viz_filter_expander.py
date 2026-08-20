@@ -6,6 +6,8 @@ panel shut after every class you added or removed. The note now reaches the
 label as generated content and the label string never moves.
 """
 
+import pathlib
+
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -86,6 +88,35 @@ def test_the_focus_switch_is_not_inside_the_panel_it_controls():
         if c.label == "Focus on one node"
     ]
     assert not inside, "the focus switch is back inside the panel it swaps"
+
+
+def test_the_panel_is_named_from_one_place():
+    """The label is spoken about elsewhere, so it cannot be a loose string.
+
+    Two graph notices tell the user to open the panel by name. Renaming the
+    expander without them left that guidance pointing at a panel no longer
+    called that (review of PR #307). Both now interpolate the constant, and
+    this fails if a stale spelling comes back.
+    """
+    source = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "orionbelt_ontology_builder"
+        / "views"
+        / "visualization.py"
+    ).read_text(encoding="utf-8")
+    assert "st.expander(VIZ_NODE_PANEL" in source, (
+        "the expander should take its label from the constant"
+    )
+    assert "Filter Nodes" not in source, (
+        "a stale spelling of the panel name is back in the view"
+    )
+
+
+def test_the_notices_name_the_panel_the_user_can_see(monkeypatch):
+    """The cap and focus notices have to match the label on screen."""
+    at = _rendered()
+    labels = [e.label for e in at.expander]
+    assert app.VIZ_NODE_PANEL in labels
 
 
 def test_entity_names_cannot_break_out_of_the_stylesheet():

@@ -10,6 +10,7 @@ from ..ui import (
     _PRECISE_NAV_TYPES,
     GRAPH_MAX_NODES,
     PKG_DIR,
+    VIZ_NODE_PANEL,
     _build_name_collision_set,
     _disambiguated_name,
     _edge_id,
@@ -602,7 +603,7 @@ def render_visualization():
         _hidden_note = st.session_state.get("_viz_hidden_note") or ""
         with (
             _filter_col.container(key="viz_filter_nodes"),
-            st.expander("Node options", expanded=False),
+            st.expander(VIZ_NODE_PANEL, expanded=False),
         ):
             st.html(viz_hidden_note_style(_hidden_note))
             if focus_mode and focus_targets:
@@ -1575,7 +1576,7 @@ def render_visualization():
                 graph_notice = (
                     f"{_cut_classes} of {len(visible_class_uris)} classes are not "
                     f"drawn: the graph stops at {max_nodes} nodes. Hide some in "
-                    f"Filter Nodes, or focus on one node, to see the rest."
+                    f"{VIZ_NODE_PANEL}, or focus on one node, to see the rest."
                 )
 
             # Focus mode: keep only the seed nodes' neighbourhood within
@@ -1675,7 +1676,8 @@ def render_visualization():
                         f"Nothing to focus on: this ontology is past the "
                         f"{max_nodes} nodes the graph builds at once, and the "
                         f"node you picked is not among them. Hide some classes "
-                        f"or individuals in Filter Nodes to bring it into range."
+                        f"or individuals in {VIZ_NODE_PANEL} to bring it into "
+                        f"range."
                     )
 
             # Spread parallel edges so they don't overlap
@@ -1753,7 +1755,7 @@ def render_visualization():
         # the cached graph is reused.
         if gdata and gdata.get("notice"):
             status.warning(gdata["notice"], icon="⚠️")
-        # Recompute the note for the Filter Nodes label now that the focus
+        # Recompute the note for the Node options label now that the focus
         # controls have rendered and the prune has run. One rerun when it
         # actually changes, so the label is never a step behind what the graph
         # is showing; it converges because the note is derived from settings,
