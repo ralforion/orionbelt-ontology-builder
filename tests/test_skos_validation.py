@@ -470,6 +470,103 @@ class TestEveryNotationIsChecked:
         assert "notation_lang_tagged" in _types(vocab)
 
 
+class TestTheTransitiveProperties:
+    """S27 makes `skos:related` disjoint with `skos:broaderTransitive`.
+
+    The check walks `skos:broader`, which is the closure in every ordinary
+    vocabulary, because SKOS entails the transitive property from the direct
+    one. A vocabulary may also assert `skos:broaderTransitive` outright, and
+    then the hierarchy is only visible through it. The Reference discourages
+    that, treating those properties as something to infer, but it is still a
+    file a consumer can hand us.
+    """
+
+    @staticmethod
+    def _seed(om, *names):
+        base = "http://test.org/ont#"
+        om.graph.add((URIRef(base + "S"), RDF.type, SKOS.ConceptScheme))
+        om.graph.add((URIRef(base + "S"), SKOS.prefLabel, Literal("S", lang="en")))
+        for name in names:
+            uri = URIRef(base + name)
+            om.graph.add((uri, RDF.type, SKOS.Concept))
+            om.graph.add((uri, SKOS.inScheme, URIRef(base + "S")))
+            om.graph.add((uri, SKOS.prefLabel, Literal(name, lang="en")))
+            om.graph.add((uri, SKOS.definition, Literal("A definition", lang="en")))
+        return base
+
+    def test_related_to_an_asserted_broader_transitive(self, om):
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" in _types(om)
+
+    def test_narrower_transitive_is_read_as_the_inverse(self, om):
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "B"), SKOS.narrowerTransitive, URIRef(base + "A")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" in _types(om)
+
+    def test_a_chain_mixing_direct_and_transitive_edges(self, om):
+        base = self._seed(om, "A", "B", "C")
+        om.graph.add((URIRef(base + "A"), SKOS.broader, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "B"), SKOS.broaderTransitive, URIRef(base + "C")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "C")))
+        assert "relation_clash" in _types(om)
+
+    def test_a_transitive_edge_is_not_hierarchy_redundancy(self, om):
+        """The reason reachability and direct parents stay separate maps.
+
+        `A broaderTransitive C` alongside `A broader B broader C` is the
+        entailment written down, not a redundant edge. Folding transitive edges
+        into the direct parent map would report it as one.
+        """
+        base = self._seed(om, "A", "B", "C")
+        om.graph.add((URIRef(base + "A"), SKOS.broader, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "B"), SKOS.broader, URIRef(base + "C")))
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, URIRef(base + "C")))
+        assert "hierarchy_redundancy" not in _types(om)
+
+    def test_a_redundant_direct_edge_is_still_reported(self, om):
+        base = self._seed(om, "A", "B", "C")
+        om.graph.add((URIRef(base + "A"), SKOS.broader, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "B"), SKOS.broader, URIRef(base + "C")))
+        om.graph.add((URIRef(base + "A"), SKOS.broader, URIRef(base + "C")))
+        assert "hierarchy_redundancy" in _types(om)
+
+    def test_a_literal_spelling_a_uri_is_not_that_concept(self, om):
+        """RDF distinguishes a resource from text that looks like one.
+
+        Every other relation read here filters to URIRef before comparing. This
+        path did not, so a literal whose lexical form happened to spell a
+        concept's URI was treated as a hierarchy edge to it, and S27 fired on a
+        relation that does not exist.
+        """
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, Literal(base + "B")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" not in _types(om)
+
+    def test_the_same_target_as_a_resource_does_clash(self, om):
+        """The other half: the guard must not suppress the real case."""
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" in _types(om)
+
+    def test_a_literal_on_the_inverse_property_too(self, om):
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "B"), SKOS.narrowerTransitive, Literal(base + "A")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" not in _types(om)
+
+    def test_a_transitive_edge_does_not_make_a_concept_look_stranded(self, om):
+        """Reachability feeds S27; orphan still asks about direct links."""
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.broader, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, URIRef(base + "B")))
+        assert "orphan" not in _types(om)
+
+
 class TestCheckCatalogue:
     """`SKOS_CHECKS` describes exactly the checks the validator can emit.
 
