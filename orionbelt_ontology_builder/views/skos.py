@@ -20,6 +20,7 @@ from ..ui import (
     language_selectbox,
     language_tag_error,
     missing_required,
+    render_scheme_metadata_editor,
     render_skos_literal_editor,
     required_selectbox,
     save_checkpoint,
@@ -119,6 +120,10 @@ def render_skos_vocabulary():
                         st.write(f"**Label:** {scheme['label'] or '—'}")
                         st.write(f"**Comment:** {scheme['comment'] or '—'}")
                         st.write(f"**Concepts:** {scheme['concept_count']}")
+                        for _field in ont.SCHEME_METADATA:
+                            _values = scheme["metadata"][_field]
+                            if _values:
+                                st.write(f"**{_field}:** {_fmt_tagged(_values)}")
 
                     if confirm_delete(scheme["uri"], "scheme", f"scheme_{_sk}"):
                         ont.delete_concept_scheme(scheme["uri"])
@@ -129,6 +134,15 @@ def render_skos_vocabulary():
                         st.rerun()
 
                     if _is_open("scheme", _sk, "edit"):
+                        st.divider()
+                        st.markdown("**Metadata**")
+                        st.caption(
+                            "Dublin Core terms a published vocabulary is "
+                            "expected to carry. `versionInfo` is OWL rather "
+                            "than DC; nothing in DC is used for it in practice."
+                        )
+                        render_scheme_metadata_editor(ont, scheme, _sk)
+
                         st.divider()
                         with st.form(f"edit_scheme_form_{_sk}"):
                             new_name = st.text_input(

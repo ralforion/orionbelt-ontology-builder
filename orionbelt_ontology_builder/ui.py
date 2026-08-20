@@ -859,6 +859,103 @@ def render_language_pack_sidebar() -> None:
     persist_language_packs()
 
 
+def _clearing_key(base: str) -> str:
+    """A widget key that changes once :func:`_clear_input` is called on it.
+
+    Popping a widget's key from ``session_state`` does not reset the widget:
+    Streamlit restores the value from its own widget store when a widget with
+    the same key is created again. Changing the key makes a different widget,
+    which starts empty. Used so an add row does not keep the text just added
+    and invite adding it twice.
+    """
+    return f"{base}_{st.session_state.get(f'{base}__gen', 0)}"
+
+
+def _clear_input(base: str) -> None:
+    """Retire the current widget behind ``base`` so the next one starts empty."""
+    generation = st.session_state.get(f"{base}__gen", 0)
+    st.session_state.pop(f"{base}_{generation}", None)
+    st.session_state[f"{base}__gen"] = generation + 1
+
+
+def render_scheme_metadata_editor(ont, scheme, sk):
+    """Rows of Dublin Core metadata on a ConceptScheme, with add and delete.
+
+    Outside the scheme form, for the same reason the concept label editor is:
+    a button inside a form cannot act until the form is submitted.
+
+    The fields are not all strings, so the add row changes shape with the one
+    picked: a language for the language-tagged ones, none for a date or an IRI.
+    Offering a language box beside a licence URL would invite tagging it.
+    """
+    rows = [
+        (field, item)
+        for field in ont.SCHEME_METADATA
+        for item in scheme["metadata"][field]
+    ]
+    for i, (field, item) in enumerate(rows):
+        col_field, col_lang, col_value, col_del = st.columns([2, 1, 5, 0.7])
+        with col_field:
+            st.write(f"`{field}`")
+        with col_lang:
+            st.write(item["lang"] or "—")
+        with col_value:
+            st.write(f"<{item['value']}>" if item["is_iri"] else item["value"])
+        with col_del:
+            if st.button("🗑️", key=f"del_meta_{sk}_{i}", help=f"Delete this {field}"):
+                ont.remove_scheme_metadata(
+                    scheme["uri"], field, item["value"], item["lang"]
+                )
+                save_checkpoint(f"Delete scheme {field}")
+                st.rerun()
+    if not rows:
+        st.caption("No metadata yet.")
+
+    col_field, col_lang, col_value, col_add = st.columns([2, 1, 5, 0.7])
+    with col_field:
+        new_field = st.selectbox(
+            "Field",
+            list(ont.SCHEME_METADATA),
+            key=f"add_meta_field_{sk}",
+            label_visibility="collapsed",
+        )
+    entry = ont.SCHEME_METADATA[new_field]
+    with col_lang:
+        if entry["kind"] == "text":
+            new_lang = language_selectbox(
+                "Language",
+                key=f"add_meta_lang_{sk}",
+                label_visibility="collapsed",
+            )
+        else:
+            new_lang = None
+            st.write("—")
+    placeholder = {
+        "date": "2026, 2026-08 or 2026-08-20",
+        "iri": "https://creativecommons.org/licenses/by/4.0/",
+        "agent": "A name, or an IRI identifying one",
+    }.get(entry["kind"], f"New {new_field}…")
+    with col_value:
+        new_value = st.text_input(
+            "Value",
+            key=_clearing_key(f"add_meta_value_{sk}"),
+            placeholder=placeholder,
+            label_visibility="collapsed",
+        )
+    with col_add:
+        if st.button("➕", key=f"add_meta_btn_{sk}", help=f"Set this {new_field}"):
+            try:
+                ont.set_scheme_metadata(
+                    scheme["uri"], new_field, new_value, new_lang or None
+                )
+            except ValueError as exc:
+                show_message(str(exc), "error")
+            else:
+                save_checkpoint(f"Set scheme {new_field}")
+                _clear_input(f"add_meta_value_{sk}")
+                st.rerun()
+
+
 def render_skos_literal_editor(ont, concept, ck):
     """One table of a concept's labels and notes, with add and delete.
 
@@ -944,7 +1041,7 @@ def render_skos_literal_editor(ont, concept, ck):
     with col_text:
         new_text = st.text_input(
             "Text",
-            key=f"add_lit_text_{ck}",
+            key=_clearing_key(f"add_lit_text_{ck}"),
             placeholder="New label or note…",
             label_visibility="collapsed",
         )
@@ -959,7 +1056,7 @@ def render_skos_literal_editor(ont, concept, ck):
                 # Clear the text but keep the kind and the language: adding
                 # several values in one language is the common case, and a
                 # value left in the box invites adding it twice.
-                st.session_state.pop(f"add_lit_text_{ck}", None)
+                _clear_input(f"add_lit_text_{ck}")
                 st.rerun()
 
 

@@ -2951,6 +2951,14 @@ class OntologyManager:
             "summary": "The concept belongs to no ConceptScheme.",
             "source": "Practice",
         },
+        "scheme_untitled": {
+            "severity": "info",
+            "summary": (
+                "A ConceptScheme has neither a dcterms:title nor an "
+                "rdfs:label, leaving a consumer only its URI."
+            ),
+            "source": "Practice",
+        },
         "undocumented": {
             "severity": "info",
             "summary": "The concept has neither a definition nor a scopeNote.",
@@ -3048,6 +3056,193 @@ class OntologyManager:
             or (scheme, SKOS.hasTopConcept, concept) in self.graph
         )
 
+    #: Metadata a published vocabulary carries on its ConceptScheme, keyed by
+    #: the short name the UI and the API use.
+    #:
+    #: Mostly Dublin Core Terms, which is what AGROVOC, EuroVoc and LCSH all
+    #: use for this. ``versionInfo`` is OWL rather than DC, included because a
+    #: vocabulary without a version is hard to cite and nothing in DC is used
+    #: for it in practice.
+    #:
+    #: ``kind`` says how a value is written, because these are not all strings:
+    #:
+    #: - ``text``   language-tagged literal, one per language
+    #: - ``agent``  a name, or an IRI identifying one; repeatable
+    #: - ``date``   typed by precision: gYear, gYearMonth or date
+    #: - ``iri``    a resource, such as the licence a vocabulary is issued under
+    #: - ``plain``  an untagged string
+    SCHEME_METADATA: ClassVar[dict[str, dict[str, Any]]] = {
+        "title": {"property": DCTERMS.title, "kind": "text", "single": True},
+        "description": {
+            "property": DCTERMS.description,
+            "kind": "text",
+            "single": True,
+        },
+        "creator": {"property": DCTERMS.creator, "kind": "agent", "single": False},
+        "publisher": {
+            "property": DCTERMS.publisher,
+            "kind": "agent",
+            "single": False,
+        },
+        "contributor": {
+            "property": DCTERMS.contributor,
+            "kind": "agent",
+            "single": False,
+        },
+        "created": {"property": DCTERMS.created, "kind": "date", "single": True},
+        "issued": {"property": DCTERMS.issued, "kind": "date", "single": True},
+        "modified": {"property": DCTERMS.modified, "kind": "date", "single": True},
+        "license": {"property": DCTERMS.license, "kind": "iri", "single": True},
+        "source": {"property": DCTERMS.source, "kind": "iri", "single": True},
+        "rights": {"property": DCTERMS.rights, "kind": "text", "single": True},
+        "versionInfo": {
+            "property": OWL.versionInfo,
+            "kind": "plain",
+            "single": True,
+        },
+    }
+
+    #: How much of a date was given, and the datatype that says so. A
+    #: vocabulary that records only ``"2019"`` should not be forced to invent a
+    #: month and a day, and typing it as xsd:date would be a false precision.
+    _DATE_PRECISION: ClassVar[tuple[tuple[str, URIRef], ...]] = (
+        (r"^\d{4}$", XSD.gYear),
+        (r"^\d{4}-\d{2}$", XSD.gYearMonth),
+        (r"^\d{4}-\d{2}-\d{2}$", XSD.date),
+    )
+
+    def _scheme_field(self, field: str) -> dict[str, Any]:
+        """Resolve a metadata field, or say which fields exist."""
+        entry = self.SCHEME_METADATA.get(field)
+        if entry is None:
+            known = ", ".join(self.SCHEME_METADATA)
+            raise ValueError(
+                f"Unknown scheme metadata field: {field} (expected one of {known})"
+            )
+        return entry
+
+    def _scheme_uri(self, scheme: str) -> URIRef:
+        """A scheme's URI, resolved by URI or by local name.
+
+        Prefers an exact URI match, so two schemes sharing a local name across
+        namespaces do not collapse into whichever the store yields first.
+        """
+        candidate = self._uri(scheme)
+        if (candidate, RDF.type, SKOS.ConceptScheme) in self.graph:
+            return candidate
+        for existing in self.graph.subjects(RDF.type, SKOS.ConceptScheme):
+            if isinstance(existing, URIRef) and self._local_name(existing) == scheme:
+                return existing
+        return candidate
+
+    def _scheme_metadata_node(self, field: str, value: str, lang: str | None):
+        """The RDF term for one metadata value, by the field's kind."""
+        entry = self._scheme_field(field)
+        kind = entry["kind"]
+        text = self._literal_text(value, field)
+
+        if kind == "text":
+            tag = self._checked_lang(lang)
+            return Literal(text, lang=tag) if tag else Literal(text)
+        if kind == "iri":
+            if not self._IRI_SCHEME_RE.match(text):
+                raise ValueError(f"{field} must be an absolute IRI, got: {text}")
+            if reason := self.invalid_uri_reason(text):
+                raise ValueError(reason)
+            return URIRef(text)
+        if kind == "agent":
+            # A name or an IRI identifying one. Both are used in the wild, and
+            # an IRI stored as a string would not resolve for a consumer.
+            if self._IRI_SCHEME_RE.match(text) and not self.invalid_uri_reason(text):
+                return URIRef(text)
+            return Literal(text)
+        if kind == "date":
+            for pattern, datatype in self._DATE_PRECISION:
+                if re.match(pattern, text):
+                    return Literal(text, datatype=datatype)
+            raise ValueError(
+                f"{field} must be a date as YYYY, YYYY-MM or YYYY-MM-DD, got: {text}"
+            )
+        return Literal(text)
+
+    def set_scheme_metadata(
+        self, scheme: str, field: str, value: str, lang: str | None = None
+    ) -> None:
+        """Set a Dublin Core (or versionInfo) value on a ConceptScheme.
+
+        Single-valued fields replace what is there, per language for the
+        language-tagged ones: a scheme has one title in English, not a list of
+        them. Repeatable fields append, since a vocabulary may have several
+        creators.
+        """
+        entry = self._scheme_field(field)
+        uri = self._scheme_uri(scheme)
+        node = self._scheme_metadata_node(field, value, lang)
+
+        if entry["single"]:
+            if entry["kind"] == "text":
+                tag = (lang or "").strip()
+                for existing in list(self.graph.objects(uri, entry["property"])):
+                    if (
+                        isinstance(existing, Literal)
+                        and (existing.language or "") == tag
+                    ):
+                        self.graph.remove((uri, entry["property"], existing))
+            else:
+                self.graph.remove((uri, entry["property"], None))
+        self.graph.add((uri, entry["property"], node))
+
+    def remove_scheme_metadata(
+        self, scheme: str, field: str, value: str | None = None, lang: str | None = None
+    ) -> bool:
+        """Remove one metadata value, or every value of that field.
+
+        Matches the term actually in the graph rather than rebuilding one, so a
+        typed date or an IRI-valued creator is removed rather than missed.
+        """
+        entry = self._scheme_field(field)
+        uri = self._scheme_uri(scheme)
+        if value is None:
+            removed = (uri, entry["property"], None) in self.graph
+            self.graph.remove((uri, entry["property"], None))
+            return removed
+
+        target_lang = (lang or "").strip()
+        removed = False
+        for existing in list(self.graph.objects(uri, entry["property"])):
+            if str(existing) != value:
+                continue
+            if (
+                isinstance(existing, Literal)
+                and (existing.language or "") != target_lang
+            ):
+                continue
+            self.graph.remove((uri, entry["property"], existing))
+            removed = True
+        return removed
+
+    def _scheme_metadata(self, uri: Node) -> dict[str, list[dict[str, Any]]]:
+        """Every metadata value on a scheme, keyed by field name.
+
+        ``is_iri`` is a bool rather than text, so the UI can render a resource
+        as one instead of as a string that happens to look like a URL.
+        """
+        found: dict[str, list[dict[str, Any]]] = {}
+        for field, entry in self.SCHEME_METADATA.items():
+            values = []
+            for obj in self.graph.objects(uri, entry["property"]):
+                values.append(
+                    {
+                        "value": str(obj),
+                        "lang": obj.language or "" if isinstance(obj, Literal) else "",
+                        "is_iri": isinstance(obj, URIRef),
+                    }
+                )
+            found[field] = sorted(
+                values, key=lambda v: (v["lang"] != "", v["lang"], v["value"])
+            )
+        return found
+
     def add_concept_scheme(
         self, name: str, label: str | None = None, comment: str | None = None
     ) -> URIRef:
@@ -3085,6 +3280,7 @@ class OntologyManager:
                     "label": label,
                     "comment": comment,
                     "concept_count": concept_count,
+                    "metadata": self._scheme_metadata(uri),
                 }
             )
         return sorted(schemes, key=lambda s: s["name"])
@@ -4140,6 +4336,18 @@ class OntologyManager:
         """Scheme membership, label clashes, and cross-scheme mapping misuse."""
         issues: list[dict[str, str]] = []
         shown = self._skos_display_names(concepts)
+
+        for scheme in schemes:
+            if not scheme["metadata"]["title"] and not scheme["label"]:
+                issues.append(
+                    self._skos_issue(
+                        "info",
+                        "scheme_untitled",
+                        scheme,
+                        f"ConceptScheme '{scheme['name']}' has no dcterms:title "
+                        "or rdfs:label, so a consumer has only its URI to go on",
+                    )
+                )
 
         for concept in concepts:
             if not concept["scheme_uris"] and schemes:

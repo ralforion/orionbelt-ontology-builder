@@ -104,9 +104,39 @@ A dedicated page for building controlled vocabularies:
 - An edge that would make a concept its own ancestor is refused as you save it
 - Hierarchy tree view, filterable by scheme
 
+#### Concept scheme metadata
+
+A published vocabulary carries Dublin Core terms on its ConceptScheme, and
+consumers rely on them: AGROVOC, EuroVoc and LCSH all do this. The Concept
+Schemes page edits them, and `set_scheme_metadata()` writes them from Python.
+
+| Field | Property | Written as |
+|---|---|---|
+| `title` | `dcterms:title` | language-tagged text, one per language |
+| `description` | `dcterms:description` | language-tagged text, one per language |
+| `creator` | `dcterms:creator` | a name, or an IRI identifying one; repeatable |
+| `publisher` | `dcterms:publisher` | a name, or an IRI identifying one; repeatable |
+| `contributor` | `dcterms:contributor` | a name, or an IRI identifying one; repeatable |
+| `created` | `dcterms:created` | `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, typed by precision |
+| `issued` | `dcterms:issued` | `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, typed by precision |
+| `modified` | `dcterms:modified` | `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, typed by precision |
+| `license` | `dcterms:license` | an absolute IRI |
+| `source` | `dcterms:source` | an absolute IRI |
+| `rights` | `dcterms:rights` | language-tagged text, one per language |
+| `versionInfo` | `owl:versionInfo` | plain text |
+
+The shapes matter. A date is typed by how much of it was given, so a
+vocabulary that records only `2019` is not forced to invent a month and a
+day. A licence is stored as a resource rather than as text about one, so a
+consumer can follow it. A creator may be either a name or an identifier such
+as an ORCID, and is stored as whichever it is.
+
+`versionInfo` is `owl:versionInfo` rather than a Dublin Core term: nothing in
+DC is used for a vocabulary version in practice.
+
 #### What SKOS validation checks
 
-21 checks in three tiers. The page groups results by check and lets you
+22 checks in three tiers. The page groups results by check and lets you
 switch either advisory tier off, which is what makes it usable on a large
 imported vocabulary. `validate_skos()` returns the same list to Python callers,
 each issue carrying a stable `type`, a `severity`, the `subject` concept and its
@@ -143,6 +173,7 @@ each issue carrying a stable `type`, a `severity`, the `subject` concept and its
 | Check | What it means | Source |
 |---|---|---|
 | `no_scheme` | The concept belongs to no ConceptScheme. | Practice |
+| `scheme_untitled` | A ConceptScheme has neither a dcterms:title nor an rdfs:label, leaving a consumer only its URI. | Practice |
 | `undocumented` | The concept has neither a definition nor a scopeNote. | Practice |
 | `valueless_association` | Two concepts are skos:related and already share a parent, which relates them anyway. | qSKOS |
 | `skos_xl_labels` | The vocabulary uses SKOS-XL labels, which this editor shows but does not edit. | SKOS-XL |
