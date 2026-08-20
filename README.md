@@ -182,6 +182,8 @@ thesaurus convention rather than anything normative.
 
 Five starter templates you can merge into or replace your current ontology: Organization, Product Catalog, Event, Person/Contact, and SKOS Thesaurus. Each is a valid Turtle snippet with a preview before you apply it.
 
+The SKOS Thesaurus template validates clean at every tier, so it is a starting point rather than a first batch of warnings, and it demonstrates the parts of SKOS worth copying: language-tagged labels, an `altLabel` and a `scopeNote`, notations, a top concept, and an `exactMatch` to Wikidata. For more than a template has room for, `orionbelt_ontology_builder/samples/skos-showcase.ttl` adds poly-hierarchy, membership of two schemes, labels in three languages, a `hiddenLabel`, and mappings to Wikidata and AGROVOC.
+
 ### Upper Ontologies
 
 Start from a professionally built upper ontology instead of redefining foundational concepts for every project. Two options ship in the box:

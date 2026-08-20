@@ -12,5 +12,18 @@ Real-world ontologies for testing and demonstration.
 | `prov-o.ttl` | [W3C PROV](https://www.w3.org/ns/prov-o) | Provenance Ontology |
 | `goodrelations.owl` | [GoodRelations](http://purl.org/goodrelations/v1) | E-commerce ontology |
 | `geography-thesaurus.ttl` | Sample | SKOS thesaurus with 100+ concepts across 4 hierarchy levels |
+| `skos-showcase.ttl` | Sample | A small, deliberately well-formed SKOS vocabulary: poly-hierarchy, two schemes, labels in three languages, notations, and mappings to Wikidata and AGROVOC |
+
+**On the two SKOS samples.** They are opposites on purpose.
+
+`skos-showcase.ttl` reports nothing under SKOS Validation at any tier. It is
+what a well-formed vocabulary looks like, and it is the one to copy from.
+
+`geography-thesaurus.ttl` has no errors or warnings, but its Americas and
+Oceania branches are **disconnected** from the rest of the hierarchy, which the
+editorial tier reports as disconnected concept clusters. Those flaws are left in
+deliberately: a sample that reports nothing demonstrates nothing about
+validation. Please do not tidy them up without also removing the test that
+depends on them (`tests/test_skos_examples.py`).
 
 **Note:** Schema.org uses `rdfs:Class` / `rdf:Property` instead of OWL types, so it won't show classes or properties in OrionBelt.

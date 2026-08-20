@@ -30,6 +30,7 @@ SAMPLE_FILES = {
         "http://purl.org/goodrelations/v1.owl",
     ),
     "geography": ("geography-thesaurus.ttl", "turtle", None),
+    "skos-showcase": ("skos-showcase.ttl", "turtle", None),
 }
 
 

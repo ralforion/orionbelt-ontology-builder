@@ -271,7 +271,7 @@ TEMPLATES = [
     },
     {
         "name": "SKOS Thesaurus",
-        "description": "SKOS ConceptScheme with sample broader/narrower concepts. Starting point for controlled vocabularies and taxonomies.",
+        "description": "SKOS ConceptScheme demonstrating language-tagged labels, notations, top concepts and a mapping to an external vocabulary. Validates clean, so it is a starting point rather than a first batch of warnings.",
         "turtle": """@prefix : <{base_uri}> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
@@ -279,40 +279,56 @@ TEMPLATES = [
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 
 :MainScheme a skos:ConceptScheme ;
-    rdfs:label "Main Scheme" .
+    rdfs:label "Main Scheme" ;
+    skos:prefLabel "Main Scheme"@en ;
+    skos:hasTopConcept :Science .
 
 :Science a skos:Concept ;
-    skos:prefLabel "Science" ;
+    skos:prefLabel "Science"@en ;
+    skos:prefLabel "Wissenschaft"@de ;
+    skos:definition "The systematic study of the natural and social world."@en ;
+    skos:notation "500" ;
+    skos:topConceptOf :MainScheme ;
     skos:inScheme :MainScheme .
 
 :NaturalScience a skos:Concept ;
-    skos:prefLabel "Natural Science" ;
+    skos:prefLabel "Natural science"@en ;
+    skos:altLabel "Physical science"@en ;
+    skos:definition "The study of the physical world through observation."@en ;
+    skos:notation "500.1" ;
     skos:broader :Science ;
     skos:inScheme :MainScheme .
 
 :SocialScience a skos:Concept ;
-    skos:prefLabel "Social Science" ;
+    skos:prefLabel "Social science"@en ;
+    skos:definition "The study of human society and relationships."@en ;
+    skos:notation "300" ;
     skos:broader :Science ;
     skos:inScheme :MainScheme .
 
 :Physics a skos:Concept ;
-    skos:prefLabel "Physics" ;
+    skos:prefLabel "Physics"@en ;
+    skos:prefLabel "Physik"@de ;
+    skos:definition "The study of matter, energy and their interactions."@en ;
+    skos:scopeNote "Covers classical and modern physics."@en ;
+    skos:notation "530" ;
     skos:broader :NaturalScience ;
-    skos:inScheme :MainScheme .
+    skos:inScheme :MainScheme ;
+    skos:exactMatch <http://www.wikidata.org/entity/Q413> .
 
 :Biology a skos:Concept ;
-    skos:prefLabel "Biology" ;
+    skos:prefLabel "Biology"@en ;
+    skos:definition "The study of living organisms."@en ;
+    skos:notation "570" ;
     skos:broader :NaturalScience ;
     skos:inScheme :MainScheme .
 
 :Economics a skos:Concept ;
-    skos:prefLabel "Economics" ;
+    skos:prefLabel "Economics"@en ;
+    skos:definition "The study of the production and distribution of goods."@en ;
+    skos:notation "330" ;
     skos:broader :SocialScience ;
     skos:inScheme :MainScheme .
-
-:Science skos:narrower :NaturalScience, :SocialScience .
-:NaturalScience skos:narrower :Physics, :Biology .
-:SocialScience skos:narrower :Economics .
 """,
     },
 ]
