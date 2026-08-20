@@ -54,6 +54,7 @@ from .ui import (  # noqa: F401
     SEARCH_PAD_WIDTH,
     VIZ_FILE_STATE_KEY,
     VIZ_FILE_STATE_MAX_FILES,
+    VIZ_NODE_PANEL,
     VIZ_SETTINGS_KEY,
     _apply_annotation_edit,
     _apply_class_edit,

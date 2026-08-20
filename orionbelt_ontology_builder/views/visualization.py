@@ -10,6 +10,7 @@ from ..ui import (
     _PRECISE_NAV_TYPES,
     GRAPH_MAX_NODES,
     PKG_DIR,
+    VIZ_NODE_PANEL,
     _build_name_collision_set,
     _disambiguated_name,
     _edge_id,
@@ -517,7 +518,17 @@ def render_visualization():
         # does not run and the page crashed reading this further down (P1).
         focus_seeds: list = []
         focus_depth = 0
-        _find_col, _filter_col = st.columns([1, 3])
+        # Find, the mode switch, then the panel the mode chooses the contents
+        # of. Focus is not a node filter: turning it on *replaces* the filter
+        # controls with its own (see the branch below), so the switch belongs
+        # outside the panel it swaps, next to Find — the two are a pair, one
+        # picking an entity and the other narrowing to it. It used to sit inside
+        # that panel, one click deep, while ten display toggles that matter far
+        # less sat in the open (issue #305).
+        # The mode column is sized to the checkbox, not to an even third: the
+        # spare width goes to the panel, whose collapsed label carries the note
+        # about what the view is holding back.
+        _find_col, _mode_col, _filter_col = st.columns([1, 0.5, 2.5])
         with _find_col:
             if focus_targets:
                 _find_choice = st.selectbox(
@@ -574,12 +585,7 @@ def render_visualization():
         # string: Streamlit's expander snaps back to `expanded` whenever its
         # label changes, so a note that moves with the filter closed the panel
         # under the user on every edit (issue #267).
-        _hidden_note = st.session_state.get("_viz_hidden_note") or ""
-        with (
-            _filter_col.container(key="viz_filter_nodes"),
-            st.expander("Filter Nodes", expanded=False),
-        ):
-            st.html(viz_hidden_note_style(_hidden_note))
+        with _mode_col:
             focus_mode = st.checkbox(
                 "Focus on one node",
                 key="viz_focus_mode",
@@ -589,9 +595,17 @@ def render_visualization():
                     "N hops, across all node types — handy for large ontologies "
                     "where showing everything at once is overwhelming. "
                     "Annotations come along with whatever is shown; the "
-                    "Annotations checkbox above still turns them off."
+                    "Annotations checkbox above still turns them off. "
+                    "The panel beside this switches to the focus controls."
                 ),
             )
+
+        _hidden_note = st.session_state.get("_viz_hidden_note") or ""
+        with (
+            _filter_col.container(key="viz_filter_nodes"),
+            st.expander(VIZ_NODE_PANEL, expanded=False),
+        ):
+            st.html(viz_hidden_note_style(_hidden_note))
             if focus_mode and focus_targets:
                 focus_labels = list(focus_targets.keys())
                 label_set = set(focus_labels)
@@ -1562,7 +1576,7 @@ def render_visualization():
                 graph_notice = (
                     f"{_cut_classes} of {len(visible_class_uris)} classes are not "
                     f"drawn: the graph stops at {max_nodes} nodes. Hide some in "
-                    f"Filter Nodes, or focus on one node, to see the rest."
+                    f"{VIZ_NODE_PANEL}, or focus on one node, to see the rest."
                 )
 
             # Focus mode: keep only the seed nodes' neighbourhood within
@@ -1662,7 +1676,8 @@ def render_visualization():
                         f"Nothing to focus on: this ontology is past the "
                         f"{max_nodes} nodes the graph builds at once, and the "
                         f"node you picked is not among them. Hide some classes "
-                        f"or individuals in Filter Nodes to bring it into range."
+                        f"or individuals in {VIZ_NODE_PANEL} to bring it into "
+                        f"range."
                     )
 
             # Spread parallel edges so they don't overlap
@@ -1740,7 +1755,7 @@ def render_visualization():
         # the cached graph is reused.
         if gdata and gdata.get("notice"):
             status.warning(gdata["notice"], icon="⚠️")
-        # Recompute the note for the Filter Nodes label now that the focus
+        # Recompute the note for the Node options label now that the focus
         # controls have rendered and the prune has run. One rerun when it
         # actually changes, so the label is never a step behind what the graph
         # is showing; it converges because the note is derived from settings,
