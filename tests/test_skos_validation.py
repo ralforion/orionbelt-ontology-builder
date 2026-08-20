@@ -533,6 +533,32 @@ class TestTheTransitiveProperties:
         om.graph.add((URIRef(base + "A"), SKOS.broader, URIRef(base + "C")))
         assert "hierarchy_redundancy" in _types(om)
 
+    def test_a_literal_spelling_a_uri_is_not_that_concept(self, om):
+        """RDF distinguishes a resource from text that looks like one.
+
+        Every other relation read here filters to URIRef before comparing. This
+        path did not, so a literal whose lexical form happened to spell a
+        concept's URI was treated as a hierarchy edge to it, and S27 fired on a
+        relation that does not exist.
+        """
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, Literal(base + "B")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" not in _types(om)
+
+    def test_the_same_target_as_a_resource_does_clash(self, om):
+        """The other half: the guard must not suppress the real case."""
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "A"), SKOS.broaderTransitive, URIRef(base + "B")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" in _types(om)
+
+    def test_a_literal_on_the_inverse_property_too(self, om):
+        base = self._seed(om, "A", "B")
+        om.graph.add((URIRef(base + "B"), SKOS.narrowerTransitive, Literal(base + "A")))
+        om.graph.add((URIRef(base + "A"), SKOS.related, URIRef(base + "B")))
+        assert "relation_clash" not in _types(om)
+
     def test_a_transitive_edge_does_not_make_a_concept_look_stranded(self, om):
         """Reachability feeds S27; orphan still asks about direct links."""
         base = self._seed(om, "A", "B")

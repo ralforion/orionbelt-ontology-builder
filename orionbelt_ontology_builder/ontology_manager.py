@@ -4087,11 +4087,15 @@ class OntologyManager:
         edges: dict[str, set[str]] = {uri: set(parents.get(uri, ())) for uri in known}
         for concept in concepts:
             subject = URIRef(concept["uri"])
+            # ``isinstance`` before the membership test, as every other relation
+            # read here does. A literal whose text spells a concept's URI is not
+            # that concept, and comparing lexical forms would make one look like
+            # a hierarchy edge.
             for target in self.graph.objects(subject, SKOS.broaderTransitive):
-                if str(target) in known:
+                if isinstance(target, URIRef) and str(target) in known:
                     edges[concept["uri"]].add(str(target))
             for target in self.graph.objects(subject, SKOS.narrowerTransitive):
-                if str(target) in known:
+                if isinstance(target, URIRef) and str(target) in known:
                     edges[str(target)].add(concept["uri"])
 
         closure: dict[str, set[str]] = {}
