@@ -9,6 +9,7 @@ about one, and a creator may be either. Storing all of them as plain literals
 would round-trip fine and be wrong.
 """
 
+import datetime
 import pathlib
 
 import pytest
@@ -82,9 +83,37 @@ class TestDatesAreTypedByPrecision:
     @pytest.mark.parametrize(
         "value", ["yesterday", "01-03-2019", "2019-3-1", "20190301"]
     )
-    def test_a_value_that_is_not_a_date_is_refused(self, om, value):
+    def test_a_value_that_is_not_shaped_like_a_date_is_refused(self, om, value):
         with pytest.raises(ValueError, match="YYYY"):
             om.set_scheme_metadata("Animals", "created", value)
+
+    @pytest.mark.parametrize(
+        "value", ["2019-13", "2019-00", "2019-02-31", "2019-04-31", "2019-02-29"]
+    )
+    def test_a_date_that_does_not_exist_is_refused(self, om, value):
+        """Shape is not enough. rdflib stores a literal like this without
+        complaint and only objects later, when something reads its value, by
+        which point it is in the user's file."""
+        with pytest.raises(ValueError, match="not a real date"):
+            om.set_scheme_metadata("Animals", "created", value)
+
+    def test_a_leap_day_is_a_date_in_a_leap_year(self, om):
+        """Why this uses the calendar and not a table of month lengths."""
+        om.set_scheme_metadata("Animals", "created", "2020-02-29")
+        assert [v["value"] for v in _meta(om, "created")] == ["2020-02-29"]
+
+    def test_the_end_of_a_long_month_is_accepted(self, om):
+        om.set_scheme_metadata("Animals", "created", "2019-12-31")
+        assert [v["value"] for v in _meta(om, "created")] == ["2019-12-31"]
+
+    def test_a_stored_date_reads_back_as_a_date(self, om):
+        """The value round-trips through rdflib rather than only looking right.
+
+        A literal that fails to convert is exactly what this check keeps out.
+        """
+        om.set_scheme_metadata("Animals", "created", "2019-03-01")
+        stored = _objects(om, DCTERMS.created)[0]
+        assert stored.toPython() == datetime.date(2019, 3, 1)
 
     def test_a_new_date_replaces_the_old_one(self, om):
         om.set_scheme_metadata("Animals", "modified", "2019")

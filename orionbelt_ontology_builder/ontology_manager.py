@@ -2,6 +2,7 @@
 OntologyManager - Core class for managing OWL ontologies using rdflib.
 """
 
+import datetime
 import logging
 import os
 import re
@@ -3157,13 +3158,37 @@ class OntologyManager:
                 return URIRef(text)
             return Literal(text)
         if kind == "date":
-            for pattern, datatype in self._DATE_PRECISION:
-                if re.match(pattern, text):
-                    return Literal(text, datatype=datatype)
+            return self._typed_date(field, text)
+        return Literal(text)
+
+    def _typed_date(self, field: str, text: str) -> Literal:
+        """A date literal typed by its precision, refused if it is not a date.
+
+        Matching the shape is not enough. "2019-13" and "2019-02-31" both look
+        like dates and neither exists, and rdflib stores such a literal happily,
+        complaining only later when something tries to read its value — by which
+        point it is in the user's file. So the range check belongs here.
+
+        February is why this uses the calendar rather than a table of month
+        lengths: 2020-02-29 is a date and 2019-02-29 is not.
+        """
+        for pattern, datatype in self._DATE_PRECISION:
+            if re.match(pattern, text):
+                break
+        else:
             raise ValueError(
                 f"{field} must be a date as YYYY, YYYY-MM or YYYY-MM-DD, got: {text}"
             )
-        return Literal(text)
+
+        parts = [int(part) for part in text.split("-")]
+        try:
+            if datatype == XSD.gYearMonth and not 1 <= parts[1] <= 12:
+                raise ValueError(text)
+            if datatype == XSD.date:
+                datetime.date(*parts)
+        except ValueError:
+            raise ValueError(f"{field} is not a real date: {text}") from None
+        return Literal(text, datatype=datatype)
 
     def set_scheme_metadata(
         self, scheme: str, field: str, value: str, lang: str | None = None
