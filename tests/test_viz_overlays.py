@@ -11,7 +11,10 @@ import re
 from pathlib import Path
 
 from orionbelt_ontology_builder import ui
-from orionbelt_ontology_builder.views.visualization import graph_overlay_css
+from orionbelt_ontology_builder.views.visualization import (
+    _TOOLBAR_CLEARANCE,
+    graph_overlay_css,
+)
 
 _PKG = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder"
 
@@ -36,6 +39,16 @@ def test_the_cards_are_opaque():
     assert "background: #ffffff" in light
     assert "background: #262730" in dark  # the app's own dark surface, not black
     assert "box-shadow:" in light and "box-shadow:" in dark
+
+
+def test_the_panel_cap_pays_for_its_own_offset():
+    """The card starts a toolbar's height down the canvas, so a cap of the full
+    row height would let a long editor hang that far past the canvas and over
+    the status bar. The cap has to subtract the same offset."""
+    css = graph_overlay_css(dark=False)
+    assert f"max-height: calc(100% - {_TOOLBAR_CLEARANCE})" in css
+    # ...and the padding has to sit inside that cap, not on top of it.
+    assert "box-sizing: border-box" in css
 
 
 def test_the_canvas_does_not_pay_for_the_column_gap():

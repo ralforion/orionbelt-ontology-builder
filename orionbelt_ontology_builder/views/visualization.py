@@ -109,7 +109,14 @@ def graph_overlay_css(dark: bool) -> str:
         position: absolute; top: {_TOOLBAR_CLEARANCE}; bottom: 0; right: 0;
         z-index: 20;
         width: 21rem; max-width: 45%;
-        height: fit-content; max-height: 100%; overflow-y: auto;
+        /* The cap has to pay for the offset too: the card starts a toolbar's
+           height down, so a full-height one would hang that far past the
+           canvas and over the status bar. Border-box so its padding is inside
+           the cap rather than added to it. */
+        box-sizing: border-box;
+        height: fit-content;
+        max-height: calc(100% - {_TOOLBAR_CLEARANCE});
+        overflow-y: auto;
         padding: 0.6rem 0.9rem 0.9rem;
         background: {bg};
         border: 1px solid {edge};
