@@ -90,7 +90,13 @@ def graph_overlay_css(dark: bool) -> str:
     edge = "rgba(250,250,250,0.2)" if dark else "rgba(49,51,63,0.15)"
     shadow = "0 8px 28px rgba(0,0,0,0.55)" if dark else "0 8px 28px rgba(0,0,0,0.16)"
     return f"""<style>
-    {_GRAPH_ROW} {{ position: relative; }}
+    {_GRAPH_ROW} {{
+        position: relative;
+        /* No column gap above the canvas. Every other row on this page is a
+           control that reads as its own line; the canvas is the page, and the
+           strip of empty graph above its legend already reads as a margin. */
+        margin-top: -12px;
+    }}
     /* The canvas takes the whole row, panel open or not. */
     {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-graph_viewer) {{
         flex: 1 1 100% !important;

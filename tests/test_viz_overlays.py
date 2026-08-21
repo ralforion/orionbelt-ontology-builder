@@ -38,6 +38,14 @@ def test_the_cards_are_opaque():
     assert "box-shadow:" in light and "box-shadow:" in dark
 
 
+def test_the_canvas_does_not_pay_for_the_column_gap():
+    """Every row on this page is separated by the column's 16px gap. Above the
+    canvas that gap reads as a band, because the canvas already opens with a
+    strip of empty graph above its legend."""
+    css = graph_overlay_css(dark=False)
+    assert "margin-top: -12px" in css
+
+
 def test_the_picker_cannot_animate_the_canvas_around():
     """Streamlit opens an expander with a JS height animation on the <details>.
 
