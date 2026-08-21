@@ -7,6 +7,7 @@ canvas, or an invisible component reappears as a band above it — so the hooks
 are pinned here instead.
 """
 
+import re
 from pathlib import Path
 
 from orionbelt_ontology_builder import ui
@@ -37,6 +38,42 @@ def test_the_cards_are_opaque():
     assert "box-shadow:" in light and "box-shadow:" in dark
 
 
+def test_the_picker_cannot_animate_the_canvas_around():
+    """Streamlit opens an expander with a JS height animation on the <details>.
+
+    It animates towards the height of a body that is out of the flow here, so
+    the graph slid down by the height of a card that was never in the flow and
+    snapped back when the animation ended. Only an !important declaration
+    outranks a script animation.
+    """
+    css = graph_overlay_css(dark=False)
+    assert ".st-key-viz_filter_nodes details {" in css
+    rule = css[css.index(".st-key-viz_filter_nodes details {") :]
+    assert "height: auto !important" in rule[: rule.index("}")]
+
+
+def test_css_only_markdown_is_taken_out_of_the_flow():
+    """An st.markdown carrying only a <style> still takes a slot in the page
+    column's 16px gap grid. Four of them ride above the graph."""
+    assert "> style:only-child" in ui._CUSTOM_CSS
+
+
+def test_the_page_starts_below_streamlit_s_header():
+    """The header is an opaque bar painted over the page, not behind it.
+
+    Hiding the CSS-only elements above the title moved the first line of the
+    page up under it, which clipped the breadcrumb. The top padding is what
+    keeps them apart, so it may not drop below the header's 60px.
+    """
+    rule = ui._CUSTOM_CSS[
+        ui._CUSTOM_CSS.index(".block-container, .stMainBlockContainer") :
+    ]
+    rule = rule[: rule.index("}")]
+    padding = re.search(r"padding-top:\s*([\d.]+)rem", rule)
+    assert padding, "the page no longer sets its own top padding"
+    assert float(padding.group(1)) * 16 >= 60
+
+
 def test_the_storage_component_rule_names_the_package_that_is_imported():
     """The invisible browser-storage iframe is hidden by its served URL.
 
@@ -46,3 +83,33 @@ def test_the_storage_component_rule_names_the_package_that_is_imported():
     """
     assert 'iframe[src*="streamlit_local_storage"]' in ui._CUSTOM_CSS
     assert "from streamlit_local_storage import" in (_PKG / "ui.py").read_text()
+
+
+def _toolbar_bottom_px(viewer: str) -> int:
+    """How far down the canvas its own toolbar reaches, from the buttons' CSS."""
+    bottoms = []
+    for button in ("#download-btn", "#fullscreen-btn"):
+        rule = viewer[viewer.index(button + " {") :]
+        rule = rule[: rule.index("}")]
+        top = re.search(r"top:\s*(\d+)px", rule)
+        height = re.search(r"height:\s*(\d+)px", rule)
+        assert top and height, f"{button} no longer sizes itself in px"
+        bottoms.append(int(top.group(1)) + int(height.group(1)))
+    return max(bottoms)
+
+
+def test_the_overlays_clear_the_canvas_toolbar():
+    """The canvas keeps download and fullscreen in the corner the cards use.
+
+    The overlays live outside the iframe, so they win every hit test over those
+    buttons — covering one is enough to make it unclickable, with nothing on
+    screen to say why. They start below the toolbar instead.
+    """
+    viewer = (_PKG / "lib" / "graph_viewer" / "index.html").read_text()
+    css = graph_overlay_css(dark=False)
+    offsets = re.findall(r"top:\s*([\d.]+)rem", css)
+    assert offsets, "the overlays no longer offset themselves from the top"
+    clearance = min(float(o) for o in offsets) * 16  # rem at Streamlit's root size
+    assert clearance >= _toolbar_bottom_px(viewer), (
+        "an overlay now starts over the canvas's own toolbar buttons"
+    )

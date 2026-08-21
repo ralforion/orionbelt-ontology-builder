@@ -67,6 +67,13 @@ logger = logging.getLogger(__name__)
 # component itself — nothing else on the page carries that key.
 _GRAPH_ROW = '[data-testid="stHorizontalBlock"]:has(.st-key-graph_viewer)'
 
+# The canvas keeps its own download and fullscreen buttons in its top-right
+# corner (see the graph viewer's #download-btn / #fullscreen-btn: 8px down,
+# 32px tall). The overlays claim that same corner, and being outside the iframe
+# they win every hit test, so they start below the toolbar instead of on top of
+# it. test_viz_overlays.py keeps this in step with the buttons' own CSS.
+_TOOLBAR_CLEARANCE = "2.75rem"
+
 
 def graph_overlay_css(dark: bool) -> str:
     """CSS that floats the graph page's panels over the canvas.
@@ -93,7 +100,8 @@ def graph_overlay_css(dark: bool) -> str:
        pinned so `max-height` has a length to resolve against, and a long editor
        scrolls inside the card instead of running past the graph. */
     {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-viz_hide_panel) {{
-        position: absolute; top: 0; bottom: 0; right: 0; z-index: 20;
+        position: absolute; top: {_TOOLBAR_CLEARANCE}; bottom: 0; right: 0;
+        z-index: 20;
         width: 21rem; max-width: 45%;
         height: fit-content; max-height: 100%; overflow-y: auto;
         padding: 0.6rem 0.9rem 0.9rem;
@@ -104,7 +112,7 @@ def graph_overlay_css(dark: bool) -> str:
     }}
     /* Panel closed: the reopen toggle alone, in the same corner. */
     {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-viz_show_panel) {{
-        position: absolute; top: 0; right: 0; z-index: 20;
+        position: absolute; top: {_TOOLBAR_CLEARANCE}; right: 0; z-index: 20;
         width: auto;
     }}
     /* Node options drops over the canvas rather than shoving it down. The card
@@ -112,6 +120,14 @@ def graph_overlay_css(dark: bool) -> str:
        as part of the control it opened from. Above the details panel: it is
        the thing the click just opened. */
     .st-key-viz_filter_nodes {{ position: relative; z-index: 25; }}
+    /* Streamlit animates an expander open by running a height animation on the
+       <details> from JavaScript. It measures the body, which is out of the flow
+       here, so the graph slid down by the height of a card that was never in
+       the flow and snapped back when the animation ended. An !important
+       declaration outranks a script animation, and with the body absolute the
+       natural height is the summary — which is what it should have been all
+       along. */
+    .st-key-viz_filter_nodes details {{ height: auto !important; }}
     .st-key-viz_filter_nodes details[open] > [data-testid="stExpanderDetails"] {{
         position: absolute; top: 100%; left: 0; right: 0;
         max-height: 60vh; overflow-y: auto;
