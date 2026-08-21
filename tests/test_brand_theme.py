@@ -19,6 +19,7 @@ def test_brand_css_forces_the_brand_colour_on_every_accent_widget():
     required_hooks = [
         'data-testid="stBaseButton-primary"',  # primary buttons
         'data-testid="stCheckbox"',  # checked checkbox
+        "> div:first-child",  # the toggle track (st.toggle reuses stCheckbox)
         'data-testid="stRadio"',  # selected radio
         'data-testid="stSlider"',  # slider thumb
         'data-testid="stSliderThumbValue"',  # slider value label

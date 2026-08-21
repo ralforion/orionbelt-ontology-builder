@@ -207,6 +207,12 @@ _BRAND_CSS = f"""
         background-color: {_BRAND} !important;
         border-color: {_BRAND} !important;
     }}
+    /* Toggle track when on. st.toggle shares stCheckbox's testid; what tells
+       them apart is the mark: a checkbox renders a <span>, a toggle a <div>
+       track wrapping the knob. */
+    [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child {{
+        background-color: {_BRAND} !important;
+    }}
     /* Selected radio (its control circle; not the label wrapper) */
     [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) > div:first-child {{
         background-color: {_BRAND} !important;
