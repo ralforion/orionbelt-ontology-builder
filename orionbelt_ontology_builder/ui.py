@@ -117,6 +117,17 @@ _CUSTOM_CSS = """
         border-radius: 4px;
         color: #721c24;
     }
+    /* CSS injected through st.markdown leaves an empty element behind, which
+       is invisible but still takes a slot in the page column's 16px gap grid.
+       Four of them ride above the graph, so the canvas started ~64px lower than
+       it had to. Nothing to show, so take them out of the flow. */
+    [data-testid="stElementContainer"]:has(
+        > [data-testid="stMarkdown"]
+        > [data-testid="stMarkdownContainer"]
+        > style:only-child
+    ) {
+        display: none !important;
+    }
     /* The browser-storage component has nothing to show, but Streamlit still
        lays its iframe out — a 26px band, plus the column's 16px gap, wherever
        the write happens to be called (on the graph page, right above the
@@ -134,10 +145,17 @@ _CUSTOM_CSS = """
     }
     /* Reduce margin/padding. The side gutters are Streamlit's own 80px, which
        on a wide screen is 160px the graph could be using; 2rem still keeps text
-       pages off the window edge. */
+       pages off the window edge.
+
+       The top has a floor: Streamlit's header is an opaque 60px bar painted at
+       z-index 999990, so anything above 3.75rem is painted over rather than
+       scrolled under. 4rem clears it with a little air. It used to be 2.5rem
+       and looked fine only because the CSS blocks above the title were each
+       taking a 16px slot in the column; once those went out of the flow, the
+       first line of the page slid under the header. */
     .block-container, .stMainBlockContainer,
     [data-testid="stAppViewBlockContainer"] {
-        padding-top: 2.5rem !important;
+        padding-top: 4rem !important;
         padding-bottom: 0 !important;
         padding-left: 2rem !important;
         padding-right: 2rem !important;

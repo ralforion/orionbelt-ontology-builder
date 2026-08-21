@@ -63,6 +63,96 @@ from ..ui import (
 
 logger = logging.getLogger(__name__)
 
+# The row that holds the canvas and both of its overlays, keyed off the graph
+# component itself — nothing else on the page carries that key.
+_GRAPH_ROW = '[data-testid="stHorizontalBlock"]:has(.st-key-graph_viewer)'
+
+# The canvas keeps its own download and fullscreen buttons in its top-right
+# corner (see the graph viewer's #download-btn / #fullscreen-btn: 8px down,
+# 32px tall). The overlays claim that same corner, and being outside the iframe
+# they win every hit test, so they start below the toolbar instead of on top of
+# it. test_viz_overlays.py keeps this in step with the buttons' own CSS.
+_TOOLBAR_CLEARANCE = "2.75rem"
+
+
+def graph_overlay_css(dark: bool) -> str:
+    """CSS that floats the graph page's panels over the canvas.
+
+    The details panel used to take a quarter of the row's width, the reopen
+    toggle a sliver of it, and the Node options picker pushed the graph down
+    far enough to squeeze it to its floor. All three now sit on top of the
+    canvas, so the graph keeps its size whatever is open.
+
+    Solid cards, not translucent ones: chips and labels read over a busy graph
+    are unreadable. Colours follow the graph's own two themes.
+    """
+    bg = "#262730" if dark else "#ffffff"
+    edge = "rgba(250,250,250,0.2)" if dark else "rgba(49,51,63,0.15)"
+    shadow = "0 8px 28px rgba(0,0,0,0.55)" if dark else "0 8px 28px rgba(0,0,0,0.16)"
+    return f"""<style>
+    {_GRAPH_ROW} {{
+        position: relative;
+        /* No column gap above the canvas. Every other row on this page is a
+           control that reads as its own line; the canvas is the page, and the
+           strip of empty graph above its legend already reads as a margin. */
+        margin-top: -12px;
+    }}
+    /* The canvas takes the whole row, panel open or not. */
+    {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-graph_viewer) {{
+        flex: 1 1 100% !important;
+        width: 100% !important;
+    }}
+    /* The details panel, as a card over the right of the canvas. Both edges are
+       pinned so `max-height` has a length to resolve against, and a long editor
+       scrolls inside the card instead of running past the graph. */
+    {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-viz_hide_panel) {{
+        position: absolute; top: {_TOOLBAR_CLEARANCE}; bottom: 0; right: 0;
+        z-index: 20;
+        width: 21rem; max-width: 45%;
+        /* The cap has to pay for the offset too: the card starts a toolbar's
+           height down, so a full-height one would hang that far past the
+           canvas and over the status bar. Border-box so its padding is inside
+           the cap rather than added to it. */
+        box-sizing: border-box;
+        height: fit-content;
+        max-height: calc(100% - {_TOOLBAR_CLEARANCE});
+        overflow-y: auto;
+        padding: 0.6rem 0.9rem 0.9rem;
+        background: {bg};
+        border: 1px solid {edge};
+        border-radius: 10px;
+        box-shadow: {shadow};
+    }}
+    /* Panel closed: the reopen toggle alone, in the same corner. */
+    {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-viz_show_panel) {{
+        position: absolute; top: {_TOOLBAR_CLEARANCE}; right: 0; z-index: 20;
+        width: auto;
+    }}
+    /* Node options drops over the canvas rather than shoving it down. The card
+       hangs off the bottom edge of its own summary, so the picker still reads
+       as part of the control it opened from. Above the details panel: it is
+       the thing the click just opened. */
+    .st-key-viz_filter_nodes {{ position: relative; z-index: 25; }}
+    /* Streamlit animates an expander open by running a height animation on the
+       <details> from JavaScript. It measures the body, which is out of the flow
+       here, so the graph slid down by the height of a card that was never in
+       the flow and snapped back when the animation ended. An !important
+       declaration outranks a script animation, and with the body absolute the
+       natural height is the summary — which is what it should have been all
+       along. */
+    .st-key-viz_filter_nodes details {{ height: auto !important; }}
+    .st-key-viz_filter_nodes details[open] > [data-testid="stExpanderDetails"] {{
+        position: absolute; top: 100%; left: 0; right: 0;
+        max-height: 60vh; overflow-y: auto;
+        padding: 0.25rem 1rem 1rem;
+        background: {bg};
+        border: 1px solid {edge};
+        border-top: none;
+        border-radius: 0 0 10px 10px;
+        box-shadow: {shadow};
+    }}
+    </style>"""
+
 
 def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
     """Hang ``subject_uri``'s annotations off its node, at most ``room`` of them.
@@ -1836,6 +1926,12 @@ def render_visualization():
                     st.session_state.pop("_viz_dropped_selection", None)
             _prev_sel = st.session_state.get("_viz_last_selection")
             _prev_has_sel = isinstance(_prev_sel, dict) and _prev_sel.get("selected")
+
+            # Everything that opens on this page used to be paid for out of
+            # the canvas: the details panel took a quarter of the width, the
+            # reopen toggle took a sliver of it, and the Node options picker
+            # pushed the graph down far enough to squeeze it to its floor.
+            st.markdown(graph_overlay_css(_gv_dark), unsafe_allow_html=True)
 
             _panel_on = bool(st.session_state.get("_viz_cfg_details_panel", True))
             if _panel_on:
