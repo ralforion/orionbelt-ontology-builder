@@ -108,7 +108,45 @@ var fsDetachTimer = null;   // timer that detaches fsResizeHandler
 // not change when the graph is resized, so the two cannot chase each other.
 var AUTOFIT_MAX_RESERVE = 220;
 
+// The status bar is sticky, so it stays readable while the page scrolls. A
+// pinned sticky element's rect reports where it is *painted*, though, not where
+// it sits in the layout — and once pinned that is level with the window bottom,
+// above the graph's own edge, so the measurement below reserved nothing and the
+// canvas grew until the bar covered it. Un-pin it for the length of the
+// measurement: it all happens in one task, so nothing repaints in between.
+function unpinStickies() {
+    var undo = [];
+    try {
+        var doc = window.parent.document;
+        var el = doc.getElementById('graph-status-bar');
+        for (; el && el !== doc.body; el = el.parentElement) {
+            if (window.parent.getComputedStyle(el).position !== 'sticky') continue;
+            undo.push([el, el.style.getPropertyValue('position'),
+                       el.style.getPropertyPriority('position')]);
+            el.style.setProperty('position', 'static', 'important');
+        }
+    } catch (e) { /* cross-origin, or no bar on screen: nothing to un-pin */ }
+    return function () {
+        for (var i = 0; i < undo.length; i++) {
+            if (undo[i][1]) {
+                undo[i][0].style.setProperty('position', undo[i][1], undo[i][2]);
+            } else {
+                undo[i][0].style.removeProperty('position');
+            }
+        }
+    };
+}
+
 function autofitReserve() {
+    var repin = unpinStickies();
+    try {
+        return measureReserve();
+    } finally {
+        repin();
+    }
+}
+
+function measureReserve() {
     var node = window.frameElement;
     while (node && node.getAttribute
            && node.getAttribute('data-testid') !== 'stElementContainer') {

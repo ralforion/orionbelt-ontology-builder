@@ -117,6 +117,21 @@ _CUSTOM_CSS = """
         border-radius: 4px;
         color: #721c24;
     }
+    /* The browser-storage component has nothing to show, but Streamlit still
+       lays its iframe out — a 26px band, plus the column's 16px gap, wherever
+       the write happens to be called (on the graph page, right above the
+       canvas). Take it out of the flow rather than hiding it: a display:none
+       or visibility:hidden iframe is a document that may never run, and this
+       one has a write to localStorage to perform. */
+    [data-testid="stElementContainer"]:has(
+        iframe[src*="streamlit_local_storage"]
+    ) {
+        position: absolute !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none;
+    }
     /* Reduce margin/padding. The side gutters are Streamlit's own 80px, which
        on a wide screen is 160px the graph could be using; 2rem still keeps text
        pages off the window edge. */
