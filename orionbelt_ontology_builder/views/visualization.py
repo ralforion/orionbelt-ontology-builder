@@ -2085,9 +2085,28 @@ def render_visualization():
                         "Alt-click to focus on it alone"
                     )
 
-                # Inject CSS to remove gap between status bar columns
+                # Inject CSS to remove gap between status bar columns, and pin
+                # the bar to the bottom of the scroll port. The bar reports the
+                # node you just clicked, so it has to stay in view while you
+                # work the graph; with the display options open it otherwise
+                # sits below the fold. A sticky element can only travel inside
+                # its own parent, so every wrapper Streamlit puts between the
+                # bar and the page column gets the rule — the one with room to
+                # move is the one that ends up sticking, and which that is
+                # differs between the two layouts below (the button row is
+                # wrapped, the lone markdown block is not). Streamlit also
+                # collapses that block to a text line's height, which would
+                # leave the 36px bar hanging past the sticky edge, so pin it.
                 st.markdown(
                     """<style>
+            div[data-testid="stLayoutWrapper"]:has(#graph-status-bar),
+            div[data-testid="stHorizontalBlock"]:has(#graph-status-bar),
+            div[data-testid="stElementContainer"]:has(#graph-status-bar) {
+                position: sticky !important; bottom: 0.75rem; z-index: 20;
+            }
+            div[data-testid="stElementContainer"]:has(#graph-status-bar) {
+                height: 36px !important;
+            }
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) { gap: 0 !important; }
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) [data-testid="stBaseButton-secondary"] button,
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) button[kind] ,

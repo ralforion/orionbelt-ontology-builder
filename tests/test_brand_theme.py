@@ -19,6 +19,12 @@ def test_brand_css_forces_the_brand_colour_on_every_accent_widget():
     required_hooks = [
         'data-testid="stBaseButton-primary"',  # primary buttons
         'data-testid="stCheckbox"',  # checked checkbox
+        # The toggle track. st.toggle reuses stCheckbox's testid, so only the
+        # full selector tells its rule apart from the checkbox's.
+        (
+            '[data-testid="stCheckbox"] label[data-baseweb="checkbox"]'
+            ":has(input:checked) > div:first-child"
+        ),
         'data-testid="stRadio"',  # selected radio
         'data-testid="stSlider"',  # slider thumb
         'data-testid="stSliderThumbValue"',  # slider value label
