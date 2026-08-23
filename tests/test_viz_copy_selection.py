@@ -96,6 +96,52 @@ def test_a_modifier_click_reports_the_node_it_hit():
     )
 
 
+def test_an_edge_keeps_the_canvas_button_through_a_rebuild():
+    """A node comes back after a rebuild by its id and the component reads the
+    copy text off it; an edge has no id to come back by, so the button vanished
+    on the next re-mount while the edge was still selected. Python hands the
+    text over instead."""
+    viz = sources.viz_text()
+    assert "copy_text=(" in viz, "the component is not told what to offer"
+    body = _viewer()
+    restore = body[body.index("setCopyTarget(restoreNode") :]
+    restore = restore[: restore.index(";") + 1]
+    assert "args.copy_text" in restore, (
+        "a rebuild clears the copy target for anything it cannot restore by id"
+    )
+
+
+# --- where the button sits ---------------------------------------------------
+
+
+def test_the_button_and_the_bar_share_a_container():
+    """It is laid over the end of the bar, and needs one thing to be positioned
+    against in either layout: beside the View button it sits in a column, and
+    for a selection without one — an annotation, the case this is all for — the
+    bar has the row to itself."""
+    viz = sources.viz_text()
+    assert 'st.container(key="graph_status_cell")' in viz
+    assert ".st-key-graph_status_cell { position: relative; }" in viz
+    positioned = viz[viz.index(".st-key-graph_status_cell [data-testid=") :]
+    positioned = positioned[: positioned.index("}")]
+    assert "position: absolute" in positioned
+    assert "stColumn" not in positioned, (
+        "the button is positioned only inside a column again — the annotation "
+        "path has no column, and there the icon fell out below the bar"
+    )
+
+
+def test_the_container_sticks_with_everything_else():
+    """It is another wrapper between the bar and the page, and the bar has to
+    stay in view while the graph is worked on."""
+    viz = sources.viz_text()
+    sticky = viz[
+        viz.index('div[data-testid="stLayoutWrapper"]:has(#graph-status-bar)') :
+    ]
+    sticky = sticky[: sticky.index("}")]
+    assert "stVerticalBlockBorderWrapper" in sticky
+
+
 # --- the bar under the graph -------------------------------------------------
 
 

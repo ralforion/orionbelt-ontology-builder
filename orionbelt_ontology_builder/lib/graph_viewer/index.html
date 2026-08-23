@@ -987,8 +987,10 @@ function renderGraph(args) {
     if (pendingSelection) {
         restoreNode = pendingSelection.selected ? (pendingSelection.nodeId || null) : null;
     }
+    // A node comes back by id and the rest is read off it; an edge has no id to
+    // come back by, so Python hands its copy text over instead.
     setCopyTarget(restoreNode !== null && restoreNode !== undefined
-        ? selectionText(nodes.get(restoreNode)) : '');
+        ? selectionText(nodes.get(restoreNode)) : (args.copy_text || ''));
     if (restoreNode !== null && restoreNode !== undefined) {
         try { network.selectNodes([restoreNode]); } catch (e) {}
         applyNeighbourHighlight(restoreNode);
