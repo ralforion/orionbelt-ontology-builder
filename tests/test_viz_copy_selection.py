@@ -3,10 +3,10 @@
 Both places the selection is reported cut it to fit: the node draws a label
 short enough for the node, and the bar under the graph ellipsises its one line.
 An annotation's value is usually the thing worth copying and is exactly what
-those cuts eat. So the canvas has a copy button that hands over what the
-selection is called, in full, and the bar carries the whole line in its tooltip.
-Copying lives on the canvas alone: Streamlit strips onclick from the HTML it
-renders, so a button in the bar could not reach the clipboard at all.
+those cuts eat. There are two buttons, answering two questions: the canvas one
+hands over what the selection is called, and the one in the black bar hands over
+the whole line the bar reports. The bar also keeps that line in a tooltip, since
+the ellipsis is what made its tail unreadable.
 
 The bar half runs the real page through AppTest, as test_viz_details_link does.
 The canvas half is browser behaviour, pinned at the source level the way
@@ -14,10 +14,17 @@ test_viz_fullscreen.py pins the fullscreen invariants. Verified by hand in the
 running app as well.
 """
 
+import json
 import os
 from pathlib import Path
 
+import sources
 from streamlit.testing.v1 import AppTest
+
+from orionbelt_ontology_builder.views.visualization import (
+    COPY_ICON_PATH,
+    status_bar_copy_html,
+)
 
 URL = "https://webeep.polimi.it/course/view.php?id=123456"
 CUT = URL[:30] + "..."
@@ -157,14 +164,29 @@ def test_the_bar_shows_the_whole_label_not_the_node_s_cut_one():
     assert CUT not in bar
 
 
-def test_the_bar_leaves_copying_to_the_canvas():
-    """A button here could only open something to copy out of, and the canvas
-    button already does it in one click, panel open or shut."""
-    at = _run()
-    # Not "no code blocks at all" — the Class Hierarchy tab draws one of its own.
-    assert not [c.value for c in at.code if URL in c.value], (
-        "the bar grew a copy panel again"
-    )
+LINE = f"{URL} — webeep: {URL}"
+
+
+def test_the_bar_button_copies_the_line_the_bar_shows():
+    """Where the canvas button copies only what the selection is called. Two
+    buttons, two answers, both a single click."""
+    out = status_bar_copy_html(LINE)
+    assert json.dumps(LINE) in out, "the button does not carry the line"
+    assert COPY_ICON_PATH in out, "the bar's icon is not the canvas's"
+    assert "execCommand('copy')" in out, "no fallback for the desktop webview"
+
+
+def test_the_bar_button_is_handed_the_whole_line():
+    """The tooltip's text, not the label alone — the page has to pass that."""
+    assert "status_bar_copy_html(_bar_title)" in sources.viz_text()
+
+
+def test_a_value_cannot_end_the_script_it_travels_in():
+    """The line is the user's own text and it lands inside a <script>: a value
+    carrying "</script>" would close the block and spill into the page."""
+    out = status_bar_copy_html("x </script><img src=y onerror=alert(1)> z")
+    assert out.count("</script>") == 1, "a value can close the script block"
+    assert "<\\/script>" in out
 
 
 def test_the_bar_escapes_what_it_is_given():
