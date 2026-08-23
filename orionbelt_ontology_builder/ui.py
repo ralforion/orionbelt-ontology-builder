@@ -14,6 +14,7 @@ compatibility shims address them by.
 """
 
 import hashlib
+import html
 import json
 import logging
 import re
@@ -2935,27 +2936,29 @@ def _panel_add_parent(classes, ntype, ename):
     return None
 
 
-#: Everything markdown would read as syntax in a heading built from user text.
-_MD_SPECIALS = re.compile(r"([\\`*_\[\]<>])")
-
-
-def panel_heading_markdown(shown: str, full: str) -> str:
+def panel_heading_html(shown: str, full: str) -> str:
     """The details panel's heading: a node's label, linking to its whole value.
 
     A node draws a label cut to fit on it, and the heading is that label. As
     plain text Streamlit linkifies a URL in it, so a cut URL became a link to
-    the cut URL and clicking it opened the wrong page (issue #313). Written as
-    an explicit link instead: the text stays as short as the node drew it, the
-    destination is the value in full, and markdown does not linkify inside a
-    link's own text, so nothing rewrites it back.
+    the cut URL and clicking it opened the wrong page (issue #313) — and a value
+    that merely *starts* with a URL has the same problem with no whole URL to
+    link to.
+
+    So the heading is written as one HTML block, which markdown copies through
+    raw: nothing in it is linkified, and the only link is the one built here,
+    around the text the node drew and pointing at the value in full. Inline HTML
+    would not do — markdown still parses the text between inline tags, and the
+    linkifier put its own <a> inside ours.
     """
-    text = _MD_SPECIALS.sub(r"\\\1", shown or full)
+    text = html.escape(shown or full)
     is_url = full.startswith(("http://", "https://")) and not any(
         c.isspace() for c in full
     )
     if not is_url:
-        return f"**{text}**"
-    return f"**[{text}](<{full.replace('>', '%3E')}>)**"
+        return f"<p><strong>{text}</strong></p>"
+    href = html.escape(full, quote=True)
+    return f'<p><strong><a href="{href}" target="_blank">{text}</a></strong></p>'
 
 
 def panel_subject_uri(ntype, ename, classes, object_props, data_props, individuals):

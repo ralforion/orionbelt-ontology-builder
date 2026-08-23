@@ -44,7 +44,7 @@ from ..ui import (
     follow_renamed_node_ids,
     graph_node_cap,
     local_store,
-    panel_heading_markdown,
+    panel_heading_html,
     panel_subject_uri,
     parse_filter_text,
     prioritise_find_target,
@@ -2143,7 +2143,8 @@ def render_visualization():
                         # full, not the cut text (issue #313).
                         _shown = _sel.get("label", "")
                         st.markdown(
-                            panel_heading_markdown(_shown, _sel.get("flabel") or _shown)
+                            panel_heading_html(_shown, _sel.get("flabel") or _shown),
+                            unsafe_allow_html=True,
                         )
                         # What was selected, not merely that it was an edge:
                         # relations, restrictions and object properties are all

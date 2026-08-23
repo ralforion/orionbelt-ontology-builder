@@ -17,7 +17,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from orionbelt_ontology_builder.app import panel_heading_markdown
+from orionbelt_ontology_builder.app import panel_heading_html
 
 URL = "https://webeep.polimi.it/course/view.php?id=123456"
 CUT = URL[:30] + "..."
@@ -108,7 +108,7 @@ def test_every_node_selection_the_viewer_sends_carries_it():
 
 
 def _heading(at):
-    headings = [m.value for m in at.markdown if m.value.startswith("**")]
+    headings = [m.value for m in at.markdown if m.value.startswith("<p>")]
     assert headings, "the details panel drew no heading"
     return headings[0]
 
@@ -116,28 +116,55 @@ def _heading(at):
 def test_the_heading_links_the_cut_text_to_the_whole_url():
     """The regression: the heading was the cut label as plain text, which
     Streamlit linkified — href and all — to ``https://webeep.polimi.it/cours``.
-    An explicit link keeps the short text and lands on the whole URL, and
-    markdown does not linkify inside a link's own text."""
-    assert _heading(_run(select=True)) == f"**[{CUT}](<{URL}>)**"
+    The link is built here now: short text, whole destination."""
+    assert _heading(_run(select=True)) == (
+        f'<p><strong><a href="{URL}" target="_blank">{CUT}</a></strong></p>'
+    )
 
 
 def test_a_value_that_was_never_cut_reads_the_same():
     short = "https://ex.org/a"
-    assert _heading(_run(select=True, value=short)) == f"**[{short}](<{short}>)**"
+    assert _heading(_run(select=True, value=short)) == (
+        f'<p><strong><a href="{short}" target="_blank">{short}</a></strong></p>'
+    )
+
+
+def test_a_value_that_only_starts_with_a_url_is_not_linked_at_all():
+    """Prose beginning with a URL has no whole URL to link to, and cutting it
+    leaves the same bare-URL text that started this. It is a block of HTML, and
+    markdown copies a block through raw — so Streamlit's linkifier never sees
+    it. Inline HTML would not do: markdown parses the text between inline tags,
+    and the linkifier put its own <a> inside ours."""
+    prose = f"{URL} notes"
+    heading = _heading(_run(select=True, value=prose))
+    assert heading == f"<p><strong>{prose[:30]}...</strong></p>"
+    assert "<a" not in heading
+
+
+def test_the_heading_is_a_block_so_markdown_leaves_it_alone():
+    """The whole guard rests on this: an HTML block starts the line."""
+    for heading in (
+        panel_heading_html("x", "x"),
+        panel_heading_html("x", "https://ex.org/x"),
+    ):
+        assert heading.startswith("<p>")
+        assert "\n" not in heading
 
 
 def test_a_plain_label_is_not_a_link():
-    assert panel_heading_markdown("Course", "Course") == "**Course**"
+    assert panel_heading_html("Course", "Course") == "<p><strong>Course</strong></p>"
 
 
-def test_a_label_that_reads_as_markdown_is_escaped():
-    """The label is the user's own text, and it is markdown now."""
-    assert panel_heading_markdown("a_b*c", "a_b*c") == "**a\\_b\\*c**"
-    assert panel_heading_markdown("[x](y)", "[x](y)") == "**\\[x\\](y)**"
+def test_a_label_is_escaped_not_rendered():
+    """The label is the user's own text, and it lands in HTML."""
+    assert panel_heading_html("<i>x</i>", "<i>x</i>") == (
+        "<p><strong>&lt;i&gt;x&lt;/i&gt;</strong></p>"
+    )
+    quoted = panel_heading_html("cut", 'https://ex.org/"onmouseover=alert(1)')
+    assert '"onmouseover' not in quoted
 
 
 def test_only_web_urls_become_links():
-    """A value that merely starts like a URL but carries spaces is prose, and
-    ``javascript:`` is not a destination this heading ever offers."""
-    assert "](" not in panel_heading_markdown("see", "see https://ex.org/a")
-    assert "](" not in panel_heading_markdown("x", "javascript:alert(1)")
+    """``javascript:`` is not a destination this heading ever offers."""
+    assert "<a" not in panel_heading_html("x", "javascript:alert(1)")
+    assert "<a" not in panel_heading_html("x", "ftp://ex.org/x")
