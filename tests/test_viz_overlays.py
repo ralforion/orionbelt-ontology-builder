@@ -51,6 +51,29 @@ def test_the_panel_cap_pays_for_its_own_offset():
     assert "box-sizing: border-box" in css
 
 
+def test_an_open_dropdown_stops_the_card_scrolling():
+    """A card that scrolls is the boundary a dropdown is placed inside, and with
+    no room below the input BaseWeb flips the list up over the input and the
+    controls above it (issue #315). Both scrolling cards have to let go while a
+    list is open — it is portaled out of them anyway."""
+    css = graph_overlay_css(dark=False)
+    escapes = re.findall(
+        r"([^{}]*:has\(\s*\[aria-expanded=\"true\"\]\s*\)[^{}]*)\{([^}]*)\}", css
+    )
+    assert escapes, "nothing lets a dropdown out of the cards"
+    selectors, body = escapes[0]
+    assert "overflow: visible" in body
+    assert ".st-key-viz_hide_panel" in selectors, "the details panel still scrolls"
+    assert ".st-key-viz_filter_nodes" in selectors, "Node options still scrolls"
+
+
+def test_the_cards_scroll_when_no_dropdown_is_open():
+    """The escape hatch is only that: a long panel still scrolls inside its card
+    rather than running past the canvas."""
+    css = graph_overlay_css(dark=False)
+    assert css.count("overflow-y: auto") == 2
+
+
 def test_the_canvas_does_not_pay_for_the_column_gap():
     """Every row on this page is separated by the column's 16px gap. Above the
     canvas that gap reads as a band, because the canvas already opens with a

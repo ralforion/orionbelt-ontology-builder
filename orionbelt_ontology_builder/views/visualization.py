@@ -124,6 +124,18 @@ def graph_overlay_css(dark: bool) -> str:
         border-radius: 10px;
         box-shadow: {shadow};
     }}
+    /* A dropdown inside a card opens into the card's own scrollport, and with
+       no room left below the input BaseWeb flips the list upwards — over the
+       input being typed into and the controls above it (issue #315). The list
+       is portaled out of the card anyway, so while one is open the card stops
+       scrolling and the list hangs past its edge instead. */
+    {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-viz_hide_panel):has(
+        [aria-expanded="true"]
+    ),
+    .st-key-viz_filter_nodes details[open]
+        > [data-testid="stExpanderDetails"]:has([aria-expanded="true"]) {{
+        overflow: visible;
+    }}
     /* Panel closed: the reopen toggle alone, in the same corner. */
     {_GRAPH_ROW} > [data-testid="stColumn"]:has(.st-key-viz_show_panel) {{
         position: absolute; top: {_TOOLBAR_CLEARANCE}; right: 0; z-index: 20;
