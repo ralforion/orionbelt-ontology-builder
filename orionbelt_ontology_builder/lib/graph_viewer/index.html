@@ -59,6 +59,21 @@ function sendToStreamlit(type, data) {
     window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data || {}), "*");
 }
 
+// Close the Node options card when something in the graph is selected. The card
+// floats over the top of the canvas, so a click means the user has moved on to
+// the graph itself and the card is now in the way — the details panel beside it
+// is where the click's answer appears. Closed the way the user would close it,
+// by clicking the expander's own summary, so Streamlit's state follows and the
+// card does not spring back open on the next rerun. The parent document is the
+// same origin (see measureReserve); if it ever is not, the card simply stays.
+function closeNodeOptions() {
+    try {
+        var summary = window.parent.document.querySelector(
+            '.st-key-viz_filter_nodes details[open] > summary');
+        if (summary) summary.click();
+    } catch (e) { /* cross-origin: leave the card as it is */ }
+}
+
 // Report a Find-selected node to Streamlit, matching the selectNode payload, so
 // the details/status panel reflects the found node. selectNodes() alone does not
 // fire selectNode, so a Find focus would otherwise leave the panel out of sync
@@ -1071,6 +1086,7 @@ function renderGraph(args) {
     network.on('selectNode', function(params) {
         var nd = nodes.get(params.nodes[0]);
         hlJustSelected = true;
+        closeNodeOptions();
         applyNeighbourHighlight(params.nodes[0]);
         // flabel is the untruncated label for nodes whose drawn label is cut to
         // fit (annotation values, literals); the details panel shows that one.
@@ -1080,6 +1096,7 @@ function renderGraph(args) {
         if (params.nodes.length === 0 && params.edges.length > 0) {
             // An edge-only selection means no node is selected, and vis does not
             // fire deselectNode on the way there.
+            closeNodeOptions();
             clearNeighbourHighlight();
             var ed = edges.get(params.edges[0]);
             sendSelection({ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true});
