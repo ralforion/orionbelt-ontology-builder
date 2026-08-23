@@ -2935,6 +2935,29 @@ def _panel_add_parent(classes, ntype, ename):
     return None
 
 
+#: Everything markdown would read as syntax in a heading built from user text.
+_MD_SPECIALS = re.compile(r"([\\`*_\[\]<>])")
+
+
+def panel_heading_markdown(shown: str, full: str) -> str:
+    """The details panel's heading: a node's label, linking to its whole value.
+
+    A node draws a label cut to fit on it, and the heading is that label. As
+    plain text Streamlit linkifies a URL in it, so a cut URL became a link to
+    the cut URL and clicking it opened the wrong page (issue #313). Written as
+    an explicit link instead: the text stays as short as the node drew it, the
+    destination is the value in full, and markdown does not linkify inside a
+    link's own text, so nothing rewrites it back.
+    """
+    text = _MD_SPECIALS.sub(r"\\\1", shown or full)
+    is_url = full.startswith(("http://", "https://")) and not any(
+        c.isspace() for c in full
+    )
+    if not is_url:
+        return f"**{text}**"
+    return f"**[{text}](<{full.replace('>', '%3E')}>)**"
+
+
 def panel_subject_uri(ntype, ename, classes, object_props, data_props, individuals):
     """The URI of the selected node, when it is something to hang more off.
 
