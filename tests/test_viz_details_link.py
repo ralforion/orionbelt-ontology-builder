@@ -90,18 +90,24 @@ def test_the_node_keeps_the_whole_value_behind_its_cut_label():
 
 
 def test_every_node_selection_the_viewer_sends_carries_it():
-    """A click and a Find & centre both fill the panel, so both payloads need
-    it: whichever one forgot would put the cut link back."""
+    """A click, a Find & centre and a modifier-click all fill the panel, so all
+    of them need it: whichever one forgot would put the cut link back. They
+    share one builder, so the guard is that the builder carries flabel and that
+    nothing hand-rolls a payload beside it."""
     src = _VIEWER.read_text(encoding="utf-8")
-    sites = list(re.finditer(r"(?<!f)label: nd\.label", src))
-    assert len(sites) == 2, (
-        f"expected 2 node selection payloads, found {len(sites)} — "
-        "a new one must send flabel too (issue #313)"
+    builder = src[src.index("function selectionPayload(") :]
+    builder = builder[: builder.index("\n}\n")]
+    assert "flabel: nd.flabel" in builder, (
+        "the selection payload sends the drawn label without the whole one"
     )
-    for site in sites:
-        assert "flabel: nd.flabel" in src[site.start() : site.start() + 200], (
-            "a selection payload sends the drawn label without the whole one"
-        )
+    hand_rolled = re.findall(r"(?<!f)label: nd\.label", src)
+    assert len(hand_rolled) == 1, (
+        f"{len(hand_rolled) - 1} selection payload(s) are built outside "
+        "selectionPayload() — they must carry flabel too (issue #313)"
+    )
+    assert len(re.findall(r"selectionPayload\(", src)) >= 4, (
+        "a path that reports a node no longer goes through the builder"
+    )
 
 
 # --- the heading ------------------------------------------------------------

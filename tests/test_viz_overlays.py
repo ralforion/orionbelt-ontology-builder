@@ -129,21 +129,46 @@ def test_the_storage_component_rule_names_the_package_that_is_imported():
     assert "from streamlit_local_storage import" in (_PKG / "ui.py").read_text()
 
 
+def _button_rules(viewer: str, button: str) -> list[str]:
+    """Every rule body whose selector is that button itself.
+
+    The toolbar buttons share one rule for all but their ``right`` offset, so a
+    value can live in either the shared rule or the button's own. Selectors that
+    merely *contain* the id are skipped, or ``#download-btn svg`` would answer
+    for the button's own height.
+    """
+    style = viewer[viewer.index("<style>") : viewer.index("</style>")]
+    return [
+        body
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", style)
+        if any(part.strip() == button for part in selector.split(","))
+    ]
+
+
 def _toolbar_bottom_px(viewer: str) -> int:
     """How far down the canvas its own toolbar reaches, from the buttons' CSS."""
     bottoms = []
-    for button in ("#download-btn", "#fullscreen-btn"):
-        rule = viewer[viewer.index(button + " {") :]
-        rule = rule[: rule.index("}")]
-        top = re.search(r"top:\s*(\d+)px", rule)
-        height = re.search(r"height:\s*(\d+)px", rule)
-        assert top and height, f"{button} no longer sizes itself in px"
-        bottoms.append(int(top.group(1)) + int(height.group(1)))
+    for button in ("#download-btn", "#fullscreen-btn", "#copy-btn"):
+        rules = _button_rules(viewer, button)
+        assert rules, f"{button} has no CSS of its own"
+
+        def _px(prop, rules=rules):
+            for body in rules:
+                found = re.search(rf"{prop}:\s*(\d+)px", body)
+                if found:
+                    return int(found.group(1))
+            return None
+
+        top, height = _px("top"), _px("height")
+        assert top is not None and height is not None, (
+            f"{button} no longer sizes itself in px"
+        )
+        bottoms.append(top + height)
     return max(bottoms)
 
 
 def test_the_overlays_clear_the_canvas_toolbar():
-    """The canvas keeps download and fullscreen in the corner the cards use.
+    """The canvas keeps its own buttons in the corner the cards use.
 
     The overlays live outside the iframe, so they win every hit test over those
     buttons — covering one is enough to make it unclickable, with nothing on

@@ -1,5 +1,7 @@
 """The visualization page."""
 
+import html
+import json
 import logging
 
 import streamlit as st
@@ -74,6 +76,84 @@ _GRAPH_ROW = '[data-testid="stHorizontalBlock"]:has(.st-key-graph_viewer)'
 # they win every hit test, so they start below the toolbar instead of on top of
 # it. test_viz_overlays.py keeps this in step with the buttons' own CSS.
 _TOOLBAR_CLEARANCE = "2.75rem"
+
+
+#: The clipboard icon the canvas uses, so both copies read as the same action.
+COPY_ICON_PATH = (
+    "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 "
+    "2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"
+)
+
+
+def status_bar_copy_html(text: str) -> str:
+    """The copy button that sits at the end of the status bar (issue #312).
+
+    It takes the whole line the bar reports — the ellipsis is exactly what makes
+    that worth having — where the canvas button takes only what the selection is
+    called. Two buttons, two answers, both a single click.
+
+    It is a little iframe of its own because Streamlit strips ``onclick`` from
+    the HTML it renders: the clipboard is reachable only from real script, and
+    the alternative was a button that could merely open something to copy out
+    of. The async clipboard is used where there is one, and the old
+    selection-based copy where there is not (the desktop webview).
+    """
+    # The text lands inside a <script>, where "</script>" in a value would end
+    # the block early and spill the rest into the page as markup.
+    payload = json.dumps(text).replace("</", "<\\/")
+    return f"""<style>
+    html, body {{ margin: 0; padding: 0; background: transparent; }}
+    #copy {{
+        width: 100%; height: 36px; border: none; background: transparent;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; opacity: 0.75; padding: 0;
+    }}
+    #copy:hover {{ opacity: 1; }}
+    #copy svg {{ width: 16px; height: 16px; fill: #fff; }}
+    </style>
+    <button id="copy" title="Copy this line">
+        <svg viewBox="0 0 24 24"><path d="{COPY_ICON_PATH}"/></svg>
+    </button>
+    <script>
+    var TEXT = {payload};
+    var COPY = '<path d="{COPY_ICON_PATH}"/>';
+    var DONE = '<path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>';
+    var btn = document.getElementById('copy');
+    function flash(ok) {{
+        btn.querySelector('svg').innerHTML = ok ? DONE : COPY;
+        btn.title = ok ? 'Copied' : 'Could not copy — select the text instead';
+        setTimeout(function () {{
+            btn.querySelector('svg').innerHTML = COPY;
+            btn.title = 'Copy this line';
+        }}, 1400);
+    }}
+    function legacy() {{
+        try {{
+            var ta = document.createElement('textarea');
+            ta.value = TEXT;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        }} catch (e) {{ return false; }}
+    }}
+    btn.addEventListener('click', function () {{
+        try {{
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(TEXT).then(
+                    function () {{ flash(true); }},
+                    function () {{ flash(legacy()); }}
+                );
+                return;
+            }}
+        }} catch (e) {{ /* no async clipboard here */ }}
+        flash(legacy());
+    }});
+    </script>"""
 
 
 def graph_overlay_css(dark: bool) -> str:
@@ -1983,6 +2063,16 @@ def render_visualization():
                     autofit=fit,
                     theme=_gv_theme,
                     selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
+                    # What the canvas copy button offers after a rebuild. The
+                    # component restores a selected *node* by id and can read
+                    # the rest off it, but an edge selection has no id to
+                    # restore — without this the button vanished on the next
+                    # rerun while the edge was still selected (issue #312).
+                    copy_text=(
+                        (_prev_sel.get("flabel") or _prev_sel.get("label") or "")
+                        if _prev_has_sel
+                        else ""
+                    ),
                     # Find & centre target + a change-seq, so the component
                     # re-centres only on a fresh pick (issue #144).
                     focus_node=_find_id,
@@ -2195,10 +2285,19 @@ def render_visualization():
                         )
             else:
                 # Status bar under the graph (shown when the panel is hidden).
+                # The line is one row and ellipsises what does not fit, so the
+                # whole of it goes in the tooltip — otherwise the tail of an
+                # annotation's value can be neither read nor selected (#312).
+                _bar_title = ""
                 if has_selection:
+                    _full_label = _sel.get("flabel") or _sel.get("label", "")
                     title_text = (_sel.get("title") or "").replace("\n", " | ")
                     prefix = "Edge: " if _sel.get("isEdge") else ""
-                    sel_html = f"<b>{prefix}{_sel.get('label', '')}</b> — {title_text}"
+                    _bar_title = f"{prefix}{_full_label}"
+                    sel_html = f"<b>{html.escape(_bar_title)}</b>"
+                    if title_text:
+                        _bar_title += f" — {title_text}"
+                        sel_html += f" — {html.escape(title_text)}"
                 else:
                     sel_html = (
                         "Click a node or edge to see details · "
@@ -2222,6 +2321,7 @@ def render_visualization():
                     """<style>
             div[data-testid="stLayoutWrapper"]:has(#graph-status-bar),
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar),
+            div[data-testid="stVerticalBlockBorderWrapper"]:has(#graph-status-bar),
             div[data-testid="stElementContainer"]:has(#graph-status-bar) {
                 position: sticky !important; bottom: 0.75rem; z-index: 20;
             }
@@ -2238,6 +2338,22 @@ def render_visualization():
                 padding: 0 16px !important; line-height: 36px !important;
                 margin: 0 !important;
             }
+            /* The copy button's iframe, laid over the end of the black strip
+               it belongs to. Both live in the same container, which is the one
+               thing it can be positioned against in either layout — beside the
+               View button in a column, or alone in the page block. Out of the
+               flow, so the row stays one bar tall and the bar does not move
+               when a selection gives it a button. */
+            .st-key-graph_status_cell { position: relative; }
+            .st-key-graph_status_cell [data-testid="stElementContainer"]:has([data-testid="stIFrame"]) {
+                position: absolute !important; top: 0; right: 4px;
+                width: 36px !important; height: 36px !important;
+                min-height: 0 !important; z-index: 21;
+            }
+            .st-key-graph_status_cell [data-testid="stIFrame"] {
+                width: 36px !important; height: 36px !important;
+                display: block; border: none;
+            }
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) [data-testid="stVerticalBlockBorderWrapper"] {
                 height: 36px !important; overflow: hidden;
             }
@@ -2248,17 +2364,43 @@ def render_visualization():
                     unsafe_allow_html=True,
                 )
 
+                def _draw_status_bar(alone):
+                    """The bar and the copy button that sits on it.
+
+                    Rounded on both ends when it is the whole row, square on the
+                    right when a button abuts it. The two go in a container of
+                    their own so the button has one thing to be positioned
+                    against, whichever layout this is — a column beside the View
+                    button, or the page block with the row to itself.
+                    """
+                    radius = "4px" if alone else "4px 0 0 4px"
+                    # The copy button is laid over the right end of the strip,
+                    # so the line stops short of it rather than running under.
+                    pad = "6px 44px 6px 12px" if _bar_title else "6px 12px"
+                    tip = f' title="{html.escape(_bar_title, quote=True)}"'
+                    cell = st.container(key="graph_status_cell")
+                    cell.markdown(
+                        f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:{pad};'
+                        f"border-radius:{radius};font-size:14px;display:flex;align-items:center;gap:8px;"
+                        f'height:36px;">'
+                        f'<span{tip if _bar_title else ""} style="flex:1;overflow:hidden;'
+                        f'text-overflow:ellipsis;white-space:nowrap;">{sel_html}</span>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    # Inside the black strip, at its end. Its own iframe, laid
+                    # over the bar by the CSS above — the bar itself is markdown
+                    # and Streamlit strips the script a copy button needs.
+                    if _bar_title:
+                        with cell:
+                            st.components.v1.html(
+                                status_bar_copy_html(_bar_title), height=36
+                            )
+
                 if show_view:
                     col_info, col_btn = st.columns([7, 2])
                     with col_info:
-                        st.markdown(
-                            f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:6px 12px;'
-                            f"border-radius:4px 0 0 4px;font-size:14px;display:flex;align-items:center;gap:8px;"
-                            f'height:36px;">'
-                            f'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sel_html}</span>'
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
+                        _draw_status_bar(alone=False)
                     with col_btn:
                         _btn_label = (
                             "Open full editor"
@@ -2270,14 +2412,7 @@ def render_visualization():
                         ):
                             _open_full_editor(ntype, ename)
                 else:
-                    st.markdown(
-                        f'<div id="graph-status-bar" style="background:#1e1e1e;color:#fff;padding:6px 12px;'
-                        f"border-radius:4px;font-size:14px;display:flex;align-items:center;gap:8px;"
-                        f'height:36px;">'
-                        f'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sel_html}</span>'
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
+                    _draw_status_bar(alone=True)
 
     if _viz_tab == "Class Hierarchy":
         st.subheader("Class Hierarchy (Text)")
