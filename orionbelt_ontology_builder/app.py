@@ -180,6 +180,7 @@ from .ui import (  # noqa: F401
     log_error,
     maybe_restore_autosave,
     missing_required,
+    panel_heading_html,
     panel_subject_uri,
     parent_option_index,
     parse_filter_text,

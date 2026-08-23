@@ -44,6 +44,7 @@ from ..ui import (
     follow_renamed_node_ids,
     graph_node_cap,
     local_store,
+    panel_heading_html,
     panel_subject_uri,
     parse_filter_text,
     prioritise_find_target,
@@ -193,6 +194,10 @@ def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
             font={"size": 10, "color": "#f0f0f0"},
             ntype="Annotation",
             ename=ann_ename,
+            # The drawn label is cut to fit the node; the details panel wants the
+            # whole value. A cut URL there rendered as a link to the cut URL,
+            # which opens the wrong page (issue #313).
+            flabel=ann["value"],
         )
         net.add_edge(
             subject_node_id,
@@ -1642,6 +1647,7 @@ def render_visualization():
                                 shape="box",
                                 size=8,
                                 font={"size": 9, "color": "#333333"},
+                                flabel=o_str,
                             )
                             _triple_new += 1
                             node_count += 1
@@ -2132,7 +2138,14 @@ def render_visualization():
                         )
                         _render_panel_add_buttons(classes, None, None, None)
                     else:
-                        st.markdown(f"**{_sel.get('label', '')}**")
+                        # The node's own label reads best here, but it is cut
+                        # to fit the node — so the link under it is the value in
+                        # full, not the cut text (issue #313).
+                        _shown = _sel.get("label", "")
+                        st.markdown(
+                            panel_heading_html(_shown, _sel.get("flabel") or _shown),
+                            unsafe_allow_html=True,
+                        )
                         # What was selected, not merely that it was an edge:
                         # relations, restrictions and object properties are all
                         # drawn as edges and want telling apart (issue #152).

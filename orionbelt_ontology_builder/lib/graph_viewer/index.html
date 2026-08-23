@@ -70,7 +70,8 @@ function sendFindSelection(id) {
         if (nd) {
             sendToStreamlit("streamlit:setComponentValue", {
                 value: {nodeId: id, ntype: nd.ntype || null, ename: nd.ename || null,
-                        label: nd.label, title: nd.title || '', selected: true}
+                        label: nd.label, flabel: nd.flabel || null,
+                        title: nd.title || '', selected: true}
             });
         }
     } catch (e) {}
@@ -1071,7 +1072,9 @@ function renderGraph(args) {
         var nd = nodes.get(params.nodes[0]);
         hlJustSelected = true;
         applyNeighbourHighlight(params.nodes[0]);
-        sendSelection({nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, title: nd.title || '', selected: true});
+        // flabel is the untruncated label for nodes whose drawn label is cut to
+        // fit (annotation values, literals); the details panel shows that one.
+        sendSelection({nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, flabel: nd.flabel || null, title: nd.title || '', selected: true});
     });
     network.on('selectEdge', function(params) {
         if (params.nodes.length === 0 && params.edges.length > 0) {
