@@ -2197,9 +2197,10 @@ def render_visualization():
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 # The line is one row and ellipsises what does not fit, so the
-                # whole of it goes in the tooltip and, unwrapped, into the copy
-                # popover beside it — an annotation's value is the thing worth
-                # copying and it is exactly what the ellipsis eats (issue #312).
+                # whole of it goes in the tooltip, and what the selection is
+                # called goes into the copy popover beside it — an annotation's
+                # value is the thing worth copying and it is exactly what the
+                # ellipsis eats (issue #312).
                 _bar_title = ""
                 _copy_text = ""
                 if has_selection:
@@ -2211,9 +2212,7 @@ def render_visualization():
                     if title_text:
                         _bar_title += f" — {title_text}"
                         sel_html += f" — {html.escape(title_text)}"
-                    _copy_text = "\n".join(
-                        part for part in (_full_label, _sel.get("title") or "") if part
-                    )
+                    _copy_text = _full_label
                 else:
                     sel_html = (
                         "Click a node or edge to see details · "

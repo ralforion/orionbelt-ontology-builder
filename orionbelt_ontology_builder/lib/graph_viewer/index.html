@@ -81,16 +81,12 @@ var COPY_ICON = '<path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9
 var DONE_ICON = '<path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>';
 var copyText = '';
 
-// A selection in full: the whole label (a node draws a cut one — see flabel)
-// and then the tooltip's own lines, so the value and what it hangs on come out
-// reading the way they do on screen.
+// What a selection copies: what it is called, in full — a node draws a label cut
+// to fit it, and flabel carries the whole one. Just that: the tooltip repeats the
+// name and adds a sentence about it, which is worth reading on screen and not
+// worth pasting.
 function selectionText(d) {
-    if (!d) return '';
-    var lines = [];
-    var label = d.flabel || d.label || '';
-    if (label) lines.push(String(label));
-    if (d.title) lines.push(String(d.title));
-    return lines.join('\n');
+    return d ? String(d.flabel || d.label || '') : '';
 }
 
 function setCopyTarget(text) {

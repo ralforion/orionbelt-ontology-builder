@@ -3,9 +3,9 @@
 Both places the selection is reported cut it to fit: the node draws a label
 short enough for the node, and the bar under the graph ellipsises its one line.
 An annotation's value is usually the thing worth copying and is exactly what
-those cuts eat. So the canvas has a copy button that hands over the whole
-selection, and the bar carries the whole line in its tooltip with a copy
-popover beside it.
+those cuts eat. So the canvas has a copy button that hands over what the
+selection is called, in full, and the bar carries the whole line in its tooltip
+with a copy popover beside it.
 
 The bar half runs the real page through AppTest, as test_viz_details_link does.
 The canvas half is browser behaviour, pinned at the source level the way
@@ -37,14 +37,15 @@ def _viewer() -> str:
 # --- the button on the canvas ------------------------------------------------
 
 
-def test_the_canvas_offers_the_selection_in_full():
-    """The whole label, not the one the node drew, and the tooltip's own lines
-    under it — so the value and what it hangs on read as they do on screen."""
+def test_the_canvas_copies_the_whole_label_and_only_that():
+    """The label the node drew is cut to fit it, so the whole one is copied —
+    and only that. The tooltip repeats the name and adds a sentence about it,
+    which is worth reading on screen and not worth pasting."""
     src = _viewer()
     body = src[src.index("function selectionText(") :]
     body = body[: body.index("\n}\n")]
     assert "d.flabel || d.label" in body, "the copy hands over the cut label"
-    assert "d.title" in body, "the copy drops everything but the label"
+    assert "d.title" not in body, "the copy carries the tooltip along with it"
 
 
 def test_the_button_comes_and_goes_with_the_selection():
@@ -139,10 +140,11 @@ def test_the_bar_shows_the_whole_label_not_the_node_s_cut_one():
     assert CUT not in bar
 
 
-def test_the_copy_popover_holds_the_selection_unwrapped():
-    """As a code block, which is what carries Streamlit's own copy button."""
+def test_the_copy_popover_holds_the_whole_value():
+    """As a code block, which is what carries Streamlit's own copy button. The
+    value in full, not the line the bar drew and cut."""
     codes = [c.value for c in _run().code]
-    assert f"{URL}\nwebeep: {URL}" in codes, codes
+    assert URL in codes, codes
 
 
 def test_the_bar_escapes_what_it_is_given():
