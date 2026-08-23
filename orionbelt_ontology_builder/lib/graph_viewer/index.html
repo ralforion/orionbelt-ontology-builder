@@ -852,8 +852,18 @@ function renderGraph(args) {
                 pinnedIds.push(n.id);
             }
         });
+        // Nothing went away, so everything the camera was framing is still
+        // there, pinned where it was: keep the view instead of letting vis
+        // re-frame the whole graph once physics settles. Adding a subclass to
+        // the class you are looking at otherwise zoomed out to the whole
+        // ontology every time, which is the one thing you were not looking at
+        // (issue #314). When nodes *did* go away the old frame can hold nothing
+        // at all — a filter swapped for another set places every node afresh —
+        // so there vis still re-frames.
+        var _keptAll = Object.keys(_raw.pos).length === pinnedIds.length;
+        var _hold = !!savedView && _keptAll;
         var iters2 = Math.min(Math.max(nCount * 3, 150), 500);
-        options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50, fit: !_pin };
+        options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50, fit: !_pin && !_hold };
     } else {
         // Fresh layout (Render, or nothing cached): deterministic thanks to the
         // pinned randomSeed set in Python (issue #141).
