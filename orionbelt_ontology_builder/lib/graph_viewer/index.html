@@ -159,6 +159,21 @@ function closeNodeOptions() {
     } catch (e) { /* cross-origin: leave the card as it is */ }
 }
 
+// What Streamlit is told about a selected node. flabel is the untruncated label
+// for nodes whose drawn one is cut to fit (annotation values, literals); the
+// details panel and the copy button both want that one.
+function selectionPayload(id, nd) {
+    return {
+        nodeId: id,
+        ntype: nd.ntype || null,
+        ename: nd.ename || null,
+        label: nd.label,
+        flabel: nd.flabel || null,
+        title: nd.title || '',
+        selected: true
+    };
+}
+
 // Report a Find-selected node to Streamlit, matching the selectNode payload, so
 // the details/status panel reflects the found node. selectNodes() alone does not
 // fire selectNode, so a Find focus would otherwise leave the panel out of sync
@@ -169,11 +184,7 @@ function sendFindSelection(id) {
         var nd = ds && ds.get(id);
         if (nd) {
             setCopyTarget(selectionText(nd));
-            sendToStreamlit("streamlit:setComponentValue", {
-                value: {nodeId: id, ntype: nd.ntype || null, ename: nd.ename || null,
-                        label: nd.label, flabel: nd.flabel || null,
-                        title: nd.title || '', selected: true}
-            });
+            sendToStreamlit("streamlit:setComponentValue", {value: selectionPayload(id, nd)});
         }
     } catch (e) {}
 }
@@ -1167,9 +1178,7 @@ function renderGraph(args) {
         setCopyTarget(selectionText(nd));
         closeNodeOptions();
         applyNeighbourHighlight(params.nodes[0]);
-        // flabel is the untruncated label for nodes whose drawn label is cut to
-        // fit (annotation values, literals); the details panel shows that one.
-        sendSelection({nodeId: params.nodes[0], ntype: nd.ntype || null, ename: nd.ename || null, label: nd.label, flabel: nd.flabel || null, title: nd.title || '', selected: true});
+        sendSelection(selectionPayload(params.nodes[0], nd));
     });
     network.on('selectEdge', function(params) {
         if (params.nodes.length === 0 && params.edges.length > 0) {
@@ -1207,13 +1216,18 @@ function renderGraph(args) {
         if (!params.nodes.length) return;
         var ev = params.event && params.event.srcEvent;
         if (ev && (ev.altKey || ev.ctrlKey || ev.metaKey)) {
+            // The focus request is the value Streamlit keeps, so it carries the
+            // selection with it: on its own it left the panel, and the copy
+            // button, reporting whatever was picked before this click — which
+            // the rebuild then restored over the node just clicked.
+            var mnd = nodes.get(params.nodes[0]);
+            setCopyTarget(selectionText(mnd));
             sendToStreamlit("streamlit:setComponentValue", {
-                value: {
+                value: Object.assign(selectionPayload(params.nodes[0], mnd), {
                     focusRequest: true,
                     reqId: Date.now(),
-                    nodeId: params.nodes[0],
                     replace: !!ev.altKey
-                }
+                })
             });
             return;
         }

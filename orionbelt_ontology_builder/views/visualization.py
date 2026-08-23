@@ -2197,12 +2197,9 @@ def render_visualization():
             else:
                 # Status bar under the graph (shown when the panel is hidden).
                 # The line is one row and ellipsises what does not fit, so the
-                # whole of it goes in the tooltip, and what the selection is
-                # called goes into the copy popover beside it — an annotation's
-                # value is the thing worth copying and it is exactly what the
-                # ellipsis eats (issue #312).
+                # whole of it goes in the tooltip — otherwise the tail of an
+                # annotation's value can be neither read nor selected (#312).
                 _bar_title = ""
-                _copy_text = ""
                 if has_selection:
                     _full_label = _sel.get("flabel") or _sel.get("label", "")
                     title_text = (_sel.get("title") or "").replace("\n", " | ")
@@ -2212,7 +2209,6 @@ def render_visualization():
                     if title_text:
                         _bar_title += f" — {title_text}"
                         sel_html += f" — {html.escape(title_text)}"
-                    _copy_text = _full_label
                 else:
                     sel_html = (
                         "Click a node or edge to see details · "
@@ -2247,16 +2243,10 @@ def render_visualization():
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) button[kind] ,
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) button {
                 background: #4CAF50 !important; color: white !important;
-                border: none !important; border-radius: 0 !important;
+                border: none !important; border-radius: 0 4px 4px 0 !important;
                 height: 36px !important; min-height: 36px !important; max-height: 36px !important;
                 padding: 0 16px !important; line-height: 36px !important;
                 margin: 0 !important;
-            }
-            /* Only the far end of the row is rounded: with a View button and a
-               copy button abutting the bar, rounding every one of them puts a
-               seam in the middle of the row. */
-            div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) [data-testid="stColumn"]:last-child button {
-                border-radius: 0 4px 4px 0 !important;
             }
             div[data-testid="stHorizontalBlock"]:has(#graph-status-bar) [data-testid="stVerticalBlockBorderWrapper"] {
                 height: 36px !important; overflow: hidden;
@@ -2283,25 +2273,15 @@ def render_visualization():
                         unsafe_allow_html=True,
                     )
 
-                # The copy button rides at the end of the row, so the value the
-                # ellipsis ate can still be taken away (issue #312). It holds the
-                # selection as a code block, which brings Streamlit's own
-                # copy-to-clipboard button with it — st.markdown's HTML is
-                # stripped of onclick, so a hand-written one would do nothing.
+                # Copying lives on the canvas, not here: Streamlit strips
+                # onclick from the HTML it renders, so a button in this row
+                # cannot reach the clipboard — it could only open something to
+                # copy out of. The canvas button does it in one click and is
+                # there whichever way the panel is (issue #312).
                 if show_view:
-                    col_info, col_btn, col_copy = st.columns([7, 2, 1])
-                elif has_selection:
-                    col_btn = None
-                    col_info, col_copy = st.columns([9, 1])
-                else:
-                    col_info = col_btn = col_copy = None
-
-                if col_info is None:
-                    _draw_status_bar(alone=True)
-                else:
+                    col_info, col_btn = st.columns([7, 2])
                     with col_info:
                         _draw_status_bar(alone=False)
-                if col_btn is not None:
                     with col_btn:
                         _btn_label = (
                             "Open full editor"
@@ -2312,16 +2292,8 @@ def render_visualization():
                             _btn_label, key="graph_view_btn", use_container_width=True
                         ):
                             _open_full_editor(ntype, ename)
-                if col_copy is not None:
-                    with (
-                        col_copy,
-                        st.popover(
-                            "⧉",
-                            help="Copy what is selected",
-                            use_container_width=True,
-                        ),
-                    ):
-                        st.code(_copy_text, language=None, wrap_lines=True)
+                else:
+                    _draw_status_bar(alone=True)
 
     if _viz_tab == "Class Hierarchy":
         st.subheader("Class Hierarchy (Text)")

@@ -4,8 +4,9 @@ Both places the selection is reported cut it to fit: the node draws a label
 short enough for the node, and the bar under the graph ellipsises its one line.
 An annotation's value is usually the thing worth copying and is exactly what
 those cuts eat. So the canvas has a copy button that hands over what the
-selection is called, in full, and the bar carries the whole line in its tooltip
-with a copy popover beside it.
+selection is called, in full, and the bar carries the whole line in its tooltip.
+Copying lives on the canvas alone: Streamlit strips onclick from the HTML it
+renders, so a button in the bar could not reach the clipboard at all.
 
 The bar half runs the real page through AppTest, as test_viz_details_link does.
 The canvas half is browser behaviour, pinned at the source level the way
@@ -70,6 +71,22 @@ def test_the_desktop_webview_can_copy_too():
     assert "navigator.clipboard" in body
     assert "legacyCopy(text)" in body, "no fallback when the clipboard API is out"
     assert "execCommand('copy')" in _viewer()
+
+
+def test_a_modifier_click_reports_the_node_it_hit():
+    """Ctrl/Cmd-click and Alt-click ask Python to focus, and that request is the
+    value Streamlit keeps. On its own it left the panel and the copy button on
+    whatever was picked before the click — and the rebuild that followed
+    restored that stale node over the one just clicked."""
+    src = _viewer()
+    handler = src[src.index("network.on('click'") :]
+    handler = handler[: handler.index("focusRequest")]
+    assert "setCopyTarget(selectionText(mnd))" in handler
+    request = src[src.index("focusRequest: true") - 400 :]
+    request = request[: request.index("focusRequest: true") + 200]
+    assert "selectionPayload(params.nodes[0], mnd)" in request, (
+        "the focus request does not carry the node it was made on"
+    )
 
 
 # --- the bar under the graph -------------------------------------------------
@@ -140,11 +157,14 @@ def test_the_bar_shows_the_whole_label_not_the_node_s_cut_one():
     assert CUT not in bar
 
 
-def test_the_copy_popover_holds_the_whole_value():
-    """As a code block, which is what carries Streamlit's own copy button. The
-    value in full, not the line the bar drew and cut."""
-    codes = [c.value for c in _run().code]
-    assert URL in codes, codes
+def test_the_bar_leaves_copying_to_the_canvas():
+    """A button here could only open something to copy out of, and the canvas
+    button already does it in one click, panel open or shut."""
+    at = _run()
+    # Not "no code blocks at all" — the Class Hierarchy tab draws one of its own.
+    assert not [c.value for c in at.code if URL in c.value], (
+        "the bar grew a copy panel again"
+    )
 
 
 def test_the_bar_escapes_what_it_is_given():
