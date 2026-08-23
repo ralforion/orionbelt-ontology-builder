@@ -15,24 +15,20 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #legend .line { display: inline-block; width: 20px; height: 2px; vertical-align: middle; margin-right: 2px; }
 #legend .line.dashed { border-top: 2px dashed; height: 0; }
 #legend .line.solid { border-top: 2px solid; height: 0; }
-#download-btn {
-    position: absolute; top: 8px; right: 48px; z-index: 10;
+#fullscreen-btn, #download-btn, #copy-btn {
+    position: absolute; top: 8px; z-index: 10;
     width: 32px; height: 32px; border: none; border-radius: 6px;
     background: rgba(255,255,255,0.92); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     opacity: 0.7; transition: opacity 0.2s;
 }
-#download-btn:hover { opacity: 1; }
-#download-btn svg { width: 18px; height: 18px; fill: #555; }
-#fullscreen-btn {
-    position: absolute; top: 8px; right: 8px; z-index: 10;
-    width: 32px; height: 32px; border: none; border-radius: 6px;
-    background: rgba(255,255,255,0.92); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    opacity: 0.7; transition: opacity 0.2s;
+#fullscreen-btn { right: 8px; }
+#download-btn { right: 48px; }
+#copy-btn { right: 88px; }
+#fullscreen-btn:hover, #download-btn:hover, #copy-btn:hover { opacity: 1; }
+#fullscreen-btn svg, #download-btn svg, #copy-btn svg {
+    width: 18px; height: 18px; fill: #555;
 }
-#fullscreen-btn:hover { opacity: 1; }
-#fullscreen-btn svg { width: 18px; height: 18px; fill: #555; }
 /* In fullscreen the container fills the screen, so the graph doesn't fall back
    to the browser's default black backdrop. Percentages, not vw/vh: this document
    is a Streamlit component iframe, where vw/vh resolve against the *iframe's*
@@ -52,11 +48,104 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
     <button id="download-btn" title="Download as PNG" style="display:none;" onclick="downloadGraph()">
         <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v6h3.66V9h3.84L12 2z" transform="rotate(180 12 12)"/></svg>
     </button>
+    <button id="copy-btn" title="Copy what is selected" style="display:none;" onclick="copySelection()">
+        <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+    </button>
 </div>
 <script>
 // Streamlit component communication
 function sendToStreamlit(type, data) {
     window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data || {}), "*");
+}
+
+// The canvas buttons all sit on the theme's panel colour with its text colour,
+// and both render paths have to paint them — a re-theme and a rebuild.
+function themeToolbarButtons(theme) {
+    ['fullscreen-btn', 'download-btn', 'copy-btn'].forEach(function (id) {
+        var btn = document.getElementById(id);
+        if (!btn) return;
+        btn.style.background = theme.panel;
+        var svg = btn.querySelector('svg');
+        if (svg) svg.style.fill = theme.text;
+    });
+}
+
+// --- Copy what is selected (issue #312) ------------------------------------
+// The bar under the graph cuts its line to fit and a node's own label is cut to
+// fit the node, so neither can be read in full, let alone copied — and an
+// annotation's value is usually the one thing worth copying. The button on the
+// canvas hands over the whole thing, tooltip lines and all, whichever panel is
+// open. It appears with a selection and goes with it.
+var COPY_TITLE = 'Copy what is selected';
+var COPY_ICON = '<path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>';
+var DONE_ICON = '<path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>';
+var copyText = '';
+
+// A selection in full: the whole label (a node draws a cut one — see flabel)
+// and then the tooltip's own lines, so the value and what it hangs on come out
+// reading the way they do on screen.
+function selectionText(d) {
+    if (!d) return '';
+    var lines = [];
+    var label = d.flabel || d.label || '';
+    if (label) lines.push(String(label));
+    if (d.title) lines.push(String(d.title));
+    return lines.join('\n');
+}
+
+function setCopyTarget(text) {
+    copyText = text || '';
+    var btn = document.getElementById('copy-btn');
+    if (btn) btn.style.display = copyText ? 'flex' : 'none';
+}
+
+// The async clipboard needs a secure context and a permission the desktop
+// webview does not grant, so the old selection-based copy stays as the fallback
+// rather than the button doing nothing there.
+function legacyCopy(text) {
+    try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+function flashCopied(ok) {
+    var btn = document.getElementById('copy-btn');
+    if (!btn) return;
+    var svg = btn.querySelector('svg');
+    if (svg) svg.innerHTML = ok ? DONE_ICON : COPY_ICON;
+    btn.title = ok ? 'Copied' : 'Could not copy — select the text instead';
+    setTimeout(function () {
+        var s2 = btn.querySelector('svg');
+        if (s2) s2.innerHTML = COPY_ICON;
+        btn.title = COPY_TITLE;
+    }, 1400);
+}
+
+function copySelection() {
+    if (!copyText) return;
+    var text = copyText;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(
+                function () { flashCopied(true); },
+                function () { flashCopied(legacyCopy(text)); }
+            );
+            return;
+        }
+    } catch (e) { /* no async clipboard here: fall through */ }
+    flashCopied(legacyCopy(text));
 }
 
 // Close the Node options card when something in the graph is selected. The card
@@ -83,6 +172,7 @@ function sendFindSelection(id) {
         var ds = network && network.body && network.body.data && network.body.data.nodes;
         var nd = ds && ds.get(id);
         if (nd) {
+            setCopyTarget(selectionText(nd));
             sendToStreamlit("streamlit:setComponentValue", {
                 value: {nodeId: id, ntype: nd.ntype || null, ename: nd.ename || null,
                         label: nd.label, flabel: nd.flabel || null,
@@ -326,18 +416,7 @@ function applyTheme(theme) {
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
     document.getElementById('container').style.background = theme.bg;
-    var dlBtn = document.getElementById('download-btn');
-    if (dlBtn) {
-        dlBtn.style.background = theme.panel;
-        var dlSvg = dlBtn.querySelector('svg');
-        if (dlSvg) dlSvg.style.fill = theme.text;
-    }
-    var fsBtn = document.getElementById('fullscreen-btn');
-    if (fsBtn) {
-        fsBtn.style.background = theme.panel;
-        var fsSvg = fsBtn.querySelector('svg');
-        if (fsSvg) fsSvg.style.fill = theme.text;
-    }
+    themeToolbarButtons(theme);
     var legendEl = document.getElementById('legend');
     if (legendEl) { legendEl.style.background = theme.panel; legendEl.style.color = theme.text; }
     if (network) {
@@ -779,16 +858,7 @@ function renderGraph(args) {
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
     document.getElementById('container').style.background = theme.bg;
-    var fsBtn2 = document.getElementById('fullscreen-btn');
-    if (fsBtn2) {
-        fsBtn2.style.background = theme.panel;
-        var fsSvg2 = fsBtn2.querySelector('svg');
-        if (fsSvg2) fsSvg2.style.fill = theme.text;
-    }
-    var dlBtn = document.getElementById('download-btn');
-    dlBtn.style.background = theme.panel;
-    var dlSvg = dlBtn.querySelector('svg');
-    if (dlSvg) dlSvg.style.fill = theme.text;
+    themeToolbarButtons(theme);
 
     var nodeArr = JSON.parse(args.nodes);
     var edges = new vis.DataSet(JSON.parse(args.edges));
@@ -910,6 +980,8 @@ function renderGraph(args) {
     if (pendingSelection) {
         restoreNode = pendingSelection.selected ? (pendingSelection.nodeId || null) : null;
     }
+    setCopyTarget(restoreNode !== null && restoreNode !== undefined
+        ? selectionText(nodes.get(restoreNode)) : '');
     if (restoreNode !== null && restoreNode !== undefined) {
         try { network.selectNodes([restoreNode]); } catch (e) {}
         applyNeighbourHighlight(restoreNode);
@@ -1096,6 +1168,7 @@ function renderGraph(args) {
     network.on('selectNode', function(params) {
         var nd = nodes.get(params.nodes[0]);
         hlJustSelected = true;
+        setCopyTarget(selectionText(nd));
         closeNodeOptions();
         applyNeighbourHighlight(params.nodes[0]);
         // flabel is the untruncated label for nodes whose drawn label is cut to
@@ -1109,14 +1182,17 @@ function renderGraph(args) {
             closeNodeOptions();
             clearNeighbourHighlight();
             var ed = edges.get(params.edges[0]);
+            setCopyTarget(selectionText(ed));
             sendSelection({ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true});
         }
     });
     network.on('deselectNode', function() {
         clearNeighbourHighlight();
+        setCopyTarget('');
         sendSelection({selected: false});
     });
     network.on('deselectEdge', function() {
+        setCopyTarget('');
         sendSelection({selected: false});
     });
 
@@ -1153,6 +1229,7 @@ function renderGraph(args) {
         // deselect has to be published here.
         if (!wasFresh && params.nodes[0] === hlSource) {
             clearNeighbourHighlight();
+            setCopyTarget('');
             try { network.unselectAll(); } catch (e) {}
             try { network.redraw(); } catch (e) {}
             sendSelection({selected: false});
