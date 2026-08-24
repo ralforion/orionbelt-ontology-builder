@@ -156,3 +156,78 @@ def test_the_toast_counts_a_large_batch():
 
 def test_the_toast_is_empty_with_nothing_to_report():
     assert app.viz_new_hidden_message([], "class", "classes") == ""
+
+
+def _renames(kind, pairs):
+    """The rename notes a session would hold for ``old -> new`` URI pairs."""
+    return {
+        app.viz_node_id(kind, old): app.viz_node_id(kind, new) for old, new in pairs
+    }
+
+
+def _renamed(all_uris, selected, known, kind, pairs):
+    """Reconcile the way the page does: follow the renames, then diff."""
+    selected, known = app.follow_filter_renames(
+        all_uris, selected, known, _renames(kind, pairs), kind
+    )
+    return app.reconcile_filter_selection(all_uris, selected, known)
+
+
+def test_renaming_the_selected_class_keeps_it_in_a_narrowed_filter():
+    # The regression the #194 review found: A was the one class shown, and
+    # renaming it read as "A deleted, A2 created" — so the view went empty.
+    selected, known = _renamed(["A2", "B"], ["A"], {"A", "B"}, "class", [("A", "A2")])
+    assert selected == ["A2"]
+    assert known == {"A2", "B"}
+
+
+def test_a_renamed_class_is_not_announced_as_newly_created():
+    selected, known = app.follow_filter_renames(
+        ["A2", "B"], ["A"], {"A", "B"}, _renames("class", [("A", "A2")]), "class"
+    )
+    selected, _ = app.reconcile_filter_selection(["A2", "B"], selected, known)
+    assert app.newly_hidden_uris(["A2", "B"], selected, known) == []
+
+
+def test_renaming_a_hidden_class_leaves_it_hidden():
+    selected, _ = _renamed(["A", "B2"], ["A"], {"A", "B"}, "class", [("B", "B2")])
+    assert selected == ["A"]
+
+
+def test_renaming_while_showing_everything_still_shows_everything():
+    selected, _ = _renamed(["A2", "B"], ["A", "B"], {"A", "B"}, "class", [("A", "A2")])
+    assert selected == ["A2", "B"]
+
+
+def test_a_rename_chain_lands_on_the_final_name():
+    # Two renames between Visualization renders, the way focus seeds handle it.
+    selected, _ = _renamed(
+        ["A3", "B"], ["A"], {"A", "B"}, "class", [("A", "A2"), ("A2", "A3")]
+    )
+    assert selected == ["A3"]
+
+
+def test_individuals_follow_their_own_node_ids():
+    # Individual node ids carry a prefix, so a filter that computed them as
+    # classes would match nothing and the rename would not be followed.
+    selected, _ = _renamed(["i2", "j"], ["i"], {"i", "j"}, "individual", [("i", "i2")])
+    assert selected == ["i2"]
+
+
+def test_a_rename_to_something_that_is_gone_drops_out():
+    # Renamed, then deleted before the next render: nothing to carry forward.
+    selected, _ = _renamed(["B"], ["A"], {"A", "B"}, "class", [("A", "A2")])
+    assert selected == []
+
+
+def test_no_rename_notes_leave_the_selection_alone():
+    assert app.follow_filter_renames(["A", "B"], ["A"], {"A", "B"}, None, "class") == (
+        ["A"],
+        {"A", "B"},
+    )
+
+
+def test_a_first_render_has_nothing_to_re_point():
+    assert app.follow_filter_renames(
+        ["A"], None, None, _renames("class", [("A", "A2")]), "class"
+    ) == (None, None)

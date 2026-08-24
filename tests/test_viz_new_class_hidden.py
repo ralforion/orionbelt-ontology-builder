@@ -31,6 +31,12 @@ def _script():
         st.session_state["_viz_cfg_known_class_uris"] = set(uris)
     if st.session_state.pop("_test_add_class", False):
         st.session_state.ontology.add_class("Bicycle")
+    if st.session_state.pop("_test_rename_shown", False):
+        om = st.session_state.ontology
+        old_uri = next(c["uri"] for c in om.get_classes() if c["name"] == "Shown")
+        om.rename_class(old_uri, "Renamed")
+        new_uri = next(c["uri"] for c in om.get_classes() if c["name"] == "Renamed")
+        app.viz_note_rename("class", old_uri, new_uri)
     app.render_visualization()
 
 
@@ -116,3 +122,29 @@ def test_a_deleted_class_drops_out_of_the_offer():
     at.session_state.ontology.delete_class("Bicycle")
     _rerun(at)
     assert at.session_state["_viz_new_hidden_class"] == []
+
+
+def test_renaming_the_one_class_on_screen_keeps_it_there():
+    """The regression the review of #194 found.
+
+    A rename mints a new URI, so a URI-keyed filter reads it as the class you
+    were looking at being deleted and a stranger being created. With new
+    entities no longer forcing themselves into a narrowed filter, that emptied
+    the view and announced the rename as a creation.
+    """
+    at = _started()
+    at.session_state["_test_rename_shown"] = True
+    _rerun(at)
+    assert _selected(at) == ["Renamed"]
+    assert not [t for t in at.toast if "hidden by your class filter" in t.value]
+    assert not [b for b in at.button if b.label.startswith("Show new")]
+
+
+def test_the_rename_notes_are_still_consumed_once():
+    # The filter only peeks at the notes: the focus-seed block below it owns
+    # the pop, and taking them early would leave a renamed focus seed pointing
+    # at nothing again (issue #275).
+    at = _started()
+    at.session_state["_test_rename_shown"] = True
+    _rerun(at)
+    assert "_viz_pending_renames" not in at.session_state

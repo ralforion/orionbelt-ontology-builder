@@ -42,6 +42,7 @@ from ..ui import (
     filter_entry_token,
     focus_seeds_after_request,
     focus_seeds_from_selection,
+    follow_filter_renames,
     follow_focus_seed_renames,
     follow_renamed_node_ids,
     graph_node_cap,
@@ -565,6 +566,13 @@ def render_visualization():
             # node id back to the label the multiselect shows.
             st.session_state["_viz_pending_focus_seed_ids"] = _saved_seed_ids
         filters: dict[str, dict] = {}
+        # Peeked, not popped: the focus-seed block below owns these notes and
+        # clears them once both readers have had them. On a replacement they
+        # name entities of the ontology that has just been swapped out, so they
+        # are ignored here for the same reason they are there.
+        _filter_renames = (
+            None if replaced else st.session_state.get("_viz_pending_renames")
+        )
         for _kind in _FILTER_KINDS:
             _key = _kind["key"]
             _entries = build_filter_entries(_kind_items.get(_key) or [])
@@ -574,6 +582,17 @@ def render_visualization():
                 set(_str_list(_file_state.get(f"hidden_{_key}_uris"))),
                 st.session_state.get(f"_viz_cfg_selected_{_key}_uris"),
                 st.session_state.get(f"_viz_cfg_known_{_key}_uris"),
+            )
+            # A rename mints a new URI, which a URI-keyed filter reads as a
+            # delete plus a create. Follow it first, so a narrowed filter keeps
+            # the entity you just renamed instead of dropping it and announcing
+            # it as new (issue #275, and the review of #194).
+            _prev_sel, _prev_known = follow_filter_renames(
+                _all_uris,
+                _prev_sel,
+                _prev_known,
+                _filter_renames,
+                _kind["node_kind"],
             )
             _sel_uris, _known_uris = reconcile_filter_selection(
                 _all_uris,

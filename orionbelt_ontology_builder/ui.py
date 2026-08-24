@@ -5017,9 +5017,14 @@ def build_class_hierarchy_text(classes):
     return "\n".join(lines)
 
 
+#: ``node_kind`` is what the entity is to the graph, which is not always the
+#: filter's own key: it is how the rename notes are keyed (see
+#: :func:`viz_node_id`), and following them is what keeps a renamed entity in a
+#: narrowed selection.
 _FILTER_KINDS = (
     {
         "key": "class",
+        "node_kind": "class",
         "toggle": "show_classes",
         "label": "Classes",
         "singular": "Class",
@@ -5028,6 +5033,7 @@ _FILTER_KINDS = (
     },
     {
         "key": "ind",
+        "node_kind": "individual",
         "toggle": "show_individuals",
         "label": "Individuals",
         "singular": "Individual",
@@ -5100,6 +5106,40 @@ def css_string(text: str) -> str:
         else:
             out.append(ch)
     return '"' + "".join(out) + '"'
+
+
+def follow_filter_renames(all_uris, selected, known, renames, node_kind):
+    """Re-point a filter's selection at entities that were renamed (issue #275).
+
+    A rename mints a new URI, so to a URI-keyed filter the entity you renamed
+    reads as deleted and a stranger reads as created. That was harmless while
+    every new entity was shown by default, but a narrowed filter now keeps new
+    entities out (issue #194) — so renaming the very class you had narrowed to
+    would have dropped it out of the view, and announced it as something you
+    had just created.
+
+    Returns ``(selected, known)`` with the renamed URIs swapped in, so the
+    reconcile that follows sees one entity carrying on under a new name rather
+    than a delete plus a create. Both halves move together: leaving ``known``
+    behind would make the new URI look new all over again.
+
+    Renames are recorded as graph node ids (see :func:`viz_note_rename`), which
+    is why the current URIs are mapped through :func:`viz_node_id` to be found.
+    A rename whose entity is no longer here re-points to nothing and keeps the
+    URI it had, which the reconcile then drops as the deletion it is.
+    """
+    if not renames or (selected is None and known is None):
+        return selected, known
+    uri_by_id = {viz_node_id(node_kind, uri): uri for uri in all_uris}
+
+    def moved(uri):
+        node_id = _renamed_node_id(viz_node_id(node_kind, uri), renames)
+        return uri_by_id.get(node_id, uri)
+
+    return (
+        None if selected is None else [moved(uri) for uri in selected],
+        None if known is None else {moved(uri) for uri in known},
+    )
 
 
 def reconcile_filter_selection(all_uris, selected, known, replaced=False):
