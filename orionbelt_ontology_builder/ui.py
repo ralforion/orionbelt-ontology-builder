@@ -5362,6 +5362,67 @@ def parse_filter_text(text, entries):
     return matched, unmatched
 
 
+def build_focus_seed_entries(targets):
+    """Describe focus-mode seeds for the paste / copy box (issue #283).
+
+    ``targets`` is what the focus picker was built from, in its order: dicts
+    carrying the ``kind`` word its label shows ("Class", "Individual", "Data
+    Property", "Concept"), the ``name`` in the already-disambiguated form the
+    picker lists, the ``label`` the multiselect holds it under, and the ``uri``
+    where the entity has one (a SKOS concept's node is keyed by name instead).
+
+    Returns ``(entries, label_by_key)``: entries in the shape
+    :func:`filter_entry_token` and :func:`parse_filter_text` read, and the map
+    from what those answer in back to the picker's labels.
+
+    A seed is written as its plain name, and as ``Kind:Name`` when the name
+    belongs to more than one kind — a class and an individual can share one, and
+    the picker's labels are how the app tells them apart. The kind loses its
+    space there (``DataProperty:``) because a token cannot carry one, and so
+    does a name the picker has had to tag for its namespace (``zero(fn)``).
+    That tag is the only namespace handling needed: the names arrive already
+    disambiguated, since that is what the picker lists.
+    """
+    # A name the picker has had to tag carries a space ("zero (fn)"), and a
+    # token cannot: closed up it survives the split, and the parser closes the
+    # pasted text up the same way, so both forms are read.
+    names = {t["label"]: _CLASS_DISPLAY_GAP.sub("(", t["name"]) for t in targets}
+    kinds_by_name: dict[str, set] = {}
+    for t in targets:
+        kinds_by_name.setdefault(names[t["label"]], set()).add(t["kind"])
+    entries = []
+    label_by_key = {}
+    for t in targets:
+        # The URI identifies the entity where it has one, so a pasted URI
+        # resolves like it does in the node filter; a concept falls back to its
+        # label, which is unique and can never collide with a URI.
+        key = t.get("uri") or t["label"]
+        name = names[t["label"]]
+        entries.append(
+            {
+                "name": name,
+                "uri": key,
+                "ambiguous": len(kinds_by_name.get(name, ())) > 1,
+                "prefix": t["kind"].replace(" ", ""),
+                "display": t["label"],
+            }
+        )
+        label_by_key[key] = t["label"]
+    return entries, label_by_key
+
+
+def parse_focus_seed_text(text, entries, label_by_key):
+    """Resolve pasted focus seeds to the labels the picker holds (issue #283).
+
+    Takes the forms the node filter's box takes — a plain name, the
+    ``Kind:Name`` the copy line uses for a name two kinds share, the tagged
+    display (``zero (fn)``) or a full URI — and answers in picker labels, in
+    picker order. Returns ``(labels, unmatched)``.
+    """
+    keys, unmatched = parse_filter_text(text, entries)
+    return [label_by_key[k] for k in keys if k in label_by_key], unmatched
+
+
 def _fmt_unknown(tokens, limit=20):
     """Render unmatched paste tokens for a warning, capped so a wholly wrong
     paste doesn't fill the panel."""
