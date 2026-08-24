@@ -67,8 +67,8 @@ gtk = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff==0.16.3",
-    "mypy==2.3.0",
+    "ruff==0.16.4",
+    "mypy==2.3.1",
 ]
 
 [project.urls]
