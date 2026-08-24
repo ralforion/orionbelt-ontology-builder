@@ -211,9 +211,13 @@ def test_a_new_namespace_twin_does_not_unhide_its_sibling(prefixes):
 
     # math:zero is imported; fn:zero is relabelled 'zero (fn)' but unchanged.
     after = app.build_filter_entries(CLASSES[:3])
+    all_uris = [e["uri"] for e in after]
     assert _displays(after) == ["Person", "zero (fn)", "zero (math)"]
-    selected, known = app.reconcile_filter_selection(
-        [e["uri"] for e in after], selected, known
-    )
-    # Only the genuinely new class joins; fn:zero stays hidden.
-    assert selected == [f"{BASE}Person", f"{MATH}zero"]
+    before_known = known
+    selected, known = app.reconcile_filter_selection(all_uris, selected, known)
+    # The filter is narrowed, so neither joins (issue #194) — and in particular
+    # the relabelled fn:zero the user hid does not come back.
+    assert selected == [f"{BASE}Person"]
+    # The genuinely new class is the one reported as held back, keyed by URI:
+    # a label-keyed reconcile would have named the hidden fn:zero as well.
+    assert app.newly_hidden_uris(all_uris, selected, before_known) == [f"{MATH}zero"]
