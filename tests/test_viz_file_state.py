@@ -344,6 +344,35 @@ def test_dropped_seeds_are_not_persisted(monkeypatch):
     assert app._viz_file_state_payload(_filters(), successor) == {}
 
 
+def test_switching_files_also_forgets_what_was_created_but_hidden(
+    monkeypatch, tmp_path
+):
+    """The "Show new" offer names the entities of the file being left (#194).
+
+    The next render unions the remembered list back into the offer, so a new
+    file that reuses one of those URIs and restores it as hidden would be told
+    it had just been created — and taking the offer would edit the filter that
+    file had asked for.
+    """
+    _desktop(monkeypatch, tmp_path, linked=FILE_A)
+    session = _Session(
+        {
+            "_viz_file_state_for": FILE_B,
+            "_viz_new_hidden_class": [NS + "A"],
+            "_viz_new_hidden_ind": [NS + "someone"],
+            "_viz_new_hidden_announce": ["A created, hidden by your class filter"],
+        }
+    )
+    monkeypatch.setattr(app.st, "session_state", session)
+    app._restore_viz_file_state()
+    for stale in (
+        "_viz_new_hidden_class",
+        "_viz_new_hidden_ind",
+        "_viz_new_hidden_announce",
+    ):
+        assert stale not in session, stale
+
+
 def test_switching_files_also_forgets_the_focus_seeds(monkeypatch, tmp_path):
     _desktop(monkeypatch, tmp_path, linked=FILE_A)
     session = _Session(

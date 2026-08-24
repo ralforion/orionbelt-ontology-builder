@@ -1414,6 +1414,14 @@ def _clear_viz_file_session_state() -> None:
     for kind in _FILTER_KINDS:
         st.session_state.pop(f"_viz_cfg_selected_{kind['key']}_uris", None)
         st.session_state.pop(f"_viz_cfg_known_{kind['key']}_uris", None)
+        # What the previous file's filter was holding back (issue #194). It
+        # names that file's entities, and the next render unions it back into
+        # the offer: a new file reusing one of those URIs and restoring it as
+        # hidden would be offered as "just created", and taking the offer would
+        # edit the filter the new file had asked for.
+        st.session_state.pop(f"_viz_new_hidden_{kind['key']}", None)
+    # Likewise the toast still queued for entities of the file we are leaving.
+    st.session_state.pop("_viz_new_hidden_announce", None)
     viz_drop_focus_seeds()
     st.session_state.pop("_viz_pending_focus_seed_ids", None)
     # The mutation counters seen on the last render belong to the file we just
