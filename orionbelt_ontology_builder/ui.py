@@ -1414,6 +1414,14 @@ def _clear_viz_file_session_state() -> None:
     for kind in _FILTER_KINDS:
         st.session_state.pop(f"_viz_cfg_selected_{kind['key']}_uris", None)
         st.session_state.pop(f"_viz_cfg_known_{kind['key']}_uris", None)
+        # What the previous file's filter was holding back (issue #194). It
+        # names that file's entities, and the next render unions it back into
+        # the offer: a new file reusing one of those URIs and restoring it as
+        # hidden would be offered as "just created", and taking the offer would
+        # edit the filter the new file had asked for.
+        st.session_state.pop(f"_viz_new_hidden_{kind['key']}", None)
+    # Likewise the toast still queued for entities of the file we are leaving.
+    st.session_state.pop("_viz_new_hidden_announce", None)
     viz_drop_focus_seeds()
     st.session_state.pop("_viz_pending_focus_seed_ids", None)
     # The mutation counters seen on the last render belong to the file we just
@@ -5017,9 +5025,14 @@ def build_class_hierarchy_text(classes):
     return "\n".join(lines)
 
 
+#: ``node_kind`` is what the entity is to the graph, which is not always the
+#: filter's own key: it is how the rename notes are keyed (see
+#: :func:`viz_node_id`), and following them is what keeps a renamed entity in a
+#: narrowed selection.
 _FILTER_KINDS = (
     {
         "key": "class",
+        "node_kind": "class",
         "toggle": "show_classes",
         "label": "Classes",
         "singular": "Class",
@@ -5028,6 +5041,7 @@ _FILTER_KINDS = (
     },
     {
         "key": "ind",
+        "node_kind": "individual",
         "toggle": "show_individuals",
         "label": "Individuals",
         "singular": "Individual",
@@ -5102,6 +5116,40 @@ def css_string(text: str) -> str:
     return '"' + "".join(out) + '"'
 
 
+def follow_filter_renames(all_uris, selected, known, renames, node_kind):
+    """Re-point a filter's selection at entities that were renamed (issue #275).
+
+    A rename mints a new URI, so to a URI-keyed filter the entity you renamed
+    reads as deleted and a stranger reads as created. That was harmless while
+    every new entity was shown by default, but a narrowed filter now keeps new
+    entities out (issue #194) — so renaming the very class you had narrowed to
+    would have dropped it out of the view, and announced it as something you
+    had just created.
+
+    Returns ``(selected, known)`` with the renamed URIs swapped in, so the
+    reconcile that follows sees one entity carrying on under a new name rather
+    than a delete plus a create. Both halves move together: leaving ``known``
+    behind would make the new URI look new all over again.
+
+    Renames are recorded as graph node ids (see :func:`viz_note_rename`), which
+    is why the current URIs are mapped through :func:`viz_node_id` to be found.
+    A rename whose entity is no longer here re-points to nothing and keeps the
+    URI it had, which the reconcile then drops as the deletion it is.
+    """
+    if not renames or (selected is None and known is None):
+        return selected, known
+    uri_by_id = {viz_node_id(node_kind, uri): uri for uri in all_uris}
+
+    def moved(uri):
+        node_id = _renamed_node_id(viz_node_id(node_kind, uri), renames)
+        return uri_by_id.get(node_id, uri)
+
+    return (
+        None if selected is None else [moved(uri) for uri in selected],
+        None if known is None else {moved(uri) for uri in known},
+    )
+
+
 def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     """Reconcile one Visualization filter's selection with the ontology.
 
@@ -5110,10 +5158,20 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     longer wipes a narrowed filter (issue #180):
 
     - entities deleted since last render drop out of the selection;
-    - entities created since last render are added (new content is shown by
-      default, matching the "everything selected" default);
+    - entities created since last render are added *only while the filter is
+      showing everything*, which is where "new content is shown by default"
+      belongs (issue #194);
     - the rest of the selection is left as-is, so a deliberately emptied filter
       stays empty (nothing is "new" when the user clears it).
+
+    Auto-adding into a narrowed filter used to be unconditional. It is right for
+    the default view and wrong for a curated one: a filter narrowed to a handful
+    of key classes is a view the user built, and a class created afterwards
+    should not push itself into it (issue #194). No extra state is needed to
+    tell the two apart — ``known`` is the previous render's full entity set, so
+    ``set(selected) == known`` already means "was showing everything". The
+    caller pairs this with :func:`newly_hidden_uris` so a creation that lands
+    outside the filter is announced rather than silently dropped.
 
     ``replaced`` marks that the whole ontology was swapped (load/import/new/undo)
     rather than incrementally edited. Diffing must not run then: an unrelated
@@ -5134,12 +5192,59 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     # otherwise reach the difference below and raise.
     known = None if known is None else set(known)
     if replaced or selected is None or known is None:
-        selected_set = set(all_uris)
+        selected_set = all_set
+    elif known and not (all_set & known):
+        # Not one entity in common: a replacement the counters did not flag
+        # (they are a heuristic). Diffing alone used to recover this, because
+        # every entity read as new and so got added; with auto-add restricted to
+        # the unnarrowed case, a narrowed filter would survive into an unrelated
+        # ontology and open it with an empty graph.
+        selected_set = all_set
+    elif set(selected) == known:
+        # Was showing everything, so it keeps showing everything.
+        selected_set = all_set
     else:
-        newly_added = all_set - known
-        selected_set = (set(selected) | newly_added) & all_set
+        selected_set = set(selected) & all_set
     ordered = [u for u in all_uris if u in selected_set]
     return ordered, all_set
+
+
+def newly_hidden_uris(all_uris, selected, known):
+    """Entities created since the last render that the filter is keeping hidden.
+
+    ``selected`` is what :func:`reconcile_filter_selection` just returned and
+    ``known`` the set it was given, i.e. the *previous* render's entity set.
+    Returns the URIs in ``all_uris`` order, so the caller can say which entity
+    was created but is not on the canvas (issue #194) — without it, a user who
+    narrowed the filter earlier and forgot creates a class, sees nothing appear,
+    and lands back on the confusion that opened issue #190.
+
+    Empty on the first render and on a replacement, where everything is selected
+    and so nothing is hidden.
+    """
+    if selected is None or known is None:
+        return []
+    fresh = set(all_uris) - set(known) - set(selected)
+    return [uri for uri in all_uris if uri in fresh]
+
+
+def viz_new_hidden_message(names, noun, plural) -> str:
+    """The toast for entities that were created outside the node filter.
+
+    Names the entity so the message is about the thing the user just made, and
+    names the filter so the fix is obvious. A batch (an import into a narrowed
+    view, several classes in one edit) switches to a count past three rather
+    than growing a toast into a list.
+    """
+    if not names:
+        return ""
+    if len(names) == 1:
+        what = f"{names[0]} created"
+    elif len(names) <= 3:
+        what = f"{', '.join(names)} created"
+    else:
+        what = f"{len(names)} {plural} created"
+    return f"{what}, hidden by your {noun} filter"
 
 
 _CLASS_TOKEN_SEPARATORS = re.compile(r"[\s,;]+")

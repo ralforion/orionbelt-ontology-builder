@@ -42,10 +42,12 @@ from ..ui import (
     filter_entry_token,
     focus_seeds_after_request,
     focus_seeds_from_selection,
+    follow_filter_renames,
     follow_focus_seed_renames,
     follow_renamed_node_ids,
     graph_node_cap,
     local_store,
+    newly_hidden_uris,
     panel_heading_html,
     panel_subject_uri,
     parse_filter_text,
@@ -59,6 +61,7 @@ from ..ui import (
     viz_hidden_caption,
     viz_hidden_note_style,
     viz_mark_ontology_seen,
+    viz_new_hidden_message,
     viz_node_id,
     viz_ontology_was_replaced,
     viz_sync,
@@ -563,6 +566,13 @@ def render_visualization():
             # node id back to the label the multiselect shows.
             st.session_state["_viz_pending_focus_seed_ids"] = _saved_seed_ids
         filters: dict[str, dict] = {}
+        # Peeked, not popped: the focus-seed block below owns these notes and
+        # clears them once both readers have had them. On a replacement they
+        # name entities of the ontology that has just been swapped out, so they
+        # are ignored here for the same reason they are there.
+        _filter_renames = (
+            None if replaced else st.session_state.get("_viz_pending_renames")
+        )
         for _kind in _FILTER_KINDS:
             _key = _kind["key"]
             _entries = build_filter_entries(_kind_items.get(_key) or [])
@@ -573,6 +583,17 @@ def render_visualization():
                 st.session_state.get(f"_viz_cfg_selected_{_key}_uris"),
                 st.session_state.get(f"_viz_cfg_known_{_key}_uris"),
             )
+            # A rename mints a new URI, which a URI-keyed filter reads as a
+            # delete plus a create. Follow it first, so a narrowed filter keeps
+            # the entity you just renamed instead of dropping it and announcing
+            # it as new (issue #275, and the review of #194).
+            _prev_sel, _prev_known = follow_filter_renames(
+                _all_uris,
+                _prev_sel,
+                _prev_known,
+                _filter_renames,
+                _kind["node_kind"],
+            )
             _sel_uris, _known_uris = reconcile_filter_selection(
                 _all_uris,
                 _prev_sel,
@@ -582,6 +603,35 @@ def render_visualization():
             st.session_state[f"_viz_cfg_selected_{_key}_uris"] = _sel_uris
             st.session_state[f"_viz_cfg_known_{_key}_uris"] = _known_uris
             _display_by_uri = {e["uri"]: e["display"] for e in _entries}
+            # An entity created while this filter is narrowed no longer forces
+            # itself into the view (issue #194), so the creation would otherwise
+            # be invisible: nothing appears on the canvas and nothing says why.
+            # Announce it, and remember it so the panel can offer a one-click
+            # way in. The remembered list is pruned rather than cleared on a
+            # timer — an entry drops out the moment the entity is deleted or
+            # shown — so the button always offers exactly what is still missing.
+            _fresh_hidden = newly_hidden_uris(_all_uris, _sel_uris, _prev_known)
+            _pending_key = f"_viz_new_hidden_{_key}"
+            _pending_set = set(st.session_state.get(_pending_key) or []) | set(
+                _fresh_hidden
+            )
+            _sel_set = set(_sel_uris)
+            st.session_state[_pending_key] = [
+                uri for uri in _all_uris if uri in _pending_set and uri not in _sel_set
+            ]
+            if _fresh_hidden:
+                # Queued, not raised here: the hidden-note recompute further
+                # down reruns the page whenever the hidden count changes —
+                # which is exactly this render — and a toast raised before a
+                # rerun is discarded with the rest of that pass's output.
+                st.session_state["_viz_new_hidden_announce"] = [
+                    *(st.session_state.get("_viz_new_hidden_announce") or []),
+                    viz_new_hidden_message(
+                        [_display_by_uri[u] for u in _fresh_hidden],
+                        _kind["noun"],
+                        _kind["plural"],
+                    ),
+                ]
             _selected_displays = [_display_by_uri[u] for u in _sel_uris]
             # The multiselect holds display labels; seed its widget value here so
             # the reconciled selection is what it renders.
@@ -922,7 +972,16 @@ def render_visualization():
                         st.session_state.get(f"_viz_cfg_selected_{_key}_uris") or []
                     )
                     _narrowed = len(_picked_uris) != len(_entries)
-                    _bcol1, _bcol2 = st.columns([1, 1])
+                    # Entities created since the filter was narrowed, which the
+                    # view is therefore holding back (issue #194). The button
+                    # only exists while there are some, so the usual two-button
+                    # row is unchanged for everyone else.
+                    _new_hidden = st.session_state.get(f"_viz_new_hidden_{_key}") or []
+                    if _new_hidden:
+                        _bcol1, _bcol_new, _bcol2 = st.columns([1, 1, 1])
+                    else:
+                        _bcol1, _bcol2 = st.columns([1, 1])
+                        _bcol_new = None
                     # An empty (or narrowed) filter hides nodes and there is no
                     # native way back — offer a one-click restore (issue B3).
                     with _bcol1:
@@ -943,6 +1002,23 @@ def render_visualization():
                                 active["uris"]
                             )
                             st.rerun()
+                    if _bcol_new is not None:
+                        with _bcol_new:
+                            # Adds them to the selection rather than replacing
+                            # it: the point is to keep the curated view and let
+                            # the new entity join it.
+                            if st.button(
+                                f"Show new ({len(_new_hidden)})",
+                                key=f"viz_show_new_{_key}",
+                                use_container_width=True,
+                                help=f"Add the {_plural} created since you "
+                                "narrowed this filter to the selection.",
+                            ):
+                                _keep = set(_picked_uris) | set(_new_hidden)
+                                st.session_state[f"_viz_cfg_selected_{_key}_uris"] = [
+                                    u for u in active["uris"] if u in _keep
+                                ]
+                                st.rerun()
                     # Picking a handful out of a long multiselect is slow, and the
                     # selection is worth keeping — so the filter can also be driven
                     # by a pasted list, and prints the current one back in the same
@@ -1959,6 +2035,12 @@ def render_visualization():
         if _note_now != st.session_state.get("_viz_hidden_note", ""):
             st.session_state["_viz_hidden_note"] = _note_now
             st.rerun()
+        # Past that rerun, so it survives to reach the user: what the filter
+        # kept out of the view when it was created (issue #194).
+        for _announcement in (
+            st.session_state.pop("_viz_new_hidden_announce", None) or []
+        ):
+            st.toast(_announcement, icon="🙈")
         # Say what is being held back, small, right above the canvas: a focus or
         # a narrowed filter is otherwise invisible, and an entity that isn't
         # drawn looks lost rather than filtered (issue #222 follow-up).
