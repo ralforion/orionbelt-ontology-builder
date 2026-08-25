@@ -46,14 +46,14 @@ def _built():
 
 
 def _parse(text):
-    entries, label_by_key = _built()
-    return app.parse_focus_seed_text(text, entries, label_by_key)
+    entries, _ = _built()
+    # The entries' identity is the picker's label, so this answers in labels.
+    return app.parse_filter_text(text, entries)
 
 
 def _tokens(labels):
-    entries, _ = _built()
-    by_label = {e["display"]: app.filter_entry_token(e) for e in entries}
-    return [by_label[label] for label in labels]
+    _, tokens_by_label = _built()
+    return [tokens_by_label[label] for label in labels]
 
 
 def test_a_plain_name_resolves_to_its_label():
@@ -128,27 +128,86 @@ def test_the_kind_token_carries_no_space():
             "label": "Data Property: Name",
         },
     ]
-    entries, label_by_key = app.build_focus_seed_entries(shared)
-    tokens = [app.filter_entry_token(e) for e in entries]
+    entries, tokens_by_label = app.build_focus_seed_entries(shared)
+    tokens = list(tokens_by_label.values())
     assert tokens == ["Class:Name", "DataProperty:Name"]
     assert all(" " not in t for t in tokens)
-    assert app.parse_focus_seed_text(" ".join(tokens), entries, label_by_key) == (
+    assert app.parse_filter_text(" ".join(tokens), entries) == (
         ["Class: Name", "Data Property: Name"],
         [],
     )
 
 
 def test_what_is_copied_pastes_back_unchanged():
-    entries, label_by_key = _built()
     picked = ["Class: zero (fn)", "Individual: Person", "Concept: Dog"]
-    text = " ".join(_tokens(picked))
-    labels, unknown = app.parse_focus_seed_text(text, entries, label_by_key)
+    labels, unknown = _parse(" ".join(_tokens(picked)))
     assert sorted(labels) == sorted(picked)
     assert unknown == []
 
 
 def test_nothing_focusable_yields_no_entries():
     assert app.build_focus_seed_entries([]) == ([], {})
+
+
+# --- One IRI, two focus targets ----------------------------------------------
+
+# An imported vocabulary may type a resource both owl:Class and skos:Concept
+# (OWL punning), and the app then lists it under Classes and under Concepts.
+# Both targets carry the same IRI, so the picker's label is what tells them
+# apart — keying the box on the IRI collapsed them into one.
+PUNNED = [
+    {
+        "kind": "Class",
+        "name": "Agent",
+        "uri": f"{BASE}Agent",
+        "label": "Class: Agent",
+    },
+    {
+        "kind": "Concept",
+        "name": "Agent",
+        "uri": f"{BASE}Agent",
+        "label": "Concept: Agent",
+    },
+]
+
+
+def test_a_punned_resource_keeps_both_of_its_seeds():
+    entries, tokens_by_label = app.build_focus_seed_entries(PUNNED)
+    assert tokens_by_label == {
+        "Class: Agent": "Class:Agent",
+        "Concept: Agent": "Concept:Agent",
+    }
+    assert app.parse_filter_text("Class:Agent Concept:Agent", entries) == (
+        ["Class: Agent", "Concept: Agent"],
+        [],
+    )
+
+
+def test_the_kind_qualifier_still_picks_one_side_of_a_pun():
+    entries, _ = app.build_focus_seed_entries(PUNNED)
+    assert app.parse_filter_text("Concept:Agent", entries) == (["Concept: Agent"], [])
+
+
+def test_a_punned_iri_focuses_on_both_targets_it_names():
+    # The IRI is an alias of both, and it genuinely names both.
+    entries, _ = app.build_focus_seed_entries(PUNNED)
+    assert app.parse_filter_text(f"{BASE}Agent", entries) == (
+        ["Class: Agent", "Concept: Agent"],
+        [],
+    )
+
+
+def test_an_alias_never_becomes_the_identity():
+    # Regression guard for the shape itself: whatever else an entry answers to,
+    # what comes back is the label.
+    entries, _ = _built()
+    assert [e["uri"] for e in entries] == [t["label"] for t in TARGETS]
+
+
+def test_entries_without_aliases_are_unaffected():
+    # The node filters build entries with no aliases key at all.
+    plain = app.build_filter_entries([{"name": "Person", "uri": f"{BASE}Person"}])
+    assert app.parse_filter_text("Person", plain) == ([f"{BASE}Person"], [])
 
 
 def test_a_tagged_name_is_written_without_the_gap():
@@ -234,3 +293,55 @@ def test_a_partly_matching_paste_applies_and_still_reports_the_rest():
     _rerun(at)
     assert at.session_state["_viz_cfg_focus_seeds"] == ["Class: Organization"]
     assert any("Bicycle" in w.value for w in at.warning), [w.value for w in at.warning]
+
+
+def test_a_punned_resource_round_trips_through_the_page():
+    """End to end on the real thing: an ontology whose Agent is both.
+
+    The picker lists it twice, and copying the focus and pasting it back has to
+    return both seeds rather than one.
+    """
+    from streamlit.testing.v1 import AppTest
+
+    def _script():
+        import streamlit as st
+        from rdflib import RDF, URIRef
+        from rdflib.namespace import SKOS
+
+        from orionbelt_ontology_builder import app
+        from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+        if "ontology" not in st.session_state:
+            om = OntologyManager()
+            om.add_class("Agent")
+            uri = URIRef(om.get_classes()[0]["uri"])
+            om.graph.add((uri, RDF.type, SKOS.Concept))
+            st.session_state.ontology = om
+            st.session_state["_autosave_restored"] = True
+            st.session_state["_viz_settings_restored"] = True
+            st.session_state["_viz_cfg_focus_mode"] = True
+            st.session_state["_viz_cfg_focus_seeds"] = [
+                "Class: Agent",
+                "Concept: Agent",
+            ]
+        app.render_visualization()
+
+    at = AppTest.from_function(_script)
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    # What the box printed for the two seeds...
+    copied = [block.value for block in at.code]
+    assert "Class:Agent Concept:Agent" in copied, copied
+    # ...pastes back as both of them.
+    at.text_area(key="viz_focus_paste").set_value("Class:Agent Concept:Agent")
+    at.button(key="viz_focus_apply_paste").click()
+    for group in at.get("button_group"):
+        value = group.value
+        if not isinstance(value, list):
+            group.set_value([value])
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    assert at.session_state["_viz_cfg_focus_seeds"] == [
+        "Class: Agent",
+        "Concept: Agent",
+    ]

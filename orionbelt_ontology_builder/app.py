@@ -187,7 +187,6 @@ from .ui import (  # noqa: F401
     panel_subject_uri,
     parent_option_index,
     parse_filter_text,
-    parse_focus_seed_text,
     parse_search_query,
     persist_autosave,
     persist_language_packs,

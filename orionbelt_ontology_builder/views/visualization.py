@@ -52,7 +52,6 @@ from ..ui import (
     panel_heading_html,
     panel_subject_uri,
     parse_filter_text,
-    parse_focus_seed_text,
     prioritise_find_target,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
@@ -917,9 +916,9 @@ def render_visualization():
                 # node filter's story (issue #179), asked for here by #283. It
                 # sits where that box does, so the button does not move when the
                 # panel switches between the two modes.
-                _focus_entries, _focus_label_by_key = build_focus_seed_entries(
-                    focus_records
-                )
+                # Parsing answers in the picker's own labels: those are the
+                # entries' identity, since one IRI can be two focus targets.
+                _focus_entries, _focus_tokens = build_focus_seed_entries(focus_records)
                 with st.columns([1, 1])[1].popover(
                     "Paste / copy", use_container_width=True
                 ):
@@ -938,8 +937,8 @@ def render_visualization():
                         key="viz_focus_apply_paste",
                         help="Focus on exactly the pasted entities.",
                     ):
-                        _fpasted, _funknown = parse_focus_seed_text(
-                            _fpaste_text, _focus_entries, _focus_label_by_key
+                        _fpasted, _funknown = parse_filter_text(
+                            _fpaste_text, _focus_entries
                         )
                         # Recorded, not warned from here, for the reason the
                         # node filter's box records it: applying reruns the
@@ -957,15 +956,12 @@ def render_visualization():
                             f"decide what is): {_fmt_unknown(_funknown_last)}"
                         )
                     if focus_seeds:
-                        _token_by_label = {
-                            e["display"]: filter_entry_token(e) for e in _focus_entries
-                        }
                         st.caption("Current focus — copy to restore it later:")
                         st.code(
                             " ".join(
-                                _token_by_label[s]
+                                _focus_tokens[s]
                                 for s in focus_seeds
-                                if s in _token_by_label
+                                if s in _focus_tokens
                             ),
                             language=None,
                             wrap_lines=True,

@@ -5303,14 +5303,18 @@ def parse_filter_text(text, entries):
 
     Accepts whitespace-, comma- or semicolon-separated tokens in any of the
     forms the app shows an entity in: a plain local name (``Person``), a prefixed
-    name (``fn:zero``), the disambiguated display form (``zero (fn)``) or a full
-    URI, optionally wrapped in ``<>`` or quotes. Matching is exact first, then
-    case-insensitive. A plain local name shared by several namespaces selects
-    all of them — the prefixed form picks just one.
+    name (``fn:zero``), the disambiguated display form (``zero (fn)``), anything
+    in the entry's optional ``aliases``, or a full URI, optionally wrapped in
+    ``<>`` or quotes. Matching is exact first, then case-insensitive. A plain
+    local name shared by several namespaces selects all of them — the prefixed
+    form picks just one.
 
-    Returns ``(uris, unmatched)``: the matched URIs in entry-list order
-    without repeats, and the tokens nothing matched, in input order. URIs rather
-    than display labels, because the selection is stored by URI.
+    Returns ``(keys, unmatched)``: the matched entries' ``uri`` values in
+    entry-list order without repeats, and the tokens nothing matched, in input
+    order. That field is the entry's identity rather than its label, because a
+    label moves under the entity (issue #179); for the node filters it is the
+    URI, and for the focus box the picker's label (see
+    :func:`build_focus_seed_entries`).
     """
     if not text or not text.strip():
         return [], []
@@ -5338,6 +5342,12 @@ def parse_filter_text(text, entries):
         _register(uri, uri)
         if entry["prefix"]:
             _register(f"{entry['prefix']}:{entry['name']}", uri)
+        # Further spellings that are not the entry's identity. The focus box
+        # needs them: two of its entries can be one IRI (a punned resource that
+        # is both a class and a concept), so they are told apart by label and
+        # the IRI is an alias both answer to.
+        for alias in entry.get("aliases") or ():
+            _register(alias, uri)
 
     matched: list[str] = []
     unmatched: list[str] = []
@@ -5371,9 +5381,16 @@ def build_focus_seed_entries(targets):
     picker lists, the ``label`` the multiselect holds it under, and the ``uri``
     where the entity has one (a SKOS concept's node is keyed by name instead).
 
-    Returns ``(entries, label_by_key)``: entries in the shape
-    :func:`filter_entry_token` and :func:`parse_filter_text` read, and the map
-    from what those answer in back to the picker's labels.
+    Returns ``(entries, tokens_by_label)``: entries in the shape
+    :func:`parse_filter_text` reads, whose identity is the picker's label — so
+    parsing answers in labels directly — and what to write each label down as.
+
+    The label, not the URI, because one IRI can be two focus targets: OWL puns,
+    and an imported vocabulary that types a resource both ``owl:Class`` and
+    ``skos:Concept`` lists it under Classes and under Concepts. Keyed by URI
+    the two collapsed into one, so ``Class:Person Concept:Person`` restored a
+    single seed. The URI rides along as an alias instead, which is right on its
+    own terms: it names both, so pasting it focuses on both.
 
     A seed is written as its plain name, and as ``Kind:Name`` when the name
     belongs to more than one kind — a class and an individual can share one, and
@@ -5391,36 +5408,20 @@ def build_focus_seed_entries(targets):
     for t in targets:
         kinds_by_name.setdefault(names[t["label"]], set()).add(t["kind"])
     entries = []
-    label_by_key = {}
+    tokens_by_label = {}
     for t in targets:
-        # The URI identifies the entity where it has one, so a pasted URI
-        # resolves like it does in the node filter; a concept falls back to its
-        # label, which is unique and can never collide with a URI.
-        key = t.get("uri") or t["label"]
         name = names[t["label"]]
-        entries.append(
-            {
-                "name": name,
-                "uri": key,
-                "ambiguous": len(kinds_by_name.get(name, ())) > 1,
-                "prefix": t["kind"].replace(" ", ""),
-                "display": t["label"],
-            }
-        )
-        label_by_key[key] = t["label"]
-    return entries, label_by_key
-
-
-def parse_focus_seed_text(text, entries, label_by_key):
-    """Resolve pasted focus seeds to the labels the picker holds (issue #283).
-
-    Takes the forms the node filter's box takes — a plain name, the
-    ``Kind:Name`` the copy line uses for a name two kinds share, the tagged
-    display (``zero (fn)``) or a full URI — and answers in picker labels, in
-    picker order. Returns ``(labels, unmatched)``.
-    """
-    keys, unmatched = parse_filter_text(text, entries)
-    return [label_by_key[k] for k in keys if k in label_by_key], unmatched
+        entry = {
+            "name": name,
+            "uri": t["label"],
+            "ambiguous": len(kinds_by_name.get(name, ())) > 1,
+            "prefix": t["kind"].replace(" ", ""),
+            "display": t["label"],
+            "aliases": [t["uri"]] if t.get("uri") else [],
+        }
+        entries.append(entry)
+        tokens_by_label[t["label"]] = filter_entry_token(entry)
+    return entries, tokens_by_label
 
 
 def _fmt_unknown(tokens, limit=20):
