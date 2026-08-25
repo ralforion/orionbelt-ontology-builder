@@ -5303,14 +5303,18 @@ def parse_filter_text(text, entries):
 
     Accepts whitespace-, comma- or semicolon-separated tokens in any of the
     forms the app shows an entity in: a plain local name (``Person``), a prefixed
-    name (``fn:zero``), the disambiguated display form (``zero (fn)``) or a full
-    URI, optionally wrapped in ``<>`` or quotes. Matching is exact first, then
-    case-insensitive. A plain local name shared by several namespaces selects
-    all of them — the prefixed form picks just one.
+    name (``fn:zero``), the disambiguated display form (``zero (fn)``), anything
+    in the entry's optional ``aliases``, or a full URI, optionally wrapped in
+    ``<>`` or quotes. Matching is exact first, then case-insensitive. A plain
+    local name shared by several namespaces selects all of them — the prefixed
+    form picks just one.
 
-    Returns ``(uris, unmatched)``: the matched URIs in entry-list order
-    without repeats, and the tokens nothing matched, in input order. URIs rather
-    than display labels, because the selection is stored by URI.
+    Returns ``(keys, unmatched)``: the matched entries' ``uri`` values in
+    entry-list order without repeats, and the tokens nothing matched, in input
+    order. That field is the entry's identity rather than its label, because a
+    label moves under the entity (issue #179); for the node filters it is the
+    URI, and for the focus box the picker's label (see
+    :func:`build_focus_seed_entries`).
     """
     if not text or not text.strip():
         return [], []
@@ -5338,6 +5342,12 @@ def parse_filter_text(text, entries):
         _register(uri, uri)
         if entry["prefix"]:
             _register(f"{entry['prefix']}:{entry['name']}", uri)
+        # Further spellings that are not the entry's identity. The focus box
+        # needs them: two of its entries can be one IRI (a punned resource that
+        # is both a class and a concept), so they are told apart by label and
+        # the IRI is an alias both answer to.
+        for alias in entry.get("aliases") or ():
+            _register(alias, uri)
 
     matched: list[str] = []
     unmatched: list[str] = []
@@ -5360,6 +5370,58 @@ def parse_filter_text(text, entries):
 
     matched.sort(key=lambda u: order.get(u, 0))
     return matched, unmatched
+
+
+def build_focus_seed_entries(targets):
+    """Describe focus-mode seeds for the paste / copy box (issue #283).
+
+    ``targets`` is what the focus picker was built from, in its order: dicts
+    carrying the ``kind`` word its label shows ("Class", "Individual", "Data
+    Property", "Concept"), the ``name`` in the already-disambiguated form the
+    picker lists, the ``label`` the multiselect holds it under, and the ``uri``
+    where the entity has one (a SKOS concept's node is keyed by name instead).
+
+    Returns ``(entries, tokens_by_label)``: entries in the shape
+    :func:`parse_filter_text` reads, whose identity is the picker's label — so
+    parsing answers in labels directly — and what to write each label down as.
+
+    The label, not the URI, because one IRI can be two focus targets: OWL puns,
+    and an imported vocabulary that types a resource both ``owl:Class`` and
+    ``skos:Concept`` lists it under Classes and under Concepts. Keyed by URI
+    the two collapsed into one, so ``Class:Person Concept:Person`` restored a
+    single seed. The URI rides along as an alias instead, which is right on its
+    own terms: it names both, so pasting it focuses on both.
+
+    A seed is written as its plain name, and as ``Kind:Name`` when the name
+    belongs to more than one kind — a class and an individual can share one, and
+    the picker's labels are how the app tells them apart. The kind loses its
+    space there (``DataProperty:``) because a token cannot carry one, and so
+    does a name the picker has had to tag for its namespace (``zero(fn)``).
+    That tag is the only namespace handling needed: the names arrive already
+    disambiguated, since that is what the picker lists.
+    """
+    # A name the picker has had to tag carries a space ("zero (fn)"), and a
+    # token cannot: closed up it survives the split, and the parser closes the
+    # pasted text up the same way, so both forms are read.
+    names = {t["label"]: _CLASS_DISPLAY_GAP.sub("(", t["name"]) for t in targets}
+    kinds_by_name: dict[str, set] = {}
+    for t in targets:
+        kinds_by_name.setdefault(names[t["label"]], set()).add(t["kind"])
+    entries = []
+    tokens_by_label = {}
+    for t in targets:
+        name = names[t["label"]]
+        entry = {
+            "name": name,
+            "uri": t["label"],
+            "ambiguous": len(kinds_by_name.get(name, ())) > 1,
+            "prefix": t["kind"].replace(" ", ""),
+            "display": t["label"],
+            "aliases": [t["uri"]] if t.get("uri") else [],
+        }
+        entries.append(entry)
+        tokens_by_label[t["label"]] = filter_entry_token(entry)
+    return entries, tokens_by_label
 
 
 def _fmt_unknown(tokens, limit=20):

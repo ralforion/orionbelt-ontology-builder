@@ -39,6 +39,7 @@ from ..ui import (
     build_class_hierarchy_text,
     build_class_options,
     build_filter_entries,
+    build_focus_seed_entries,
     filter_entry_token,
     focus_seeds_after_request,
     focus_seeds_from_selection,
@@ -667,23 +668,41 @@ def render_visualization():
         # links of every type — not just subclass chains. Seed options are keyed
         # to the same node ids the graph builder assigns.
         focus_targets: dict[str, str] = {}
+        # The same targets in list form, carrying what the paste / copy box
+        # needs to write one down and read it back (issue #283).
+        focus_records: list[dict] = []
+
+        def _focus_target(kind_word, name, node_kind, ref, uri=None):
+            """Register one focusable entity under the label the picker shows."""
+            label = f"{kind_word}: {name}"
+            focus_targets[label] = viz_node_id(node_kind, ref)
+            focus_records.append(
+                {"kind": kind_word, "name": name, "uri": uri, "label": label}
+            )
+
         if show_classes:
             for e in class_entries:
-                focus_targets[f"Class: {e['display']}"] = viz_node_id("class", e["uri"])
+                _focus_target("Class", e["display"], "class", e["uri"], e["uri"])
         if show_individuals:
             for e in ind_entries:
-                focus_targets[f"Individual: {e['display']}"] = viz_node_id(
-                    "individual", e["uri"]
+                _focus_target(
+                    "Individual", e["display"], "individual", e["uri"], e["uri"]
                 )
         if show_data_props:
             for prop in data_props:
-                focus_targets[f"Data Property: {prop['name']}"] = viz_node_id(
-                    "property", prop["uri"]
+                _focus_target(
+                    "Data Property", prop["name"], "property", prop["uri"], prop["uri"]
                 )
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
-                focus_targets[f"Concept: {concept['name']}"] = viz_node_id(
-                    "concept", concept["name"]
+                # A concept's node is keyed by name, not by URI (see
+                # viz_node_id), but the URI is still what a paste may carry.
+                _focus_target(
+                    "Concept",
+                    concept["name"],
+                    "concept",
+                    concept["name"],
+                    concept.get("uri"),
                 )
 
         # A seed whose entity was renamed is held under a label that no longer
@@ -891,6 +910,62 @@ def render_visualization():
                         args=("_viz_cfg_focus_depth", "viz_focus_depth"),
                         help="1 = direct neighbours only; higher pulls in further links.",
                     )
+                # Picking seeds out of a long list is slow and a focus worth
+                # setting is worth keeping, so focus mode takes a pasted list
+                # too and prints the current one back in the same syntax — the
+                # node filter's story (issue #179), asked for here by #283. It
+                # sits where that box does, so the button does not move when the
+                # panel switches between the two modes.
+                # Parsing answers in the picker's own labels: those are the
+                # entries' identity, since one IRI can be two focus targets.
+                _focus_entries, _focus_tokens = build_focus_seed_entries(focus_records)
+                with st.columns([1, 1])[1].popover(
+                    "Paste / copy", use_container_width=True
+                ):
+                    _fpaste_text = st.text_area(
+                        "Paste a list of focus nodes",
+                        key="viz_focus_paste",
+                        height=80,
+                        placeholder="Person Organization Dog",
+                        help="Separate names with spaces, commas or line breaks. "
+                        "Applying replaces the focus. A name shared by several "
+                        "kinds focuses on all of them — write 'Class:Person' "
+                        "(or paste the full URI) to pick just one.",
+                    )
+                    if st.button(
+                        "Apply pasted list",
+                        key="viz_focus_apply_paste",
+                        help="Focus on exactly the pasted entities.",
+                    ):
+                        _fpasted, _funknown = parse_filter_text(
+                            _fpaste_text, _focus_entries
+                        )
+                        # Recorded, not warned from here, for the reason the
+                        # node filter's box records it: applying reruns the
+                        # page and takes anything drawn on that pass with it.
+                        st.session_state["_viz_focus_paste_unknown"] = _funknown
+                        if _fpasted:
+                            st.session_state["_viz_cfg_focus_seeds"] = _fpasted
+                            st.rerun()
+                        elif not _funknown:
+                            st.info("Paste one or more entity names first.")
+                    _funknown_last = st.session_state.get("_viz_focus_paste_unknown")
+                    if _funknown_last:
+                        st.warning(
+                            "Ignored, not focusable (the entity types above "
+                            f"decide what is): {_fmt_unknown(_funknown_last)}"
+                        )
+                    if focus_seeds:
+                        st.caption("Current focus — copy to restore it later:")
+                        st.code(
+                            " ".join(
+                                _focus_tokens[s]
+                                for s in focus_seeds
+                                if s in _focus_tokens
+                            ),
+                            language=None,
+                            wrap_lines=True,
+                        )
                 focus_seed_ids = [
                     focus_targets[s] for s in focus_seeds if s in focus_targets
                 ]
@@ -1042,22 +1117,26 @@ def render_visualization():
                             help=f"Show exactly the pasted {_plural}.",
                         ):
                             _pasted, _unknown = parse_filter_text(_paste_text, _entries)
+                            # Recorded rather than warned from here. Applying a
+                            # selection changes the hidden note, which reruns
+                            # the page, and anything drawn on the pass that
+                            # reruns is discarded with it — so a partly matching
+                            # paste applied silently and never said what it had
+                            # dropped. Recorded, it is there on the pass the
+                            # user sees, and stands until the next Apply
+                            # replaces it. Per kind, so the individuals box does
+                            # not inherit what the classes box ignored.
+                            st.session_state[f"_viz_paste_unknown_{_key}"] = _unknown
                             if _pasted:
-                                # The warning has to outlive the rerun that
-                                # applies the selection, so a partly matching
-                                # paste still reports what it dropped.
-                                st.session_state["_viz_paste_unknown"] = _unknown
                                 st.session_state[f"_viz_cfg_selected_{_key}_uris"] = (
                                     _pasted
                                 )
                                 st.rerun()
-                            elif _unknown:
-                                st.warning(
-                                    f"No {_noun} matched: {_fmt_unknown(_unknown)}"
-                                )
-                            else:
+                            elif not _unknown:
                                 st.info(f"Paste one or more {_noun} names first.")
-                        _unknown_last = st.session_state.pop("_viz_paste_unknown", None)
+                        _unknown_last = st.session_state.get(
+                            f"_viz_paste_unknown_{_key}"
+                        )
                         if _unknown_last:
                             st.warning(
                                 f"Ignored, no such {_noun}: "

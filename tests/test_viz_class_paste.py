@@ -221,3 +221,80 @@ def test_a_new_namespace_twin_does_not_unhide_its_sibling(prefixes):
     # The genuinely new class is the one reported as held back, keyed by URI:
     # a label-keyed reconcile would have named the hidden fn:zero as well.
     assert app.newly_hidden_uris(all_uris, selected, before_known) == [f"{MATH}zero"]
+
+
+# --- The box on the page -----------------------------------------------------
+
+
+def _page_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        for name in ("Person", "Organization", "Department"):
+            om.add_class(name)
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+    app.render_visualization()
+
+
+def _page():
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_page_script)
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return at
+
+
+def _rerun(at):
+    """Run the page again; see tests/test_viz_new_class_hidden.py for the
+    button-group shim this needs."""
+    for group in at.get("button_group"):
+        value = group.value
+        if not isinstance(value, list):
+            group.set_value([value])
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return at
+
+
+def _apply(at, text):
+    at.text_area(key="viz_paste_class").set_value(text)
+    at.button(key="viz_apply_paste_class").click()
+    return _rerun(at)
+
+
+def test_a_partly_matching_paste_still_reports_what_it_dropped():
+    """Regression: it applied silently.
+
+    Applying narrows the filter, which changes the "N hidden" note, which
+    reruns the page — and the warning was drawn on the pass that reran, so it
+    went with it. Recorded in session instead, it survives to the pass the user
+    sees.
+    """
+    at = _apply(_page(), "Organization Bicycle")
+    assert [
+        u.rsplit("#", 1)[-1] for u in at.session_state["_viz_cfg_selected_class_uris"]
+    ] == ["Organization"]
+    assert any("Bicycle" in w.value for w in at.warning), [w.value for w in at.warning]
+
+
+def test_the_report_stands_until_the_next_apply_replaces_it():
+    at = _apply(_page(), "Organization Bicycle")
+    at = _rerun(at)
+    assert any("Bicycle" in w.value for w in at.warning)
+    at = _apply(at, "Person")
+    assert not [w for w in at.warning if "Bicycle" in w.value]
+
+
+def test_a_paste_matching_nothing_says_so_and_changes_nothing():
+    at = _page()
+    before = list(at.session_state["_viz_cfg_selected_class_uris"])
+    at = _apply(at, "Bicycle Tandem")
+    assert at.session_state["_viz_cfg_selected_class_uris"] == before
+    assert any("Bicycle" in w.value for w in at.warning), [w.value for w in at.warning]

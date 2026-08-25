@@ -157,6 +157,7 @@ from .ui import (  # noqa: F401
     build_class_hierarchy_text,
     build_class_options,
     build_filter_entries,
+    build_focus_seed_entries,
     build_namespace_options,
     build_uri_options,
     clearable_selectbox,
