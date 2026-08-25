@@ -154,6 +154,27 @@ def test_resolved_startup_base_prefers_pin(home, monkeypatch):
     assert local_store.resolved_startup_base() == "dark"
 
 
+@pytest.mark.parametrize("write_config", [False, True])
+def test_an_absent_config_follows_the_os_like_an_empty_one(
+    home, monkeypatch, write_config
+):
+    """Issue #139 reported that the OS theme was only followed once a (even
+    empty) config.json existed. It is not what decides: a missing file and an
+    empty one both load as ``{}``, so neither pins a theme and both fall
+    through to the OS. What decides is whether ``darkdetect`` can be imported,
+    which is to say whether the app was installed with one of the extras that
+    ships it. Pinned here so the reported quirk cannot become true later.
+    """
+    fake = types.ModuleType("darkdetect")
+    fake.theme = lambda: "Dark"
+    monkeypatch.setitem(sys.modules, "darkdetect", fake)
+    if write_config:
+        local_store.config_file().write_text("{}", encoding="utf-8")
+    assert local_store.config_file().exists() is write_config
+    assert local_store.load_config() == {}
+    assert local_store.resolved_startup_base() == "dark"
+
+
 def test_resolved_startup_base_falls_back_to_system(home, monkeypatch):
     fake = types.ModuleType("darkdetect")
     fake.theme = lambda: "Dark"
