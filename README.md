@@ -524,6 +524,18 @@ Not implemented yet, listed here so it is clear what the workbench does *not* do
 
 An ontology-based MCP server that analyzes relational database schemas (PostgreSQL, Snowflake, Dremio) and generates RDF/OWL ontologies with embedded SQL mappings. Together with the Ontology Builder, they form a toolkit for ontology-driven data modeling.
 
+## Acknowledgements
+
+[@SuperCowProducts](https://github.com/SuperCowProducts) has filed the large
+majority of this project's issue reports, and much of the Visualization page as
+it stands was shaped by them: the node filter, focus mode, the details panel and
+the graph's camera behaviour all came out of their reports. They also wrote the
+filter reconcile that the "Auto-show new" setting turns on
+([#326](https://github.com/ralforion/orionbelt-ontology-builder/issues/326)).
+
+Thanks also to everyone else who files a bug, sends a patch, or tells us what
+does not work.
+
 ## License
 
 Copyright 2025–2026 [RALFORION d.o.o.](https://ralforion.com)
