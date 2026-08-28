@@ -59,15 +59,51 @@ def test_on_still_drops_what_was_deleted():
 
 
 def test_on_leaves_a_deliberately_emptied_filter_empty():
-    """Nothing is "new" when the user clears the filter, and an empty view is a
-    view — the setting must not quietly refill it."""
+    """An empty view is a view, and the one auto-add could never be undone from:
+    every entity created afterwards would walk straight back into it.
+
+    The new entity has to be in ``all_uris`` for this to test anything — with
+    nothing new to add, the setting has no way to refill the filter and the
+    assertion holds whatever the rule is (Codex review of PR #332).
+    """
     selected, _known = app.reconcile_filter_selection(
-        _uris("Shown", "Hidden"),
+        _uris("Shown", "Hidden", "Bicycle"),
         [],
         set(_uris("Shown", "Hidden")),
         auto_show_new=True,
     )
     assert selected == []
+
+
+def test_an_emptied_filter_still_queues_what_was_created():
+    """It degrades to the setting-off behaviour rather than swallowing the
+    creation: "Show new" is still the way in."""
+    all_uris = _uris("Shown", "Hidden", "Bicycle")
+    selected, _known = app.reconcile_filter_selection(
+        all_uris, [], set(_uris("Shown", "Hidden")), auto_show_new=True
+    )
+    assert app.newly_hidden_uris(all_uris, selected, set(_uris("Shown", "Hidden"))) == [
+        NS + "Bicycle"
+    ]
+
+
+def test_taking_the_queue_in_makes_the_filter_non_empty_again():
+    """And then it is a narrowed filter like any other, so the next creation
+    joins it: emptiness is a state, not a permanent opt-out."""
+    selected, known = app.reconcile_filter_selection(
+        _uris("Shown", "Hidden", "Bicycle"),
+        _uris("Bicycle"),
+        set(_uris("Shown", "Hidden", "Bicycle")),
+        auto_show_new=True,
+    )
+    assert selected == _uris("Bicycle")
+    selected, _known = app.reconcile_filter_selection(
+        _uris("Shown", "Hidden", "Bicycle", "Wheel"),
+        selected,
+        known,
+        auto_show_new=True,
+    )
+    assert selected == _uris("Bicycle", "Wheel")
 
 
 def test_on_does_not_change_a_replacement():

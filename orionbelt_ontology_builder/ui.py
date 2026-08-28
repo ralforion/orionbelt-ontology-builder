@@ -5246,7 +5246,8 @@ def reconcile_filter_selection(
       belongs (issue #194) — unless ``auto_show_new`` says otherwise, in which
       case they are added to a narrowed filter too (issue #326);
     - the rest of the selection is left as-is, so a deliberately emptied filter
-      stays empty (nothing is "new" when the user clears it).
+      stays empty (nothing is "new" when the user clears it), which
+      ``auto_show_new`` does not override.
 
     Auto-adding into a narrowed filter used to be unconditional. It is right for
     the default view and wrong for a curated one: a filter narrowed to a handful
@@ -5296,10 +5297,18 @@ def reconcile_filter_selection(
         selected_set = all_set
     else:
         selected_set = set(selected) & all_set
-        if auto_show_new:
+        if auto_show_new and selected:
             # Everything the previous render had never seen is new, and the
             # setting says new content joins the view rather than queueing up
             # behind "Show new" (issue #326).
+            #
+            # Not into a filter the user cleared, though. Empty is a view too,
+            # and the one auto-add could never be undone from: every entity
+            # created afterwards would walk straight back into it, so there
+            # would be no way to keep an empty canvas while building. Clearing
+            # it stays the deliberate act the rule above describes, and what is
+            # created lands behind "Show new" the way it does with the setting
+            # off.
             selected_set |= all_set - known
     ordered = [u for u in all_uris if u in selected_set]
     return ordered, all_set
