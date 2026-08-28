@@ -1276,7 +1276,10 @@ def focus_seeds_from_selection(selected_classes, class_count):
 
 
 def focus_seeds_after_request(seeds, label, replace=False):
-    """The focus seeds a modifier-click in the graph leaves behind.
+    """What a modifier-click on a graph node leaves the focus as.
+
+    Returns ``(seeds, focus_on)`` — the new seed list and whether focus mode
+    should still be on.
 
     Ctrl/Cmd-click adds the node to whatever is focused already (issue #56),
     which is what building a neighbourhood up out of several nodes needs.
@@ -1284,15 +1287,37 @@ def focus_seeds_after_request(seeds, label, replace=False):
     time is the common case, and it otherwise means emptying the picker by hand
     between hops.
 
-    Clicking a node that is already a seed changes nothing either way, rather
-    than duplicating it in the multiselect.
+    Clicking a node that is *already* focused used to do nothing at all, which
+    left no way back out of focus mode except reaching for the checkbox. Each
+    modifier now undoes its own action instead (issue #328):
+
+    - Ctrl/Cmd-click adds, so on a node that is already a seed it removes it.
+      Taking the last one out leaves nothing to focus on, so the mode goes off
+      with it.
+    - Alt-click sets the focus to exactly one node, so on a node that is
+      *already* the only seed it turns the mode off. The seeds are kept, so
+      switching focus back on returns you to where you were (issue #235). On one
+      of several seeds it still means "now just this one", which is a narrowing
+      the user can still want.
+
+    Every behaviour that changes here was a no-op before, so nothing that did
+    something does something else now.
+
+    The mode has to go off in the same breath as the seeds empty, never on a
+    later render: focus mode with no seeds backfills an arbitrary first node
+    (see render_visualization), so passing through that state would jump the
+    graph to a class the user never picked.
     """
-    if replace:
-        return [label]
     seeds = list(seeds or [])
-    if label not in seeds:
-        seeds.append(label)
-    return seeds
+    if replace:
+        if seeds == [label]:
+            return seeds, False
+        return [label], True
+    if label in seeds:
+        seeds.remove(label)
+        return seeds, bool(seeds)
+    seeds.append(label)
+    return seeds, True
 
 
 def viz_focus_toggle():
