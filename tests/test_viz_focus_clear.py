@@ -305,3 +305,72 @@ def test_a_canvas_click_trims_the_ids_too(session):
 
     assert session["_viz_cfg_focus_seeds"] == []
     assert session["_viz_cfg_focus_seed_ids_by_label"] == {}
+
+
+def test_a_focus_left_off_does_not_poison_the_next_one(session):
+    """The reviewer's route, and the one nothing else trimmed: with the mode
+    off, the render's own prune is what empties the seeds, and the derivation
+    that refills them runs from the checkbox. Both wrote the seeds directly, so
+    the old ids sat there through the whole cycle and pruned the fresh seed."""
+    # Focus was left off with its seeds kept (the Alt-click exit, issue #328).
+    session["_viz_cfg_focus_mode"] = False
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+    session["_viz_cfg_focus_seed_ids_by_label"] = {PERSON: "old_uid"}
+
+    # An ontology is loaded in which that label names a different entity, so the
+    # render's prune drops the seed. That write has to take the id with it.
+    ui.viz_set_focus_seeds(
+        ui.prune_reused_focus_seeds(
+            session["_viz_cfg_focus_seeds"],
+            session["_viz_cfg_focus_seed_ids_by_label"],
+            {PERSON: "new_uid"},
+        )
+    )
+    assert session["_viz_cfg_focus_seeds"] == []
+    assert session["_viz_cfg_focus_seed_ids_by_label"] == {}
+
+    # Ticking focus back on derives fresh seeds, which must survive the prune.
+    session["_viz_cfg_selected_classes"] = ["Person"]
+    session["_viz_cfg_class_count"] = 5
+    session["viz_focus_mode"] = True
+    ui.viz_focus_toggle()
+
+    assert session["_viz_cfg_focus_seeds"] == [PERSON]
+    assert ui.prune_reused_focus_seeds(
+        session["_viz_cfg_focus_seeds"],
+        session.get("_viz_cfg_focus_seed_ids_by_label"),
+        {PERSON: "new_uid"},
+    ) == [PERSON]
+
+
+def test_deriving_seeds_drops_ids_left_from_before(session):
+    """The derivation half on its own: what it produces are labels the user has
+    not picked yet, so no identity on file for them can be theirs."""
+    session["_viz_cfg_focus_seeds"] = []
+    session["_viz_cfg_focus_seed_ids_by_label"] = {PERSON: "old_uid"}
+    session["_viz_cfg_selected_classes"] = ["Person"]
+    session["_viz_cfg_class_count"] = 5
+    session["viz_focus_mode"] = True
+
+    ui.viz_focus_toggle()
+
+    assert session["_viz_cfg_focus_seeds"] == [PERSON]
+    assert "_viz_cfg_focus_seed_ids_by_label" not in session
+
+
+def test_every_way_of_storing_focus_seeds_goes_through_the_setter():
+    """Five call sites reached the seeds directly and two of them left the map
+    behind. Pinning it, since the next one added would too."""
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder"
+    src = (pkg / "ui.py").read_text(encoding="utf-8") + (
+        pkg / "views" / "visualization.py"
+    ).read_text(encoding="utf-8")
+    direct = [
+        line
+        for line in src.splitlines()
+        if '["_viz_cfg_focus_seeds"] =' in line and "viz_set_focus_seeds" not in line
+    ]
+    # The setter itself, and the rename follow, which writes the pair together.
+    assert len(direct) == 1, direct

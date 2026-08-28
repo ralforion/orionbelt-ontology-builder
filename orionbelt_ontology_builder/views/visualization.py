@@ -749,10 +749,16 @@ def render_visualization():
         # render belong to an ontology that has since been swapped out, so drop
         # them before anything reads or persists them.
         if "_viz_cfg_focus_seeds" in st.session_state:
-            st.session_state["_viz_cfg_focus_seeds"] = prune_reused_focus_seeds(
-                st.session_state["_viz_cfg_focus_seeds"],
-                st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
-                focus_targets,
+            # Through the setter, so an id recorded for a label the prune has
+            # just dropped goes with it. This runs whether or not focus mode is
+            # on, and it is the path that empties the seeds while the mode is
+            # off — where nothing else trims the map (Codex review of PR #336).
+            viz_set_focus_seeds(
+                prune_reused_focus_seeds(
+                    st.session_state["_viz_cfg_focus_seeds"],
+                    st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
+                    focus_targets,
+                )
             )
 
         # Seeds saved for this linked file are stored as node ids (#164); turn
@@ -770,7 +776,7 @@ def render_visualization():
                 _label_by_id[i] for i in _pending_seed_ids if i in _label_by_id
             ]
             if _restored_seeds:
-                st.session_state["_viz_cfg_focus_seeds"] = _restored_seeds
+                viz_set_focus_seeds(_restored_seeds)
 
         # Find & centre on a specific entity (issue #144). Independent of focus
         # mode: picking an entity here selects and camera-centres it in the graph
@@ -840,9 +846,7 @@ def render_visualization():
                                 st.session_state.get("_viz_cfg_focus_seeds") or []
                             )
                             if _find_choice not in _seeds:
-                                st.session_state["_viz_cfg_focus_seeds"] = _seeds + [
-                                    _find_choice
-                                ]
+                                viz_set_focus_seeds(_seeds + [_find_choice])
                                 _reveal_rerun = True
                         if _reveal_rerun:
                             st.rerun()
@@ -978,7 +982,7 @@ def render_visualization():
                         # page and takes anything drawn on that pass with it.
                         st.session_state["_viz_focus_paste_unknown"] = _funknown
                         if _fpasted:
-                            st.session_state["_viz_cfg_focus_seeds"] = _fpasted
+                            viz_set_focus_seeds(_fpasted)
                             st.rerun()
                         elif not _funknown:
                             st.info("Paste one or more entity names first.")

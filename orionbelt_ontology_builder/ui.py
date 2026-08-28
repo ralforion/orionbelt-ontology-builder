@@ -1385,9 +1385,18 @@ def viz_focus_toggle():
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
     if on and not st.session_state.get("_viz_cfg_focus_seeds"):
-        st.session_state["_viz_cfg_focus_seeds"] = focus_seeds_from_selection(
-            st.session_state.get("_viz_cfg_selected_classes") or [],
-            st.session_state.get("_viz_cfg_class_count") or 0,
+        # Forgotten wholesale rather than trimmed: these labels are derived
+        # from the class selection, not picked by the user as seeds, so an id on
+        # file against one describes whatever was loaded before rather than the
+        # entity now carrying that name. Trimming would keep such an entry,
+        # since the label *is* a seed again, and the next prune would drop the
+        # seed as a swapped label (the Codex review of PR #336).
+        st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
+        viz_set_focus_seeds(
+            focus_seeds_from_selection(
+                st.session_state.get("_viz_cfg_selected_classes") or [],
+                st.session_state.get("_viz_cfg_class_count") or 0,
+            )
         )
 
 
