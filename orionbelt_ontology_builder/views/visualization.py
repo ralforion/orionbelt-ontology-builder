@@ -63,6 +63,7 @@ from ..ui import (
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,
+    viz_leave_empty_focus,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_id,
@@ -891,7 +892,16 @@ def render_visualization():
                     )
                 saved_seeds = [s for s in saved_seeds if s in label_set]
                 if not saved_seeds:
-                    saved_seeds = [focus_labels[0]]
+                    # Nothing left to focus on. This used to stand in an
+                    # arbitrary first entity, which is how the picker became
+                    # impossible to clear and how a focus whose entity type was
+                    # switched off silently moved to a stranger (issue #335).
+                    # Leave the mode instead, the one landing every route out of
+                    # a focus now shares (issue #328). Reruns so the panel can
+                    # swap back to the node filter; it converges because the
+                    # mode is off on the next pass, so this branch is not taken.
+                    viz_leave_empty_focus()
+                    st.rerun()
                 st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
                 st.session_state["viz_focus_seeds"] = saved_seeds
                 # Remember what each label resolved to, so the next render can

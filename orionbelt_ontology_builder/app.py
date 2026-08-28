@@ -227,6 +227,7 @@ from .ui import (  # noqa: F401
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,
+    viz_leave_empty_focus,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_id,

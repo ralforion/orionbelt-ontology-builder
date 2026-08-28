@@ -105,6 +105,29 @@ def test_clearing_with_the_mode_already_off_touches_nothing(session):
     assert "_viz_settings_dirty" not in session
 
 
+def test_a_focus_whose_seeds_have_all_gone_leaves_the_mode(session):
+    """The other route to an empty focus, and the one no callback sees: the
+    entity was deleted, or its whole type was switched off, so the saved labels
+    resolve to nothing on the next render. That used to move the focus onto an
+    arbitrary first entity behind the user's back."""
+    session["_viz_cfg_focus_mode"] = True
+
+    ui.viz_leave_empty_focus()
+
+    assert session["_viz_cfg_focus_mode"] is False
+    assert session["_viz_settings_dirty"] is True
+
+
+def test_leaving_a_focus_that_is_already_off_changes_nothing(session):
+    """So a render that finds no seeds with the mode already off does not
+    keep marking the settings dirty on every pass."""
+    session["_viz_cfg_focus_mode"] = False
+
+    ui.viz_leave_empty_focus()
+
+    assert "_viz_settings_dirty" not in session
+
+
 def test_turning_the_mode_back_on_starts_over_from_the_selection(session):
     """The "start over" the request asked for: re-ticking the checkbox after a
     clear derives fresh seeds rather than restoring what was cleared."""
@@ -120,3 +143,20 @@ def test_turning_the_mode_back_on_starts_over_from_the_selection(session):
 
     assert session["_viz_cfg_focus_mode"] is True
     assert session["_viz_cfg_focus_seeds"] == [PERSON, ORG]
+
+
+def test_the_render_no_longer_stands_in_a_first_entity():
+    """The backfill itself is gone, not merely unreachable from the picker:
+    every route to an empty focus now ends the mode instead."""
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "orionbelt_ontology_builder"
+        / "views"
+        / "visualization.py"
+    ).read_text(encoding="utf-8")
+    assert "focus_labels[0]" not in src, (
+        "an empty focus is being filled with an arbitrary first entity again"
+    )
+    assert "viz_leave_empty_focus()" in src

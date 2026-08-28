@@ -1391,6 +1391,31 @@ def viz_focus_toggle():
         )
 
 
+def viz_leave_empty_focus() -> None:
+    """Switch focus mode off because there is nothing left to focus on.
+
+    The one landing every route out of a focus shares: the last Ctrl/Cmd-click
+    on the canvas (issue #328), clearing the picker, and a focus whose seeds
+    have all gone — an entity deleted, or its whole type switched off.
+
+    It replaces standing in an arbitrary first entity, which is what made the
+    picker impossible to clear and moved a focus onto a stranger behind the
+    user's back (issue #335). Nothing here picks *for* the user; it just stops
+    pretending a focus is running.
+
+    Also lifts the persisted-settings gate, since ``focus_mode`` is a saved
+    display setting and the save is gated on that flag (#142, and the Codex
+    review of PR #334).
+    """
+    if not st.session_state.get("_viz_cfg_focus_mode"):
+        return
+    st.session_state["_viz_cfg_focus_mode"] = False
+    # The config key only: the next render copies it into the checkbox's widget
+    # key, and writing that here raises once the checkbox has been instantiated
+    # — which it has, by the time the panel below it finds the focus empty.
+    st.session_state["_viz_settings_dirty"] = True
+
+
 def viz_focus_seeds_changed():
     """Persist the focus seeds, and leave focus mode when the last one goes.
 
@@ -1416,12 +1441,8 @@ def viz_focus_seeds_changed():
         return
     seeds = st.session_state["viz_focus_seeds"] or []
     st.session_state["_viz_cfg_focus_seeds"] = seeds
-    if not seeds and st.session_state.get("_viz_cfg_focus_mode"):
-        st.session_state["_viz_cfg_focus_mode"] = False
-        # focus_mode is a persisted display setting and the save is gated on the
-        # dirty flag (#142) — the same gate the canvas click had to lift (the
-        # Codex review of PR #334), for the same reason.
-        st.session_state["_viz_settings_dirty"] = True
+    if not seeds:
+        viz_leave_empty_focus()
 
 
 def viz_find_changed():
