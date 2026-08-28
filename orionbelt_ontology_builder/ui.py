@@ -52,6 +52,7 @@ _VIZ_PERSIST_KEYS = (
     "node_spacing",
     "fit",
     "highlight_issues",
+    "auto_show_new",
     "details_panel",
     "focus_mode",
     "focus_depth",
@@ -620,14 +621,27 @@ def _persist_viz_settings() -> None:
     Gated on an explicit change (the dirty flag set by the settings callbacks),
     not merely on the page rendering: otherwise a cloud reload could write the
     starting defaults back over a saved set before localStorage had answered
-    (PR #142 review P1). No-ops when nothing changed since the last write.
+    (PR #142 review P1).
+
+    Only the disk write is finished by the time this returns, and only it is
+    recorded as saved. The browser one is a component render, and a pass that
+    ends in ``st.rerun()`` is discarded along with everything it drew — which
+    is the usual pass here, because changing a setting often moves the
+    hidden-note count and that recompute reruns the page. Recording it as saved
+    there made the loss permanent: the next pass found the payload already
+    saved and never rendered the component again, so the setting was gone on
+    the next reload. So the browser path re-offers the payload until a pass
+    survives to carry it. The component is keyed by the payload's hash, so
+    those are all the same component writing the same value, not a queue of
+    writes (issue #326: turning "Auto-show new" on takes in what was queued,
+    which moves that count, so the very first use hit this every time).
     """
     if not st.session_state.get("_viz_settings_dirty"):
         return
     payload = _viz_settings_payload()
-    if payload == st.session_state.get("_viz_settings_saved_json"):
-        return
     if local_store.local_persist_enabled():
+        if payload == st.session_state.get("_viz_settings_saved_json"):
+            return
         try:
             cfg = local_store.load_config()
             cfg["viz_settings"] = json.loads(payload)
@@ -635,15 +649,13 @@ def _persist_viz_settings() -> None:
         except OSError as e:
             log_error(e, context="Viz settings save")
             return
-    else:
-        ls = _get_local_storage()
-        if ls is None:
-            return
-        h = _content_hash(payload)
-        ls.setItem(
-            VIZ_SETTINGS_KEY, payload, key=f"orionbelt_viz_settings_set_{h[:12]}"
-        )
-    st.session_state["_viz_settings_saved_json"] = payload
+        st.session_state["_viz_settings_saved_json"] = payload
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        return
+    h = _content_hash(payload)
+    ls.setItem(VIZ_SETTINGS_KEY, payload, key=f"orionbelt_viz_settings_set_{h[:12]}")
 
 
 def custom_language_packs() -> dict[str, list[dict]]:
@@ -1213,6 +1225,36 @@ def viz_filter_changed(kind_key, uri_by_display):
     st.session_state[f"_viz_cfg_selected_{kind_key}_uris"] = [
         uri_by_display[d] for d in picked if d in uri_by_display
     ]
+
+
+def viz_auto_show_new_toggled():
+    """Persist "Auto-show new", and on switching it on let in what is queued.
+
+    The filter may already be holding entities back behind "Show new (N)" when
+    the setting is turned on. Leaving them there would break the half of the
+    promise the user can see: those are precisely the ones it says should have
+    come in. The reconcile cannot do it — by now they are in ``known``, so it no
+    longer reads them as new — so they are folded into the selection here, the
+    same merge the button does.
+
+    Order is not preserved and does not need to be: the next render's
+    :func:`reconcile_filter_selection` returns the selection in entity-list
+    order, and the queued list prunes itself the moment its entries are shown.
+    """
+    viz_sync("_viz_cfg_auto_show_new", "viz_auto_show_new")
+    if not st.session_state.get("_viz_cfg_auto_show_new"):
+        return
+    for kind in _FILTER_KINDS:
+        key = kind["key"]
+        pending = st.session_state.get(f"_viz_new_hidden_{key}") or []
+        if not pending:
+            continue
+        selected = st.session_state.get(f"_viz_cfg_selected_{key}_uris") or []
+        seen = set(selected)
+        st.session_state[f"_viz_cfg_selected_{key}_uris"] = [
+            *selected,
+            *(uri for uri in pending if uri not in seen),
+        ]
 
 
 def focus_seeds_from_selection(selected_classes, class_count):
@@ -5189,7 +5231,9 @@ def follow_filter_renames(all_uris, selected, known, renames, node_kind):
     )
 
 
-def reconcile_filter_selection(all_uris, selected, known, replaced=False):
+def reconcile_filter_selection(
+    all_uris, selected, known, replaced=False, auto_show_new=False
+):
     """Reconcile one Visualization filter's selection with the ontology.
 
     Diffs the current URIs against those seen on the previous render (``known``)
@@ -5199,9 +5243,11 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     - entities deleted since last render drop out of the selection;
     - entities created since last render are added *only while the filter is
       showing everything*, which is where "new content is shown by default"
-      belongs (issue #194);
+      belongs (issue #194) — unless ``auto_show_new`` says otherwise, in which
+      case they are added to a narrowed filter too (issue #326);
     - the rest of the selection is left as-is, so a deliberately emptied filter
-      stays empty (nothing is "new" when the user clears it).
+      stays empty (nothing is "new" when the user clears it), which
+      ``auto_show_new`` does not override.
 
     Auto-adding into a narrowed filter used to be unconditional. It is right for
     the default view and wrong for a curated one: a filter narrowed to a handful
@@ -5211,6 +5257,13 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
     ``set(selected) == known`` already means "was showing everything". The
     caller pairs this with :func:`newly_hidden_uris` so a creation that lands
     outside the filter is announced rather than silently dropped.
+
+    Which of the two a user wants turns out to depend on the ontology, not on
+    taste: curating a handful of key classes out of five hundred, a new class
+    forcing its way in is noise; building a small one class by class, being
+    told each time that what you just made is not on the canvas is friction.
+    ``auto_show_new`` is that choice, off by default so the shipped behaviour
+    is unchanged (issue #326).
 
     ``replaced`` marks that the whole ontology was swapped (load/import/new/undo)
     rather than incrementally edited. Diffing must not run then: an unrelated
@@ -5244,6 +5297,19 @@ def reconcile_filter_selection(all_uris, selected, known, replaced=False):
         selected_set = all_set
     else:
         selected_set = set(selected) & all_set
+        if auto_show_new and selected:
+            # Everything the previous render had never seen is new, and the
+            # setting says new content joins the view rather than queueing up
+            # behind "Show new" (issue #326).
+            #
+            # Not into a filter the user cleared, though. Empty is a view too,
+            # and the one auto-add could never be undone from: every entity
+            # created afterwards would walk straight back into it, so there
+            # would be no way to keep an empty canvas while building. Clearing
+            # it stays the deliberate act the rule above describes, and what is
+            # created lands behind "Show new" the way it does with the setting
+            # off.
+            selected_set |= all_set - known
     ordered = [u for u in all_uris if u in selected_set]
     return ordered, all_set
 

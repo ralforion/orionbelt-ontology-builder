@@ -56,6 +56,7 @@ from ..ui import (
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
+    viz_auto_show_new_toggled,
     viz_filter_changed,
     viz_find_changed,
     viz_focus_toggle,
@@ -365,6 +366,10 @@ def render_visualization():
             "fit": True,
             "details_panel": False,
             "highlight_issues": False,
+            # Off keeps the shipped behaviour: a narrowed filter is a view the
+            # user built, and a class created afterwards waits behind "Show
+            # new" rather than pushing into it (issues #194, #326).
+            "auto_show_new": False,
             "focus_mode": False,
             "focus_depth": 1,
             "options_open": True,
@@ -534,6 +539,7 @@ def render_visualization():
         node_spacing = _cfg["_viz_cfg_node_spacing"]
         fit = _cfg["_viz_cfg_fit"]
         highlight_issues = _cfg["_viz_cfg_highlight_issues"]
+        auto_show_new = _cfg["_viz_cfg_auto_show_new"]
 
         validation_subjects = set()
         if highlight_issues:
@@ -601,6 +607,7 @@ def render_visualization():
                 _prev_sel,
                 _prev_known,
                 replaced=replaced,
+                auto_show_new=auto_show_new,
             )
             st.session_state[f"_viz_cfg_selected_{_key}_uris"] = _sel_uris
             st.session_state[f"_viz_cfg_known_{_key}_uris"] = _known_uris
@@ -1160,6 +1167,23 @@ def render_visualization():
                                 language=None,
                                 wrap_lines=True,
                             )
+                    # Which behaviour a narrowed filter should have is a
+                    # property of the ontology you are working on, so it is a
+                    # setting rather than a fixed rule (issue #326). It sits
+                    # here, under the "Show new" button it replaces, because
+                    # this is where the behaviour is visible; it governs every
+                    # filterable kind, not just the segment on screen, so the
+                    # label names none of them.
+                    st.checkbox(
+                        "Auto-show new",
+                        key="viz_auto_show_new",
+                        on_change=viz_auto_show_new_toggled,
+                        help="Let entities created from now on join a narrowed "
+                        "filter by themselves, instead of being held back and "
+                        "offered as 'Show new'. Turning it on also lets in "
+                        "whatever is queued there now. Applies to every "
+                        "filterable kind.",
+                    )
                 # Authoritative regardless of which segment is on screen: the
                 # class filter still applies while you are editing another kind.
                 selected_classes = selected_classes_list

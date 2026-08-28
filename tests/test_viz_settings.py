@@ -25,12 +25,14 @@ class _FakeLS:
     def __init__(self, value=None):
         self._value = value
         self.saved = None
+        self.writes: list = []
 
     def getItem(self, _key):
         return self._value
 
     def setItem(self, _key, value, key=None):
         self.saved = value
+        self.writes.append((value, key))
 
 
 def test_apply_validates_types_and_clamps_ints(monkeypatch, patch_ui):
@@ -151,6 +153,46 @@ def test_browser_dirty_change_is_saved(monkeypatch, patch_ui):
     app._persist_viz_settings()
     assert ls.saved is not None
     assert json.loads(ls.saved)["show_skos"] is False
+
+
+def test_browser_save_is_re_offered_until_a_pass_survives(monkeypatch, patch_ui):
+    """A pass that ends in ``st.rerun()`` is discarded along with everything it
+    drew, and the browser save is a component render — so a save made on such a
+    pass never reaches the browser. Recording it as saved made that permanent:
+    the next pass found nothing to do and the setting was gone on reload. It has
+    to keep being offered (issue #326 hit this on the toggle's very first use,
+    because taking in the queued entities moves the hidden-note count and that
+    recompute reruns the page).
+    """
+    ls = _FakeLS(None)
+    monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: False)
+    patch_ui("_get_local_storage", lambda: ls)
+    state: dict = {"_viz_settings_dirty": True, "_viz_cfg_show_skos": False}
+    monkeypatch.setattr(app.st, "session_state", state)
+
+    app._persist_viz_settings()
+    app._persist_viz_settings()
+
+    assert len(ls.writes) == 2, "the payload was offered once and then dropped"
+    # The same component writing the same value, not a queue of writes: the key
+    # is the payload's hash, so the browser sees one localStorage entry.
+    assert ls.writes[0] == ls.writes[1]
+
+
+def test_disk_save_still_happens_once(monkeypatch, patch_ui, tmp_path):
+    """The disk write is finished by the time it returns, so it keeps its
+    no-op — nothing there can discard it."""
+    cfg_file = tmp_path / "config.json"
+    monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
+    monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
+    state: dict = {"_viz_settings_dirty": True, "_viz_cfg_fit": False}
+    monkeypatch.setattr(app.st, "session_state", state)
+
+    app._persist_viz_settings()
+    assert state["_viz_settings_saved_json"] == json.dumps({"fit": False})
+    first = cfg_file.stat().st_mtime_ns
+    app._persist_viz_settings()
+    assert cfg_file.stat().st_mtime_ns == first
 
 
 def test_restore_defers_to_in_progress_changes(monkeypatch, patch_ui):
