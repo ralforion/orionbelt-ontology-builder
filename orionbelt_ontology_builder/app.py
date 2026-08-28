@@ -223,6 +223,7 @@ from .ui import (  # noqa: F401
     viz_drop_focus_seeds,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_seeds_changed,
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,

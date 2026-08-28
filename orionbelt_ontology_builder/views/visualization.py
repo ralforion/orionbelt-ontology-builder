@@ -59,6 +59,7 @@ from ..ui import (
     viz_auto_show_new_toggled,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_seeds_changed,
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,
@@ -905,8 +906,7 @@ def render_visualization():
                         "Focus node(s)",
                         options=focus_labels,
                         key="viz_focus_seeds",
-                        on_change=viz_sync,
-                        args=("_viz_cfg_focus_seeds", "viz_focus_seeds"),
+                        on_change=viz_focus_seeds_changed,
                         help="Classes, individuals or SKOS concepts to centre on. "
                         "The neighbourhood grows from all of them. Starts from "
                         "the classes you had filtered down to, or from one when "

@@ -1391,6 +1391,39 @@ def viz_focus_toggle():
         )
 
 
+def viz_focus_seeds_changed():
+    """Persist the focus seeds, and leave focus mode when the last one goes.
+
+    Focus mode is "show me this node's neighbourhood", so it has nothing to mean
+    with nothing picked. Emptying the picker was undone on the spot by the
+    backfill downstream, which put the first class back in and made the list
+    impossible to clear at all (issue #335). Clearing it now leaves the mode
+    instead, which is where the last Ctrl/Cmd-click on the canvas already lands
+    (issue #328), so both ways out of a focus agree.
+
+    Leaving the mode rather than allowing an empty focus is also what keeps the
+    node cap honest: focus mode is allowed to assemble more nodes than can be
+    drawn only because the prune cuts it back to the seeds' neighbourhood
+    afterwards, and with no seeds nothing prunes (see :func:`graph_node_cap`).
+    An empty focus would have handed the browser the whole ontology, which is
+    the opposite of what clearing the box looks like it should do.
+
+    Switching the mode back on re-derives the seeds from the class selection
+    (see :func:`viz_focus_toggle`), which is the "start over" the request was
+    after.
+    """
+    if _viz_widget_missing("viz_focus_seeds"):
+        return
+    seeds = st.session_state["viz_focus_seeds"] or []
+    st.session_state["_viz_cfg_focus_seeds"] = seeds
+    if not seeds and st.session_state.get("_viz_cfg_focus_mode"):
+        st.session_state["_viz_cfg_focus_mode"] = False
+        # focus_mode is a persisted display setting and the save is gated on the
+        # dirty flag (#142) — the same gate the canvas click had to lift (the
+        # Codex review of PR #334), for the same reason.
+        st.session_state["_viz_settings_dirty"] = True
+
+
 def viz_find_changed():
     """Bump a sequence so the graph re-centres on the picked entity only when the
     Find selection changes — not on every rerun or drag, which would keep yanking
