@@ -234,6 +234,7 @@ from .ui import (  # noqa: F401
     viz_note_rename,
     viz_ontology_was_replaced,
     viz_rename_map,
+    viz_set_focus_seeds,
     viz_sync,
 )
 

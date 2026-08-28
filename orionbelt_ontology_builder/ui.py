@@ -1355,7 +1355,7 @@ def viz_apply_focus_click(label, replace=False):
         seeds, label, replace=replace, focus_on=mode_before
     )
     st.session_state["_viz_cfg_focus_mode"] = focus_on
-    st.session_state["_viz_cfg_focus_seeds"] = seeds
+    viz_set_focus_seeds(seeds)
     if focus_on != mode_before:
         # focus_mode is a persisted display setting (#142) and the save is gated
         # on the dirty flag the widget callbacks set. Switching the mode from the
@@ -1389,6 +1389,31 @@ def viz_focus_toggle():
             st.session_state.get("_viz_cfg_selected_classes") or [],
             st.session_state.get("_viz_cfg_class_count") or 0,
         )
+
+
+def viz_set_focus_seeds(seeds) -> None:
+    """Store the focus seeds, keeping the label -> id map to just those.
+
+    That map is what :func:`prune_reused_focus_seeds` compares against to tell a
+    label that has come to name a *different* entity from one that still names
+    the same (issue #180). An entry left behind for a label that is no longer a
+    seed outlives the entity it described: clear the focus, import an ontology
+    that also has a ``Bicycle``, pick it again, and the stale id says it is a
+    different Bicycle, so it is pruned and the focus ends before it starts (the
+    Codex review of PR #336).
+
+    Trimming rather than clearing outright, so the labels that *are* still seeds
+    keep the identity they were last seen under. A seed with no entry is one the
+    user has just picked, which the prune keeps.
+    """
+    seeds = list(seeds or [])
+    st.session_state["_viz_cfg_focus_seeds"] = seeds
+    ids = st.session_state.get("_viz_cfg_focus_seed_ids_by_label")
+    if ids:
+        kept = set(seeds)
+        st.session_state["_viz_cfg_focus_seed_ids_by_label"] = {
+            label: node_id for label, node_id in ids.items() if label in kept
+        }
 
 
 def viz_leave_empty_focus() -> None:
@@ -1439,9 +1464,8 @@ def viz_focus_seeds_changed():
     """
     if _viz_widget_missing("viz_focus_seeds"):
         return
-    seeds = st.session_state["viz_focus_seeds"] or []
-    st.session_state["_viz_cfg_focus_seeds"] = seeds
-    if not seeds:
+    viz_set_focus_seeds(st.session_state["viz_focus_seeds"])
+    if not st.session_state["_viz_cfg_focus_seeds"]:
         viz_leave_empty_focus()
 
 

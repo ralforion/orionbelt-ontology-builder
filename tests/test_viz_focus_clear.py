@@ -241,3 +241,67 @@ def test_the_render_no_longer_stands_in_a_first_entity():
         "an empty focus is being filled with an arbitrary first entity again"
     )
     assert "viz_leave_empty_focus()" in src
+
+
+# --- the label -> id map must not outlive the seeds ---------------------------
+
+
+def test_clearing_the_picker_drops_the_recorded_ids(session):
+    """The map is what tells a label that has come to name a different entity
+    from one that still names the same (issue #180). Left behind for a label
+    that is no longer a seed, it outlives the entity it described."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+    session["_viz_cfg_focus_seed_ids_by_label"] = {PERSON: "old_uid"}
+    session["viz_focus_seeds"] = []
+
+    ui.viz_focus_seeds_changed()
+
+    assert session["_viz_cfg_focus_seed_ids_by_label"] == {}
+
+
+def test_a_seed_picked_again_after_a_swap_is_not_pruned(session):
+    """The failure the stale map caused: clear the focus, import an ontology
+    that also has a Bicycle, pick it again, and the old id says it is a
+    different Bicycle — so it was pruned and the focus ended before it started
+    (the Codex review of PR #336)."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+    session["_viz_cfg_focus_seed_ids_by_label"] = {PERSON: "old_uid"}
+    session["viz_focus_seeds"] = []
+    ui.viz_focus_seeds_changed()
+
+    # The label now resolves to a different entity in the ontology just loaded.
+    kept = ui.prune_reused_focus_seeds(
+        [PERSON],
+        session["_viz_cfg_focus_seed_ids_by_label"],
+        {PERSON: "new_uid"},
+    )
+
+    assert kept == [PERSON]
+
+
+def test_the_ids_of_seeds_that_remain_are_kept(session):
+    """Trimmed, not cleared: a label that is still a seed keeps the identity it
+    was last seen under, so a genuine swap under it is still caught."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON, ORG]
+    session["_viz_cfg_focus_seed_ids_by_label"] = {PERSON: "p_uid", ORG: "o_uid"}
+    session["viz_focus_seeds"] = [ORG]
+
+    ui.viz_focus_seeds_changed()
+
+    assert session["_viz_cfg_focus_seed_ids_by_label"] == {ORG: "o_uid"}
+
+
+def test_a_canvas_click_trims_the_ids_too(session):
+    """The other route that empties the seeds: Ctrl/Cmd-click on the last one
+    (issue #328)."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+    session["_viz_cfg_focus_seed_ids_by_label"] = {PERSON: "old_uid"}
+
+    ui.viz_apply_focus_click(PERSON)
+
+    assert session["_viz_cfg_focus_seeds"] == []
+    assert session["_viz_cfg_focus_seed_ids_by_label"] == {}

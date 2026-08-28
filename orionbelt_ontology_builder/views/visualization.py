@@ -69,6 +69,7 @@ from ..ui import (
     viz_node_id,
     viz_ontology_was_replaced,
     viz_rename_map,
+    viz_set_focus_seeds,
     viz_sync,
 )
 
@@ -897,7 +898,7 @@ def render_visualization():
                 # re-deriving from the class selection, find them invalid again,
                 # and turn straight off — a focus that can never be switched on
                 # again (the Codex review of PR #336).
-                st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
+                viz_set_focus_seeds(saved_seeds)
                 if not saved_seeds:
                     # Nothing left to focus on. This used to stand in an
                     # arbitrary first entity, which is how the picker became
