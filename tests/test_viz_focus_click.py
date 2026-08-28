@@ -11,7 +11,9 @@ switches the mode off when the focus is already exactly that node. Every case
 that changed was a no-op before.
 """
 
-from orionbelt_ontology_builder import app
+import pytest
+
+from orionbelt_ontology_builder import app, ui
 
 PERSON = "Class: Person"
 ORG = "Class: Org"
@@ -23,15 +25,17 @@ ROLE = "Class: Role"
 
 def test_ctrl_click_adds_to_what_is_already_focused():
     """Building a neighbourhood up out of several nodes."""
-    assert app.focus_seeds_after_request([PERSON], ORG) == ([PERSON, ORG], True)
+    assert app.focus_seeds_after_request([PERSON], ORG, focus_on=True) == (
+        [PERSON, ORG],
+        True,
+    )
 
 
 def test_alt_click_focuses_on_that_node_alone():
     """The point of issue #276."""
-    assert app.focus_seeds_after_request([PERSON, ORG], ROLE, replace=True) == (
-        [ROLE],
-        True,
-    )
+    assert app.focus_seeds_after_request(
+        [PERSON, ORG], ROLE, replace=True, focus_on=True
+    ) == ([ROLE], True)
 
 
 def test_a_first_click_starts_the_focus_either_way():
@@ -46,39 +50,77 @@ def test_a_first_click_starts_the_focus_either_way():
 def test_ctrl_clicking_a_focused_node_drops_it():
     """Ctrl/cmd-click adds, so on a node it already added it takes it back out.
     The others stay, and the mode stays on with them."""
-    assert app.focus_seeds_after_request([PERSON, ORG], PERSON) == ([ORG], True)
+    assert app.focus_seeds_after_request([PERSON, ORG], PERSON, focus_on=True) == (
+        [ORG],
+        True,
+    )
 
 
 def test_ctrl_clicking_the_last_focused_node_turns_the_mode_off():
     """Nothing left to focus on. The mode has to go off in the same breath: with
     it on and no seeds, the page backfills an arbitrary first node, so the graph
     would jump to a class nobody picked."""
-    assert app.focus_seeds_after_request([PERSON], PERSON) == ([], False)
+    assert app.focus_seeds_after_request([PERSON], PERSON, focus_on=True) == ([], False)
 
 
 def test_alt_clicking_the_only_focused_node_turns_the_mode_off():
     """Alt-click sets the focus to exactly one node, so on the node it is
     already set to, it is the way back out."""
-    assert app.focus_seeds_after_request([PERSON], PERSON, replace=True) == (
-        [PERSON],
-        False,
-    )
+    assert app.focus_seeds_after_request(
+        [PERSON], PERSON, replace=True, focus_on=True
+    ) == ([PERSON], False)
 
 
 def test_the_alt_click_exit_keeps_the_seeds():
     """So switching focus back on returns you where you were, rather than to a
     node derived from the class selection (issue #235)."""
-    seeds, focus_on = app.focus_seeds_after_request([PERSON], PERSON, replace=True)
+    seeds, focus_on = app.focus_seeds_after_request(
+        [PERSON], PERSON, replace=True, focus_on=True
+    )
     assert (seeds, focus_on) == ([PERSON], False)
 
 
 def test_alt_clicking_one_of_several_still_narrows():
     """Not an exit: the focus is not already *exactly* that node, so "now just
     this one" is still what the user asked for and still what they get."""
-    assert app.focus_seeds_after_request([PERSON, ORG], PERSON, replace=True) == (
+    assert app.focus_seeds_after_request(
+        [PERSON, ORG], PERSON, replace=True, focus_on=True
+    ) == ([PERSON], True)
+
+
+# --- with the mode off, a click just starts focusing (Codex review of #334) --
+
+
+def test_alt_clicking_the_node_you_just_left_focuses_it_again():
+    """The Alt-click exit keeps the seed, so the seed list still says
+    "Person" while the mode is off. Reading focus from the seeds made the
+    obvious next click refuse to do anything."""
+    assert app.focus_seeds_after_request(
+        [PERSON], PERSON, replace=True, focus_on=False
+    ) == ([PERSON], True)
+
+
+def test_ctrl_clicking_a_retained_seed_with_the_mode_off_focuses_it():
+    """Not a removal: there is no focus on screen for it to be the undo of."""
+    assert app.focus_seeds_after_request([PERSON], PERSON, focus_on=False) == (
         [PERSON],
         True,
     )
+
+
+def test_ctrl_clicking_with_the_mode_off_keeps_the_seeds_it_finds():
+    """Turning focus back on from the canvas restores what was kept, the same
+    way ticking the checkbox does (issue #235), and adds the node clicked."""
+    assert app.focus_seeds_after_request([PERSON], ORG, focus_on=False) == (
+        [PERSON, ORG],
+        True,
+    )
+
+
+def test_alt_clicking_with_the_mode_off_still_means_only_this_one():
+    assert app.focus_seeds_after_request(
+        [PERSON, ORG], ROLE, replace=True, focus_on=False
+    ) == ([ROLE], True)
 
 
 # --- and the invariant that made this safe to change -------------------------
@@ -88,6 +130,68 @@ def test_the_caller_s_list_is_not_mutated():
     """The seeds come out of session state; editing that list in place would
     change the stored value before the assignment that is meant to."""
     seeds = [PERSON, ORG]
-    app.focus_seeds_after_request(seeds, ORG)
-    app.focus_seeds_after_request(seeds, PERSON, replace=True)
+    app.focus_seeds_after_request(seeds, ORG, focus_on=True)
+    app.focus_seeds_after_request(seeds, PERSON, replace=True, focus_on=True)
     assert seeds == [PERSON, ORG]
+
+
+# --- and what the page writes when that click arrives ------------------------
+
+
+class _State(dict):
+    """Stand-in for ``st.session_state``, which is read and written both ways."""
+
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
+
+
+@pytest.fixture
+def session(monkeypatch):
+    state = _State()
+    monkeypatch.setattr(ui.st, "session_state", state)
+    return state
+
+
+def test_the_click_writes_the_mode_and_the_seeds_together(session):
+    """Never one render apart: focus mode with no seeds backfills an arbitrary
+    first label, so the graph would jump to a class nobody picked."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+
+    seeds, focus_on = ui.viz_apply_focus_click(PERSON)
+
+    assert (seeds, focus_on) == ([], False)
+    assert session["_viz_cfg_focus_seeds"] == []
+    assert session["_viz_cfg_focus_mode"] is False
+
+
+def test_switching_the_mode_from_the_canvas_marks_the_settings_dirty(session):
+    """focus_mode is persisted (#142) and the save is gated on that flag, which
+    only the widget callbacks used to set. Without it, exiting focus by
+    modifier-click left the saved settings stale across a reload."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+
+    ui.viz_apply_focus_click(PERSON, replace=True)
+
+    assert session["_viz_cfg_focus_mode"] is False
+    assert session["_viz_settings_dirty"] is True
+
+
+def test_turning_the_mode_on_from_the_canvas_marks_it_dirty_too(session):
+    session["_viz_cfg_focus_mode"] = False
+    ui.viz_apply_focus_click(PERSON)
+    assert session["_viz_cfg_focus_mode"] is True
+    assert session["_viz_settings_dirty"] is True
+
+
+def test_a_click_that_leaves_the_mode_alone_does_not_mark_it_dirty(session):
+    """Adding a second seed changes the seeds, which are saved against the
+    linked file rather than with the display settings."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+
+    ui.viz_apply_focus_click(ORG)
+
+    assert session["_viz_cfg_focus_seeds"] == [PERSON, ORG]
+    assert "_viz_settings_dirty" not in session

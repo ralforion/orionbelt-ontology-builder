@@ -218,6 +218,7 @@ from .ui import (  # noqa: F401
     set_active_language_pack,
     set_flash_message,
     show_message,
+    viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_drop_focus_seeds,
     viz_filter_changed,

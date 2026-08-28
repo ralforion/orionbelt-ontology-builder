@@ -41,7 +41,6 @@ from ..ui import (
     build_filter_entries,
     build_focus_seed_entries,
     filter_entry_token,
-    focus_seeds_after_request,
     focus_seeds_from_selection,
     follow_filter_renames,
     follow_focus_seed_renames,
@@ -56,6 +55,7 @@ from ..ui import (
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
+    viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_filter_changed,
     viz_find_changed,
@@ -2311,16 +2311,9 @@ def render_visualization():
                     _focus_label = _id_to_label.get(selection.get("nodeId"))
                     if _focus_label:
                         _replace = bool(selection.get("replace"))
-                        _was = list(st.session_state.get("_viz_cfg_focus_seeds") or [])
-                        _seeds, _focus_on = focus_seeds_after_request(
-                            _was, _focus_label, replace=_replace
+                        _seeds, _focus_on = viz_apply_focus_click(
+                            _focus_label, replace=_replace
                         )
-                        # Both together, never across renders: focus mode with
-                        # no seeds backfills an arbitrary first node further up,
-                        # so a pass through that state would jump the graph to a
-                        # class nobody picked (issue #328).
-                        st.session_state["_viz_cfg_focus_mode"] = _focus_on
-                        st.session_state["_viz_cfg_focus_seeds"] = _seeds
                         if not _focus_on:
                             _note = "Focus off"
                         elif _focus_label not in _seeds:
