@@ -188,6 +188,44 @@ def test_the_render_says_why_it_ended_the_focus():
     assert "_viz_focus_left_note" not in at.session_state
 
 
+def test_a_focus_ended_by_the_render_can_be_switched_back_on():
+    """The seeds that just resolved to nothing must not survive the exit.
+
+    They are still truthy, so viz_focus_toggle would skip re-deriving from the
+    class selection, the next render would find them invalid again and turn the
+    mode straight back off: a focus that can never be switched on again. The
+    write has to happen before the branch reruns (the Codex review of PR #336).
+    """
+    from streamlit.testing.v1 import AppTest
+
+    def _script():
+        import streamlit as st
+
+        from orionbelt_ontology_builder import app
+        from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+        if "ontology" not in st.session_state:
+            om = OntologyManager()
+            om.add_class("Bicycle")
+            om.add_class("Wheel")
+            st.session_state.ontology = om
+            st.session_state["_autosave_restored"] = True
+            st.session_state["_viz_settings_restored"] = True
+            st.session_state["_local_storage"] = None
+            st.session_state["_viz_cfg_focus_mode"] = True
+            # A seed whose entity is gone: deleted, or its type switched off.
+            st.session_state["_viz_cfg_focus_seeds"] = ["Class: Deleted"]
+        app.render_visualization()
+
+    at = AppTest.from_function(_script).run(timeout=120)
+    assert not at.exception, at.exception
+
+    assert at.session_state["_viz_cfg_focus_mode"] is False
+    assert at.session_state["_viz_cfg_focus_seeds"] == [], (
+        "the labels that resolved to nothing survived as the seeds to restore"
+    )
+
+
 def test_the_render_no_longer_stands_in_a_first_entity():
     """The backfill itself is gone, not merely unreachable from the picker:
     every route to an empty focus now ends the mode instead."""

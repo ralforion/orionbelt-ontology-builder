@@ -891,6 +891,13 @@ def render_visualization():
                         len(all_class_names),
                     )
                 saved_seeds = [s for s in saved_seeds if s in label_set]
+                # Written before the branch below reruns. Labels that have just
+                # resolved to nothing must not survive as "the seeds to restore":
+                # they are still truthy, so switching focus back on would skip
+                # re-deriving from the class selection, find them invalid again,
+                # and turn straight off — a focus that can never be switched on
+                # again (the Codex review of PR #336).
+                st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
                 if not saved_seeds:
                     # Nothing left to focus on. This used to stand in an
                     # arbitrary first entity, which is how the picker became
@@ -905,7 +912,6 @@ def render_visualization():
                     # drawn before a rerun goes with the rest of its output.
                     st.session_state["_viz_focus_left_note"] = True
                     st.rerun()
-                st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
                 st.session_state["viz_focus_seeds"] = saved_seeds
                 # Remember what each label resolved to, so the next render can
                 # tell a label that has come to name a different entity from one
