@@ -145,6 +145,49 @@ def test_turning_the_mode_back_on_starts_over_from_the_selection(session):
     assert session["_viz_cfg_focus_seeds"] == [PERSON, ORG]
 
 
+def test_the_render_says_why_it_ended_the_focus():
+    """Un-ticking the box with no explanation is the confusing half of not
+    standing an arbitrary entity in: ticking focus with nothing to derive a
+    first seed from would otherwise just appear not to work.
+
+    Driven through the page rather than asserted at the source, because the note
+    has to survive the reruns between being queued and being raised — the pass
+    that ends the focus reruns, and so does the hidden-note recompute after it,
+    and anything drawn on a pass that reruns goes with it.
+    """
+    from streamlit.testing.v1 import AppTest
+
+    def _script():
+        import streamlit as st
+
+        from orionbelt_ontology_builder import app
+        from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+        if "ontology" not in st.session_state:
+            om = OntologyManager()
+            om.add_class("Bicycle")
+            om.add_class("Wheel")
+            st.session_state.ontology = om
+            st.session_state["_autosave_restored"] = True
+            # Mounting the localStorage component blocks with no browser to
+            # answer it, and ending a focus lifts the save's dirty gate.
+            st.session_state["_viz_settings_restored"] = True
+            st.session_state["_local_storage"] = None
+            st.session_state["_viz_cfg_focus_mode"] = True
+            st.session_state["_viz_cfg_focus_seeds"] = []
+        app.render_visualization()
+
+    at = AppTest.from_function(_script).run(timeout=120)
+    assert not at.exception, at.exception
+
+    assert at.session_state["_viz_cfg_focus_mode"] is False
+    assert [t.value for t in at.toast] == [
+        "Focus off: nothing left to focus on. Ctrl/Cmd-click a node to start a new one."
+    ]
+    # Consumed, so it is not raised again on every later render.
+    assert "_viz_focus_left_note" not in at.session_state
+
+
 def test_the_render_no_longer_stands_in_a_first_entity():
     """The backfill itself is gone, not merely unreachable from the picker:
     every route to an empty focus now ends the mode instead."""

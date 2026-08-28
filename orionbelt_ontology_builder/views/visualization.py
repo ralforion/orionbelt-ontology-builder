@@ -901,6 +901,9 @@ def render_visualization():
                     # swap back to the node filter; it converges because the
                     # mode is off on the next pass, so this branch is not taken.
                     viz_leave_empty_focus()
+                    # Queued, not raised here: this pass reruns, and a toast
+                    # drawn before a rerun goes with the rest of its output.
+                    st.session_state["_viz_focus_left_note"] = True
                     st.rerun()
                 st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
                 st.session_state["viz_focus_seeds"] = saved_seeds
@@ -2160,6 +2163,17 @@ def render_visualization():
             st.session_state.pop("_viz_new_hidden_announce", None) or []
         ):
             st.toast(_announcement, icon="🙈")
+        # Focus mode ended itself because nothing was left to focus on — the
+        # entity went, its type was switched off, or there was nothing to derive
+        # a first seed from. Silently un-ticking the box is the confusing half of
+        # not standing an arbitrary entity in (issue #335), so say so, and say
+        # what starts a focus instead.
+        if st.session_state.pop("_viz_focus_left_note", False):
+            st.toast(
+                "Focus off: nothing left to focus on. Ctrl/Cmd-click a node to "
+                "start a new one.",
+                icon="🎯",
+            )
         # Say what is being held back, small, right above the canvas: a focus or
         # a narrowed filter is otherwise invisible, and an entity that isn't
         # drawn looks lost rather than filtered (issue #222 follow-up).
