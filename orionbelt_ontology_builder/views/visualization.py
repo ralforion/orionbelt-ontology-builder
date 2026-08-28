@@ -41,7 +41,6 @@ from ..ui import (
     build_filter_entries,
     build_focus_seed_entries,
     filter_entry_token,
-    focus_seeds_after_request,
     focus_seeds_from_selection,
     follow_filter_renames,
     follow_focus_seed_renames,
@@ -56,6 +55,7 @@ from ..ui import (
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
+    viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_filter_changed,
     viz_find_changed,
@@ -2311,19 +2311,19 @@ def render_visualization():
                     _focus_label = _id_to_label.get(selection.get("nodeId"))
                     if _focus_label:
                         _replace = bool(selection.get("replace"))
-                        st.session_state["_viz_cfg_focus_mode"] = True
-                        st.session_state["_viz_cfg_focus_seeds"] = (
-                            focus_seeds_after_request(
-                                st.session_state.get("_viz_cfg_focus_seeds"),
-                                _focus_label,
-                                replace=_replace,
+                        _seeds, _focus_on = viz_apply_focus_click(
+                            _focus_label, replace=_replace
+                        )
+                        if not _focus_on:
+                            _note = "Focus off"
+                        elif _focus_label not in _seeds:
+                            # Ctrl/Cmd-click took it out and left others behind.
+                            _note = f"Dropped {_focus_label} from the focus"
+                        else:
+                            _note = f"Focusing on {_focus_label}" + (
+                                " only" if _replace else ""
                             )
-                        )
-                        st.toast(
-                            f"Focusing on {_focus_label}"
-                            + (" only" if _replace else ""),
-                            icon="🎯",
-                        )
+                        st.toast(_note, icon="🎯")
                         st.rerun()
                     else:
                         st.toast(

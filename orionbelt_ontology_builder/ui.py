@@ -1275,8 +1275,11 @@ def focus_seeds_from_selection(selected_classes, class_count):
     return labels
 
 
-def focus_seeds_after_request(seeds, label, replace=False):
-    """The focus seeds a modifier-click in the graph leaves behind.
+def focus_seeds_after_request(seeds, label, replace=False, focus_on=False):
+    """What a modifier-click on a graph node leaves the focus as.
+
+    ``focus_on`` is whether focus mode is on *now*; returns ``(seeds, focus_on)``
+    — the new seed list and whether it should be on after the click.
 
     Ctrl/Cmd-click adds the node to whatever is focused already (issue #56),
     which is what building a neighbourhood up out of several nodes needs.
@@ -1284,15 +1287,82 @@ def focus_seeds_after_request(seeds, label, replace=False):
     time is the common case, and it otherwise means emptying the picker by hand
     between hops.
 
-    Clicking a node that is already a seed changes nothing either way, rather
-    than duplicating it in the multiselect.
+    Clicking a node that is *already* focused used to do nothing at all, which
+    left no way back out of focus mode except reaching for the checkbox. Each
+    modifier now undoes its own action instead (issue #328), but only while the
+    mode is on: the seeds outlive it on purpose (see the Alt-click note below),
+    so a seed sitting in the list is not the same thing as a node the user can
+    see focused. With the mode off there is nothing on screen to undo, and a
+    modifier-click is what it always was, an instruction to start focusing.
+    Inferring the mode from the seed list instead made Alt-clicking the node you
+    had just left refuse to focus it again, and Ctrl-clicking it drop it from a
+    focus that was not running (Codex review of PR #334).
+
+    While the mode is on:
+
+    - Ctrl/Cmd-click adds, so on a node that is already a seed it removes it.
+      Taking the last one out leaves nothing to focus on, so the mode goes off
+      with it.
+    - Alt-click sets the focus to exactly one node, so on a node that is
+      *already* the only seed it turns the mode off. The seeds are kept, so
+      switching focus back on returns you to where you were (issue #235). On one
+      of several seeds it still means "now just this one", which is a narrowing
+      the user can still want.
+
+    Every behaviour that changes here was a no-op before, so nothing that did
+    something does something else now.
+
+    The mode has to go off in the same breath as the seeds empty, never on a
+    later render: focus mode with no seeds backfills an arbitrary first node
+    (see render_visualization), so passing through that state would jump the
+    graph to a class the user never picked.
     """
-    if replace:
-        return [label]
     seeds = list(seeds or [])
-    if label not in seeds:
-        seeds.append(label)
-    return seeds
+    if not focus_on:
+        # Nothing running to undo: start the focus. The seeds kept from last
+        # time come back around it, the same restore ticking the checkbox does.
+        if replace:
+            return [label], True
+        if label not in seeds:
+            seeds.append(label)
+        return seeds, True
+    if replace:
+        if seeds == [label]:
+            return seeds, False
+        return [label], True
+    if label in seeds:
+        seeds.remove(label)
+        return seeds, bool(seeds)
+    seeds.append(label)
+    return seeds, True
+
+
+def viz_apply_focus_click(label, replace=False):
+    """Apply a modifier-click on ``label`` to the focus state in session.
+
+    Returns the ``(seeds, focus_on)`` it wrote, so the caller can word the
+    toast. Split out from the page so the state it touches can be tested: the
+    click arrives through the graph component, which does not render under
+    AppTest, so nothing else can reach this path.
+
+    Mode and seeds are written together, never across renders: focus mode with
+    no seeds backfills an arbitrary first label, so a pass through that state
+    would jump the graph to a class nobody picked (issue #328).
+    """
+    seeds = list(st.session_state.get("_viz_cfg_focus_seeds") or [])
+    mode_before = bool(st.session_state.get("_viz_cfg_focus_mode"))
+    seeds, focus_on = focus_seeds_after_request(
+        seeds, label, replace=replace, focus_on=mode_before
+    )
+    st.session_state["_viz_cfg_focus_mode"] = focus_on
+    st.session_state["_viz_cfg_focus_seeds"] = seeds
+    if focus_on != mode_before:
+        # focus_mode is a persisted display setting (#142) and the save is gated
+        # on the dirty flag the widget callbacks set. Switching the mode from the
+        # canvas has to lift the same gate, or what is saved goes stale against
+        # what is on screen (Codex review of PR #334).
+        st.session_state["_viz_settings_dirty"] = True
+    return seeds, focus_on
 
 
 def viz_focus_toggle():
