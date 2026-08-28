@@ -1355,7 +1355,7 @@ def viz_apply_focus_click(label, replace=False):
         seeds, label, replace=replace, focus_on=mode_before
     )
     st.session_state["_viz_cfg_focus_mode"] = focus_on
-    st.session_state["_viz_cfg_focus_seeds"] = seeds
+    viz_set_focus_seeds(seeds)
     if focus_on != mode_before:
         # focus_mode is a persisted display setting (#142) and the save is gated
         # on the dirty flag the widget callbacks set. Switching the mode from the
@@ -1385,10 +1385,97 @@ def viz_focus_toggle():
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
     if on and not st.session_state.get("_viz_cfg_focus_seeds"):
-        st.session_state["_viz_cfg_focus_seeds"] = focus_seeds_from_selection(
-            st.session_state.get("_viz_cfg_selected_classes") or [],
-            st.session_state.get("_viz_cfg_class_count") or 0,
+        # Forgotten wholesale rather than trimmed: these labels are derived
+        # from the class selection, not picked by the user as seeds, so an id on
+        # file against one describes whatever was loaded before rather than the
+        # entity now carrying that name. Trimming would keep such an entry,
+        # since the label *is* a seed again, and the next prune would drop the
+        # seed as a swapped label (the Codex review of PR #336).
+        st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
+        viz_set_focus_seeds(
+            focus_seeds_from_selection(
+                st.session_state.get("_viz_cfg_selected_classes") or [],
+                st.session_state.get("_viz_cfg_class_count") or 0,
+            )
         )
+
+
+def viz_set_focus_seeds(seeds) -> None:
+    """Store the focus seeds, keeping the label -> id map to just those.
+
+    That map is what :func:`prune_reused_focus_seeds` compares against to tell a
+    label that has come to name a *different* entity from one that still names
+    the same (issue #180). An entry left behind for a label that is no longer a
+    seed outlives the entity it described: clear the focus, import an ontology
+    that also has a ``Bicycle``, pick it again, and the stale id says it is a
+    different Bicycle, so it is pruned and the focus ends before it starts (the
+    Codex review of PR #336).
+
+    Trimming rather than clearing outright, so the labels that *are* still seeds
+    keep the identity they were last seen under. A seed with no entry is one the
+    user has just picked, which the prune keeps.
+    """
+    seeds = list(seeds or [])
+    st.session_state["_viz_cfg_focus_seeds"] = seeds
+    ids = st.session_state.get("_viz_cfg_focus_seed_ids_by_label")
+    if ids:
+        kept = set(seeds)
+        st.session_state["_viz_cfg_focus_seed_ids_by_label"] = {
+            label: node_id for label, node_id in ids.items() if label in kept
+        }
+
+
+def viz_leave_empty_focus() -> None:
+    """Switch focus mode off because there is nothing left to focus on.
+
+    The one landing every route out of a focus shares: the last Ctrl/Cmd-click
+    on the canvas (issue #328), clearing the picker, and a focus whose seeds
+    have all gone — an entity deleted, or its whole type switched off.
+
+    It replaces standing in an arbitrary first entity, which is what made the
+    picker impossible to clear and moved a focus onto a stranger behind the
+    user's back (issue #335). Nothing here picks *for* the user; it just stops
+    pretending a focus is running.
+
+    Also lifts the persisted-settings gate, since ``focus_mode`` is a saved
+    display setting and the save is gated on that flag (#142, and the Codex
+    review of PR #334).
+    """
+    if not st.session_state.get("_viz_cfg_focus_mode"):
+        return
+    st.session_state["_viz_cfg_focus_mode"] = False
+    # The config key only: the next render copies it into the checkbox's widget
+    # key, and writing that here raises once the checkbox has been instantiated
+    # — which it has, by the time the panel below it finds the focus empty.
+    st.session_state["_viz_settings_dirty"] = True
+
+
+def viz_focus_seeds_changed():
+    """Persist the focus seeds, and leave focus mode when the last one goes.
+
+    Focus mode is "show me this node's neighbourhood", so it has nothing to mean
+    with nothing picked. Emptying the picker was undone on the spot by the
+    backfill downstream, which put the first class back in and made the list
+    impossible to clear at all (issue #335). Clearing it now leaves the mode
+    instead, which is where the last Ctrl/Cmd-click on the canvas already lands
+    (issue #328), so both ways out of a focus agree.
+
+    Leaving the mode rather than allowing an empty focus is also what keeps the
+    node cap honest: focus mode is allowed to assemble more nodes than can be
+    drawn only because the prune cuts it back to the seeds' neighbourhood
+    afterwards, and with no seeds nothing prunes (see :func:`graph_node_cap`).
+    An empty focus would have handed the browser the whole ontology, which is
+    the opposite of what clearing the box looks like it should do.
+
+    Switching the mode back on re-derives the seeds from the class selection
+    (see :func:`viz_focus_toggle`), which is the "start over" the request was
+    after.
+    """
+    if _viz_widget_missing("viz_focus_seeds"):
+        return
+    viz_set_focus_seeds(st.session_state["viz_focus_seeds"])
+    if not st.session_state["_viz_cfg_focus_seeds"]:
+        viz_leave_empty_focus()
 
 
 def viz_find_changed():

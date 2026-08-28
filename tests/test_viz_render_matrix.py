@@ -49,8 +49,12 @@ def _script():
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
         # The cross-session restore mounts the localStorage component, which
-        # blocks forever without a browser to answer it.
+        # blocks forever without a browser to answer it. The *save* mounts it
+        # too, and a render can now lift the dirty gate by itself — leaving a
+        # focus whose seeds have all gone (issue #335) — so the handle is nulled
+        # rather than only the restore being skipped.
         st.session_state["_viz_settings_restored"] = True
+        st.session_state["_local_storage"] = None
         for key, value in json.loads(os.environ["VIZ_MATRIX_SETTINGS"]).items():
             if value == "__all__":
                 value = {c["uri"] for c in om.get_classes()}

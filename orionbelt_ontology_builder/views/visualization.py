@@ -59,14 +59,17 @@ from ..ui import (
     viz_auto_show_new_toggled,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_seeds_changed,
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,
+    viz_leave_empty_focus,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_id,
     viz_ontology_was_replaced,
     viz_rename_map,
+    viz_set_focus_seeds,
     viz_sync,
 )
 
@@ -746,10 +749,16 @@ def render_visualization():
         # render belong to an ontology that has since been swapped out, so drop
         # them before anything reads or persists them.
         if "_viz_cfg_focus_seeds" in st.session_state:
-            st.session_state["_viz_cfg_focus_seeds"] = prune_reused_focus_seeds(
-                st.session_state["_viz_cfg_focus_seeds"],
-                st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
-                focus_targets,
+            # Through the setter, so an id recorded for a label the prune has
+            # just dropped goes with it. This runs whether or not focus mode is
+            # on, and it is the path that empties the seeds while the mode is
+            # off — where nothing else trims the map (Codex review of PR #336).
+            viz_set_focus_seeds(
+                prune_reused_focus_seeds(
+                    st.session_state["_viz_cfg_focus_seeds"],
+                    st.session_state.get("_viz_cfg_focus_seed_ids_by_label"),
+                    focus_targets,
+                )
             )
 
         # Seeds saved for this linked file are stored as node ids (#164); turn
@@ -767,7 +776,7 @@ def render_visualization():
                 _label_by_id[i] for i in _pending_seed_ids if i in _label_by_id
             ]
             if _restored_seeds:
-                st.session_state["_viz_cfg_focus_seeds"] = _restored_seeds
+                viz_set_focus_seeds(_restored_seeds)
 
         # Find & centre on a specific entity (issue #144). Independent of focus
         # mode: picking an entity here selects and camera-centres it in the graph
@@ -837,9 +846,7 @@ def render_visualization():
                                 st.session_state.get("_viz_cfg_focus_seeds") or []
                             )
                             if _find_choice not in _seeds:
-                                st.session_state["_viz_cfg_focus_seeds"] = _seeds + [
-                                    _find_choice
-                                ]
+                                viz_set_focus_seeds(_seeds + [_find_choice])
                                 _reveal_rerun = True
                         if _reveal_rerun:
                             st.rerun()
@@ -889,9 +896,27 @@ def render_visualization():
                         len(all_class_names),
                     )
                 saved_seeds = [s for s in saved_seeds if s in label_set]
+                # Written before the branch below reruns. Labels that have just
+                # resolved to nothing must not survive as "the seeds to restore":
+                # they are still truthy, so switching focus back on would skip
+                # re-deriving from the class selection, find them invalid again,
+                # and turn straight off — a focus that can never be switched on
+                # again (the Codex review of PR #336).
+                viz_set_focus_seeds(saved_seeds)
                 if not saved_seeds:
-                    saved_seeds = [focus_labels[0]]
-                st.session_state["_viz_cfg_focus_seeds"] = saved_seeds
+                    # Nothing left to focus on. This used to stand in an
+                    # arbitrary first entity, which is how the picker became
+                    # impossible to clear and how a focus whose entity type was
+                    # switched off silently moved to a stranger (issue #335).
+                    # Leave the mode instead, the one landing every route out of
+                    # a focus now shares (issue #328). Reruns so the panel can
+                    # swap back to the node filter; it converges because the
+                    # mode is off on the next pass, so this branch is not taken.
+                    viz_leave_empty_focus()
+                    # Queued, not raised here: this pass reruns, and a toast
+                    # drawn before a rerun goes with the rest of its output.
+                    st.session_state["_viz_focus_left_note"] = True
+                    st.rerun()
                 st.session_state["viz_focus_seeds"] = saved_seeds
                 # Remember what each label resolved to, so the next render can
                 # tell a label that has come to name a different entity from one
@@ -905,8 +930,7 @@ def render_visualization():
                         "Focus node(s)",
                         options=focus_labels,
                         key="viz_focus_seeds",
-                        on_change=viz_sync,
-                        args=("_viz_cfg_focus_seeds", "viz_focus_seeds"),
+                        on_change=viz_focus_seeds_changed,
                         help="Classes, individuals or SKOS concepts to centre on. "
                         "The neighbourhood grows from all of them. Starts from "
                         "the classes you had filtered down to, or from one when "
@@ -958,7 +982,7 @@ def render_visualization():
                         # page and takes anything drawn on that pass with it.
                         st.session_state["_viz_focus_paste_unknown"] = _funknown
                         if _fpasted:
-                            st.session_state["_viz_cfg_focus_seeds"] = _fpasted
+                            viz_set_focus_seeds(_fpasted)
                             st.rerun()
                         elif not _funknown:
                             st.info("Paste one or more entity names first.")
@@ -2150,6 +2174,17 @@ def render_visualization():
             st.session_state.pop("_viz_new_hidden_announce", None) or []
         ):
             st.toast(_announcement, icon="🙈")
+        # Focus mode ended itself because nothing was left to focus on — the
+        # entity went, its type was switched off, or there was nothing to derive
+        # a first seed from. Silently un-ticking the box is the confusing half of
+        # not standing an arbitrary entity in (issue #335), so say so, and say
+        # what starts a focus instead.
+        if st.session_state.pop("_viz_focus_left_note", False):
+            st.toast(
+                "Focus off: nothing left to focus on. Ctrl/Cmd-click a node to "
+                "start a new one.",
+                icon="🎯",
+            )
         # Say what is being held back, small, right above the canvas: a focus or
         # a narrowed filter is otherwise invisible, and an entity that isn't
         # drawn looks lost rather than filtered (issue #222 follow-up).

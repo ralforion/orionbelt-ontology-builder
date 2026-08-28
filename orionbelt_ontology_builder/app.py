@@ -223,15 +223,18 @@ from .ui import (  # noqa: F401
     viz_drop_focus_seeds,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_seeds_changed,
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,
+    viz_leave_empty_focus,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_id,
     viz_note_rename,
     viz_ontology_was_replaced,
     viz_rename_map,
+    viz_set_focus_seeds,
     viz_sync,
 )
 
