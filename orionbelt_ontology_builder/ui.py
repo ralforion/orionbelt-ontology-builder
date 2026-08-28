@@ -1358,6 +1358,26 @@ def _renamed_node_id(node_id, renames):
     return node_id
 
 
+def viz_rename_map(renames):
+    """The recorded renames flattened to one ``old id -> where it is now`` map.
+
+    The notes are left one rename at a time (see :func:`viz_note_rename`), so an
+    entity renamed twice before the next Visualization render is recorded as a
+    chain (A->B, B->C). The graph component needs a single hop per id to carry a
+    cached node position across a rename (issue #329), so the chain is walked
+    here. A rename back to an earlier name leaves the id where it started and is
+    dropped, since there is nothing to carry.
+    """
+    if not renames:
+        return {}
+    moved = {}
+    for old in renames:
+        final = _renamed_node_id(old, renames)
+        if final != old:
+            moved[old] = final
+    return moved
+
+
 def follow_renamed_node_ids(node_ids, renames):
     """Where ``node_ids`` ended up after the recorded renames (issue #275).
 
@@ -1732,16 +1752,35 @@ def show_message(message: str, type: str = "info"):
         st.info(message)
 
 
-def set_flash_message(message: str, type: str = "info"):
-    """Set a flash message to be displayed after rerun."""
-    st.session_state.flash_message = {"message": message, "type": type}
+#: Icons for the toast form of a flash message, by message type.
+_FLASH_TOAST_ICON = {"success": "✅", "warning": "⚠️", "error": "🚫", "info": "ℹ️"}
+
+
+def set_flash_message(message: str, type: str = "info", toast: bool = False):
+    """Set a flash message to be displayed after rerun.
+
+    ``toast`` floats the message over the page instead of drawing it as a banner.
+    The banner goes above the whole page body, so a confirmation for an edit made
+    further down — the details panel, a row editor — pushes everything the user
+    is looking at out from under the cursor (issue #330). Use it for the short
+    confirmations that say only that the edit landed; anything worth reading
+    twice, such as a bulk-add summary or an error, stays a banner (issue #114).
+    """
+    st.session_state.flash_message = {
+        "message": message,
+        "type": type,
+        "toast": toast,
+    }
 
 
 def display_flash_message():
     """Display and clear any pending flash message."""
     if st.session_state.get("flash_message"):
         msg = st.session_state.flash_message
-        show_message(msg["message"], msg["type"])
+        if msg.get("toast"):
+            st.toast(msg["message"], icon=_FLASH_TOAST_ICON.get(msg["type"]))
+        else:
+            show_message(msg["message"], msg["type"])
         st.session_state.flash_message = None
 
 
@@ -2782,7 +2821,7 @@ def render_annotation_form(
         save_checkpoint("Delete annotation")
         if on_close is not None:
             on_close()
-        set_flash_message("Annotation deleted!", "success")
+        set_flash_message("Annotation deleted!", "success", toast=True)
         st.rerun()
     if saved:
         if _missing := missing_required(On=new_subject):
@@ -2806,7 +2845,7 @@ def render_annotation_form(
             save_checkpoint("Update annotation")
             if on_close is not None:
                 on_close()
-            set_flash_message("Annotation updated!", "success")
+            set_flash_message("Annotation updated!", "success", toast=True)
             st.rerun()
 
 
@@ -3517,7 +3556,7 @@ def _panel_delete_entity(ont, kind, entity) -> None:
         }[kind](entity["uri"])
         save_checkpoint(f"Delete {kind}")
         _panel_drop_selection()
-        set_flash_message(f"{entity['name']} deleted!", "success")
+        set_flash_message(f"{entity['name']} deleted!", "success", toast=True)
 
     _panel_confirm_dialog(
         ont.format_delete_impact(ont.get_delete_impact(entity["uri"], kind)),
@@ -3556,7 +3595,7 @@ def _panel_delete_edge(ont, label, key_suffix, delete) -> None:
         if changed:
             save_checkpoint(f"Delete {label}")
             _panel_drop_selection()
-            set_flash_message(f"{label.capitalize()} deleted!", "success")
+            set_flash_message(f"{label.capitalize()} deleted!", "success", toast=True)
         else:
             set_flash_message(f"This {label} is no longer in the ontology.", "error")
 
@@ -4384,7 +4423,7 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
                 save_checkpoint("Edit restriction")
                 if on_close is not None:
                     on_close()
-                set_flash_message("Restriction updated!", "success")
+                set_flash_message("Restriction updated!", "success", toast=True)
                 st.rerun()
             else:
                 show_message(
@@ -4721,7 +4760,7 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
                 save_checkpoint(f"Edit {spec['label']}")
                 if on_close is not None:
                     on_close()
-                set_flash_message("Relation updated!", "success")
+                set_flash_message("Relation updated!", "success", toast=True)
                 st.rerun()
             else:
                 # The row was deleted or edited elsewhere since this list
