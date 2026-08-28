@@ -65,6 +65,7 @@ from ..ui import (
     viz_new_hidden_message,
     viz_node_id,
     viz_ontology_was_replaced,
+    viz_rename_map,
     viz_sync,
 )
 
@@ -718,6 +719,11 @@ def render_visualization():
             # whatever happens to hold that URI now, which is the very thing the
             # reuse prune below exists to stop (issue #180).
             _renames = None
+        # The graph component carries a renamed node's cached position over to
+        # the id it now has, so the render it lands on stays where it was
+        # instead of re-framing the whole graph (issue #329). Flattened here
+        # because the component applies one hop per id.
+        _viz_renames = viz_rename_map(_renames)
         if _renames and "_viz_cfg_focus_seeds" in st.session_state:
             (
                 st.session_state["_viz_cfg_focus_seeds"],
@@ -2241,6 +2247,10 @@ def render_visualization():
                     # On desktop the webview can't download; the component sends
                     # the PNG back for us to save instead (#86).
                     web_download=not local_store.local_persist_enabled(),
+                    # Where entities renamed since the last render went, so the
+                    # cached layout follows them and a rename doesn't zoom the
+                    # graph out (issue #329).
+                    renames=json.dumps(_viz_renames),
                     seq=st.session_state.viz_render_seq,
                     key="graph_viewer",
                     default=None,

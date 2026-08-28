@@ -919,6 +919,32 @@ function renderGraph(args) {
     var _raw = null;
     try { _raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null'); } catch (e) {}
 
+    // A rename mints a new URI, so the entity comes back as a node the cached
+    // layout has never seen: its old id went away, the "nothing went away" test
+    // below fails, and vis re-frames the whole graph — zooming out of the very
+    // class you were renaming (issue #329). Python sends where each renamed node
+    // went, so move its cached position over to the id it now has. The hash is
+    // recomputed over the same key set it was first taken from, so a render whose
+    // only change is the rename lands on the exact-restore path below. Written
+    // back to sessionStorage because a later re-mount reads the cache afresh.
+    var _renames = {};
+    var _carried = false;
+    try { _renames = JSON.parse(args.renames || '{}') || {}; } catch (e) {}
+    if (_raw && _raw.pos) {
+        Object.keys(_renames).forEach(function (oldId) {
+            var newId = _renames[oldId];
+            if (newId === oldId ||
+                !Object.prototype.hasOwnProperty.call(_raw.pos, oldId)) { return; }
+            _raw.pos[newId] = _raw.pos[oldId];
+            delete _raw.pos[oldId];
+            _carried = true;
+        });
+        if (_carried) {
+            _raw.hash = _hash(Object.keys(_raw.pos).sort().join('|'));
+            try { sessionStorage.setItem('viz_pos', JSON.stringify(_raw)); } catch (e) {}
+        }
+    }
+
     var usedSaved = false;
     if (_raw && _raw.seq === args.seq && _raw.hash === nodeHash && _raw.pos) {
         // Exact same graph: restore every position with physics off — no
@@ -952,8 +978,16 @@ function renderGraph(args) {
         // (issue #314). When nodes *did* go away the old frame can hold nothing
         // at all — a filter swapped for another set places every node afresh —
         // so there vis still re-frames.
+        // A rename is a substitution, not a change of subject: this is the graph
+        // you were already looking at, with one entity under a new name. The
+        // renamed node's own position was carried across above, but everything
+        // else keyed off its URI — its annotation nodes — comes back under new
+        // ids too, which fails that same test and re-frames the graph regardless
+        // (issue #329). So a render that carried a rename holds the camera on
+        // what it was framing and lets physics settle the re-keyed nodes around
+        // their pinned subject.
         var _keptAll = Object.keys(_raw.pos).length === pinnedIds.length;
-        var _hold = !!savedView && _keptAll;
+        var _hold = !!savedView && (_keptAll || _carried);
         var iters2 = Math.min(Math.max(nCount * 3, 150), 500);
         options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50, fit: !_pin && !_hold };
     } else {
