@@ -86,6 +86,15 @@ _GRAPH_ROW = '[data-testid="stHorizontalBlock"]:has(.st-key-graph_viewer)'
 # it. test_viz_overlays.py keeps this in step with the buttons' own CSS.
 _TOOLBAR_CLEARANCE = "2.75rem"
 
+# The canvas always fits itself to the window: it measures the room left below
+# the controls and re-measures whenever the layout shifts, which is the only
+# sizing anyone wants — a fixed height was an option that could only ever leave
+# white space or overflow, and it is what made collapsing the display options
+# reclaim nothing (issue #347). This height is the viewer's fallback for the one
+# case it cannot measure: a browser that walls off the parent window from the
+# component iframe, where `autofitHeight()` returns null.
+_GRAPH_FALLBACK_HEIGHT = 670
+
 
 #: The clipboard icon the canvas uses, so both copies read as the same action.
 COPY_ICON_PATH = (
@@ -364,9 +373,7 @@ def render_visualization():
             "show_skos": True,
             "show_ind_edges": False,
             "show_triples": False,
-            "graph_height": 670,
             "node_spacing": 150,
-            "fit": True,
             "details_panel": False,
             "highlight_issues": False,
             # Off keeps the shipped behaviour: a narrowed filter is a view the
@@ -402,8 +409,7 @@ def render_visualization():
                 key="viz_options_open",
                 on_change=viz_sync,
                 args=("_viz_cfg_options_open", "viz_options_open"),
-                help="Which node types to draw, the graph height and the "
-                "layout spacing.",
+                help="Which node types to draw and how far apart to space them.",
             )
         with _render_col:
             render_graph = st.button(
@@ -483,21 +489,10 @@ def render_visualization():
                     help="Show all RDF triples for visible nodes",
                 )
 
-            # Row 2: sliders + fit-to-window + highlight issues
-            col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+            # Row 2: spacing + highlight issues. There is no graph height here:
+            # the canvas always fills the window (see _GRAPH_FALLBACK_HEIGHT).
+            col1, col2 = st.columns([2, 2])
             with col1:
-                st.slider(
-                    "Graph Height",
-                    300,
-                    1200,
-                    step=10,
-                    key="viz_graph_height",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_graph_height", "viz_graph_height"),
-                    disabled=st.session_state.get("_viz_cfg_fit", True),
-                    help="Used when 'Fit to window' is off.",
-                )
-            with col2:
                 st.slider(
                     "Node Spacing",
                     50,
@@ -507,16 +502,7 @@ def render_visualization():
                     on_change=viz_sync,
                     args=("_viz_cfg_node_spacing", "viz_node_spacing"),
                 )
-            with col3:
-                st.checkbox(
-                    "Fit to window",
-                    help="Resize the graph to fill the window height. "
-                    "Turn off to use the Graph Height slider.",
-                    key="viz_fit",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_fit", "viz_fit"),
-                )
-            with col4:
+            with col2:
                 st.checkbox(
                     "Highlight Issues",
                     key="viz_highlight_issues",
@@ -538,9 +524,7 @@ def render_visualization():
         show_skos = _has_skos and _cfg["_viz_cfg_show_skos"]
         show_ind_edges = _cfg["_viz_cfg_show_ind_edges"]
         show_triples = _cfg["_viz_cfg_show_triples"]
-        height = _cfg["_viz_cfg_graph_height"]
         node_spacing = _cfg["_viz_cfg_node_spacing"]
-        fit = _cfg["_viz_cfg_fit"]
         highlight_issues = _cfg["_viz_cfg_highlight_issues"]
         auto_show_new = _cfg["_viz_cfg_auto_show_new"]
 
@@ -1245,7 +1229,7 @@ def render_visualization():
         # thing — the page builds and caches a graph with no target, then picking
         # one changes nothing the key can see, so no rebuild happens and the
         # cached payload still lacks the entity that was asked for.
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{height}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}"
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -2285,8 +2269,8 @@ def render_visualization():
                     nodes=gdata["nodes"],
                     edges=gdata["edges"],
                     options=gdata["options"],
-                    height=height,
-                    autofit=fit,
+                    height=_GRAPH_FALLBACK_HEIGHT,
+                    autofit=True,
                     theme=_gv_theme,
                     selected_node=(_prev_sel.get("nodeId") if _prev_has_sel else None),
                     # What the canvas copy button offers after a rebuild. The
