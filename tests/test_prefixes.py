@@ -166,6 +166,16 @@ class TestDefaultPrefix:
         assert "@prefix : <http://acme.example/onto#>" in turtle
         assert ":Event" in turtle
 
+    def test_old_base_uri_is_not_kept_as_a_prefix(self, om):
+        # set_base_uri rewrites every resource into the new namespace, so the
+        # old one is abandoned, not displaced: keeping a prefix for it would
+        # offer the old base URI as a place to create entities.
+        om.add_class("Event")
+        om.set_base_uri("http://acme.example/onto#")
+        bound = {str(ns) for _, ns in om.graph.namespaces()}
+        assert "http://test.org/ont#" not in bound
+        assert "http://test.org/ont#" not in om.get_creatable_namespaces()
+
     def test_sparql_resolves_the_empty_prefix_to_this_ontology(self, om):
         # The user-visible symptom: `:Event` matched nothing because `:` named
         # a namespace the ontology no longer used.

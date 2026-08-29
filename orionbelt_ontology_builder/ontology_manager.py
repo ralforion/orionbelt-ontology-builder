@@ -370,8 +370,11 @@ class OntologyManager:
                 self.graph.remove(old_triple)
                 self.graph.add(new_triple)
 
-        # Re-bind the default namespace
-        self._bind_default_prefix()
+        # Re-bind the default namespace. The namespace it moves off is not
+        # preserved: every resource in it was just rewritten into the new one,
+        # so keeping a prefix for it would leave the abandoned base URI on
+        # offer in the entity-creation namespace picker.
+        self._bind_default_prefix(preserve_displaced=False)
 
     #: The ``scheme:`` an absolute IRI opens with (RFC 3986). A local name can
     #: never match it: :attr:`_LOCAL_NAME_RE` allows no colon, so "already a
@@ -5641,7 +5644,7 @@ class OntologyManager:
         self.graph.bind("dcterms", DCTERMS)
         self._bind_default_prefix()
 
-    def _bind_default_prefix(self):
+    def _bind_default_prefix(self, preserve_displaced: bool = True):
         """Bind ``:`` to this ontology's own namespace, taking it if need be.
 
         ``Graph.bind`` defaults to ``replace=False``, which does not mean "leave
@@ -5665,9 +5668,17 @@ class OntologyManager:
         other prefix is re-bound under a generated name rather than dropped: a
         binding a loaded file declared should survive a round trip, and an
         unbound namespace comes back out of the serializer as ``ns1:``.
+
+        ``preserve_displaced=False`` for the one caller that is not displacing
+        someone else's namespace but abandoning its own: :meth:`set_base_uri`
+        rewrites every resource into the new namespace, so a prefix left
+        pointing at the old one would keep the abandoned base URI in the
+        creatable-namespace list and on the dashboard as a removable prefix.
         """
         displaced = self.graph.store.namespace("")
         self.graph.bind("", self.namespace, replace=True)
+        if not preserve_displaced:
+            return
         if displaced is None or str(displaced) == str(self.namespace):
             return
         if any(str(ns) == str(displaced) for _, ns in self.graph.namespaces()):
