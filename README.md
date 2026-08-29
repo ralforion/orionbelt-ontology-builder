@@ -498,7 +498,7 @@ orionbelt-ontology-builder/
 │   ├── ontology_manager.py             # Core OWL/SKOS engine (rdflib)
 │   ├── templates.py                    # Built-in templates / upper / reference ontologies
 │   ├── samples/                        # Bundled gist, gUFO, FOAF, PROV-O, GoodRelations, …
-│   ├── lib/                            # Frontend libraries (vis-network, Tom Select)
+│   ├── lib/                            # The graph component (vendored vis-network)
 │   ├── assets/                         # Logos and screenshots
 │   └── favicon.png
 ├── pyproject.toml                      # Project metadata
