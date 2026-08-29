@@ -239,6 +239,32 @@ def test_a_query_that_never_yields_a_row_is_still_interrupted():
     assert elapsed < 20, f"deadline did not interrupt promptly ({elapsed:.1f}s)"
 
 
+def test_a_union_query_is_interrupted():
+    """The common case, and the one a row cap cannot touch.
+
+    rdflib's ``evalUnion`` is not a generator: it appends both branches into a
+    list and returns it, so every query containing a UNION is fully evaluated
+    before its first row exists. Only the store deadline can stop one.
+    """
+    graph = _cartesian_graph()
+    started = time.monotonic()
+    result = sparql.run_query(
+        graph,
+        """
+        SELECT ?x WHERE {
+          { ?x ?p ?o }
+          UNION
+          { ?a ?b ?c . ?d ?e ?f . ?x ?g ?h }
+        }
+        """,
+        timeout_seconds=1,
+    )
+    elapsed = time.monotonic() - started
+    assert result.timed_out is True
+    assert result.rows == [], "a UNION yields nothing until it is fully evaluated"
+    assert elapsed < 20, f"deadline did not interrupt promptly ({elapsed:.1f}s)"
+
+
 def test_a_streaming_runaway_is_interrupted(populated_om):
     graph = _cartesian_graph()
     result = sparql.run_query(

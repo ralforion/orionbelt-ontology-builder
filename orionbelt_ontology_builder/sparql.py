@@ -17,13 +17,20 @@ forms and rejects every update form by name.
 Layer 2 is the one that actually saves the app. rdflib's ``evalBGP`` pulls every
 candidate solution through ``ctx.graph.triples(...)`` and recurses per binding,
 so a deadline enforced at the store is checked continuously throughout
-evaluation — including while an ``ORDER BY``/``GROUP BY``/``DISTINCT`` above it
-is consuming the whole join before yielding anything. Layer 1 cannot help there:
-measured on a 300-triple graph, a three-way cartesian product under ``ORDER BY``
-produced no first row at all after 8 seconds, while the store deadline stopped
-the same query at 3.05s. It costs nothing to run — the same query with the proxy
-installed timed at 72.1ms against 72.3ms without it, because rdflib's per-triple
-work dwarfs a ``monotonic()`` call every few hundred triples.
+evaluation — including while an operator above it consumes the whole join before
+yielding anything. Layer 1 cannot help there: measured on a 300-triple graph, a
+three-way cartesian product under ``ORDER BY`` produced no first row at all after
+8 seconds, while the store deadline stopped the same query at 3.05s.
+
+``ORDER BY``/``GROUP BY``/``DISTINCT`` are the obvious cases. The common one is
+``UNION``: rdflib's ``evalUnion`` is not a generator, it appends both branches
+into a list and returns it, so *every* query containing a ``UNION`` is fully
+evaluated before its first row exists. A row cap cannot bound that; only the
+deadline can.
+
+The proxy costs nothing to run — the same query with it installed timed at
+72.1ms against 72.3ms without, because rdflib's per-triple work dwarfs a
+``monotonic()`` call every few hundred triples.
 
 Being in-process is the point. A subprocess would have to fork from a Streamlit
 ScriptRunner thread, which is a multi-threaded process, and CPython has
