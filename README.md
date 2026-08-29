@@ -14,6 +14,7 @@
   ✔ Visual graph editor<br>
   ✔ OWL RL reasoning &amp; consistency checks<br>
   ✔ OWL + SKOS in one workbench<br>
+  ✔ SKOS in depth: poly-hierarchy, mappings, 22 checks with autofix<br>
   ✔ Read-only SPARQL console<br>
   ✔ RDF/OWL import &amp; export<br>
   ✔ Pure Python
