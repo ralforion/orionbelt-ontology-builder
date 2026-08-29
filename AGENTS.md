@@ -26,7 +26,7 @@ orionbelt_ontology_builder/
 ├── ontology_manager.py # Core OWL/SKOS engine on rdflib (OntologyManager, UndoManager)
 ├── templates.py        # Built-in templates, upper & reference ontologies
 ├── samples/            # Bundled ontologies (gist, gUFO, FOAF, PROV-O, …)
-├── lib/                # Vendored frontend libs (vis-network, Tom Select)
+├── lib/                # The graph component (vendored vis-network)
 ├── assets/             # Logos, screenshots
 └── favicon.png
 tests/                  # pytest suite (~22 test_*.py files)
@@ -59,7 +59,7 @@ pytest                                    # testpaths/pythonpath configured in p
 pytest tests/test_classes.py -q           # a single file
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx, pyvis. Python >= 3.12.
+Dependencies: streamlit, rdflib, owlrl, networkx. Python >= 3.12.
 
 The floor is 3.12 because that is the oldest runtime CI keeps green, and
 because both deployment targets are at or above it (Streamlit Community

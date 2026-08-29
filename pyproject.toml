@@ -24,7 +24,6 @@ dependencies = [
     "rdflib>=7.0.0",
     "owlrl>=6.0.2",
     "networkx>=3.0",
-    "pyvis>=0.3.2",
     "streamlit-local-storage>=0.0.25",
 ]
 
@@ -117,7 +116,10 @@ include-package-data = true
 orionbelt_ontology_builder = [
     "favicon.png",
     "assets/*",
-    "lib/**/*",
+    # The graph component only. A "lib/**/*" glob swept in whatever else was in
+    # the working tree, including a macOS .DS_Store, and nothing else under lib/
+    # is loaded any more.
+    "lib/graph_viewer/*",
     "samples/**/*.ttl",
     "samples/**/*.owl",
     "samples/**/*.rdf",
