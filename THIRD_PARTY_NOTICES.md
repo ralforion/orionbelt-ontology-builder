@@ -55,7 +55,26 @@ Verified 2026-08-29.
 
 ## Python dependencies
 
-Runtime dependencies (streamlit, rdflib, owlrl, networkx, streamlit-local-storage) are
-declared in `pyproject.toml` and installed from PyPI. They are not redistributed here, so
-their licences are not reproduced. That changes if a bundle ever ships them inside an
-artifact, such as the PyInstaller build in issue #54, and this file should be revisited then.
+The wheel and sdist declare their dependencies rather than containing them, so those licences
+are not reproduced here.
+
+**The container image is a different distribution.** It is built on `python:3.14-slim` and
+pushed to Docker Hub on every version tag, so it redistributes CPython, the Debian base and
+the whole runtime dependency tree. Most of that carries its own terms:
+
+- Debian ships `/usr/share/doc/*/copyright` for the OS packages and for CPython, which is
+  under the Python Software Foundation License.
+- Installed Python distributions carry their licence files into `site-packages`. That covers
+  54 of the 55 in the current lock.
+- `streamlit` is the exception: its wheel ships no licence file at all. Its Apache-2.0 text is
+  copied into the image at `/app/licenses/`, from `docker/licenses/` in this repository.
+  Streamlit publishes no NOTICE file, so there is none to carry with it.
+
+Nothing in the tree needs a licence election. `python-dateutil` offers a choice (Apache-2.0 or
+BSD-3-Clause) and ships both texts, which satisfies it without electing either; numpy's
+`BSD-3-Clause AND 0BSD AND MIT AND Zlib` is a conjunction rather than a choice, and it ships
+all four.
+
+If the PyInstaller build in issue #54 ever bundles the interpreter and dependencies into a
+downloadable artifact, that is a third distribution channel and this section wants revisiting
+again.
