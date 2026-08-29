@@ -1,5 +1,8 @@
 """Tests for the read-only SPARQL console engine."""
 
+import os
+import subprocess
+import sys
 import time
 
 import pytest
@@ -331,3 +334,83 @@ def test_dataset_clauses_are_rejected(populated_om, query):
 def test_a_query_without_a_dataset_clause_is_unaffected(populated_om):
     result = sparql.run_query(populated_om.graph, "SELECT * WHERE { ?s ?p ?o }")
     assert result.row_count == len(populated_om.graph)
+
+
+# --- column ordering -------------------------------------------------------
+
+
+def test_select_star_columns_follow_query_order(populated_om):
+    result = sparql.run_query(populated_om.graph, "SELECT * WHERE { ?s ?p ?o }")
+    assert result.columns == ["s", "p", "o"]
+
+
+def test_select_star_column_order_is_stable_across_processes():
+    """The bug this fixes: rdflib builds SELECT *'s projection from a set, so
+    hash randomisation reordered the columns between runs and two exports of
+    the same query could disagree. Run in subprocesses because a single
+    interpreter has one hash seed for its lifetime.
+    """
+    script = (
+        "from rdflib import Graph, Literal, Namespace;"
+        "from orionbelt_ontology_builder import sparql;"
+        "EX = Namespace('http://e.org/');"
+        "g = Graph();"
+        "g.add((EX.a, EX.p, Literal('x')));"
+        "print(sparql.run_query(g, 'SELECT * WHERE { ?alpha ?beta ?gamma }').columns)"
+    )
+    seen = set()
+    for seed in ("0", "1", "2", "42"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        out = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+        seen.add(out.stdout.strip())
+    assert len(seen) == 1, f"column order varied by hash seed: {seen}"
+    assert seen.pop() == "['alpha', 'beta', 'gamma']"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("SELECT ?o ?s WHERE { ?s ?p ?o }", ["o", "s"]),
+        ("SELECT ?p ?s WHERE { ?s ?p ?o }", ["p", "s"]),
+        (
+            "SELECT ?p (COUNT(?s) AS ?n) WHERE { ?s ?p ?o } GROUP BY ?p",
+            ["p", "n"],
+        ),
+    ],
+)
+def test_an_explicit_projection_keeps_the_users_order(populated_om, query, expected):
+    """Only SELECT * may be reordered. The order the user wrote lives solely in
+    the projection — the algebra keeps no record of the SELECT clause — so
+    ordering an explicit projection against the pattern would rewrite it.
+    """
+    assert sparql.run_query(populated_om.graph, query).columns == expected
+
+
+def test_reordering_keeps_each_value_under_its_own_column():
+    """Reordering the header without reordering the cells would mislabel every
+    row, which is worse than the unstable order it replaces."""
+    graph = Graph()
+    graph.add((EX.subj, EX.pred, Literal("the object")))
+    result = sparql.run_query(graph, "SELECT * WHERE { ?s ?p ?o }")
+    row = dict(zip(result.columns, result.rows[0], strict=True))
+    assert row["s"].endswith("subj")
+    assert row["p"].endswith("pred")
+    assert row["o"] == "the object"
+
+
+def test_ordered_vars_places_unknown_variables_last_by_name():
+    """Nothing is dropped, and a variable the walk cannot place still lands in
+    a deterministic spot rather than a hash-ordered one."""
+    from rdflib import Variable
+
+    algebra = sparql.prepare("SELECT * WHERE { ?s ?p ?o }", {}).query.algebra
+    given = [Variable("zeta"), Variable("o"), Variable("alpha"), Variable("s")]
+    ordered = sparql.ordered_vars(algebra, given, select_star=True)
+    assert [str(v) for v in ordered] == ["s", "o", "alpha", "zeta"]
+    assert sorted(str(v) for v in ordered) == sorted(str(v) for v in given)

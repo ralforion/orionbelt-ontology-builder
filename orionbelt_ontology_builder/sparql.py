@@ -49,9 +49,9 @@ from dataclasses import dataclass, field
 from math import prod
 from typing import Any, cast
 
-from rdflib import BNode, Graph, Literal, URIRef
-from rdflib.plugins.sparql import prepareQuery
-from rdflib.plugins.sparql.parser import parseUpdate
+from rdflib import BNode, Graph, Literal, URIRef, Variable
+from rdflib.plugins.sparql.algebra import translateQuery
+from rdflib.plugins.sparql.parser import parseQuery, parseUpdate
 from rdflib.plugins.sparql.sparql import Query
 from rdflib.query import ResultRow
 from rdflib.store import Store
@@ -223,18 +223,33 @@ def _algebra_guard(algebra: Any) -> None:
         )
 
 
-def prepare(query_text: str, init_ns: dict[str, Any] | None = None) -> Query:
+@dataclass(frozen=True)
+class PreparedQuery:
+    """A parsed, vetted query, plus what the algebra no longer remembers."""
+
+    query: Query
+    #: Whether the user wrote ``SELECT *``. Read off the parse tree because the
+    #: algebra cannot answer it: an explicit projection and a ``*`` over the
+    #: same variables produce an identical ``PV``, differing only in an order
+    #: that is meaningful in one case and random in the other.
+    select_star: bool
+
+
+def prepare(query_text: str, init_ns: dict[str, Any] | None = None) -> PreparedQuery:
     """Parse ``query_text``, rejecting anything that is not a read-only query.
 
-    ``prepareQuery`` accepts only SELECT/ASK/CONSTRUCT/DESCRIBE, so every update
-    form fails it. We re-parse a failure as an update to tell the two cases
-    apart: "this console is read-only" and "you have a typo" are different
-    problems and deserve different messages.
+    Parsing and translation are done here rather than through ``prepareQuery``
+    so the parse tree can be inspected on the way past; ``prepareQuery`` is
+    exactly these two calls and discards the tree. Only query forms translate,
+    so every update form fails. We re-parse a failure as an update to tell the
+    two cases apart: "this console is read-only" and "you have a typo" are
+    different problems and deserve different messages.
     """
     if not query_text.strip():
         raise QuerySyntaxError("Enter a query to run.")
     try:
-        query = prepareQuery(query_text, initNs=init_ns or {})
+        parsed = parseQuery(query_text)
+        query = translateQuery(parsed, initNs=init_ns or {})
     except Exception as exc:
         # Any parse failure is triaged below into "read-only" or "syntax error".
         try:
@@ -248,7 +263,57 @@ def prepare(query_text: str, init_ns: dict[str, Any] | None = None) -> Query:
             "change is recorded and can be undone."
         ) from exc
     _algebra_guard(query.algebra)
-    return query
+    return PreparedQuery(query=query, select_star=not parsed[1].projection)
+
+
+def _vars_in_query_order(algebra: Any) -> list[Any]:
+    """Variables in the order the query first mentions them.
+
+    Walked off the algebra rather than the query text so comments and string
+    literals cannot affect it. ``triples`` (a BGP), ``values`` and the variable
+    an ``Extend``/BIND introduces are the three places a variable is first
+    bound, and each holds them in the order they were written.
+    """
+    seen: list[Any] = []
+
+    def note(term: Any) -> None:
+        if isinstance(term, Variable) and term not in seen:
+            seen.append(term)
+
+    for node in _walk(algebra):
+        for triple in node.get("triples") or ():
+            for term in triple:
+                note(term)
+        for binding in node.get("res") or ():
+            if isinstance(binding, dict):
+                for var in binding:
+                    note(var)
+        note(node.get("var"))
+    return seen
+
+
+def ordered_vars(algebra: Any, result_vars: Any, select_star: bool) -> list[Any]:
+    """The result's variables, in a stable order.
+
+    ``SELECT *`` gets its projection from a *set* in rdflib
+    (``PV = list(VS)``), so its column order is whatever hash randomisation
+    produced and differs between runs: the same query exported twice can come
+    back with its columns rearranged. Those get query order instead.
+
+    An explicit projection is returned untouched. It is already in the order
+    the user wrote, and that order is *only* in ``PV`` — the algebra keeps no
+    record of the SELECT clause, so reordering it against the pattern would
+    turn ``SELECT ?o ?s`` into ``s, o``.
+
+    Anything the walk did not reach sorts by name after everything it did, so
+    a variable this cannot place is never dropped and never reintroduces the
+    randomness this exists to remove.
+    """
+    result_vars = list(result_vars or [])
+    if not select_star:
+        return result_vars
+    order = {var: i for i, var in enumerate(_vars_in_query_order(algebra))}
+    return sorted(result_vars, key=lambda v: (order.get(v, len(order)), str(v)))
 
 
 def query_form(query: Query) -> str:
@@ -334,7 +399,8 @@ def run_query(
         MIN_TIMEOUT_SECONDS, min(float(timeout_seconds), MAX_TIMEOUT_SECONDS)
     )
     prefixes = sorted_prefixes(graph)
-    query = prepare(query_text, dict(graph.namespaces()))
+    prepared = prepare(query_text, dict(graph.namespaces()))
+    query = prepared.query
     form = query_form(query)
 
     started = time.monotonic()
@@ -367,7 +433,10 @@ def run_query(
                 result.rows.append([format_term(t, prefixes) for t in triple])
             result.graph = built
         else:
-            result.columns = [str(v) for v in (answer.vars or [])]
+            # Stable column order: rdflib derives SELECT * from a set, so the
+            # order is otherwise randomised per run.
+            columns = ordered_vars(query.algebra, answer.vars, prepared.select_star)
+            result.columns = [str(v) for v in columns]
             for row in answer:
                 if len(result.rows) >= max_rows:
                     result.truncated = True
@@ -379,7 +448,7 @@ def run_query(
                 # Result.__iter__ (shared with ASK and CONSTRUCT) does not say.
                 bindings = cast(ResultRow, row)
                 result.rows.append(
-                    [format_term(bindings[v], prefixes) for v in (answer.vars or [])]
+                    [format_term(bindings[v], prefixes) for v in columns]
                 )
     except QueryTimeout:
         result.timed_out = True
