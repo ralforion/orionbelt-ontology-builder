@@ -11,7 +11,8 @@ import os
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from orionbelt_ontology_builder.views.sparql import EXAMPLE_QUERIES
+from orionbelt_ontology_builder.ontology_manager import OntologyManager
+from orionbelt_ontology_builder.views.sparql import EXAMPLE_QUERIES, _prefix_rows
 
 
 def _script():
@@ -93,6 +94,40 @@ def test_an_empty_result_says_so():
     at = _run("SELECT ?s WHERE { ?s a <http://nope.example/Missing> }")
     assert not at.error
     assert any("matched nothing" in i.value for i in at.info)
+
+
+def test_an_empty_result_points_at_the_prefixes():
+    # The mistake behind an empty result is usually a prefixed name resolved
+    # into a namespace the ontology does not use, and that fails silently.
+    at = _run("SELECT ?s WHERE { ?s a <http://nope.example/Missing> }")
+    assert "own namespace" in _captions(at)
+
+
+def test_the_page_lists_the_prefixes_that_name_something():
+    at = _run("SELECT ?s WHERE { ?s a owl:Class }", click=False)
+    assert any("Prefixes in this ontology" in e.label for e in at.expander)
+
+
+class TestPrefixRows:
+    """What the prefix list says a name in each namespace looks like."""
+
+    def test_the_ontology_namespace_comes_first_as_the_empty_prefix(self):
+        om = OntologyManager()
+        om.add_class("Person")
+        assert _prefix_rows(om)[0] == {"Prefix": ":", "Namespace": om.base_uri}
+
+    def test_an_imported_namespace_keeps_its_own_prefix(self):
+        om = OntologyManager()
+        om.add_prefix("foaf", "http://xmlns.com/foaf/0.1/")
+        om.add_class("Person", namespace="http://xmlns.com/foaf/0.1/")
+        rows = {row["Namespace"]: row["Prefix"] for row in _prefix_rows(om)}
+        assert rows["http://xmlns.com/foaf/0.1/"] == "foaf:"
+
+    def test_a_namespace_nothing_names_is_shown_in_full(self):
+        om = OntologyManager()
+        om.add_class("Widget", namespace="http://un.bound.example/ns#")
+        rows = {row["Namespace"]: row["Prefix"] for row in _prefix_rows(om)}
+        assert rows["http://un.bound.example/ns#"].startswith("<http://un.bound")
 
 
 def test_the_page_renders_before_anything_is_run():
