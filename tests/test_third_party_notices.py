@@ -11,8 +11,12 @@ ontologies shipped with no terms at all while gist and gUFO, alone, carried
 theirs.
 """
 
-import re
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 PKG = REPO / "orionbelt_ontology_builder"
@@ -71,17 +75,81 @@ def test_every_bundled_third_party_file_is_accounted_for():
         assert licence in notices, f"{licence} is not stated in THIRD_PARTY_NOTICES.md"
 
 
-def test_the_licence_texts_are_packaged():
-    """package-data decides what reaches the wheel, and a licence that does not
-    ship is not carried with the work it covers."""
-    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-    package_data = re.search(
-        r"\[tool\.setuptools\.package-data\](.*?)(?:\n\[|\Z)", pyproject, re.DOTALL
+def _build_wheel(out_dir: Path) -> Path | None:
+    """Build a wheel into ``out_dir``, or None when no builder is available.
+
+    Takes about half a second. Worth it: the thing being asserted is what the
+    *artifact* contains, and every cheaper proxy for that has already been wrong
+    once. MANIFEST.in governs the sdist only, so listing the notices there left
+    the wheel without them while a config-reading test stayed green.
+    """
+    for argv in (
+        ["uv", "build", "--wheel", "--out-dir", str(out_dir)],
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(out_dir)],
+    ):
+        try:
+            done = subprocess.run(
+                argv, cwd=REPO, capture_output=True, timeout=300, check=False
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        if done.returncode == 0:
+            wheels = list(out_dir.glob("*.whl"))
+            if wheels:
+                return wheels[0]
+    return None
+
+
+@pytest.fixture(scope="module")
+def wheel_names(tmp_path_factory) -> list[str]:
+    wheel = _build_wheel(tmp_path_factory.mktemp("dist"))
+    if wheel is None:
+        pytest.skip("no wheel builder available (uv or build)")
+    with zipfile.ZipFile(wheel) as zf:
+        return zf.namelist()
+
+
+def test_the_project_declares_the_right_spdx_licence(wheel_names, tmp_path_factory):
+    """BUSL-1.1 is the Business Source License 1.1. BSL-1.0 is the Boost Software
+    License, and BSL-1.1 is not an SPDX identifier at all, so the value this used
+    to carry named nothing while looking like it named Boost. Asserted on the
+    built metadata rather than on pyproject.toml, because what a consumer reads
+    is the METADATA."""
+    wheel = next(iter(tmp_path_factory.getbasetemp().glob("**/*.whl")))
+    with zipfile.ZipFile(wheel) as zf:
+        meta = zf.read(
+            next(n for n in zf.namelist() if n.endswith("METADATA"))
+        ).decode()
+    assert "License-Expression: BUSL-1.1" in meta, (
+        "the wheel does not declare BUSL-1.1 as an SPDX expression"
     )
-    assert package_data, "package-data section not found"
-    assert '"licenses/*"' in package_data.group(1), (
-        "licenses/ is not in package-data, so the texts would not reach the wheel"
+    assert "Classifier: License ::" not in meta, (
+        "a License classifier alongside a PEP 639 expression is rejected by PyPI"
     )
-    assert "include THIRD_PARTY_NOTICES.md" in (REPO / "MANIFEST.in").read_text(
-        encoding="utf-8"
+
+
+def test_the_notices_reach_the_wheel(wheel_names):
+    """The licence texts inside the package point at THIRD_PARTY_NOTICES.md for
+    the map from file to licence. Shipping them without it leaves that pointer
+    dangling for anyone who installs the wheel, which is everyone."""
+    assert any(n.endswith("THIRD_PARTY_NOTICES.md") for n in wheel_names), (
+        "THIRD_PARTY_NOTICES.md is not in the wheel"
     )
+
+
+def test_every_licence_text_reaches_the_wheel(wheel_names):
+    for name in LICENCES:
+        assert any(n.endswith(f"licenses/{name}") for n in wheel_names), (
+            f"{name} is not in the wheel"
+        )
+    for vocab in ("gist", "gufo"):
+        assert any(
+            n.endswith(f"samples/{vocab}/LICENSE-CC-BY-4.0.txt") for n in wheel_names
+        ), f"{vocab}'s licence is not in the wheel"
+
+
+def test_every_covered_file_reaches_the_wheel(wheel_names):
+    """A licence carried for a file that no longer ships is stale; a file that
+    ships without one is the problem this guards."""
+    for rel in BUNDLED:
+        assert any(n.endswith(rel) for n in wheel_names), f"{rel} is not in the wheel"
