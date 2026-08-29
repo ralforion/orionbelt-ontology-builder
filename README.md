@@ -17,7 +17,7 @@
   ✔ SKOS mappings, poly-hierarchy, 22 checks<br>
   ✔ Read-only SPARQL console<br>
   ✔ RDF/OWL import &amp; export<br>
-  ✔ Pure Python, browser or desktop
+  ✔ Pure Python: <a href="https://orionbelt.streamlit.app/">hosted app</a>, browser or desktop
 </p>
 
 [![GitHub stars](https://img.shields.io/github/stars/ralforion/orionbelt-ontology-builder?style=social)](https://github.com/ralforion/orionbelt-ontology-builder)
