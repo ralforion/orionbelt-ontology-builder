@@ -505,7 +505,7 @@ orionbelt-ontology-builder/
 └── tests/                              # pytest suite
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx, pyvis.
+Dependencies: streamlit, rdflib, owlrl, networkx.
 
 ---
 
