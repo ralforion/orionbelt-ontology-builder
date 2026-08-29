@@ -120,6 +120,9 @@ orionbelt_ontology_builder = [
     # the working tree, including a macOS .DS_Store, and nothing else under lib/
     # is loaded any more.
     "lib/graph_viewer/*",
+    # Third-party licence texts for what this wheel redistributes; the map from
+    # file to licence is THIRD_PARTY_NOTICES.md at the repo root.
+    "licenses/*",
     "samples/**/*.ttl",
     "samples/**/*.owl",
     "samples/**/*.rdf",
