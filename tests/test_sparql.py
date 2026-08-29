@@ -409,8 +409,47 @@ def test_ordered_vars_places_unknown_variables_last_by_name():
     a deterministic spot rather than a hash-ordered one."""
     from rdflib import Variable
 
-    algebra = sparql.prepare("SELECT * WHERE { ?s ?p ?o }", {}).query.algebra
+    var_order = sparql.prepare("SELECT * WHERE { ?s ?p ?o }", {}).var_order
     given = [Variable("zeta"), Variable("o"), Variable("alpha"), Variable("s")]
-    ordered = sparql.ordered_vars(algebra, given, select_star=True)
+    ordered = sparql.ordered_vars(var_order, given, select_star=True)
     assert [str(v) for v in ordered] == ["s", "o", "alpha", "zeta"]
     assert sorted(str(v) for v in ordered) == sorted(str(v) for v in given)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        # A variable bound after a pattern comes after it. The algebra puts the
+        # operator that introduces it *above* that pattern, so an algebra walk
+        # reported it first; the parse tree has no such inversion.
+        ("SELECT * WHERE { ?s ?p ?o . BIND(?o AS ?x) }", ["s", "p", "o", "x"]),
+        ("SELECT * WHERE { VALUES ?z { 1 } BIND(2 AS ?a) }", ["z", "a"]),
+        # ... and one bound before a pattern still comes first, which a fix
+        # that merely visited Extend's child first would have inverted.
+        ("SELECT * WHERE { BIND(1 AS ?first) ?s ?p ?o }", ["first", "s", "p", "o"]),
+        (
+            "SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o ?q ?r } }",
+            ["s", "p", "o", "q", "r"],
+        ),
+        (
+            "SELECT * WHERE { { ?a ?b ?c } UNION { ?d ?e ?f } }",
+            ["a", "b", "c", "d", "e", "f"],
+        ),
+    ],
+)
+def test_select_star_follows_source_order_through_binding_forms(query, expected):
+    graph = Graph()
+    graph.add((EX.s, EX.p, Literal(1)))
+    assert sparql.run_query(graph, query).columns == expected
+
+
+def test_a_variable_named_only_in_a_comment_or_string_does_not_reorder():
+    """The order is read off the parse tree, not the query text, so text that
+    merely looks like a variable is not one."""
+    graph = Graph()
+    graph.add((EX.s, EX.p, Literal("?zzz")))
+    query = """
+        # ?zzz is mentioned here and is not a binding
+        SELECT * WHERE { ?s ?p ?o . FILTER(?o != "?zzz") }
+    """
+    assert sparql.run_query(graph, query).columns == ["s", "p", "o"]

@@ -233,6 +233,9 @@ class PreparedQuery:
     #: same variables produce an identical ``PV``, differing only in an order
     #: that is meaningful in one case and random in the other.
     select_star: bool
+    #: Every variable the query names, in source order. Only consulted for
+    #: ``SELECT *``, whose own order is random.
+    var_order: tuple[Any, ...] = ()
 
 
 def prepare(query_text: str, init_ns: dict[str, Any] | None = None) -> PreparedQuery:
@@ -263,36 +266,56 @@ def prepare(query_text: str, init_ns: dict[str, Any] | None = None) -> PreparedQ
             "change is recorded and can be undone."
         ) from exc
     _algebra_guard(query.algebra)
-    return PreparedQuery(query=query, select_star=not parsed[1].projection)
+    return PreparedQuery(
+        query=query,
+        select_star=not parsed[1].projection,
+        var_order=_vars_in_source_order(parsed),
+    )
 
 
-def _vars_in_query_order(algebra: Any) -> list[Any]:
-    """Variables in the order the query first mentions them.
+def _vars_in_source_order(parsed: Any) -> tuple[Any, ...]:
+    """Variables in the order the query text names them.
 
-    Walked off the algebra rather than the query text so comments and string
-    literals cannot affect it. ``triples`` (a BGP), ``values`` and the variable
-    an ``Extend``/BIND introduces are the three places a variable is first
-    bound, and each holds them in the order they were written.
+    Read off the *parse tree*, which mirrors the source, rather than the
+    algebra, which does not. The algebra places an operator that introduces a
+    variable above the pattern it reads from — BIND becomes
+    ``Extend(p=<the pattern>, var=?x)`` — so walking it in pre-order reports
+    ?x before the pattern that precedes it in the query, and
+    ``{ ?s ?p ?o . BIND(?o AS ?x) }`` came out as ``x, s, p, o``. Special-casing
+    Extend would fix that one operator and leave the same inversion waiting in
+    any other that binds above its child. The parse tree has no such inversion
+    to correct.
+
+    Not the raw query text either: a variable named in a comment or inside a
+    string literal is not a binding, and the parser has already told them apart.
     """
     seen: list[Any] = []
 
-    def note(term: Any) -> None:
-        if isinstance(term, Variable) and term not in seen:
-            seen.append(term)
+    def visit(node: Any) -> None:
+        # Variable subclasses str, so it has to be tested before the str guard
+        # that stops us walking into URIs and literals character by character.
+        if isinstance(node, Variable):
+            if node not in seen:
+                seen.append(node)
+            return
+        if isinstance(node, (str, bytes)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                visit(value)
+            return
+        # Lists, and the ParseResults the parser returns at the top level.
+        if hasattr(node, "__iter__"):
+            for value in node:
+                visit(value)
 
-    for node in _walk(algebra):
-        for triple in node.get("triples") or ():
-            for term in triple:
-                note(term)
-        for binding in node.get("res") or ():
-            if isinstance(binding, dict):
-                for var in binding:
-                    note(var)
-        note(node.get("var"))
-    return seen
+    visit(parsed)
+    return tuple(seen)
 
 
-def ordered_vars(algebra: Any, result_vars: Any, select_star: bool) -> list[Any]:
+def ordered_vars(
+    var_order: tuple[Any, ...], result_vars: Any, select_star: bool
+) -> list[Any]:
     """The result's variables, in a stable order.
 
     ``SELECT *`` gets its projection from a *set* in rdflib
@@ -312,7 +335,7 @@ def ordered_vars(algebra: Any, result_vars: Any, select_star: bool) -> list[Any]
     result_vars = list(result_vars or [])
     if not select_star:
         return result_vars
-    order = {var: i for i, var in enumerate(_vars_in_query_order(algebra))}
+    order = {var: i for i, var in enumerate(var_order)}
     return sorted(result_vars, key=lambda v: (order.get(v, len(order)), str(v)))
 
 
@@ -435,7 +458,9 @@ def run_query(
         else:
             # Stable column order: rdflib derives SELECT * from a set, so the
             # order is otherwise randomised per run.
-            columns = ordered_vars(query.algebra, answer.vars, prepared.select_star)
+            columns = ordered_vars(
+                prepared.var_order, answer.vars, prepared.select_star
+            )
             result.columns = [str(v) for v in columns]
             for row in answer:
                 if len(result.rows) >= max_rows:
