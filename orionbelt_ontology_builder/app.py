@@ -258,6 +258,7 @@ from .views.relations import render_relations
 from .views.restrictions import render_restrictions
 from .views.skos import render_skos_vocabulary
 from .views.source import render_source
+from .views.sparql import render_sparql
 from .views.validation import render_validation
 from .views.visualization import render_visualization
 
@@ -459,6 +460,7 @@ def main():
         "SKOS Vocabulary": render_skos_vocabulary,
         "Import / Export": render_import_export,
         "Source": render_source,
+        "SPARQL": render_sparql,
         "Validation": render_validation,
         "Visualization": render_visualization,
     }

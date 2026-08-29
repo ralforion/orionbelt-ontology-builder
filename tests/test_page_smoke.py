@@ -87,6 +87,7 @@ PAGE_FUNCTIONS = {
     "skos": "render_skos_vocabulary",
     "import_export": "render_import_export",
     "source": "render_source",
+    "sparql": "render_sparql",
     "validation": "render_validation",
 }
 CASES = [

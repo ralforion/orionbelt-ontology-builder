@@ -246,6 +246,18 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 - SKOS checks (see above)
 - RDFS and OWL-RL reasoning via owlrl
 
+### SPARQL queries
+
+A read-only query console over the loaded ontology: SELECT, ASK, CONSTRUCT and
+DESCRIBE, with the ontology's own prefixes already declared so `owl:Class` and
+`:Person` work without a PREFIX line. Results download as CSV (SELECT) or
+Turtle (CONSTRUCT/DESCRIBE), and eight worked examples are one click away.
+
+Updates (INSERT, DELETE, LOAD, CLEAR, DROP) are refused: edits go through the
+editor pages, where they are checkpointed and can be undone. Every query runs
+under a row limit and a wall-clock time limit, so a runaway query is stopped
+rather than taking the app with it.
+
 ### Visualization
 
 Interactive vis-network graph with class filtering, configurable node limits, click-to-navigate into the editor, Ctrl/Cmd-click a node to add it to the "Focus on one node" selection (narrowing the graph to its neighbourhood) or Alt-click to focus on it alone, hierarchy tree view, and statistics charts.
@@ -483,6 +495,7 @@ the 200 MB default; raise the value only when self-hosting with enough memory.
 | **SKOS Vocabulary** | Concept schemes, concepts, hierarchy, SKOS validation          |
 | **Import / Export** | File import with merge review, export, new ontology, templates |
 | **Source**          | Live Turtle source view of the ontology                        |
+| **SPARQL**          | Read-only SPARQL console with row and time limits              |
 | **Validation**      | Ontology validation and OWL reasoning                          |
 | **Visualization**   | Interactive graph (OWL + SKOS), hierarchy tree, statistics     |
 
@@ -497,6 +510,7 @@ orionbelt-ontology-builder/
 │   ├── app.py                          # Streamlit UI
 │   ├── ontology_manager.py             # Core OWL/SKOS engine (rdflib)
 │   ├── templates.py                    # Built-in templates / upper / reference ontologies
+│   ├── sparql.py                       # Read-only SPARQL execution (deadline + row cap)
 │   ├── samples/                        # Bundled gist, gUFO, FOAF, PROV-O, GoodRelations, …
 │   ├── lib/                            # The graph component (vendored vis-network)
 │   ├── assets/                         # Logos and screenshots
@@ -514,7 +528,6 @@ Dependencies: streamlit, rdflib, owlrl, networkx.
 Not implemented yet, listed here so it is clear what the workbench does *not* do today:
 
 - **SHACL validation.** Validation is currently structural (orphan classes, duplicate labels, domain/range mismatches, SKOS cycles) plus OWL RL reasoning. Shape-based validation against SHACL constraints is not supported.
-- **SPARQL queries.** There is no query console; exploration is through search, usage/backlink views and the graph.
 
 ---
 
