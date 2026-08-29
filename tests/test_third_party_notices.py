@@ -148,6 +148,37 @@ def test_every_licence_text_reaches_the_wheel(wheel_names):
         ), f"{vocab}'s licence is not in the wheel"
 
 
+def test_the_image_carries_the_one_licence_pip_does_not():
+    """The container image redistributes the whole dependency tree, and almost
+    all of it carries its own terms into site-packages. The streamlit wheel does
+    not: its dist-info has METADATA, RECORD and WHEEL and no licence file, so the
+    text has to be put in by hand.
+
+    A file assertion rather than an image one. Building the image takes minutes
+    and needs a daemon, so this checks that the text exists, is the real Apache
+    licence, and that the Dockerfile copies the directory holding it. What the
+    built image contains is verified by the Docker workflow's smoke test, not
+    here.
+    """
+    text = REPO / "docker" / "licenses" / "streamlit-Apache-2.0.txt"
+    assert text.is_file(), "streamlit's licence text is missing"
+    body = text.read_text(encoding="utf-8")
+    assert "Apache License" in body and "TERMS AND CONDITIONS" in body, (
+        "that file is not the Apache licence"
+    )
+    assert "COPY docker/licenses/" in (REPO / "Dockerfile").read_text(
+        encoding="utf-8"
+    ), "the image does not copy the licence directory in"
+
+
+def test_the_notices_do_not_claim_dependencies_are_unshipped():
+    """They are, in the image, which is pushed on every version tag. Saying
+    otherwise in the file whose job is accuracy was the error this fixes."""
+    notices = NOTICES.read_text(encoding="utf-8")
+    assert "container image is a different distribution" in notices
+    assert "They are not redistributed here" not in notices
+
+
 def test_every_covered_file_reaches_the_wheel(wheel_names):
     """A licence carried for a file that no longer ships is stale; a file that
     ships without one is the problem this guards."""

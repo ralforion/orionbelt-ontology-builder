@@ -33,6 +33,14 @@ RUN uv sync --frozen --no-install-project
 COPY . .
 RUN uv sync --frozen --no-editable
 
+# The image redistributes CPython, the Debian base and every runtime dependency,
+# so it has to carry their terms. Almost all of that comes for free: Debian ships
+# /usr/share/doc/*/copyright for the OS packages and for CPython, and installed
+# Python distributions carry their own licence files into site-packages. The
+# streamlit wheel is the one that ships none, so its Apache-2.0 text is copied in
+# here. See THIRD_PARTY_NOTICES.md.
+COPY docker/licenses/ /app/licenses/
+
 # uv installs into a project venv; put it first on PATH so `streamlit` resolves.
 ENV PATH="/app/.venv/bin:$PATH"
 
