@@ -113,3 +113,75 @@ class TestPrefixNamespaceNormalization:
             om.add_prefix("q", "http://example.org/ns?term=")
             == "http://example.org/ns?term="
         )
+
+
+class TestDefaultPrefix:
+    """``:`` must name this ontology's namespace, never a foreign one.
+
+    ``Graph.bind`` defaults to ``replace=False``, so re-binding ``:`` over an
+    existing binding silently parks the new namespace under ``default1:`` and
+    leaves ``:`` where it was. Nothing raises; the damage only shows up when
+    something reads ``:`` back, which is why each case below reads it back.
+    """
+
+    def _empty_prefix(self, om):
+        return str(om.graph.store.namespace(""))
+
+    def test_loaded_file_does_not_keep_the_empty_prefix(self):
+        om = OntologyManager()
+        om.load_from_string(
+            """
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix : <http://other.example/vocab#> .
+            <http://example.org/ontology> a owl:Ontology .
+            <http://example.org/ontology#Event> a owl:Class .
+            """,
+            "turtle",
+        )
+        assert self._empty_prefix(om) == om.base_uri
+
+    def test_displaced_namespace_stays_bound(self):
+        om = OntologyManager()
+        om.load_from_string(
+            """
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix : <http://other.example/vocab#> .
+            <http://example.org/ontology> a owl:Ontology .
+            <http://example.org/ontology#Event> a owl:Class .
+            """,
+            "turtle",
+        )
+        bound = {str(ns) for _, ns in om.graph.namespaces()}
+        assert "http://other.example/vocab#" in bound
+
+    def test_set_base_uri_moves_the_empty_prefix(self, om):
+        om.add_class("Event")
+        om.set_base_uri("http://acme.example/onto#")
+        assert self._empty_prefix(om) == "http://acme.example/onto#"
+
+    def test_renamed_namespace_serializes_under_the_empty_prefix(self, om):
+        om.add_class("Event")
+        om.set_base_uri("http://acme.example/onto#")
+        turtle = om.graph.serialize(format="turtle")
+        assert "@prefix : <http://acme.example/onto#>" in turtle
+        assert ":Event" in turtle
+
+    def test_old_base_uri_is_not_kept_as_a_prefix(self, om):
+        # set_base_uri rewrites every resource into the new namespace, so the
+        # old one is abandoned, not displaced: keeping a prefix for it would
+        # offer the old base URI as a place to create entities.
+        om.add_class("Event")
+        om.set_base_uri("http://acme.example/onto#")
+        bound = {str(ns) for _, ns in om.graph.namespaces()}
+        assert "http://test.org/ont#" not in bound
+        assert "http://test.org/ont#" not in om.get_creatable_namespaces()
+
+    def test_sparql_resolves_the_empty_prefix_to_this_ontology(self, om):
+        # The user-visible symptom: `:Event` matched nothing because `:` named
+        # a namespace the ontology no longer used.
+        from orionbelt_ontology_builder import sparql
+
+        om.add_class("Event")
+        om.set_base_uri("http://acme.example/onto#")
+        result = sparql.run_query(om.graph, "SELECT ?p WHERE { :Event ?p ?o }")
+        assert result.rows

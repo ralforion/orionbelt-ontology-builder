@@ -93,7 +93,17 @@ def _load_example() -> None:
 
 _EDITOR_HELP = (
     "The ontology's prefixes are already declared, so you can write "
-    "`owl:Class` or `:Person` without a PREFIX line."
+    "`owl:Class` or `:Person` without a PREFIX line. `:` is this ontology's "
+    "own namespace; an imported vocabulary keeps its own prefix."
+)
+
+#: Shown with an empty result and beside the prefix list. A prefixed name that
+#: points at the wrong namespace is valid SPARQL, so it does not fail — it
+#: matches nothing, which reads like an empty ontology rather than a typo.
+_NAMESPACE_HINT = (
+    "`:` is this ontology's own namespace. An entity that came in with an "
+    "imported or upper ontology keeps that vocabulary's prefix, so it is "
+    "`foaf:Person`, not `:Person`."
 )
 _PLACEHOLDER = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
 
@@ -161,13 +171,73 @@ def _render_editor() -> str:
     return edited
 
 
+def _prefix_rows(ont) -> list[dict[str, str]]:
+    """How to write a name in each namespace the ontology actually holds.
+
+    Not every binding: the graph carries ~30 prefixes rdflib binds by default,
+    almost none of which name anything here, and a list that long is one nobody
+    reads. ``get_creatable_namespaces`` is the same set the entity forms offer
+    — the base namespace, plus every namespace an existing entity or a bound
+    import prefix puts in play — which is exactly where a prefixed name in a
+    query can point and find something.
+    """
+    by_namespace: dict[str, list[str]] = {}
+    for prefix, namespace in ont.graph.namespaces():
+        by_namespace.setdefault(str(namespace), []).append(str(prefix))
+
+    rows = []
+    for namespace in ont.get_creatable_namespaces():
+        bound = by_namespace.get(namespace, [])
+        named = next((p for p in bound if p), None)
+        if namespace == ont.base_uri:
+            label = ":"
+        elif named:
+            label = f"{named}:"
+        else:
+            # Nothing names it. The namespace is in the next column, so
+            # repeating it here would only be noise.
+            label = "(none)"
+        rows.append({"Prefix": label, "Namespace": namespace})
+    return rows
+
+
+def _render_prefixes(ont) -> None:
+    """The namespaces in play, under the editor where a query is being written."""
+    with st.expander("Prefixes in this ontology"):
+        st.caption(_NAMESPACE_HINT)
+        st.dataframe(_prefix_rows(ont), use_container_width=True, hide_index=True)
+        st.caption(
+            "`owl:`, `rdf:`, `rdfs:`, `xsd:`, `skos:`, `dc:` and `dcterms:` are "
+            "always declared too, along with the prefixes rdflib binds by "
+            "default. A namespace with no prefix has to be written in full, as "
+            "`<http://example.org/ontology#Person>`."
+        )
+
+
+def _matched_nothing() -> None:
+    """Say the result is empty, and name the likeliest reason it is.
+
+    An empty result has no error to read, so the one thing worth pointing at is
+    the mistake that produces one silently: a prefixed name resolved into a
+    namespace the ontology does not use.
+    """
+    st.info("The query ran and matched nothing.")
+    # Shorter than the hint above the results: with the prefix list expanded
+    # the two sit on screen together, and saying it twice reads as noise.
+    st.caption(
+        "Check the prefixes if the query names an entity: `:` is this "
+        "ontology's own namespace, and an imported vocabulary keeps its own. "
+        "The list under the editor has them all."
+    )
+
+
 def _render_select_result(result: sparql.QueryResult) -> None:
     if not result.rows:
         # Only an empty result that actually finished matched nothing. A query
         # stopped by the deadline produced no rows *yet*, and telling the user
         # its answer is empty would be wrong.
         if not result.timed_out:
-            st.info("The query ran and matched nothing.")
+            _matched_nothing()
         return
     st.dataframe(
         [dict(zip(result.columns, row, strict=False)) for row in result.rows],
@@ -186,7 +256,7 @@ def _render_select_result(result: sparql.QueryResult) -> None:
 def _render_graph_result(result: sparql.QueryResult) -> None:
     if result.graph is None or len(result.graph) == 0:
         if not result.timed_out:
-            st.info("The query ran and matched nothing.")
+            _matched_nothing()
         return
     try:
         turtle = result.graph.serialize(format="turtle")
@@ -257,6 +327,7 @@ def render_sparql():
     )
 
     query_text = _render_editor()
+    _render_prefixes(ont)
 
     limit_col, timeout_col, run_col = st.columns([2, 2, 1])
     with limit_col:
