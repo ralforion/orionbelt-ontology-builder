@@ -196,6 +196,17 @@ _CUSTOM_CSS = """
         content: "";
         margin-left: 0;
     }
+    /* The SPARQL editor. A query is code: proportional type misaligns the
+       indentation that shows how a WHERE block nests, and makes it hard to see
+       that ?s and ?5 differ. Scoped by the container key so every other text
+       area in the app keeps the UI font. */
+    .st-key-sparql_editor textarea {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                     "Liberation Mono", monospace !important;
+        font-size: 0.86rem !important;
+        line-height: 1.55 !important;
+        tab-size: 2;
+    }
     [data-testid="stSidebarHeader"] [data-testid="stLogoSpacer"] {
         /* Reserves room for a st.logo() this app doesn't set: the mark is
            rendered as an image in the sidebar body instead. */
