@@ -10,9 +10,8 @@ DEFAULTS = {
     "show_classes": True,
     "show_obj_props": True,
     "show_skos": True,
-    "graph_height": 670,
     "node_spacing": 150,
-    "fit": True,
+    "highlight_issues": False,
     "focus_mode": False,
     "focus_depth": 1,
     "selected_classes": [],  # not in _VIZ_PERSIST_KEYS
@@ -41,20 +40,18 @@ def test_apply_validates_types_and_clamps_ints(monkeypatch, patch_ui):
     app._apply_viz_settings(
         {
             "show_classes": False,  # bool -> applied
-            "graph_height": 99999,  # clamped to 1200
             "node_spacing": 10,  # clamped to 50
-            "focus_depth": 3,  # in range
-            "fit": "yes",  # wrong type -> ignored
+            "focus_depth": 99,  # clamped to 5
+            "highlight_issues": "yes",  # wrong type -> ignored
             "selected_classes": ["X"],  # not persisted -> ignored
             "bogus": 1,  # not a known setting -> ignored
         },
         DEFAULTS,
     )
     assert fake["_viz_cfg_show_classes"] is False
-    assert fake["_viz_cfg_graph_height"] == 1200
     assert fake["_viz_cfg_node_spacing"] == 50
-    assert fake["_viz_cfg_focus_depth"] == 3
-    assert "_viz_cfg_fit" not in fake  # wrong type left at default
+    assert fake["_viz_cfg_focus_depth"] == 5
+    assert "_viz_cfg_highlight_issues" not in fake  # wrong type left at default
     assert "_viz_cfg_selected_classes" not in fake
     assert "_viz_cfg_bogus" not in fake
 
@@ -75,13 +72,17 @@ def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
     save_state: dict = {
         "_viz_settings_dirty": True,
         "_viz_cfg_show_classes": False,
-        "_viz_cfg_graph_height": 800,
-        "_viz_cfg_fit": False,
+        "_viz_cfg_node_spacing": 200,
+        "_viz_cfg_highlight_issues": True,
     }
     monkeypatch.setattr(app.st, "session_state", save_state)
     app._persist_viz_settings()
     stored = json.loads(cfg_file.read_text())["viz_settings"]
-    assert stored == {"show_classes": False, "graph_height": 800, "fit": False}
+    assert stored == {
+        "show_classes": False,
+        "node_spacing": 200,
+        "highlight_issues": True,
+    }
 
     # Restore into a fresh "session".
     restore_state: dict = {}
@@ -89,8 +90,8 @@ def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
     app._restore_viz_settings(DEFAULTS)
     assert restore_state["_viz_settings_restored"] is True
     assert restore_state["_viz_cfg_show_classes"] is False
-    assert restore_state["_viz_cfg_graph_height"] == 800
-    assert restore_state["_viz_cfg_fit"] is False
+    assert restore_state["_viz_cfg_node_spacing"] == 200
+    assert restore_state["_viz_cfg_highlight_issues"] is True
 
 
 def test_persist_requires_a_user_change(monkeypatch, patch_ui, tmp_path):
@@ -108,7 +109,7 @@ def test_persist_noops_when_unchanged(monkeypatch, patch_ui, tmp_path):
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
     monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
-    state: dict = {"_viz_settings_dirty": True, "_viz_cfg_fit": True}
+    state: dict = {"_viz_settings_dirty": True, "_viz_cfg_highlight_issues": True}
     monkeypatch.setattr(app.st, "session_state", state)
     app._persist_viz_settings()
     first = cfg_file.stat().st_mtime_ns
@@ -132,7 +133,7 @@ def test_browser_restore_retries_until_real_value(monkeypatch, patch_ui):
 
 
 def test_browser_restore_applies_real_value(monkeypatch, patch_ui):
-    val = json.dumps({"show_skos": False, "graph_height": 900})
+    val = json.dumps({"show_skos": False, "node_spacing": 250})
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: False)
     patch_ui("_get_local_storage", lambda: _FakeLS(val))
     state: dict = {}
@@ -140,7 +141,7 @@ def test_browser_restore_applies_real_value(monkeypatch, patch_ui):
     app._restore_viz_settings(DEFAULTS)
     assert state["_viz_settings_restored"] is True
     assert state["_viz_cfg_show_skos"] is False
-    assert state["_viz_cfg_graph_height"] == 900
+    assert state["_viz_cfg_node_spacing"] == 250
 
 
 def test_browser_dirty_change_is_saved(monkeypatch, patch_ui):
@@ -185,11 +186,11 @@ def test_disk_save_still_happens_once(monkeypatch, patch_ui, tmp_path):
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
     monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
-    state: dict = {"_viz_settings_dirty": True, "_viz_cfg_fit": False}
+    state: dict = {"_viz_settings_dirty": True, "_viz_cfg_highlight_issues": False}
     monkeypatch.setattr(app.st, "session_state", state)
 
     app._persist_viz_settings()
-    assert state["_viz_settings_saved_json"] == json.dumps({"fit": False})
+    assert state["_viz_settings_saved_json"] == json.dumps({"highlight_issues": False})
     first = cfg_file.stat().st_mtime_ns
     app._persist_viz_settings()
     assert cfg_file.stat().st_mtime_ns == first

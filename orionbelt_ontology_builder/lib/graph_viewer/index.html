@@ -205,9 +205,10 @@ var fsGen = 0;             // fullscreen transition counter, to void stale callb
 var fsResizeHandler = null; // active 'resize' listener from the current transition
 var fsDetachTimer = null;   // timer that detaches fsResizeHandler
 
-// When "Fit to window" is on, fill the available window height instead of using
-// the fixed Graph Height. Reads the parent window's height and this iframe's
-// position in it (same-origin), reserving room for whatever sits below.
+// Fill the available window height. Reads the parent window's height and this
+// iframe's position in it (same-origin), reserving room for whatever sits below.
+// This is how the canvas is always sized; args.height is only the fallback for
+// when the parent window cannot be read at all.
 //
 // That reserve used to be a flat 90px, which is what the status bar takes when
 // something is selected. With nothing selected the bar is a single line, so the

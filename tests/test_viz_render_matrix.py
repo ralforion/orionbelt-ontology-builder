@@ -100,7 +100,9 @@ CASES = {
         {"selected_class_uris": [], "known_class_uris": "__all__"},
         "full",
     ),
-    "fixed height, no fit": ({"fit": False, "graph_height": 300}, "full"),
+    # Settings a browser saved before the canvas always fitted the window. They
+    # are no longer read, and must not break the page on the way past.
+    "stale fixed-height settings": ({"fit": False, "graph_height": 300}, "full"),
     "highlight issues": ({"highlight_issues": True}, "full"),
     "status bar instead of the panel": ({"details_panel": False}, "full"),
     "options collapsed": ({"options_open": False}, "full"),

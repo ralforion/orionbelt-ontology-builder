@@ -48,9 +48,7 @@ _VIZ_PERSIST_KEYS = (
     "show_skos",
     "show_ind_edges",
     "show_triples",
-    "graph_height",
     "node_spacing",
-    "fit",
     "highlight_issues",
     "auto_show_new",
     "details_panel",
@@ -59,7 +57,6 @@ _VIZ_PERSIST_KEYS = (
     "options_open",
 )
 _VIZ_INT_RANGES = {
-    "graph_height": (300, 1200),
     "node_spacing": (50, 300),
     "focus_depth": (1, 5),
 }
