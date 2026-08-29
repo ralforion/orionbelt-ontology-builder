@@ -371,7 +371,7 @@ class OntologyManager:
                 self.graph.add(new_triple)
 
         # Re-bind the default namespace
-        self.graph.bind("", self.namespace)
+        self._bind_default_prefix()
 
     #: The ``scheme:`` an absolute IRI opens with (RFC 3986). A local name can
     #: never match it: :attr:`_LOCAL_NAME_RE` allows no colon, so "already a
@@ -5639,7 +5639,43 @@ class OntologyManager:
         self.graph.bind("skosxl", SKOSXL)
         self.graph.bind("dc", DC)
         self.graph.bind("dcterms", DCTERMS)
-        self.graph.bind("", self.namespace)
+        self._bind_default_prefix()
+
+    def _bind_default_prefix(self):
+        """Bind ``:`` to this ontology's own namespace, taking it if need be.
+
+        ``Graph.bind`` defaults to ``replace=False``, which does not mean "leave
+        the binding alone": when ``:`` is already bound to a *different*
+        namespace, rdflib keeps that binding and quietly parks ours under a
+        generated ``default1:`` instead. Nothing raises, so the app carries on
+        believing ``:`` is its namespace while it names someone else's.
+
+        Two paths land there. Loading a file that declares its own
+        ``@prefix : <...>`` keeps the file's, and :meth:`set_base_uri` leaves
+        ``:`` on the namespace the ontology just moved away from. Both are
+        silent until something reads ``:`` back: entities the editor mints
+        serialize as ``default1:Thing``, and a ``:Thing`` in the SPARQL console
+        resolves into the foreign namespace and matches nothing.
+
+        ``:`` therefore belongs to :attr:`namespace` by force. Every editor page
+        mints URIs there, so it is the one namespace the empty prefix can mean
+        without lying.
+
+        Taking ``:`` unbinds whatever held it, so a displaced namespace with no
+        other prefix is re-bound under a generated name rather than dropped: a
+        binding a loaded file declared should survive a round trip, and an
+        unbound namespace comes back out of the serializer as ``ns1:``.
+        """
+        displaced = self.graph.store.namespace("")
+        self.graph.bind("", self.namespace, replace=True)
+        if displaced is None or str(displaced) == str(self.namespace):
+            return
+        if any(str(ns) == str(displaced) for _, ns in self.graph.namespaces()):
+            return
+        index = 1
+        while self.graph.store.namespace(f"default{index}") is not None:
+            index += 1
+        self.graph.bind(f"default{index}", displaced, replace=True)
 
     def _update_namespace_from_graph(self):
         """Update namespace based on loaded ontology."""
