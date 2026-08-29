@@ -199,6 +199,20 @@ def _algebra_guard(algebra: Any) -> None:
             "queries the ontology loaded in the app."
         )
 
+    # FROM / FROM NAMED name a dataset to query instead of this one. Nothing
+    # here can serve them: the console evaluates against a single wrapper graph
+    # over the loaded ontology, so rdflib ignores the clause and answers from
+    # the ontology anyway. That is the dangerous outcome — the query looks
+    # honoured and the rows look right, so `FROM <somewhere-else>` returns this
+    # ontology's data under another graph's name. Refusing is the only reading
+    # that cannot mislead.
+    if "DatasetClause" in names:
+        raise QueryNotAllowed(
+            "FROM and FROM NAMED are not supported: this console always queries "
+            "the ontology loaded in the app, and the clause would be ignored "
+            "rather than honoured. Remove it to query the loaded ontology."
+        )
+
     # No triple pattern means evaluation never reaches the store, so the store
     # deadline never fires. Harmless at small sizes; unstoppable at large ones.
     if "BGP" not in names and prod(values_sizes or [0]) > _VALUES_PRODUCT_LIMIT:

@@ -303,3 +303,31 @@ def test_rows_to_csv_round_trips():
     csv_text = sparql.rows_to_csv(["a", "b"], [["1", "2"], ["3", "4"]])
     assert csv_text.splitlines()[0] == "a,b"
     assert "3,4" in csv_text
+
+
+# --- dataset clauses -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT * FROM <http://no-such.example/g> WHERE { ?s ?p ?o }",
+        "SELECT * FROM NAMED <http://no-such.example/g> WHERE { ?s ?p ?o }",
+        "CONSTRUCT { ?s ?p ?o } FROM <http://no-such.example/g> WHERE { ?s ?p ?o }",
+        "ASK FROM <http://no-such.example/g> { ?s ?p ?o }",
+        "DESCRIBE ?s FROM <http://no-such.example/g> WHERE { ?s ?p ?o }",
+    ],
+)
+def test_dataset_clauses_are_rejected(populated_om, query):
+    """rdflib evaluates these against the graph it is given and ignores the
+    clause, so every one of them silently answered from the loaded ontology
+    under another graph's name — right-looking rows for a question nobody
+    asked. Refused rather than answered wrongly.
+    """
+    with pytest.raises(sparql.QueryNotAllowed, match="FROM"):
+        sparql.run_query(populated_om.graph, query)
+
+
+def test_a_query_without_a_dataset_clause_is_unaffected(populated_om):
+    result = sparql.run_query(populated_om.graph, "SELECT * WHERE { ?s ?p ?o }")
+    assert result.row_count == len(populated_om.graph)
