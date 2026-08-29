@@ -194,8 +194,9 @@ def _prefix_rows(ont) -> list[dict[str, str]]:
         elif named:
             label = f"{named}:"
         else:
-            # Nothing names it, so the only way to write it is in full.
-            label = f"<{namespace}…>"
+            # Nothing names it. The namespace is in the next column, so
+            # repeating it here would only be noise.
+            label = "(none)"
         rows.append({"Prefix": label, "Namespace": namespace})
     return rows
 
@@ -207,7 +208,9 @@ def _render_prefixes(ont) -> None:
         st.dataframe(_prefix_rows(ont), use_container_width=True, hide_index=True)
         st.caption(
             "`owl:`, `rdf:`, `rdfs:`, `xsd:`, `skos:`, `dc:` and `dcterms:` are "
-            "always declared too, along with the prefixes rdflib binds by default."
+            "always declared too, along with the prefixes rdflib binds by "
+            "default. A namespace with no prefix has to be written in full, as "
+            "`<http://example.org/ontology#Person>`."
         )
 
 
@@ -219,7 +222,13 @@ def _matched_nothing() -> None:
     namespace the ontology does not use.
     """
     st.info("The query ran and matched nothing.")
-    st.caption(f"{_NAMESPACE_HINT} The prefix list under the editor has them all.")
+    # Shorter than the hint above the results: with the prefix list expanded
+    # the two sit on screen together, and saying it twice reads as noise.
+    st.caption(
+        "Check the prefixes if the query names an entity: `:` is this "
+        "ontology's own namespace, and an imported vocabulary keeps its own. "
+        "The list under the editor has them all."
+    )
 
 
 def _render_select_result(result: sparql.QueryResult) -> None:

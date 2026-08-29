@@ -127,7 +127,7 @@ class TestPrefixRows:
         om = OntologyManager()
         om.add_class("Widget", namespace="http://un.bound.example/ns#")
         rows = {row["Namespace"]: row["Prefix"] for row in _prefix_rows(om)}
-        assert rows["http://un.bound.example/ns#"].startswith("<http://un.bound")
+        assert rows["http://un.bound.example/ns#"] == "(none)"
 
 
 def test_the_page_renders_before_anything_is_run():
