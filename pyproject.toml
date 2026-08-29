@@ -3,7 +3,15 @@ name = "orionbelt-ontology-builder"
 version = "1.24.0"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
-license = {text = "BSL-1.1"}
+# SPDX. Business Source License 1.1 is BUSL-1.1; BSL-1.0 is the Boost Software
+# License and BSL-1.1 is not an SPDX identifier at all, so the old value named
+# nothing while looking like it named Boost.
+license = "BUSL-1.1"
+# PEP 639. Both reach the wheel as dist-info/licenses/, which is where a consumer
+# of the built artifact looks. MANIFEST.in governs the sdist only, so listing the
+# notices there alone left the wheel without them, and the licence texts inside
+# the package pointing at a file that was not in it.
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.12"
 authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "info@ralforion.com"}]
 keywords = ["ontology", "owl", "rdf", "rdflib", "streamlit", "semantic-web", "knowledge-graph"]
@@ -99,7 +107,8 @@ filterwarnings = [
 ]
 
 [build-system]
-requires = ["setuptools>=68.0"]
+# 77 is where PEP 639 (`license` as an SPDX expression, `license-files`) landed.
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -120,6 +129,9 @@ orionbelt_ontology_builder = [
     # the working tree, including a macOS .DS_Store, and nothing else under lib/
     # is loaded any more.
     "lib/graph_viewer/*",
+    # Third-party licence texts for what this wheel redistributes; the map from
+    # file to licence is THIRD_PARTY_NOTICES.md at the repo root.
+    "licenses/*",
     "samples/**/*.ttl",
     "samples/**/*.owl",
     "samples/**/*.rdf",
