@@ -60,7 +60,7 @@ pytest                                    # testpaths/pythonpath configured in p
 pytest tests/test_classes.py -q           # a single file
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx. Python >= 3.12.
+Dependencies: streamlit, rdflib, owlrl, networkx, streamlit-ace. Python >= 3.12.
 
 The floor is 3.12 because that is the oldest runtime CI keeps green, and
 because both deployment targets are at or above it (Streamlit Community

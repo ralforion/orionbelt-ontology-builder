@@ -708,6 +708,7 @@ dependencies = [
     { name = "owlrl" },
     { name = "rdflib" },
     { name = "streamlit" },
+    { name = "streamlit-ace" },
     { name = "streamlit-local-storage" },
 ]
 
@@ -750,6 +751,7 @@ requires-dist = [
     { name = "rdflib", specifier = ">=7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.4" },
     { name = "streamlit", specifier = "==1.49.1" },
+    { name = "streamlit-ace", specifier = ">=0.1.1" },
     { name = "streamlit-desktop-app", marker = "extra == 'desktop'", specifier = ">=0.3.3" },
     { name = "streamlit-desktop-app", marker = "extra == 'gtk'", specifier = ">=0.3.3" },
     { name = "streamlit-desktop-app", marker = "extra == 'qt'", specifier = ">=0.3.3" },
@@ -1550,6 +1552,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/24/17/c8024e4ef311dc7833987c603a7d0ebe82f8aa352aaca53b27be3f6b7f01/streamlit-1.49.1.tar.gz", hash = "sha256:6f213f1e43f035143a56f58ad50068d8a09482f0a2dad1050d7e7e99a9689818", size = 9640116, upload-time = "2025-08-29T18:35:45.055Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/9e/146cdef515ad07e56c3aa942d087562498592d441aa3bae845ef0cd8fca3/streamlit-1.49.1-py3-none-any.whl", hash = "sha256:ad7b6d0dc35db168587acf96f80378249467fc057ed739a41c511f6bf5aa173b", size = 10044388, upload-time = "2025-08-29T18:35:42.239Z" },
+]
+
+[[package]]
+name = "streamlit-ace"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/34/a508123af170e41852d247b17d38d9cddc2b4be3884f2f29a84aeb322992/streamlit_ace-0.1.1.tar.gz", hash = "sha256:1852fa19707685fd4241be9256c1ab1a89da4a3b8c28ab286e3bff122d3a1686", size = 2389652, upload-time = "2021-12-07T19:01:15.66Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/c9/e862cefc5735e11c101b2bc45f37a2b767666ffe673d262004202b506f3b/streamlit_ace-0.1.1-py3-none-any.whl", hash = "sha256:cdf908a90058fa831fb720d29e2aef35a0f5799eac33e2b2e58ba9f3631b1aa5", size = 3642928, upload-time = "2021-12-07T19:01:11.288Z" },
 ]
 
 [[package]]

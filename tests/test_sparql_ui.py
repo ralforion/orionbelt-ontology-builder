@@ -8,6 +8,7 @@ than swallowed.
 
 import os
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder.views.sparql import EXAMPLE_QUERIES
@@ -153,3 +154,85 @@ def test_a_timed_out_query_does_not_claim_it_matched_nothing(monkeypatch):
     shown.clear()
     page._render_result(sparql.QueryResult(form="SELECT"))
     assert any("matched nothing" in m for m in shown)
+
+
+# --- the editor ------------------------------------------------------------
+
+
+def test_the_editor_themes_are_real_ace_themes():
+    """A typo here does not raise, it silently renders an unstyled editor."""
+    from streamlit_ace import THEMES
+
+    from orionbelt_ontology_builder.views import sparql as page
+
+    assert page._EDITOR_THEME_LIGHT in THEMES
+    assert page._EDITOR_THEME_DARK in THEMES
+
+
+def test_the_editor_theme_is_not_one_that_leaves_sparql_black():
+    """Ace themes only colour the token classes they choose to, and SPARQL
+    emits ``ace_variable ace_other`` / ``ace_support ace_type``. The 'github'
+    theme styles neither and gives ace_keyword bold with no colour, so the
+    whole query renders flat black. Measured in the browser, not guessed.
+    """
+    from orionbelt_ontology_builder.views import sparql as page
+
+    assert page._EDITOR_THEME_LIGHT != "github"
+    assert page._EDITOR_THEME_DARK != "github"
+
+
+@pytest.mark.parametrize(
+    ("theme_type", "expected"),
+    [("dark", "_EDITOR_THEME_DARK"), ("light", "_EDITOR_THEME_LIGHT")],
+)
+def test_the_editor_follows_the_app_theme(monkeypatch, theme_type, expected):
+    from orionbelt_ontology_builder.views import sparql as page
+
+    monkeypatch.setattr(
+        page.st,
+        "context",
+        type("C", (), {"theme": type("T", (), {"type": theme_type})}),
+    )
+    assert page._editor_theme() == getattr(page, expected)
+
+
+def test_the_editor_falls_back_to_light_when_the_theme_is_unreadable(monkeypatch):
+    """st.context.theme is not available in every Streamlit context."""
+    from orionbelt_ontology_builder.views import sparql as page
+
+    class Boom:
+        @property
+        def theme(self):
+            raise RuntimeError("no context")
+
+    monkeypatch.setattr(page.st, "context", Boom())
+    assert page._editor_theme() == page._EDITOR_THEME_LIGHT
+
+
+def test_picking_an_example_remounts_the_editor():
+    """Ace treats ``value`` as initial content only, so an example has to
+    remount the component under a new key or the editor keeps showing what the
+    user had before."""
+    at = _run("", click=False)
+    at.selectbox[0].select("Class hierarchy").run(timeout=120)
+    assert not at.exception, at.exception
+    assert at.session_state["sparql_editor_nonce"] >= 1
+    assert at.session_state["sparql_query_text"] == EXAMPLE_QUERIES["Class hierarchy"]
+
+
+def test_the_page_still_works_without_the_editor_component(monkeypatch):
+    """The editor is a nicety; querying is the feature. If streamlit-ace cannot
+    be imported the page must still render and run queries."""
+    from orionbelt_ontology_builder.views import sparql as page
+
+    monkeypatch.setattr(page, "st_ace", None)
+    shown: dict = {}
+    monkeypatch.setattr(page.st, "caption", lambda *a, **k: None)
+    monkeypatch.setattr(
+        page.st, "container", lambda **k: __import__("contextlib").nullcontext()
+    )
+    monkeypatch.setattr(
+        page.st, "text_area", lambda *a, **k: shown.setdefault("fell_back", True) and ""
+    )
+    page._render_editor()
+    assert shown.get("fell_back") is True

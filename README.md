@@ -250,7 +250,8 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 
 A read-only query console over the loaded ontology: SELECT, ASK, CONSTRUCT and
 DESCRIBE, with the ontology's own prefixes already declared so `owl:Class` and
-`:Person` work without a PREFIX line. Results download as CSV (SELECT) or
+`:Person` work without a PREFIX line. The editor highlights SPARQL syntax and
+follows the app's light/dark theme. Results download as CSV (SELECT) or
 Turtle (CONSTRUCT/DESCRIBE), and eight worked examples are one click away.
 
 Updates (INSERT, DELETE, LOAD, CLEAR, DROP) are refused: edits go through the
@@ -519,7 +520,7 @@ orionbelt-ontology-builder/
 └── tests/                              # pytest suite
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx.
+Dependencies: streamlit, rdflib, owlrl, networkx, streamlit-ace.
 
 ---
 

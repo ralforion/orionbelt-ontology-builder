@@ -10,6 +10,14 @@ import streamlit as st
 from .. import sparql
 from ..ui import _download_or_save, log_error
 
+try:
+    from streamlit_ace import st_ace
+except ImportError:  # pragma: no cover - exercised only without the extra
+    # The editor is a nicety; querying is the feature. If the component cannot
+    # be imported the page falls back to a plain monospace text area rather
+    # than failing to render at all.
+    st_ace = None
+
 #: Starter queries. Written against prefixes every ontology here has bound —
 #: ``owl:``/``rdfs:``/``skos:`` from the standard set, and ``:`` for the
 #: ontology's own namespace — so they run as-is without editing.
@@ -61,6 +69,10 @@ WHERE {
 }
 
 _QUERY_KEY = "sparql_query_text"
+#: Bumped to force a fresh editor instance. The Ace component treats ``value``
+#: as initial content, so loading an example has to remount it under a new key
+#: or the editor keeps showing what the user had before.
+_EDITOR_NONCE = "sparql_editor_nonce"
 _RESULT_KEY = "sparql_last_result"
 _ERROR_KEY = "sparql_last_error"
 
@@ -74,8 +86,79 @@ def _load_example() -> None:
     name = st.session_state.get("sparql_example")
     if name and name in EXAMPLE_QUERIES:
         st.session_state[_QUERY_KEY] = EXAMPLE_QUERIES[name]
+        st.session_state[_EDITOR_NONCE] = st.session_state.get(_EDITOR_NONCE, 0) + 1
         st.session_state.pop(_RESULT_KEY, None)
         st.session_state.pop(_ERROR_KEY, None)
+
+
+_EDITOR_HELP = (
+    "The ontology's prefixes are already declared, so you can write "
+    "`owl:Class` or `:Person` without a PREFIX line."
+)
+_PLACEHOLDER = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
+
+
+#: Ace themes for the app's two appearances. Chosen by measuring what each
+#: actually colours, not by name: Ace themes only style the token classes they
+#: choose to, and SPARQL emits ``ace_variable ace_other`` and
+#: ``ace_support ace_type`` for its variables and prefixed names. The obvious
+#: pick, ``github``, styles neither — it gives ``ace_keyword`` bold weight and
+#: no colour, and colours only ``ace_variable.ace_class``, so a whole query
+#: renders in flat black. These two give keywords, variables, prefixed names
+#: and strings four distinct colours, on grounds that match the app's own.
+_EDITOR_THEME_LIGHT = "chrome"
+_EDITOR_THEME_DARK = "tomorrow_night"
+
+
+def _editor_theme() -> str:
+    """An Ace theme matching the app's appearance. Light is the safe default:
+    the browser only reports its theme from the second render on."""
+    try:
+        is_dark = st.context.theme.type == "dark"
+    except Exception:  # noqa: BLE001 - theme detection is cosmetic, never fatal
+        is_dark = False
+    return _EDITOR_THEME_DARK if is_dark else _EDITOR_THEME_LIGHT
+
+
+def _render_editor() -> str:
+    """The query editor, syntax-highlighted where the component is available.
+
+    ``auto_update=True`` matters: left at its default the component renders its
+    own separate apply button and never reports edits on blur, so pressing Run
+    would submit the previous query. On, it commits after a short debounce, so
+    what is on screen is what runs.
+    """
+    st.caption("Query")
+    current = st.session_state.get(_QUERY_KEY, "")
+    if st_ace is None:
+        # Keyed container so the monospace rule in _CUSTOM_CSS reaches this one
+        # text area without restyling every other text area in the app.
+        with st.container(key="sparql_editor"):
+            return st.text_area(
+                "Query",
+                height=240,
+                key=_QUERY_KEY,
+                placeholder=_PLACEHOLDER,
+                help=_EDITOR_HELP,
+                label_visibility="collapsed",
+            )
+    edited = st_ace(
+        value=current,
+        placeholder=_PLACEHOLDER,
+        language="sparql",
+        theme=_editor_theme(),
+        height=260,
+        font_size=14,
+        tab_size=2,
+        wrap=True,
+        show_gutter=True,
+        auto_update=True,
+        key=f"sparql_ace_{st.session_state.get(_EDITOR_NONCE, 0)}",
+    )
+    edited = edited or ""
+    st.session_state[_QUERY_KEY] = edited
+    st.caption(_EDITOR_HELP)
+    return edited
 
 
 def _render_select_result(result: sparql.QueryResult) -> None:
@@ -173,16 +256,7 @@ def render_sparql():
         on_change=_load_example,
     )
 
-    query_text = st.text_area(
-        "Query",
-        height=240,
-        key=_QUERY_KEY,
-        placeholder="SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10",
-        help=(
-            "The ontology's prefixes are already declared, so you can write "
-            "`owl:Class` or `:Person` without a PREFIX line."
-        ),
-    )
+    query_text = _render_editor()
 
     limit_col, timeout_col, run_col = st.columns([2, 2, 1])
     with limit_col:
