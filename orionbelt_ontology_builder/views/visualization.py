@@ -57,6 +57,7 @@ from ..ui import (
     parse_filter_text,
     path_chain_text,
     path_edge_kinds,
+    path_entity_kinds,
     path_highlight,
     path_nodes,
     prioritise_find_target,
@@ -181,6 +182,51 @@ def status_bar_copy_html(text: str) -> str:
         flash(legacy());
     }});
     </script>"""
+
+
+#: The two band switches above the canvas, laid out as one inline pair.
+#:
+#: Not two proportional columns: narrow enough to sit next to each other on a
+#: wide screen, the first one is too narrow for its own label on a laptop and
+#: "Display options" breaks over four lines, shoving the whole row down. Sized
+#: to their content instead, so the labels never break at any width and the
+#: spare width goes to the gap before Render. A width too small for both drops
+#: the second switch onto its own line rather than breaking either label.
+BAND_SWITCH_CSS = """<style>
+.st-key-viz_band_switches {
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 1.5rem;
+}
+.st-key-viz_band_switches [data-testid="stLayoutWrapper"],
+.st-key-viz_band_switches [data-testid="stElementContainer"] {
+    width: auto !important;
+    flex: 0 0 auto;
+}
+.st-key-viz_band_switches label,
+.st-key-viz_band_switches label p {
+    white-space: nowrap;
+}
+/* Both switch boxes are 24px, the height of the switch itself. One of the two
+   is handed an 8px top margin and the other is not, which made them 32px and
+   24px; centring then sat the short one 4px below the tall one and the pair
+   read as misaligned. Levelled by dropping that margin rather than by aligning
+   around it, so the boxes match and the centring has nothing left to do.
+
+   min-height, not height: 24px is what the switch needs at the default text
+   size, and a hard height would clip the label for anyone reading at a larger
+   one. */
+.st-key-viz_band_switches [data-testid="stCheckbox"] {
+    /* !important because the margin comes from one of Streamlit's own hashed
+       class rules, which outranks this selector on specificity. */
+    margin-top: 0 !important;
+    min-height: 24px;
+}
+.st-key-viz_band_switches > [data-testid="stElementContainer"] {
+    min-height: 24px;
+}
+</style>"""
 
 
 def graph_overlay_css(dark: bool) -> str:
@@ -392,6 +438,9 @@ def render_visualization():
             "focus_mode": False,
             "focus_depth": 1,
             "options_open": True,
+            # Off by default: the panel is a tool you reach for, not something
+            # every graph needs, and off it costs no vertical space at all.
+            "path_panel": False,
         }
         # Bring back settings saved in a previous session before applying
         # defaults, so a returning user opens with their own preferences (#142).
@@ -411,14 +460,29 @@ def render_visualization():
         # persisted viz settings, so a band you collapsed stays collapsed.
         # Render sits outside it, since redrawing is the one thing still worth
         # doing while the rest is out of the way.
-        _opt_col, _render_col = st.columns([5, 1])
-        with _opt_col:
+        # Both bands above the canvas are switched from the same row, and Render
+        # sits outside them: redrawing is the one thing still worth doing while
+        # the rest is out of the way. The two switches share one column and are
+        # laid out inline (see BAND_SWITCH_CSS), so they read as a pair and
+        # neither label can be squeezed into breaking.
+        st.html(BAND_SWITCH_CSS)
+        _switch_col, _, _render_col = st.columns([2.4, 2.6, 1])
+        with _switch_col.container(key="viz_band_switches"):
             options_open = st.toggle(
                 "Display options",
                 key="viz_options_open",
                 on_change=viz_sync,
                 args=("_viz_cfg_options_open", "viz_options_open"),
                 help="Which node types to draw and how far apart to space them.",
+            )
+            path_panel = st.toggle(
+                "Path finder",
+                key="viz_path_panel",
+                on_change=viz_sync,
+                args=("_viz_cfg_path_panel", "viz_path_panel"),
+                help="Find the shortest chain of links between two classes, "
+                "individuals or SKOS concepts, and highlight it in the graph. "
+                "Off, the panel takes no room and nothing is highlighted.",
             )
         with _render_col:
             render_graph = st.button(
@@ -1251,123 +1315,182 @@ def render_visualization():
 
         path_hops: list | None = None
         path_cut_short = False
+        path_failed = False
         path_node_ids: list[str] = []
         path_pairs: set = set()
-        with st.expander("Shortest path between two entities", expanded=False):
-            _psrc_col, _ptgt_col = st.columns(2)
-            with _psrc_col:
-                _path_source = st.selectbox(
-                    "From",
-                    options=sorted(path_choices),
-                    index=None,
-                    placeholder="Start entity…",
-                    key="viz_path_source",
-                    help="Lists the entity types enabled above.",
-                )
-            with _ptgt_col:
-                _path_target = st.selectbox(
-                    "To",
-                    options=sorted(path_choices),
-                    index=None,
-                    placeholder="End entity…",
-                    key="viz_path_target",
-                    help="The path is undirected — it answers 'how are these "
-                    "two related', so it reads a link either way round.",
-                )
-
-            _src_key = path_choices.get(_path_source)
-            _tgt_key = path_choices.get(_path_target)
-            if _src_key and _tgt_key:
-                # Memoised against the ontology's mutation counter and the
-                # walkable link kinds, the two things that can change the
-                # answer. Without it every rerun — a filter tweak, a node click —
-                # rebuilds the adjacency over the whole ontology to re-derive a
-                # path that has not moved.
-                _path_kinds = path_edge_kinds(
-                    show_classes,
-                    show_properties,
-                    show_individuals,
-                    show_ind_edges,
-                    show_skos,
-                )
-                _path_cache_key = (
-                    st.session_state.get("_ont_mutation_count", 0),
-                    _path_kinds,
-                    _src_key,
-                    _tgt_key,
-                )
-                _cached = st.session_state.get("_viz_path_cache")
-                # Length checked as well as key: a session that outlived a
-                # change to what is cached here holds the older shape.
-                if len(_cached or ()) == 3 and _cached[0] == _path_cache_key:
-                    path_hops, path_cut_short = _cached[1], _cached[2]
-                else:
-                    try:
-                        path_hops = ont.find_shortest_path(
-                            _src_key, _tgt_key, kinds=_path_kinds
-                        )
-                    except PathSearchLimitError:
-                        # Not the same as "no path": the search was cut short,
-                        # and saying they are unconnected would be a wrong
-                        # answer rather than a missing one.
-                        path_cut_short = True
-                        path_hops = None
-                    except Exception:
-                        # A path is a read-only extra; a failure here must not
-                        # take the graph page down with it.
-                        logger.debug("Shortest path search failed", exc_info=True)
-                        path_hops = None
-                    st.session_state["_viz_path_cache"] = (
-                        _path_cache_key,
-                        path_hops,
-                        path_cut_short,
+        # Switched off, the panel is not drawn at all and nothing is
+        # highlighted: "off" means off, and a path still painted on the canvas
+        # with no visible control explaining it would be a puzzle. Hiding it is
+        # a deliberate click on a switch, the same as collapsing the display
+        # options, so the iframe re-created by the element going away (issue
+        # #189) is a cost the user asked for — unlike a banner that comes and
+        # goes on its own.
+        if path_panel:
+            with st.expander("Shortest path between two entities", expanded=False):
+                _psrc_col, _ptgt_col = st.columns(2)
+                with _psrc_col:
+                    _path_source = st.selectbox(
+                        "From",
+                        options=sorted(path_choices),
+                        index=None,
+                        placeholder="Start entity…",
+                        key="viz_path_source",
+                        help="Classes, individuals or SKOS concepts. Toggle the "
+                        "entity-type checkboxes above to list more. Data "
+                        "properties are not listed: one hangs off its domain "
+                        "class and leads nowhere else, so it can never be a step "
+                        "in a path.",
+                    )
+                with _ptgt_col:
+                    _path_target = st.selectbox(
+                        "To",
+                        options=sorted(path_choices),
+                        index=None,
+                        placeholder="End entity…",
+                        key="viz_path_target",
+                        help="The path is undirected — it answers 'how are these "
+                        "two related', so it reads a link either way round.",
                     )
 
-            if path_hops:
-                path_node_ids, path_pairs = path_highlight(path_hops, _src_key)
-                _path_message = (
-                    f"**{len(path_hops)} hop"
-                    f"{'s' if len(path_hops) != 1 else ''}:** "
-                    + path_chain_text(path_hops, _src_key, path_labels)
-                )
-            elif path_hops == []:
-                _path_message = "That is one and the same entity."
-            elif path_cut_short:
-                _path_message = (
-                    f"This ontology is too large to search exhaustively: the "
-                    f"search stopped after {PATH_MAX_VISITED:,} entities without "
-                    f"reaching the target. There may still be a path between "
-                    f"them."
-                )
-            elif _src_key and _tgt_key:
-                _path_message = (
-                    "No path between them over the links the graph is drawing. "
-                    "Turning on more entity types above gives the search more "
-                    "to walk."
-                )
-            else:
-                _path_message = (
-                    "Pick two entities to see the shortest chain of links "
-                    "between them, highlighted in the graph."
-                )
-            st.markdown(_path_message)
-            if st.button(
-                "Focus on this path",
-                key="viz_path_focus",
-                disabled=not path_hops,
-                help="Makes the path the focus, so all of it is drawn even when "
-                "the full graph is too large to show. It is an ordinary focus "
-                "from there: the depth slider decides how much of what "
-                "surrounds the path comes with it.",
-            ):
-                viz_focus_on_path(
-                    [
-                        path_labels[node]
-                        for node in path_nodes(path_hops, _src_key)
-                        if node in path_labels
-                    ]
-                )
-                st.rerun()
+                _src_key = path_choices.get(_path_source)
+                _tgt_key = path_choices.get(_path_target)
+                if _src_key and _tgt_key:
+                    # Memoised against the ontology's mutation counter and the
+                    # walkable link kinds, the two things that can change the
+                    # answer. Without it every rerun — a filter tweak, a node click —
+                    # rebuilds the adjacency over the whole ontology to re-derive a
+                    # path that has not moved.
+                    _path_kinds = path_edge_kinds(
+                        show_classes,
+                        show_properties,
+                        show_individuals,
+                        show_ind_edges,
+                        show_skos,
+                        show_triples,
+                    )
+                    _path_entities = path_entity_kinds(
+                        show_classes, show_individuals, show_skos
+                    )
+                    _path_cache_key = (
+                        st.session_state.get("_ont_mutation_count", 0),
+                        _path_kinds,
+                        _path_entities,
+                        _src_key,
+                        _tgt_key,
+                    )
+                    _cached = st.session_state.get("_viz_path_cache")
+                    # Length checked as well as key: a session that outlived a
+                    # change to what is cached here holds the older shape.
+                    if len(_cached or ()) == 4 and _cached[0] == _path_cache_key:
+                        path_hops, path_cut_short, path_failed = _cached[1:]
+                    else:
+                        try:
+                            path_hops = ont.find_shortest_path(
+                                _src_key,
+                                _tgt_key,
+                                kinds=_path_kinds,
+                                entity_kinds=_path_entities,
+                            )
+                        except PathSearchLimitError:
+                            # Not the same as "no path": the search was cut short,
+                            # and saying they are unconnected would be a wrong
+                            # answer rather than a missing one.
+                            path_cut_short = True
+                            path_hops = None
+                        except Exception:
+                            # A path is a read-only extra; a failure here must not
+                            # take the graph page down with it. But it must not be
+                            # reported as "no path" either — that is a claim about
+                            # the ontology, and answering a broken search with one
+                            # sends the reader looking for a modelling problem
+                            # that isn't there.
+                            logger.debug("Shortest path search failed", exc_info=True)
+                            path_failed = True
+                            path_hops = None
+                        st.session_state["_viz_path_cache"] = (
+                            _path_cache_key,
+                            path_hops,
+                            path_cut_short,
+                            path_failed,
+                        )
+
+                if path_hops:
+                    path_node_ids, path_pairs = path_highlight(path_hops, _src_key)
+                    _path_message = (
+                        f"**{len(path_hops)} hop"
+                        f"{'s' if len(path_hops) != 1 else ''}:** "
+                        + path_chain_text(path_hops, _src_key, path_labels)
+                    )
+                elif path_hops == []:
+                    _path_message = (
+                        f"**{_path_source}** is the same entity twice. Pick two "
+                        f"different ones."
+                    )
+                elif path_failed:
+                    _path_message = (
+                        f"The path search between **{_path_source}** and "
+                        f"**{_path_target}** could not be run. Nothing is wrong "
+                        f"with the two entities you picked; see the error log for "
+                        f"what went wrong."
+                    )
+                elif path_cut_short:
+                    _path_message = (
+                        f"This ontology is too large to search exhaustively: the "
+                        f"search out from **{_path_source}** stopped after "
+                        f"{PATH_MAX_VISITED:,} entities without reaching "
+                        f"**{_path_target}**. There may still be a path between "
+                        f"them."
+                    )
+                elif _src_key and _tgt_key:
+                    # Named rather than "them": the pickers scroll out of sight
+                    # on a long page, and a bare "no path" then says nothing
+                    # about which pair it is answering for.
+                    _path_message = (
+                        f"No path between **{_path_source}** and "
+                        f"**{_path_target}** over the links the graph is drawing. "
+                        f"Turning on more entity types above gives the search "
+                        f"more to walk."
+                    )
+                    if show_triples:
+                        # With Triples on, the canvas draws lines this search
+                        # will not walk, and the sentence above reads as a
+                        # contradiction: you can trace two classes to a shared
+                        # rdf:type node and be told they are unconnected. A
+                        # triple between two named entities *is* walked; one
+                        # ending at a node like owl:Class is not, because
+                        # nearly every entity meets there and walking it would
+                        # put any two of them two hops apart.
+                        _path_message += (
+                            " Triples drawn to a shared node such as owl:Class "
+                            "are not walked: nearly every entity meets there, "
+                            "which would make any two of them two hops apart. "
+                            "A triple asserted straight between two named "
+                            "entities is walked."
+                        )
+                else:
+                    _path_message = (
+                        "Pick two classes, individuals or SKOS concepts to see "
+                        "the shortest chain of links between them, highlighted "
+                        "in the graph."
+                    )
+                st.markdown(_path_message)
+                if st.button(
+                    "Focus on this path",
+                    key="viz_path_focus",
+                    disabled=not path_hops,
+                    help="Makes the path the focus, so all of it is drawn even when "
+                    "the full graph is too large to show. It is an ordinary focus "
+                    "from there: the depth slider decides how much of what "
+                    "surrounds the path comes with it.",
+                ):
+                    viz_focus_on_path(
+                        [
+                            path_labels[node]
+                            for node in path_nodes(path_hops, _src_key)
+                            if node in path_labels
+                        ]
+                    )
+                    st.rerun()
 
         # Store graph settings in session state for caching
         selected_classes_key = (

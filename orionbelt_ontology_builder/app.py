@@ -193,6 +193,7 @@ from .ui import (  # noqa: F401
     parse_search_query,
     path_chain_text,
     path_edge_kinds,
+    path_entity_kinds,
     path_highlight,
     path_nodes,
     persist_autosave,

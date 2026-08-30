@@ -48,11 +48,20 @@ def _script():
         # The cross-session settings restore mounts the localStorage component,
         # which blocks forever without a browser to answer it. Mark it done.
         st.session_state["_viz_settings_restored"] = True
+        st.session_state["_viz_cfg_path_panel"] = os.environ["PATH_PANEL"] == "1"
+        st.session_state["_viz_cfg_show_triples"] = os.environ["PATH_TRIPLES"] == "1"
         if os.environ["PATH_FROM"]:
             st.session_state["viz_path_source"] = os.environ["PATH_FROM"]
         if os.environ["PATH_TO"]:
             st.session_state["viz_path_target"] = os.environ["PATH_TO"]
-        if os.environ.get("PATH_LIMIT") == "1":
+        if os.environ.get("PATH_BROKEN") == "1":
+            # Stands in for any bug inside the search — the shape that made a
+            # stale process report two connected classes as unconnected.
+            def _broken(*_args, **_kwargs):
+                raise TypeError("unexpected keyword argument")
+
+            om.find_shortest_path = _broken
+        elif os.environ.get("PATH_LIMIT") == "1":
             # Standing in for an ontology too large to search exhaustively,
             # which is otherwise 50,000 entities to build.
             from orionbelt_ontology_builder.ontology_manager import (
@@ -67,11 +76,21 @@ def _script():
     app.render_visualization()
 
 
-def _render(source="Class: A", target="Class: C", over_budget=False):
+def _render(
+    source="Class: A",
+    target="Class: C",
+    over_budget=False,
+    panel=True,
+    triples=False,
+    broken=False,
+):
     """Render once and return the AppTest, with a path picked."""
     os.environ["PATH_FROM"] = source
     os.environ["PATH_TO"] = target
     os.environ["PATH_LIMIT"] = "1" if over_budget else "0"
+    os.environ["PATH_PANEL"] = "1" if panel else "0"
+    os.environ["PATH_TRIPLES"] = "1" if triples else "0"
+    os.environ["PATH_BROKEN"] = "1" if broken else "0"
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -174,8 +193,39 @@ def test_a_single_hop_is_not_pluralised():
 
 def test_two_unconnected_entities_are_reported_as_such():
     at = _render("Class: A", "Class: D")
-    assert "No path between them" in _panel_text(at)
+    text = _panel_text(at)
+    assert "No path between" in text
+    # Named, not "them": the pickers scroll out of sight on a long page.
+    assert "Class: A" in text
+    assert "Class: D" in text
     assert _highlighted_edges(_graph(at)[1]) == []
+
+
+def test_no_path_says_why_the_triple_lines_on_screen_were_not_walked():
+    """With Triples on, two unrelated classes are both drawn joined to a shared
+    rdf:type node, so a bare "no path" reads as a contradiction: you can trace
+    the line yourself. Walking those would put every pair two hops apart."""
+    text = _panel_text(_render("Class: A", "Class: D", triples=True))
+    assert "No path between" in text
+    assert "shared node such as owl:Class" in text
+    assert "asserted straight between two named" in text
+
+
+def test_that_explanation_is_left_out_when_no_triples_are_drawn():
+    """Nothing on screen to contradict, so nothing to explain away."""
+    assert "owl:Class" not in _panel_text(_render("Class: A", "Class: D"))
+
+
+def test_a_search_that_breaks_is_not_reported_as_no_path():
+    """ "No path" is a claim about the ontology. Answering a broken search with
+    one sends the reader hunting a modelling problem that isn't there — which is
+    exactly how a stale process presented two connected classes."""
+    at = _render("Class: A", "Class: C", broken=True)
+    text = _panel_text(at)
+    assert "could not be run" in text
+    assert "Class: A" in text and "Class: C" in text
+    assert "No path between" not in text
+    assert not at.exception, "a failed search must not take the page down"
 
 
 def test_a_search_cut_short_is_not_reported_as_no_path():
@@ -184,15 +234,21 @@ def test_a_search_cut_short_is_not_reported_as_no_path():
     text = _panel_text(_render("Class: A", "Class: C", over_budget=True))
     assert "too large to search exhaustively" in text
     assert "There may still be a path" in text
-    assert "No path between them" not in text
+    assert "Class: A" in text and "Class: C" in text
+    assert "No path between" not in text
 
 
 def test_an_entity_paired_with_itself_says_so():
-    assert "one and the same entity" in _panel_text(_render("Class: A", "Class: A"))
+    text = _panel_text(_render("Class: A", "Class: A"))
+    assert "the same entity twice" in text
+    assert "Class: A" in text
 
 
-def test_the_panel_prompts_when_nothing_is_picked():
-    assert "Pick two entities" in _panel_text(_render("", ""))
+def test_the_panel_prompts_with_the_kinds_of_entity_it_can_join():
+    """ "Two entities" leaves the reader guessing which — the finder takes
+    classes, individuals and SKOS concepts, and not data properties."""
+    text = _panel_text(_render("", ""))
+    assert "Pick two classes, individuals or SKOS concepts" in text
 
 
 # --- the panel keeps its shape ---------------------------------------------
@@ -219,6 +275,45 @@ def test_the_focus_button_is_offered_only_once_there_is_a_path_to_focus_on():
     assert _button(_render("Class: A", "Class: C")).disabled is False
     assert _button(_render("Class: A", "Class: D")).disabled is True
     assert _button(_render("", "")).disabled is True
+
+
+# --- the switch that shows the panel at all ---------------------------------
+
+
+def test_the_panel_is_not_drawn_when_the_switch_is_off():
+    """It is a tool you reach for, and off it should cost no vertical space."""
+    at = _render("Class: A", "Class: C", panel=False)
+    assert "Shortest path" not in _panel_text(at)
+    assert not [b for b in at.button if b.label == "Focus on this path"]
+
+
+def test_nothing_is_highlighted_when_the_switch_is_off():
+    """A path still painted on the canvas with no control in sight explaining
+    it would be a puzzle, so off means off."""
+    nodes, edges = _graph(_render("Class: A", "Class: C", panel=False))
+    assert _highlighted_edges(edges) == []
+    assert all(n["color"]["border"] != PATH_HIGHLIGHT_COLOR for n in nodes)
+
+
+def test_the_switch_is_offered_beside_the_display_options_switch():
+    at = _render("", "")
+    labels = [t.label for t in at.toggle]
+    assert "Path finder" in labels
+    assert labels.index("Path finder") == labels.index("Display options") + 1
+
+
+def test_the_switch_is_remembered_across_sessions():
+    """It rides the persisted display settings like the other band switch, so a
+    panel you opened is still open next time (#142)."""
+    from orionbelt_ontology_builder.ui import _VIZ_PERSIST_KEYS
+
+    assert "path_panel" in _VIZ_PERSIST_KEYS
+
+
+def test_turning_the_switch_off_rebuilds_the_graph_without_the_highlight():
+    on = _render("Class: A", "Class: C").session_state["last_graph_key"]
+    off = _render("Class: A", "Class: C", panel=False).session_state["last_graph_key"]
+    assert on != off
 
 
 # --- what the focus button writes -------------------------------------------

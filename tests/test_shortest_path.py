@@ -4,6 +4,7 @@ import pytest
 
 from ontology_manager import (
     PATH_EDGE_KINDS,
+    PATH_ENTITY_KINDS,
     OntologyManager,
     PathSearchLimitError,
     bfs_path,
@@ -11,6 +12,7 @@ from ontology_manager import (
 from orionbelt_ontology_builder.ui import (
     path_chain_text,
     path_edge_kinds,
+    path_entity_kinds,
     path_highlight,
     path_nodes,
 )
@@ -174,17 +176,128 @@ def test_every_declared_edge_kind_builds_an_adjacency(path_om):
         assert isinstance(path_om.build_path_graph(kinds=(kind,)), dict)
 
 
+# ---- raw triples between two named entities -----------------------------
+
+
+def test_a_custom_predicate_between_two_classes_is_walked(path_om):
+    """The gap the triples kind closes: a predicate asserted straight between
+    two classes is drawn by the canvas and matched by no other kind here."""
+    from rdflib import URIRef
+
+    path_om.graph.add(
+        (
+            URIRef(f"{BASE}Rock"),
+            URIRef(f"{BASE}nextItem"),
+            URIRef(f"{BASE}Person"),
+        )
+    )
+    hops = path_om.find_shortest_path(cls("Rock"), cls("Person"), kinds=("triples",))
+    assert [h["relation"] for h in hops] == ["nextItem"]
+    # And it is reachable with every kind in play, not only on its own.
+    assert path_om.find_shortest_path(cls("Rock"), cls("Person")) == hops
+
+
+def test_a_triple_to_a_node_that_is_not_an_entity_is_not_walked(path_om):
+    """rdf:type owl:Class is on nearly every class. Walking it would put any
+    two of them two hops apart and bury every relation that means something."""
+    hops = path_om.find_shortest_path(cls("Rock"), cls("Person"), kinds=("triples",))
+    assert hops is None
+
+
+def test_a_triple_to_a_literal_is_not_walked(om):
+    om.add_class("Lonely", label="A label nobody can walk through")
+    om.add_class("Other", label="A label nobody can walk through")
+    src = ("class", str(om._uri("Lonely")))
+    dst = ("class", str(om._uri("Other")))
+    assert om.find_shortest_path(src, dst, kinds=("triples",)) is None
+
+
+def test_which_entities_a_triple_may_join_is_asked_for(path_om):
+    """Classes switched off draw no class nodes, so a triple between two of
+    them is not on screen and must not be walked either."""
+    from rdflib import URIRef
+
+    path_om.graph.add(
+        (
+            URIRef(f"{BASE}Rock"),
+            URIRef(f"{BASE}nextItem"),
+            URIRef(f"{BASE}Person"),
+        )
+    )
+    assert (
+        path_om.find_shortest_path(
+            cls("Rock"),
+            cls("Person"),
+            kinds=("triples",),
+            entity_kinds=("individual", "concept"),
+        )
+        is None
+    )
+    assert path_om.find_shortest_path(
+        cls("Rock"), cls("Person"), kinds=("triples",), entity_kinds=("class",)
+    )
+
+
+def test_a_relation_with_a_proper_kind_keeps_its_own_name(path_om):
+    """The triples pass runs last and never overwrites a link an earlier kind
+    already named, so a subclass link still reads as subClassOf."""
+    hops = path_om.find_shortest_path(cls("Person"), cls("Agent"))
+    assert [h["relation"] for h in hops] == ["subClassOf"]
+
+
+# ---- the compatibility shim ---------------------------------------------
+
+
+def test_the_shim_names_the_path_api_explicitly():
+    """``from ontology_manager import ...`` still works for the path API.
+
+    Read out of the shim's source rather than by importing: the wildcard above
+    the explicit list makes every public name resolve at runtime either way, so
+    a symbol missing from the list is invisible to an import test — which is how
+    it drifts from the convention in AGENTS.md.
+    """
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("ontology_manager.py").read_text(encoding="utf-8"))
+    listed = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name != "*"
+    }
+    assert {
+        "PATH_EDGE_KINDS",
+        "PATH_ENTITY_KINDS",
+        "PATH_MAX_VISITED",
+        "PathSearchLimitError",
+        "bfs_path",
+    } <= listed
+
+
 # ---- the page helpers ---------------------------------------------------
 
 
 def test_edge_kinds_follow_the_display_toggles():
-    everything = path_edge_kinds(True, True, True, True, True)
+    everything = path_edge_kinds(True, True, True, True, True, True)
     assert set(everything) == set(PATH_EDGE_KINDS)
     assert path_edge_kinds(False, True, False, False, False) == ()
     assert path_edge_kinds(True, False, False, False, False) == (
         "subclass",
         "class_relations",
     )
+
+
+def test_triples_are_walked_only_with_the_triples_toggle_on():
+    assert "triples" not in path_edge_kinds(True, True, True, True, True)
+    assert "triples" in path_edge_kinds(True, True, True, True, True, True)
+
+
+def test_entity_kinds_follow_the_display_toggles():
+    assert path_entity_kinds(True, True, True) == PATH_ENTITY_KINDS
+    assert path_entity_kinds(True, False, False) == ("class",)
+    assert path_entity_kinds(False, False, False) == ()
 
 
 def test_object_property_links_need_the_classes_they_join():

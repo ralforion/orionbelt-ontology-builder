@@ -56,6 +56,7 @@ _VIZ_PERSIST_KEYS = (
     "focus_mode",
     "focus_depth",
     "options_open",
+    "path_panel",
 )
 _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
@@ -1574,12 +1575,31 @@ PATH_HIGHLIGHT_WIDTH = 5
 PATH_HIGHLIGHT_BORDER = 3
 
 
+def path_entity_kinds(
+    show_classes: bool, show_individuals: bool, show_skos: bool
+) -> tuple[str, ...]:
+    """Which entities a path may run through, from the display toggles.
+
+    Only the raw-triple walk needs telling (see ``build_path_graph``); the other
+    link kinds each join a fixed pair of types and gate themselves.
+    """
+    kinds = []
+    if show_classes:
+        kinds.append("class")
+    if show_individuals:
+        kinds.append("individual")
+    if show_skos:
+        kinds.append("concept")
+    return tuple(kinds)
+
+
 def path_edge_kinds(
     show_classes: bool,
     show_obj_props: bool,
     show_individuals: bool,
     show_ind_edges: bool,
     show_skos: bool,
+    show_triples: bool = False,
 ) -> tuple[str, ...]:
     """Which link kinds a path may be walked over, from the display toggles.
 
@@ -1600,6 +1620,8 @@ def path_edge_kinds(
         kinds.append("individual_relations")
     if show_skos:
         kinds.append("skos")
+    if show_triples:
+        kinds.append("triples")
     return tuple(kinds)
 
 

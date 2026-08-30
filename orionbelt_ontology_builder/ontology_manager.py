@@ -86,7 +86,14 @@ PATH_EDGE_KINDS: tuple[str, ...] = (
     "individual_types",
     "individual_relations",
     "skos",
+    "triples",
 )
+
+#: The kinds of thing a path may run through. Separate from the edge kinds
+#: because "triples" is the one kind that does not imply what it joins: every
+#: other kind links a fixed pair of entity types, while a raw triple can name
+#: anything, so which entities it is allowed to connect has to be said.
+PATH_ENTITY_KINDS: tuple[str, ...] = ("class", "individual", "concept")
 
 #: How many nodes a single search may settle before giving up. A path search is
 #: linear in the graph, so this is not about the algorithm — it is a ceiling on
@@ -6651,7 +6658,9 @@ class OntologyManager:
     # ==================== PATH SEARCH ====================
 
     def build_path_graph(
-        self, kinds: "tuple[str, ...] | list[str] | None" = None
+        self,
+        kinds: "tuple[str, ...] | list[str] | None" = None,
+        entity_kinds: "tuple[str, ...] | list[str] | None" = None,
     ) -> dict[tuple[str, str], dict[tuple[str, str], tuple[str, bool]]]:
         """An undirected adjacency over the entities the graph page draws.
 
@@ -6671,8 +6680,15 @@ class OntologyManager:
         for the same reason a data property is not among them: its node hangs off
         its domain class and leads nowhere else, so it can never be a step in a
         path between two other entities.
+
+        ``entity_kinds`` (see :data:`PATH_ENTITY_KINDS`) says which entities a
+        raw triple may join, and matters only for the ``triples`` kind — every
+        other kind already links a fixed pair of types.
         """
         wanted = set(PATH_EDGE_KINDS if kinds is None else kinds)
+        wanted_entities = set(
+            PATH_ENTITY_KINDS if entity_kinds is None else entity_kinds
+        )
         adjacency: dict[tuple[str, str], dict[tuple[str, str], tuple[str, bool]]] = {}
 
         def link(first, second, relation) -> None:
@@ -6778,6 +6794,37 @@ class OntologyManager:
                             "related",
                         )
 
+        if "triples" in wanted:
+            # Raw triples, but only between two entities the graph has nodes
+            # for. That restriction is the whole point rather than a
+            # simplification: an unrestricted triple walk goes through whatever
+            # a triple happens to name, and since nearly every entity carries
+            # `rdf:type owl:Class`, that one node would put any two of them two
+            # hops apart and bury every relation that means something. Held to
+            # named entities, what is left is the thing nothing else covers — a
+            # custom predicate asserted straight between two of them, which the
+            # canvas draws and no other kind here would walk.
+            entity_by_uri: dict[str, tuple[str, str]] = {}
+            if "class" in wanted_entities:
+                for cls in self.get_classes():
+                    entity_by_uri[cls["uri"]] = ("class", cls["uri"])
+            if "individual" in wanted_entities:
+                for ind in self.get_individuals():
+                    entity_by_uri[ind["uri"]] = ("individual", ind["uri"])
+            if "concept" in wanted_entities:
+                # Keyed by name, as the concept nodes are (see viz_node_id), so
+                # the URI a triple names has to be resolved back to one.
+                for concept in self.get_concepts():
+                    entity_by_uri[concept["uri"]] = ("concept", concept["name"])
+            for subj_uri, subj in entity_by_uri.items():
+                for pred, obj in self.graph.predicate_objects(URIRef(subj_uri)):
+                    if not isinstance(obj, URIRef):
+                        continue
+                    target = entity_by_uri.get(str(obj))
+                    if target is None or target == subj:
+                        continue
+                    link(subj, target, self._local_name(pred))
+
         return adjacency
 
     def find_shortest_path(
@@ -6786,6 +6833,7 @@ class OntologyManager:
         target: tuple[str, str],
         kinds: "tuple[str, ...] | list[str] | None" = None,
         max_visited: int = PATH_MAX_VISITED,
+        entity_kinds: "tuple[str, ...] | list[str] | None" = None,
     ) -> list[dict[str, Any]] | None:
         """The shortest path between two entities, as a list of hops.
 
@@ -6802,7 +6850,10 @@ class OntologyManager:
         view.
         """
         return bfs_path(
-            self.build_path_graph(kinds), source, target, max_visited=max_visited
+            self.build_path_graph(kinds, entity_kinds),
+            source,
+            target,
+            max_visited=max_visited,
         )
 
     # ==================== STATISTICS ====================
