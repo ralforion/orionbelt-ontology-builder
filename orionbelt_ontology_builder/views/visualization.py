@@ -11,6 +11,9 @@ from ..ui import (
     _PAGE_BY_TYPE,
     _PRECISE_NAV_TYPES,
     GRAPH_MAX_NODES,
+    PATH_HIGHLIGHT_BORDER,
+    PATH_HIGHLIGHT_COLOR,
+    PATH_HIGHLIGHT_WIDTH,
     PKG_DIR,
     VIZ_NODE_PANEL,
     _build_name_collision_set,
@@ -51,6 +54,10 @@ from ..ui import (
     panel_heading_html,
     panel_subject_uri,
     parse_filter_text,
+    path_chain_text,
+    path_edge_kinds,
+    path_highlight,
+    path_nodes,
     prioritise_find_target,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
@@ -59,6 +66,7 @@ from ..ui import (
     viz_auto_show_new_toggled,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_on_path,
     viz_focus_seeds_changed,
     viz_focus_toggle,
     viz_hidden_caption,
@@ -672,7 +680,17 @@ def render_visualization():
             label = f"{kind_word}: {name}"
             focus_targets[label] = viz_node_id(node_kind, ref)
             focus_records.append(
-                {"kind": kind_word, "name": name, "uri": uri, "label": label}
+                {
+                    "kind": kind_word,
+                    "name": name,
+                    "uri": uri,
+                    "label": label,
+                    # The (kind, ref) pair the engine keys a path node by, kept
+                    # alongside the node id so the path picker can hand a label
+                    # straight to the search (issue #176).
+                    "node_kind": node_kind,
+                    "ref": ref,
+                }
             )
 
         if show_classes:
@@ -1204,6 +1222,133 @@ def render_visualization():
         # against the linked working file it belongs to (#164).
         _persist_viz_file_state(filters, focus_targets)
 
+        # ---- Shortest path between two entities (issue #176) ----------------
+        #
+        # Everything in this panel renders on every pass, whether or not a path
+        # was asked for or found. The panel sits above the graph component, and
+        # an element that comes and goes above it moves the component in
+        # Streamlit's element tree, which re-creates its iframe and drops the
+        # canvas out of fullscreen (issue #189). So the result line is always
+        # drawn — with a placeholder when there is nothing to say — and the
+        # button is disabled rather than withheld.
+        #
+        # Data properties are left out of the pickers: a data property node hangs
+        # off its domain class and leads nowhere else, so it can neither be a
+        # step in a path nor an endpoint worth asking about.
+        path_choices = {
+            r["label"]: (r["node_kind"], r["ref"])
+            for r in focus_records
+            if r["node_kind"] != "property"
+        }
+        path_labels = {key: label for label, key in path_choices.items()}
+        # A pick whose entity is gone — deleted, or its type toggled off — is no
+        # longer an option, and Streamlit would otherwise carry the stale label
+        # into a widget that cannot show it.
+        for _pkey in ("viz_path_source", "viz_path_target"):
+            if st.session_state.get(_pkey) not in path_choices:
+                st.session_state.pop(_pkey, None)
+
+        path_hops: list | None = None
+        path_node_ids: list[str] = []
+        path_pairs: set = set()
+        with st.expander("Shortest path between two entities", expanded=False):
+            _psrc_col, _ptgt_col = st.columns(2)
+            with _psrc_col:
+                _path_source = st.selectbox(
+                    "From",
+                    options=sorted(path_choices),
+                    index=None,
+                    placeholder="Start entity…",
+                    key="viz_path_source",
+                    help="Lists the entity types enabled above.",
+                )
+            with _ptgt_col:
+                _path_target = st.selectbox(
+                    "To",
+                    options=sorted(path_choices),
+                    index=None,
+                    placeholder="End entity…",
+                    key="viz_path_target",
+                    help="The path is undirected — it answers 'how are these "
+                    "two related', so it reads a link either way round.",
+                )
+
+            _src_key = path_choices.get(_path_source)
+            _tgt_key = path_choices.get(_path_target)
+            if _src_key and _tgt_key:
+                # Memoised against the ontology's mutation counter and the
+                # walkable link kinds, the two things that can change the
+                # answer. Without it every rerun — a filter tweak, a node click —
+                # rebuilds the adjacency over the whole ontology to re-derive a
+                # path that has not moved.
+                _path_kinds = path_edge_kinds(
+                    show_classes,
+                    show_properties,
+                    show_individuals,
+                    show_ind_edges,
+                    show_skos,
+                )
+                _path_cache_key = (
+                    st.session_state.get("_ont_mutation_count", 0),
+                    _path_kinds,
+                    _src_key,
+                    _tgt_key,
+                )
+                _cached = st.session_state.get("_viz_path_cache")
+                if _cached and _cached[0] == _path_cache_key:
+                    path_hops = _cached[1]
+                else:
+                    try:
+                        path_hops = ont.find_shortest_path(
+                            _src_key, _tgt_key, kinds=_path_kinds
+                        )
+                    except Exception:
+                        # A path is a read-only extra; a failure here must not
+                        # take the graph page down with it.
+                        logger.debug("Shortest path search failed", exc_info=True)
+                        path_hops = None
+                    st.session_state["_viz_path_cache"] = (
+                        _path_cache_key,
+                        path_hops,
+                    )
+
+            if path_hops:
+                path_node_ids, path_pairs = path_highlight(path_hops, _src_key)
+                _path_message = (
+                    f"**{len(path_hops)} hop"
+                    f"{'s' if len(path_hops) != 1 else ''}:** "
+                    + path_chain_text(path_hops, _src_key, path_labels)
+                )
+            elif path_hops == []:
+                _path_message = "That is one and the same entity."
+            elif _src_key and _tgt_key:
+                _path_message = (
+                    "No path between them over the links the graph is drawing. "
+                    "Turning on more entity types above gives the search more "
+                    "to walk."
+                )
+            else:
+                _path_message = (
+                    "Pick two entities to see the shortest chain of links "
+                    "between them, highlighted in the graph."
+                )
+            st.markdown(_path_message)
+            if st.button(
+                "Show only this path",
+                key="viz_path_focus",
+                disabled=not path_hops,
+                help="Focus the graph on the entities along the path, so all of "
+                "it is drawn even when the full graph is too large to show.",
+            ):
+                viz_focus_on_path(
+                    [
+                        path_labels[node]
+                        for node in path_nodes(path_hops, _src_key)
+                        if node in path_labels
+                    ]
+                )
+                st.rerun()
+
         # Store graph settings in session state for caching
         selected_classes_key = (
             "_".join(sorted(selected_classes)) if selected_classes else "none"
@@ -1217,8 +1362,10 @@ def render_visualization():
         # holding a pre-#223 payload would otherwise keep serving nodes a click
         # cannot resolve until some unrelated change happened to evict it. 20:
         # focus mode stopped charging an annotation a hop (issue #272), so a
-        # cached focus payload is one built under the old pruning.
-        _graph_ver = 20
+        # cached focus payload is one built under the old pruning. 21: nodes and
+        # edges along a shortest path are repainted (issue #176), which a cached
+        # pre-#176 payload has none of.
+        _graph_ver = 21
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -1229,7 +1376,7 @@ def render_visualization():
         # thing — the page builds and caches a graph with no target, then picking
         # one changes nothing the key can see, so no rebuild happens and the
         # cached payload still lacks the entity that was asked for.
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}"
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -2059,6 +2206,45 @@ def render_visualization():
                         f"node you picked is not among them. Hide some classes "
                         f"or individuals in {VIZ_NODE_PANEL} to bring it into "
                         f"range."
+                    )
+
+            # Repaint the shortest path onto whatever of it the canvas is
+            # drawing (issue #176). After the focus prune, so a node lit up here
+            # is one that survived it, and before the parallel-edge spreading,
+            # which only reads endpoints and so is unaffected either way.
+            #
+            # The search ran over the whole ontology and the canvas draws at most
+            # `max_nodes` of it, so a path can name entities that were never
+            # built. Say so where the graph already explains why it is smaller
+            # than the ontology, and only when it has nothing sharper to report.
+            if path_pairs:
+                _path_ids = set(path_node_ids)
+                for edge in net.edges:
+                    if frozenset((edge["from"], edge["to"])) in path_pairs:
+                        # The colour it had says which kind of link it is, and
+                        # the legend is built from that. Kept, so highlighting
+                        # the only subClassOf edge on screen does not take
+                        # subClassOf out of the legend with it.
+                        if isinstance(edge.get("color"), str):
+                            edge["basecolor"] = edge["color"]
+                        edge["color"] = PATH_HIGHLIGHT_COLOR
+                        edge["width"] = PATH_HIGHLIGHT_WIDTH
+                for node in net.nodes:
+                    if node["id"] in _path_ids and isinstance(node.get("color"), dict):
+                        # Border only: the fill is what says which kind of entity
+                        # this is, and a path that recoloured it would trade one
+                        # piece of information for another.
+                        node["color"] = {
+                            **node["color"],
+                            "border": PATH_HIGHLIGHT_COLOR,
+                        }
+                        node["borderWidth"] = PATH_HIGHLIGHT_BORDER
+                _path_missing = len(_path_ids - {n["id"] for n in net.nodes})
+                if _path_missing and not graph_notice:
+                    graph_notice = (
+                        f"{_path_missing} of the {len(_path_ids)} entities on the "
+                        f"path are not drawn, so the highlight is partial. Use "
+                        f"“Show only this path” to see all of it."
                     )
 
             # Spread parallel edges so they don't overlap

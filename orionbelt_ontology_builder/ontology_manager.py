@@ -7,6 +7,8 @@ import logging
 import os
 import re
 import tempfile
+from collections import deque
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -69,6 +71,87 @@ _RANGE_INCLUDES = (_SCHEMA.rangeIncludes, _GIST.rangeIncludes)
 IMPORT_REPLACE = "replace"
 IMPORT_MERGE = "merge"
 IMPORT_MERGE_OVERWRITE = "merge_overwrite"
+
+# ==================== PATH SEARCH ====================
+
+#: The kinds of link a path search may walk, each named for the thing the
+#: Visualization page draws it for. The page passes the subset its display
+#: toggles have switched on, so the path it reports is one made of edges the
+#: canvas is actually showing (issue #176).
+PATH_EDGE_KINDS: tuple[str, ...] = (
+    "subclass",
+    "class_relations",
+    "object_properties",
+    "restrictions",
+    "individual_types",
+    "individual_relations",
+    "skos",
+)
+
+#: How many nodes a single search may settle before giving up. A path search is
+#: linear in the graph, so this is not about the algorithm — it is a ceiling on
+#: what one page render will spend on an ontology far larger than anything the
+#: canvas can draw.
+PATH_MAX_VISITED = 50_000
+
+
+def bfs_path(
+    adjacency: dict[tuple[str, str], dict[tuple[str, str], tuple[str, bool]]],
+    source: tuple[str, str],
+    target: tuple[str, str],
+    max_visited: int = PATH_MAX_VISITED,
+) -> list[dict[str, Any]] | None:
+    """The shortest chain of hops from ``source`` to ``target``, or ``None``.
+
+    Breadth-first over an undirected adjacency, so the first time ``target`` is
+    reached it is by a shortest route. Neighbours are walked in sorted order,
+    which is what makes the answer stable: several routes are usually equally
+    short, and one that changed between renders would look like the graph had
+    changed. ``[]`` means source and target are the same entity — distinct from
+    ``None``, which means they are not connected at all.
+
+    Pure, so it is unit-tested directly; :meth:`OntologyManager.find_shortest_path`
+    supplies the adjacency.
+    """
+    if source == target:
+        return []
+    if source not in adjacency or target not in adjacency:
+        return None
+
+    came_from: dict[tuple[str, str], tuple[str, str]] = {}
+    seen = {source}
+    queue = deque([source])
+    while queue:
+        if len(seen) > max_visited:
+            return None
+        node = queue.popleft()
+        for neighbour in sorted(adjacency.get(node, {})):
+            if neighbour in seen:
+                continue
+            seen.add(neighbour)
+            came_from[neighbour] = node
+            if neighbour == target:
+                # Walk the parents back and turn each step into its hop. The
+                # relation is read off the edge in the direction it was
+                # asserted, so the text can say which way round the link runs.
+                chain = [target]
+                while chain[-1] != source:
+                    chain.append(came_from[chain[-1]])
+                chain.reverse()
+                hops = []
+                for first, second in pairwise(chain):
+                    relation, forward = adjacency[first][second]
+                    hops.append(
+                        {
+                            "source": first,
+                            "target": second,
+                            "relation": relation,
+                            "forward": forward,
+                        }
+                    )
+                return hops
+            queue.append(neighbour)
+    return None
 
 
 class OntologyManager:
@@ -6548,6 +6631,161 @@ class OntologyManager:
             owlrl.DeductiveClosure(owlrl.OWLRL_Extension).expand(self.graph)
 
         return len(self.graph) - initial_count
+
+    # ==================== PATH SEARCH ====================
+
+    def build_path_graph(
+        self, kinds: "tuple[str, ...] | list[str] | None" = None
+    ) -> dict[tuple[str, str], dict[tuple[str, str], tuple[str, bool]]]:
+        """An undirected adjacency over the entities the graph page draws.
+
+        Nodes are ``(kind, ref)`` pairs in the same terms the Visualization page
+        keys its graph nodes by — ``("class", uri)``, ``("individual", uri)``,
+        ``("concept", name)`` — so a path can be mapped straight onto the canvas
+        without a second naming scheme to keep in step.
+
+        Each neighbour carries ``(relation, forward)``: the name of the link, and
+        whether it was asserted from this node's side. Undirected because the
+        question a path answers is "how are these two related", which a direction
+        would only get in the way of — but the direction is kept so the answer can
+        still be read back the way the ontology states it.
+
+        ``kinds`` selects which links to walk (see :data:`PATH_EDGE_KINDS`);
+        ``None`` walks them all. Only the links the canvas draws are built, and
+        for the same reason a data property is not among them: its node hangs off
+        its domain class and leads nowhere else, so it can never be a step in a
+        path between two other entities.
+        """
+        wanted = set(PATH_EDGE_KINDS if kinds is None else kinds)
+        adjacency: dict[tuple[str, str], dict[tuple[str, str], tuple[str, bool]]] = {}
+
+        def link(first, second, relation) -> None:
+            """Record one undirected link, keeping the direction it was stated in.
+
+            The first relation between a pair wins. Two entities are often linked
+            several ways over, and a path only needs to know that they *are*
+            linked; the page highlights every link between them anyway.
+            """
+            adjacency.setdefault(first, {}).setdefault(second, (relation, True))
+            adjacency.setdefault(second, {}).setdefault(first, (relation, False))
+
+        classes = (
+            self.get_classes()
+            if wanted
+            & {
+                "subclass",
+                "class_relations",
+                "object_properties",
+                "restrictions",
+                "individual_types",
+            }
+            else []
+        )
+        class_uris = {cls["uri"] for cls in classes}
+
+        if "subclass" in wanted:
+            for cls in classes:
+                for parent_uri in cls.get("parent_uris", []):
+                    if parent_uri in class_uris:
+                        link(("class", cls["uri"]), ("class", parent_uri), "subClassOf")
+
+        if "class_relations" in wanted:
+            for rel in self.get_class_relations():
+                subj_uri = rel.get("subject_uri", "")
+                obj_uri = rel.get("object_uri", "")
+                if subj_uri in class_uris and obj_uri in class_uris:
+                    link(("class", subj_uri), ("class", obj_uri), rel["relation"])
+
+        if "object_properties" in wanted:
+            for prop in self.get_object_properties():
+                dom_uri = prop.get("domain_uri", "")
+                rng_uri = prop.get("range_uri", "")
+                if dom_uri in class_uris and rng_uri in class_uris:
+                    link(("class", dom_uri), ("class", rng_uri), prop["name"])
+
+        if "restrictions" in wanted:
+            for rest in self.get_restrictions():
+                if rest["type"] not in ("someValuesFrom", "allValuesFrom"):
+                    continue
+                value_uri = rest.get("value_uri")
+                if value_uri not in class_uris:
+                    continue
+                for src_uri in rest.get("applied_to_uris", []):
+                    if src_uri in class_uris:
+                        link(
+                            ("class", src_uri),
+                            ("class", value_uri),
+                            rest["property"],
+                        )
+
+        if wanted & {"individual_types", "individual_relations"}:
+            individuals = self.get_individuals()
+            ind_uris = {ind["uri"] for ind in individuals}
+            for ind in individuals:
+                if "individual_types" in wanted:
+                    for cls_uri in ind.get("class_uris") or []:
+                        if cls_uri in class_uris:
+                            link(
+                                ("individual", ind["uri"]),
+                                ("class", cls_uri),
+                                "type",
+                            )
+                if "individual_relations" in wanted:
+                    for prop in ind.get("properties", []):
+                        target_uri = prop.get("value_uri")
+                        if target_uri in ind_uris:
+                            link(
+                                ("individual", ind["uri"]),
+                                ("individual", target_uri),
+                                prop["property"],
+                            )
+
+        if "skos" in wanted:
+            concepts = self.get_concepts()
+            concept_names = {c["name"] for c in concepts}
+            for concept in concepts:
+                # broader and related only, the two the canvas draws. A narrower
+                # assertion is the inverse of a broader one and would add an edge
+                # the graph has no line for.
+                for broader in concept.get("broader", []):
+                    if broader in concept_names:
+                        link(
+                            ("concept", concept["name"]),
+                            ("concept", broader),
+                            "broader",
+                        )
+                for related in concept.get("related", []):
+                    if related in concept_names:
+                        link(
+                            ("concept", concept["name"]),
+                            ("concept", related),
+                            "related",
+                        )
+
+        return adjacency
+
+    def find_shortest_path(
+        self,
+        source: tuple[str, str],
+        target: tuple[str, str],
+        kinds: "tuple[str, ...] | list[str] | None" = None,
+        max_visited: int = PATH_MAX_VISITED,
+    ) -> list[dict[str, Any]] | None:
+        """The shortest path between two entities, as a list of hops.
+
+        ``source`` and ``target`` are ``(kind, ref)`` pairs as
+        :meth:`build_path_graph` keys them. Returns ``[]`` when they are the same
+        entity and ``None`` when no path exists — including when either one has no
+        links of the kinds being walked at all.
+
+        The search runs over the whole ontology, not over what the canvas has
+        room to draw, so it still finds a path in an ontology past the render cap
+        (issue #176). The page is then responsible for bringing the result into
+        view.
+        """
+        return bfs_path(
+            self.build_path_graph(kinds), source, target, max_visited=max_visited
+        )
 
     # ==================== STATISTICS ====================
 

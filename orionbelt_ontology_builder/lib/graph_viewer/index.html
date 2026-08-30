@@ -1155,6 +1155,10 @@ function renderGraph(args) {
         var c = typeof e.color === 'string' ? e.color : (e.color && e.color.color) || '';
         var lbl = (e.label || '').toLowerCase();
         if (c) edgeColors[c.toUpperCase() + '|' + lbl] = true;
+        // An edge repainted as part of a highlight keeps the colour of its own
+        // kind in `basecolor`, and the legend counts both: the highlight earns
+        // its entry without the kind it painted over losing one (issue #176).
+        if (e.basecolor) edgeColors[e.basecolor.toUpperCase() + '|' + lbl] = true;
     });
 
     var nodeItems = [
@@ -1176,7 +1180,8 @@ function renderGraph(args) {
         {color: '#A1887F', label: 'annotation', match: null, dashed: true},
         {color: '#26A69A', label: 'broader', match: 'broader', dashed: false},
         {color: '#80CBC4', label: 'related', match: 'related', dashed: true},
-        {color: '#90A4AE', label: 'triple', match: null, dashed: false}
+        {color: '#90A4AE', label: 'triple', match: null, dashed: false},
+        {color: '#FFEB3B', label: 'shortest path', match: null, dashed: false}
     ];
 
     var nodeLegend = '';
