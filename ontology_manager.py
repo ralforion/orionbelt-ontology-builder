@@ -14,7 +14,12 @@ from orionbelt_ontology_builder.ontology_manager import (  # noqa: F401
     IMPORT_MERGE,
     IMPORT_MERGE_OVERWRITE,
     IMPORT_REPLACE,
+    PATH_EDGE_KINDS,
+    PATH_ENTITY_KINDS,
+    PATH_MAX_VISITED,
     SKOSXL,
     OntologyManager,
+    PathSearchLimitError,
     UndoManager,
+    bfs_path,
 )

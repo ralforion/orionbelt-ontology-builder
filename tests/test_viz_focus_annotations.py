@@ -13,6 +13,7 @@ because ``AppTest.from_function`` runs the script source in a fresh namespace.
 
 import json
 import os
+import re
 
 from streamlit.testing.v1 import AppTest
 
@@ -182,6 +183,14 @@ def test_annotations_do_not_eat_the_focus_assembly_budget(patch_ui):
 
 def test_the_graph_cache_version_moved_with_the_pruning():
     """A session holding a payload built under the old prune would keep serving
-    a focus without its annotations until something unrelated evicted it."""
+    a focus without its annotations until something unrelated evicted it.
+
+    A floor rather than an exact version: anything from 20 up evicts a payload
+    built before the pruning changed, which is the whole guarantee. Pinning the
+    number instead made every later bump — each of which also evicts it — look
+    like a regression.
+    """
     source = (app.PKG_DIR / "views" / "visualization.py").read_text("utf-8")
-    assert "_graph_ver = 20" in source
+    match = re.search(r"^\s*_graph_ver = (\d+)$", source, re.MULTILINE)
+    assert match, "the graph cache version is no longer a plain assignment"
+    assert int(match.group(1)) >= 20

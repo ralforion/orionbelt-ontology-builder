@@ -21,6 +21,7 @@ import re
 import time
 import traceback
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path as _Path
 
 import streamlit as st
@@ -55,6 +56,7 @@ _VIZ_PERSIST_KEYS = (
     "focus_mode",
     "focus_depth",
     "options_open",
+    "path_panel",
 )
 _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
@@ -1433,6 +1435,32 @@ def viz_set_focus_seeds(seeds) -> None:
         }
 
 
+def viz_focus_on_path(labels) -> None:
+    """Focus the graph on exactly the entities a shortest path runs through.
+
+    The path search runs over the whole ontology while the canvas assembles at
+    most :data:`GRAPH_MAX_NODES` of it, so a path can name entities the current
+    view has no node for — and the highlight then has nothing to paint. Making
+    the path the focus is the way back: focus mode assembles past the render cap
+    and prunes to its seeds, so the whole path is drawn whatever the graph
+    happened to be showing.
+
+    Mode and seeds are written together for the reason
+    :func:`viz_apply_focus_click` writes them together: focus mode with no seeds
+    backfills an arbitrary node, and a pass through that state would jump the
+    graph somewhere nobody asked for.
+    """
+    labels = [str(label) for label in labels or []]
+    if not labels:
+        return
+    if not st.session_state.get("_viz_cfg_focus_mode"):
+        st.session_state["_viz_cfg_focus_mode"] = True
+        # focus_mode is a persisted display setting (#142), saved only when the
+        # dirty flag is lifted — the same gate the canvas click has to lift.
+        st.session_state["_viz_settings_dirty"] = True
+    viz_set_focus_seeds(labels)
+
+
 def viz_leave_empty_focus() -> None:
     """Switch focus mode off because there is nothing left to focus on.
 
@@ -1532,6 +1560,112 @@ def viz_node_id(kind: str, ref: str) -> str:
     if kind == "concept":
         return f"skos_{ref}"
     return f"{_VIZ_NODE_ID_PREFIX[kind]}{_uid(ref)}"
+
+
+#: The colour a highlighted path is drawn in, and how wide its links are drawn.
+#: Deliberately outside the palette the graph already gives relation types —
+#: green for subclass, blue for properties, orange for individuals, teal for
+#: SKOS, red for disjoint — so a highlighted link reads as "on the path" rather
+#: than as one more kind of link (issue #176).
+PATH_HIGHLIGHT_COLOR = "#FFEB3B"
+#: A path link is drawn thick enough to follow across a busy graph. Its nodes
+#: take a thinner border than that: a node box is small, and a border as wide as
+#: the links swallows the fill that says which kind of entity it is.
+PATH_HIGHLIGHT_WIDTH = 5
+PATH_HIGHLIGHT_BORDER = 3
+
+
+def path_entity_kinds(
+    show_classes: bool, show_individuals: bool, show_skos: bool
+) -> tuple[str, ...]:
+    """Which entities a path may run through, from the display toggles.
+
+    Only the raw-triple walk needs telling (see ``build_path_graph``); the other
+    link kinds each join a fixed pair of types and gate themselves.
+    """
+    kinds = []
+    if show_classes:
+        kinds.append("class")
+    if show_individuals:
+        kinds.append("individual")
+    if show_skos:
+        kinds.append("concept")
+    return tuple(kinds)
+
+
+def path_edge_kinds(
+    show_classes: bool,
+    show_obj_props: bool,
+    show_individuals: bool,
+    show_ind_edges: bool,
+    show_skos: bool,
+    show_triples: bool = False,
+) -> tuple[str, ...]:
+    """Which link kinds a path may be walked over, from the display toggles.
+
+    The path search runs over the whole ontology while the canvas draws a subset
+    of it, so the one thing that must not drift is *which kinds of link count*:
+    a path found over a relation the canvas isn't drawing could not be
+    highlighted, and would read as the highlight being broken. Each condition
+    here mirrors the guard the graph builder puts on the edges it adds.
+    """
+    kinds = []
+    if show_classes:
+        kinds += ["subclass", "class_relations"]
+        if show_obj_props:
+            kinds += ["object_properties", "restrictions"]
+        if show_individuals:
+            kinds.append("individual_types")
+    if show_individuals and show_ind_edges:
+        kinds.append("individual_relations")
+    if show_skos:
+        kinds.append("skos")
+    if show_triples:
+        kinds.append("triples")
+    return tuple(kinds)
+
+
+def path_nodes(hops: list, source) -> list:
+    """The entities a path runs through, in order, as ``(kind, ref)`` pairs.
+
+    Takes ``source`` as well as the hops because a path from an entity to itself
+    has no hops at all and is still one node long.
+    """
+    return [source, *[hop["target"] for hop in hops]]
+
+
+def path_highlight(hops: list, source) -> tuple[list[str], set[frozenset]]:
+    """What to repaint for a path: its node ids, and its links as endpoint pairs.
+
+    Pairs are unordered, and matched against drawn edges by endpoint alone. Two
+    entities linked several ways over therefore light up on all of those links
+    rather than on the one the search happened to walk — which is the honest
+    picture: the path goes between them, and saying which line it took would
+    claim more than the search decided.
+    """
+    ids = [viz_node_id(kind, ref) for kind, ref in path_nodes(hops, source)]
+    pairs = {frozenset(pair) for pair in pairwise(ids)}
+    return ids, pairs
+
+
+def path_chain_text(hops: list, source, labels: dict) -> str:
+    """The path written out as one line, naming each link and its direction.
+
+    ``labels`` maps a ``(kind, ref)`` node to the name the pickers show it under;
+    anything missing falls back to its own reference, which is what an entity
+    whose type has since been switched off would have.
+    """
+
+    def name(node) -> str:
+        return labels.get(node, node[1])
+
+    if not hops:
+        return name(source)
+    text = name(hops[0]["source"])
+    for hop in hops:
+        arrow = f" —{hop['relation']}→ " if hop["forward"] else f" ←{hop['relation']}— "
+        text += arrow + name(hop["target"])
+    return text
 
 
 def viz_note_rename(kind: str, old_ref: str, new_ref: str) -> None:
@@ -1944,6 +2078,12 @@ def log_error(error: Exception, context: str = ""):
         "error": str(error),
         "traceback": traceback.format_exc(),
     }
+    # Initialised on the way in rather than assumed. This is called from
+    # `except` blocks, so raising here — which reading a missing key does —
+    # replaces the error being reported with a page crash, and the report is
+    # lost either way.
+    if "error_log" not in st.session_state:
+        st.session_state["error_log"] = []
     st.session_state.error_log.append(entry)
 
 
