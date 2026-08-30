@@ -52,14 +52,26 @@ def _script():
             st.session_state["viz_path_source"] = os.environ["PATH_FROM"]
         if os.environ["PATH_TO"]:
             st.session_state["viz_path_target"] = os.environ["PATH_TO"]
+        if os.environ.get("PATH_LIMIT") == "1":
+            # Standing in for an ontology too large to search exhaustively,
+            # which is otherwise 50,000 entities to build.
+            from orionbelt_ontology_builder.ontology_manager import (
+                PathSearchLimitError,
+            )
+
+            def _over_budget(*_args, **_kwargs):
+                raise PathSearchLimitError("gave up")
+
+            om.find_shortest_path = _over_budget
 
     app.render_visualization()
 
 
-def _render(source="Class: A", target="Class: C"):
+def _render(source="Class: A", target="Class: C", over_budget=False):
     """Render once and return the AppTest, with a path picked."""
     os.environ["PATH_FROM"] = source
     os.environ["PATH_TO"] = target
+    os.environ["PATH_LIMIT"] = "1" if over_budget else "0"
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
@@ -166,6 +178,15 @@ def test_two_unconnected_entities_are_reported_as_such():
     assert _highlighted_edges(_graph(at)[1]) == []
 
 
+def test_a_search_cut_short_is_not_reported_as_no_path():
+    """The two are different facts. Telling someone their entities are
+    unconnected when the search simply gave up is a wrong answer."""
+    text = _panel_text(_render("Class: A", "Class: C", over_budget=True))
+    assert "too large to search exhaustively" in text
+    assert "There may still be a path" in text
+    assert "No path between them" not in text
+
+
 def test_an_entity_paired_with_itself_says_so():
     assert "one and the same entity" in _panel_text(_render("Class: A", "Class: A"))
 
@@ -183,16 +204,17 @@ def test_the_panel_draws_the_same_elements_whether_or_not_a_path_was_found():
     found = _render("Class: A", "Class: C")
     missing = _render("Class: A", "Class: D")
     unpicked = _render("", "")
+    cut_short = _render("Class: A", "Class: C", over_budget=True)
     counts = {
         len(at.markdown) + len(at.button) + len(at.selectbox)
-        for at in (found, missing, unpicked)
+        for at in (found, missing, unpicked, cut_short)
     }
     assert len(counts) == 1
 
 
 def test_the_focus_button_is_offered_only_once_there_is_a_path_to_focus_on():
     def _button(at):
-        return next(b for b in at.button if b.label == "Show only this path")
+        return next(b for b in at.button if b.label == "Focus on this path")
 
     assert _button(_render("Class: A", "Class: C")).disabled is False
     assert _button(_render("Class: A", "Class: D")).disabled is True

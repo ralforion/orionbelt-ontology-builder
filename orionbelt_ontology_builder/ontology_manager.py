@@ -95,6 +95,16 @@ PATH_EDGE_KINDS: tuple[str, ...] = (
 PATH_MAX_VISITED = 50_000
 
 
+class PathSearchLimitError(RuntimeError):
+    """A path search settled more entities than its budget allowed.
+
+    Raised rather than folded into the "no path" answer: the two are different
+    facts, and reporting a bounded search as "these are not connected" is a
+    wrong answer rather than a missing one. The caller can say the search was
+    cut short, which is the truth — a path may well exist beyond the budget.
+    """
+
+
 def bfs_path(
     adjacency: dict[tuple[str, str], dict[tuple[str, str], tuple[str, bool]]],
     source: tuple[str, str],
@@ -110,6 +120,10 @@ def bfs_path(
     changed. ``[]`` means source and target are the same entity — distinct from
     ``None``, which means they are not connected at all.
 
+    Raises :class:`PathSearchLimitError` when ``max_visited`` entities have been
+    settled without reaching the target, so an answer that was cut short is
+    never mistaken for "these two are not connected".
+
     Pure, so it is unit-tested directly; :meth:`OntologyManager.find_shortest_path`
     supplies the adjacency.
     """
@@ -123,7 +137,9 @@ def bfs_path(
     queue = deque([source])
     while queue:
         if len(seen) > max_visited:
-            return None
+            raise PathSearchLimitError(
+                f"gave up after settling more than {max_visited} entities"
+            )
         node = queue.popleft()
         for neighbour in sorted(adjacency.get(node, {})):
             if neighbour in seen:
@@ -6776,7 +6792,9 @@ class OntologyManager:
         ``source`` and ``target`` are ``(kind, ref)`` pairs as
         :meth:`build_path_graph` keys them. Returns ``[]`` when they are the same
         entity and ``None`` when no path exists — including when either one has no
-        links of the kinds being walked at all.
+        links of the kinds being walked at all. Raises
+        :class:`PathSearchLimitError` when the search hit ``max_visited`` first,
+        which is not the same answer as "no path".
 
         The search runs over the whole ontology, not over what the canvas has
         room to draw, so it still finds a path in an ontology past the render cap

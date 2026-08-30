@@ -2,7 +2,12 @@
 
 import pytest
 
-from ontology_manager import PATH_EDGE_KINDS, OntologyManager, bfs_path
+from ontology_manager import (
+    PATH_EDGE_KINDS,
+    OntologyManager,
+    PathSearchLimitError,
+    bfs_path,
+)
 from orionbelt_ontology_builder.ui import (
     path_chain_text,
     path_edge_kinds,
@@ -131,14 +136,21 @@ def test_the_adjacency_is_undirected(path_om):
     assert cls("Person") in adjacency[cls("Agent")]
 
 
-def test_a_search_that_settles_too_many_nodes_gives_up(path_om):
-    # Reachable in two subclass hops, but not within a one-node budget.
-    assert (
+def test_a_search_that_settles_too_many_nodes_says_so_rather_than_no_path(path_om):
+    """Reachable in two subclass hops, but not within a one-node budget.
+
+    A bounded search must not answer "not connected": that is a wrong answer
+    rather than a missing one, and these two demonstrably are connected.
+    """
+    with pytest.raises(PathSearchLimitError):
         path_om.find_shortest_path(
             cls("Person"), cls("Organization"), kinds=("subclass",), max_visited=1
         )
-        is None
-    )
+
+
+def test_entities_that_really_are_unconnected_still_answer_no_path(path_om):
+    # Within budget and genuinely disconnected: None, not the limit error.
+    assert path_om.find_shortest_path(cls("Person"), cls("Rock")) is None
 
 
 def test_bfs_is_stable_when_several_routes_are_equally_short():

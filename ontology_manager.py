@@ -16,5 +16,6 @@ from orionbelt_ontology_builder.ontology_manager import (  # noqa: F401
     IMPORT_REPLACE,
     SKOSXL,
     OntologyManager,
+    PathSearchLimitError,
     UndoManager,
 )

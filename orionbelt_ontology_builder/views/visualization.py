@@ -6,6 +6,7 @@ import logging
 
 import streamlit as st
 
+from ..ontology_manager import PATH_MAX_VISITED, PathSearchLimitError
 from ..ui import (
     _FILTER_KINDS,
     _PAGE_BY_TYPE,
@@ -1249,6 +1250,7 @@ def render_visualization():
                 st.session_state.pop(_pkey, None)
 
         path_hops: list | None = None
+        path_cut_short = False
         path_node_ids: list[str] = []
         path_pairs: set = set()
         with st.expander("Shortest path between two entities", expanded=False):
@@ -1295,13 +1297,21 @@ def render_visualization():
                     _tgt_key,
                 )
                 _cached = st.session_state.get("_viz_path_cache")
-                if _cached and _cached[0] == _path_cache_key:
-                    path_hops = _cached[1]
+                # Length checked as well as key: a session that outlived a
+                # change to what is cached here holds the older shape.
+                if len(_cached or ()) == 3 and _cached[0] == _path_cache_key:
+                    path_hops, path_cut_short = _cached[1], _cached[2]
                 else:
                     try:
                         path_hops = ont.find_shortest_path(
                             _src_key, _tgt_key, kinds=_path_kinds
                         )
+                    except PathSearchLimitError:
+                        # Not the same as "no path": the search was cut short,
+                        # and saying they are unconnected would be a wrong
+                        # answer rather than a missing one.
+                        path_cut_short = True
+                        path_hops = None
                     except Exception:
                         # A path is a read-only extra; a failure here must not
                         # take the graph page down with it.
@@ -1310,6 +1320,7 @@ def render_visualization():
                     st.session_state["_viz_path_cache"] = (
                         _path_cache_key,
                         path_hops,
+                        path_cut_short,
                     )
 
             if path_hops:
@@ -1321,6 +1332,13 @@ def render_visualization():
                 )
             elif path_hops == []:
                 _path_message = "That is one and the same entity."
+            elif path_cut_short:
+                _path_message = (
+                    f"This ontology is too large to search exhaustively: the "
+                    f"search stopped after {PATH_MAX_VISITED:,} entities without "
+                    f"reaching the target. There may still be a path between "
+                    f"them."
+                )
             elif _src_key and _tgt_key:
                 _path_message = (
                     "No path between them over the links the graph is drawing. "
@@ -1334,11 +1352,13 @@ def render_visualization():
                 )
             st.markdown(_path_message)
             if st.button(
-                "Show only this path",
+                "Focus on this path",
                 key="viz_path_focus",
                 disabled=not path_hops,
-                help="Focus the graph on the entities along the path, so all of "
-                "it is drawn even when the full graph is too large to show.",
+                help="Makes the path the focus, so all of it is drawn even when "
+                "the full graph is too large to show. It is an ordinary focus "
+                "from there: the depth slider decides how much of what "
+                "surrounds the path comes with it.",
             ):
                 viz_focus_on_path(
                     [
@@ -2244,7 +2264,7 @@ def render_visualization():
                     graph_notice = (
                         f"{_path_missing} of the {len(_path_ids)} entities on the "
                         f"path are not drawn, so the highlight is partial. Use "
-                        f"“Show only this path” to see all of it."
+                        f"“Focus on this path” to bring all of it into view."
                     )
 
             # Spread parallel edges so they don't overlap
