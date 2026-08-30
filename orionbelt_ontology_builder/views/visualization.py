@@ -51,6 +51,7 @@ from ..ui import (
     follow_renamed_node_ids,
     graph_node_cap,
     local_store,
+    log_error,
     newly_hidden_uris,
     panel_heading_html,
     panel_subject_uri,
@@ -1397,14 +1398,18 @@ def render_visualization():
                             # answer rather than a missing one.
                             path_cut_short = True
                             path_hops = None
-                        except Exception:
+                        except Exception as _path_error:  # noqa: BLE001 - a failed path must not break the page
                             # A path is a read-only extra; a failure here must not
                             # take the graph page down with it. But it must not be
                             # reported as "no path" either — that is a claim about
                             # the ontology, and answering a broken search with one
                             # sends the reader looking for a modelling problem
                             # that isn't there.
-                            logger.debug("Shortest path search failed", exc_info=True)
+                            #
+                            # log_error, not logger.debug: the message below sends
+                            # the reader to the sidebar's error log, and a debug
+                            # line on the server never arrives there.
+                            log_error(_path_error, context="Shortest path search")
                             path_failed = True
                             path_hops = None
                         st.session_state["_viz_path_cache"] = (
@@ -1430,8 +1435,8 @@ def render_visualization():
                     _path_message = (
                         f"The path search between **{_path_source}** and "
                         f"**{_path_target}** could not be run. Nothing is wrong "
-                        f"with the two entities you picked; see the error log for "
-                        f"what went wrong."
+                        f"with the two entities you picked; see **Errors** in the "
+                        f"sidebar for what went wrong."
                     )
                 elif path_cut_short:
                     _path_message = (

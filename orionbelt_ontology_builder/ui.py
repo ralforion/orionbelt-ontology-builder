@@ -2078,6 +2078,12 @@ def log_error(error: Exception, context: str = ""):
         "error": str(error),
         "traceback": traceback.format_exc(),
     }
+    # Initialised on the way in rather than assumed. This is called from
+    # `except` blocks, so raising here — which reading a missing key does —
+    # replaces the error being reported with a page crash, and the report is
+    # lost either way.
+    if "error_log" not in st.session_state:
+        st.session_state["error_log"] = []
     st.session_state.error_log.append(entry)
 
 

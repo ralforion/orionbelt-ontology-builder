@@ -45,6 +45,9 @@ def _script():
         om.add_class("D")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
+        # The shell initialises this at startup; this harness calls the page
+        # directly, so it stands in for that.
+        st.session_state["error_log"] = []
         # The cross-session settings restore mounts the localStorage component,
         # which blocks forever without a browser to answer it. Mark it done.
         st.session_state["_viz_settings_restored"] = True
@@ -226,6 +229,32 @@ def test_a_search_that_breaks_is_not_reported_as_no_path():
     assert "Class: A" in text and "Class: C" in text
     assert "No path between" not in text
     assert not at.exception, "a failed search must not take the page down"
+
+
+def test_a_failed_search_is_written_to_the_log_it_sends_the_reader_to():
+    """The message points at the sidebar's error log. A debug line on the
+    server never arrives there, so the direction would be a dead end."""
+    at = _render("Class: A", "Class: C", broken=True)
+    assert "Errors" in _panel_text(at)
+    logged = at.session_state["error_log"]
+    assert [e for e in logged if e["context"] == "Shortest path search"]
+
+
+def test_logging_a_failure_works_before_the_log_exists(session):
+    """log_error is called from `except` blocks. Reading a missing key raises,
+    which would replace the error being reported with a page crash — and lose
+    the report as well."""
+    ui.log_error(RuntimeError("boom"), context="Shortest path search")
+    assert session["error_log"][0]["error"] == "boom"
+
+
+def test_nothing_is_logged_when_the_search_simply_finds_nothing():
+    """No path and a search past its budget are answers, not failures."""
+    assert _render("Class: A", "Class: D").session_state["error_log"] == []
+    assert (
+        _render("Class: A", "Class: C", over_budget=True).session_state["error_log"]
+        == []
+    )
 
 
 def test_a_search_cut_short_is_not_reported_as_no_path():
