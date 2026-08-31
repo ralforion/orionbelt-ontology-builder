@@ -145,6 +145,62 @@ def _graph(
     )
 
 
+def _render(n_classes, **kw):
+    """Render once and return the AppTest itself, for the notice's own UI."""
+    os.environ["N_CLASSES"] = str(n_classes)
+    for var, default in (
+        ("SEED", ""),
+        ("SHAPE", "chain"),
+        ("DEPTH", "1"),
+        ("FIND", ""),
+        ("EXTRA", ""),
+        ("HIDE", ""),
+        ("HIDE_ALL", ""),
+    ):
+        os.environ[var] = str(kw.get(var.lower(), default))
+    at = AppTest.from_function(_script)
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return at
+
+
+def _notice_shown(at):
+    return [c.value for c in at.caption if "are not drawn" in c.value]
+
+
+# --- the notice above the canvas --------------------------------------------
+
+
+def test_the_notice_is_one_line_and_can_be_dismissed():
+    """It used to be an st.warning box — three lines of padding around one line
+    of text, on every ontology past the cap, permanently."""
+    at = _render(app.GRAPH_MAX_NODES + 20)
+
+    assert _notice_shown(at)
+    assert not [w for w in at.warning if "are not drawn" in w.value]
+    assert at.button(key="viz_notice_dismiss")
+
+
+def test_dismissing_the_notice_takes_it_off_the_page():
+    at = _render(app.GRAPH_MAX_NODES + 20)
+
+    at.button(key="viz_notice_dismiss").click().run(timeout=300)
+    assert not at.exception, at.exception
+
+    assert not _notice_shown(at)
+
+
+def test_a_notice_that_has_changed_is_shown_again():
+    """Dismissal is keyed by the text, not by a flag: a different count, or a
+    different reason altogether, is news and has to be readable."""
+    at = _render(app.GRAPH_MAX_NODES + 20)
+    at.session_state["_viz_notice_dismissed"] = "some older notice"
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    assert _notice_shown(at)
+
+
 # --- the bug ----------------------------------------------------------------
 
 
