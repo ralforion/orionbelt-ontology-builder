@@ -60,7 +60,7 @@ from ..ui import (
     path_entity_kinds,
     path_highlight,
     path_nodes,
-    prioritise_find_target,
+    prioritise_pinned,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
@@ -1676,15 +1676,24 @@ def render_visualization():
             max_nodes = graph_node_cap(focus_pruning)
             node_count = 0
 
-            def _find_kind_is(prefix: str, _fid=_find_id) -> bool:
-                """Is the Find target one of *this* kind of node? (issue #234)
+            # The entities the cap may not drop: the one picked in Find (issue
+            # #234) and every one on a highlighted path (issue #378). Both are
+            # things the user has just asked to see, and both are listed from
+            # pickers that offer the whole ontology rather than only what is
+            # drawn — so the graph has to hold them whatever else it holds. They
+            # are pinned as node ids, which is what the builder deals in and what
+            # carries the entity's kind as a prefix.
+            _pinned_ids = {i for i in (_find_id, *path_node_ids) if i}
 
-                Ordering the target first only helps if its loop runs at all, and
+            def _pinned_kind_is(prefix: str, _pins=_pinned_ids) -> bool:
+                """Is anything pinned one of *this* kind of node?
+
+                Ordering the pinned first only helps if the loop runs at all, and
                 the kinds after classes are skipped outright once the budget is
                 spent. Node ids carry their kind as a prefix, so the guard can
-                let a block through for the one entity the user asked for.
+                let a block through for the entities that must be in it.
                 """
-                return bool(_fid) and _fid.startswith(prefix)
+                return any(pin.startswith(prefix) for pin in _pins)
 
             # Why the graph is smaller than the ontology, shown above it. Empty
             # when nothing was left out.
@@ -1716,10 +1725,10 @@ def render_visualization():
 
             # Add classes as nodes (only selected classes)
             if show_classes and (selected_classes or _find_is_class):
-                for cls in prioritise_find_target(
-                    classes, lambda c: _uid(c["uri"]), _find_id
+                for cls in prioritise_pinned(
+                    classes, lambda c: _uid(c["uri"]), _pinned_ids
                 ):
-                    if node_count >= max_nodes:
+                    if node_count >= max_nodes and _uid(cls["uri"]) not in _pinned_ids:
                         break
                     # The entity picked in Find is drawn even when the node
                     # filter hides it: you asked to see it, and a graph that
@@ -1734,7 +1743,7 @@ def render_visualization():
                     # a node it had not sent (issue #234).
                     if (
                         cls["uri"] not in visible_class_uris
-                        and _uid(cls["uri"]) != _find_id
+                        and _uid(cls["uri"]) not in _pinned_ids
                     ):
                         continue
                     cls_node_id = _uid(cls["uri"])
@@ -1863,13 +1872,13 @@ def render_visualization():
             if (
                 show_data_props
                 and data_props
-                and (node_count < max_nodes or _find_kind_is("dprop_"))
+                and (node_count < max_nodes or _pinned_kind_is("dprop_"))
             ):
-                for prop in prioritise_find_target(
-                    data_props, lambda p: f"dprop_{_uid(p['uri'])}", _find_id
+                for prop in prioritise_pinned(
+                    data_props, lambda p: f"dprop_{_uid(p['uri'])}", _pinned_ids
                 ):
                     if node_count >= max_nodes and (
-                        f"dprop_{_uid(prop['uri'])}" != _find_id
+                        f"dprop_{_uid(prop['uri'])}" not in _pinned_ids
                     ):
                         break
                     # Skip if domain is set but the class node isn't displayed.
@@ -1884,7 +1893,7 @@ def render_visualization():
                         dom_uri
                         and show_classes
                         and dom_uri not in displayed_class_uris
-                        and prop_node_id != _find_id
+                        and prop_node_id not in _pinned_ids
                     ):
                         continue
 
@@ -1925,15 +1934,15 @@ def render_visualization():
             if (
                 show_individuals
                 and individuals
-                and (node_count < max_nodes or _find_kind_is("ind_"))
+                and (node_count < max_nodes or _pinned_kind_is("ind_"))
             ):
                 ind_collisions = _build_name_collision_set(individuals)
-                for ind in prioritise_find_target(
-                    individuals, lambda i: f"ind_{_uid(i['uri'])}", _find_id
+                for ind in prioritise_pinned(
+                    individuals, lambda i: f"ind_{_uid(i['uri'])}", _pinned_ids
                 ):
                     if (
                         node_count >= max_nodes
-                        and f"ind_{_uid(ind['uri'])}" != _find_id
+                        and f"ind_{_uid(ind['uri'])}" not in _pinned_ids
                     ):
                         break
                     # Individuals filter (issue #196). Focus mode builds the full
@@ -1942,7 +1951,7 @@ def render_visualization():
                     if (
                         not focus_mode
                         and ind["uri"] not in selected_ind_uris
-                        and f"ind_{_uid(ind['uri'])}" != _find_id
+                        and f"ind_{_uid(ind['uri'])}" not in _pinned_ids
                     ):
                         continue
                     ind_node_id = f"ind_{_uid(ind['uri'])}"
@@ -2116,14 +2125,14 @@ def render_visualization():
                             )
 
             # Add SKOS concepts and relations
-            if show_skos and (node_count < max_nodes or _find_kind_is("skos_")):
+            if show_skos and (node_count < max_nodes or _pinned_kind_is("skos_")):
                 concepts = ont.get_concepts()
-                for concept in prioritise_find_target(
-                    concepts, lambda c: f"skos_{c['name']}", _find_id
+                for concept in prioritise_pinned(
+                    concepts, lambda c: f"skos_{c['name']}", _pinned_ids
                 ):
                     if (
                         node_count >= max_nodes
-                        and f"skos_{concept['name']}" != _find_id
+                        and f"skos_{concept['name']}" not in _pinned_ids
                     ):
                         break
                     c_id = f"skos_{concept['name']}"

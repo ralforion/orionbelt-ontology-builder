@@ -188,6 +188,34 @@ def test_the_cached_graph_is_rebuilt_when_the_path_changes():
     assert first != second
 
 
+# --- the path survives the node cap (issue #378) -----------------------------
+
+
+def test_the_whole_path_is_drawn_even_when_the_cap_cannot_hold_it(patch_ui):
+    """The reported case, in miniature: on an ontology past the cap the middle
+    of a path was simply not built, so it was ringed in disconnected pieces —
+    the answer to the question, drawn with the answer missing."""
+    patch_ui("GRAPH_MAX_NODES", 2)  # the A -> B -> C path is three
+
+    nodes, edges = _graph(_render("Class: A", "Class: C"))
+
+    assert {"A", "B", "C"} <= {n["label"] for n in nodes}
+    # And ringed end to end, not in pieces: both links, not one.
+    assert len(_highlighted_edges(edges)) == 2
+
+
+def test_a_pinned_path_does_not_lift_the_cap_for_everything_else(patch_ui):
+    """The cap is what protects the browser. Pinning buys the path its own
+    nodes, not a bigger graph: D is unrelated and stays out."""
+    patch_ui("GRAPH_MAX_NODES", 2)
+
+    nodes, _ = _graph(_render("Class: A", "Class: B"))
+
+    labels = {n["label"] for n in nodes}
+    assert {"A", "B"} <= labels
+    assert "D" not in labels
+
+
 # --- what the panel says ----------------------------------------------------
 
 
