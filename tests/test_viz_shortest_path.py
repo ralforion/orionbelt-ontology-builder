@@ -23,7 +23,6 @@ from orionbelt_ontology_builder import ui
 from orionbelt_ontology_builder.ui import (
     PATH_HIGHLIGHT_BORDER,
     PATH_HIGHLIGHT_COLOR,
-    PATH_HIGHLIGHT_WIDTH,
 )
 
 
@@ -122,10 +121,12 @@ def _panel_text(at):
 # --- the highlight ----------------------------------------------------------
 
 
-def test_the_links_along_the_path_are_widened_and_ringed():
+def test_the_links_along_the_path_are_ringed_and_otherwise_left_alone():
     nodes, edges = _graph(_render("Class: A", "Class: C"))
     lit = _highlighted_edges(edges)
-    assert all(e["width"] == PATH_HIGHLIGHT_WIDTH for e in lit)
+    # The line itself is untouched — no width of its own, so it is drawn exactly
+    # as an unhighlighted one is, with only the ring added around it.
+    assert all("width" not in e for e in lit)
     assert all(
         e["pathhl"]
         == {
@@ -164,8 +165,7 @@ def test_the_nodes_along_the_path_keep_their_fill_and_take_the_path_border():
         assert node["color"]["border"] == PATH_HIGHLIGHT_COLOR
         # The fill is what says this is a class; the path must not spend it.
         assert node["color"]["background"] == "#4CAF50"
-        # And a node box is small enough that a link-width border would.
-        assert node["borderWidth"] == PATH_HIGHLIGHT_BORDER < PATH_HIGHLIGHT_WIDTH
+        assert node["borderWidth"] == PATH_HIGHLIGHT_BORDER
 
 
 def test_an_entity_off_the_path_is_not_bordered():

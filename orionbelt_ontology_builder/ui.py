@@ -1567,15 +1567,12 @@ def viz_node_id(kind: str, ref: str) -> str:
 #: properties, orange for individuals, teal for SKOS, red for disjoint — so the
 #: ring reads as "on the path" rather than as one more kind of link (issue #176).
 PATH_HIGHLIGHT_COLOR = "#FFEB3B"
-#: A path link is widened this far so it can be followed across a busy graph. It
-#: keeps its own colour, though: that colour is what says which kind of link it
-#: is, and it is what the graph is scanned by (issue #357).
-PATH_HIGHLIGHT_WIDTH = 5
 #: How wide the ring around everything on the path is drawn — a border on its
 #: nodes, and a casing under its links, which the viewer draws because
 #: vis-network has no edge equivalent of a border. One width for both, so the
-#: two read as the same marking. Narrower than the link itself, on the same
-#: reasoning: what is ringed has to stay visible inside the ring.
+#: two read as the same marking. What is ringed is otherwise left exactly as it
+#: was drawn, fill and line alike: that is what says which kind of entity or
+#: link it is, and it is what the graph is scanned by (issue #357).
 PATH_HIGHLIGHT_BORDER = 3
 
 
