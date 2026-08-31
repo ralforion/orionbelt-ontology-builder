@@ -1622,8 +1622,11 @@ def render_visualization():
         # focus mode stopped charging an annotation a hop (issue #272), so a
         # cached focus payload is one built under the old pruning. 21: nodes and
         # edges along a shortest path are repainted (issue #176), which a cached
-        # pre-#176 payload has none of.
-        _graph_ver = 21
+        # pre-#176 payload has none of. 22: the notice cached with the payload
+        # now reports a path that is only half drawn, where before the generic
+        # cap line suppressed it — a cached v21 payload carries the suppressed
+        # one and would keep showing it until something unrelated evicted it.
+        _graph_ver = 22
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -2367,12 +2370,19 @@ def render_visualization():
             # block below replaces this with something more specific when it has
             # it, since a focus that finds nothing is the sharper symptom.
             _cut_classes = len(visible_class_uris) - len(displayed_class_uris)
+            # Whether the line above is the only thing the graph has to say. The
+            # path block at the end replaces this one and nothing else: the focus
+            # messages below are sharper (one of them explains an empty canvas),
+            # and their advice is about the focus the user is already in, which
+            # "use Focus on this path" would talk straight over.
+            _notice_is_the_cap_line = False
             if show_classes and _cut_classes > 0:
                 graph_notice = (
                     f"{_cut_classes} of {len(visible_class_uris)} classes are not "
                     f"drawn: the graph stops at {max_nodes} nodes. Hide some in "
                     f"{VIZ_NODE_PANEL}, or focus on one node, to see the rest."
                 )
+                _notice_is_the_cap_line = True
 
             # Focus mode: keep only the seed nodes' neighbourhood within
             # focus_depth hops over the assembled edges (BFS over all node
@@ -2408,6 +2418,7 @@ def render_visualization():
                                 f"only part of it is shown. Pick fewer focus "
                                 f"nodes, or a lower depth, to see it in full."
                             )
+                            _notice_is_the_cap_line = False
                             break
                         keep |= ring
                         nxt: set = set()
@@ -2474,6 +2485,7 @@ def render_visualization():
                         f"or individuals in {VIZ_NODE_PANEL} to bring it into "
                         f"range."
                     )
+                    _notice_is_the_cap_line = False
 
             # Repaint the shortest path onto whatever of it the canvas is
             # drawing (issue #176). After the focus prune, so a node lit up here
@@ -2511,11 +2523,20 @@ def render_visualization():
                         }
                         node["borderWidth"] = PATH_HIGHLIGHT_BORDER
                 _path_missing = len(_path_ids - {n["id"] for n in net.nodes})
-                if _path_missing and not graph_notice:
+                if _path_missing and (not graph_notice or _notice_is_the_cap_line):
+                    # Said instead of whatever the graph had to say about its own
+                    # size, not only when it had nothing to say. The two have the
+                    # same cause — the view holds less than the ontology — but on
+                    # a graph at the node cap the generic line was always set
+                    # first, so this one never appeared: the path came out in
+                    # disconnected pieces with nothing on screen accounting for
+                    # it, which reads as a broken highlight rather than as a view
+                    # that does not hold all of it. This one also names the way
+                    # out, and it is the more specific of the two.
                     graph_notice = (
-                        f"{_path_missing} of the {len(_path_ids)} entities on the "
-                        f"path are not drawn, so the highlight is partial. Use "
-                        f"“Focus on this path” to bring all of it into view."
+                        f"{_path_missing} of the {len(_path_ids)} entities on this "
+                        f"path are not drawn, so the highlight is broken into "
+                        f"pieces. Use “Focus on this path” to see all of it."
                     )
 
             # Spread parallel edges so they don't overlap

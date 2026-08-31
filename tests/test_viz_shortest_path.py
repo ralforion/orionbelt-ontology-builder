@@ -216,6 +216,52 @@ def test_a_pinned_path_does_not_lift_the_cap_for_everything_else(patch_ui):
     assert "D" not in labels
 
 
+def test_a_path_the_view_cannot_draw_says_so():
+    """A path drawn in pieces with nothing accounting for it reads as a broken
+    highlight rather than as a view that does not hold all of it, and this is
+    the only line that names the way out.
+
+    Focused elsewhere, because since #378 the node cap cannot do this: the
+    entities on a path are pinned past it. The focus prune runs after the build
+    and takes them out again, which is what is left.
+    """
+    at = _render("Class: A", "Class: C")
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: D"]  # not on the path
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    notice = at.session_state["last_graph_data"]["notice"]
+    assert "entities on this path are not drawn" in notice
+    # Here the advice is the right advice: they are focused on something else.
+    assert "Focus on this path" in notice
+
+
+def test_a_focus_keeps_its_own_advice_when_the_path_is_half_drawn(patch_ui):
+    """The path line replaces the generic cap line and nothing else. The focus
+    messages are sharper — one of them explains an empty canvas — and their
+    advice is about the focus the user is already in, which "use Focus on this
+    path" would talk straight over (Codex review of PR #377)."""
+    patch_ui("GRAPH_MAX_NODES", 2)
+    at = _render("Class: A", "Class: C")
+
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: A", "Class: B", "Class: C"]
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    notice = at.session_state["last_graph_data"]["notice"]
+    assert "focus" in notice.lower()
+    assert "Focus on this path" not in notice
+
+
+def test_a_path_drawn_in_full_leaves_the_graph_notice_alone():
+    """Nothing is missing from the path, so there is nothing for it to say."""
+    notice = _render("Class: A", "Class: C").session_state["last_graph_data"]["notice"]
+
+    assert "entities on this path" not in notice
+
+
 # --- what the panel says ----------------------------------------------------
 
 
