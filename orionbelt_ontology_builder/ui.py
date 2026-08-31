@@ -242,84 +242,115 @@ _BRAND = local_store.BRAND_PRIMARY_COLOR  # "#0D2B7A"
 _BRAND_TINT = "rgba(13, 43, 122, 0.12)"
 _BRAND_CSS = f"""
 <style>
+    /* Every hook below names Streamlit's own DOM, which is internal and moves
+       without notice: 1.62 rebuilt these widgets on react-aria, and every
+       ``[data-baseweb=...]`` selector this file used stopped matching in
+       silence (issue #368). Re-check them in the browser whenever the Streamlit
+       pin moves — the check is to inspect a rendered widget and confirm the
+       element carrying the accent is still the one named here. */
+
     /* Primary buttons */
     [data-testid="stBaseButton-primary"] {{
         background-color: {_BRAND} !important;
         border-color: {_BRAND} !important;
     }}
-    /* Checked checkbox box */
-    [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > span {{
+    /* The box of a checked checkbox, and the track of a toggle that is on:
+       st.toggle reuses stCheckbox's testid, and in 1.62 both mark the state on
+       the label, so one rule covers the pair.
+
+       ``:not([data-testid])`` is what separates the mark from the words beside
+       it. Both are plain divs directly under the label; only the label carries a
+       testid (stWidgetLabel). Without it this paints the text's background too,
+       and every checked checkbox reads as highlighted. The radio and slider
+       rules below exclude their own labels the same way. */
+    [data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid]) {{
         background-color: {_BRAND} !important;
         border-color: {_BRAND} !important;
     }}
-    /* Toggle track when on. st.toggle shares stCheckbox's testid; what tells
-       them apart is the mark: a checkbox renders a <span>, a toggle a <div>
-       track wrapping the knob. */
-    [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child {{
+    /* The dot inside a selected radio, not the label wrapper (which carries a
+       hover/focus tint of its own). */
+    label[data-testid="stRadioOption"][data-selected="true"] > div > div > div:not([data-testid]) {{
         background-color: {_BRAND} !important;
-    }}
-    /* Selected radio (its control circle; not the label wrapper) */
-    [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) > div:first-child {{
-        background-color: {_BRAND} !important;
-        border-color: {_BRAND} !important;
     }}
     /* Active segmented-control pill (the page tab pickers). Selected by ARIA
        state rather than by a testid: the testid this used to name,
-       ``stBaseButton-segmented_controlActive``, is not on the button in
-       Streamlit 1.62, so the rule matched nothing and went unnoticed — worth
-       re-checking in the DOM after a Streamlit upgrade (issue #368).
-       No ``color`` here: Streamlit paints the active label with the configured
-       primaryColor, which is the brand navy and reads at 12.6:1 on a light
-       background. Dark backgrounds are where that fails, and _DARK_CSS below
-       overrides it. */
+       ``stBaseButton-segmented_controlActive``, is not on the button in 1.62.
+       No ``color`` here — Streamlit paints the active label with the configured
+       primaryColor, which is the brand navy and reads at 12.8:1 on a light
+       background. Dark backgrounds are where that fails, and _DARK_CSS
+       overrides it there. */
     button[data-variant="segmented_control"][aria-checked="true"] {{
         border-color: {_BRAND} !important;
         background-color: {_BRAND_TINT} !important;
     }}
-    /* Slider thumb + its floating value label */
-    [data-testid="stSlider"] [role="slider"] {{
+    /* Slider thumb and its floating value label. There is no [role=slider] in
+       1.62; the thumb is an unlabelled div, told apart from the rail beside it
+       by the value label it carries. */
+    [data-testid="stSlider"] div:has(> [data-testid="stSliderThumbValue"]) {{
         background-color: {_BRAND} !important;
     }}
     [data-testid="stSliderThumbValue"] {{
         color: {_BRAND} !important;
     }}
-    /* Slider track: the filled portion's colour (red on a reset theme) is baked
-       into a per-value class we can't recolour selectively, so neutralise the
-       whole bar to Streamlit's unfilled tint — no red shows, and the navy thumb
-       marks the position. Targets the track (the thumb's direct parent). */
-    [data-testid="stSlider"] [data-baseweb="slider"] div:has(> [role="slider"]) {{
+    /* Slider rail: the filled portion's colour (red on a reset theme) is baked
+       into a per-value class we cannot recolour selectively, so the whole bar is
+       neutralised — no red shows, and the thumb marks the position. Painting the
+       rail with the accent instead would colour the unfilled half too, which
+       says the slider is at its maximum. It is the childless div; the thumb is
+       the one with the value label inside. */
+    [data-testid="stSlider"] > div > div > div:not([data-testid]):not(:has(*)) {{
         background: rgba(151, 166, 195, 0.25) !important;
     }}
-    /* Multiselect selected chips and their focus outline */
-    [data-testid="stMultiSelect"] [data-baseweb="tag"] {{
+    /* Multiselect selected chips */
+    [data-testid="stMultiSelectTagsContainer"] > span > span {{
         background-color: {_BRAND} !important;
-    }}
-    [data-testid="stMultiSelect"] [data-baseweb="select"] > div:focus-within {{
-        border-color: {_BRAND} !important;
     }}
 </style>
 """
+#: Text and line accents on a dark backdrop: the active tab's label, the slider
+#: value, borders. The brand navy is 1.48:1 against Streamlit's dark background
+#: and cannot be read there; this is 7.8:1, and 8.5:1 against the darker custom
+#: theme in issue #368.
 _DARK_ACCENT = "#6EA8FE"
 _DARK_TINT = "rgba(110, 168, 254, 0.15)"
+#: Filled controls — a button, a checkbox, a radio dot, a slider thumb. They
+#: cannot take _DARK_ACCENT, because a filled control carries white text and
+#: white on that accent is 2.4:1. This is the brightest blue that still holds a
+#: white label: 4.6:1 for the label, and 4.1:1 for the control against the page,
+#: comfortably past the 3:1 WCAG asks of a control against its surroundings.
+_DARK_FILL = "#3B6FE0"
 _DARK_CSS = f"""
 <style>
-    /* The brand navy Streamlit puts on the active label is 1.48:1 against
-       Streamlit's own dark background and 1.61:1 against the darker custom one
-       in issue #368 — the selected tab was the single unreadable label on the
-       page. The accent below is 7:1 and 8.5:1 on those two. */
+    /* The active pill's label: Streamlit paints it with primaryColor, and the
+       brand navy is 1.48:1 on Streamlit's dark background and 1.61:1 on the
+       custom one in issue #368 — the single unreadable label on the page. The
+       accent is 7.8:1 and 8.5:1 on those two. */
     button[data-variant="segmented_control"][aria-checked="true"] {{
         color: {_DARK_ACCENT} !important;
         border-color: {_DARK_ACCENT} !important;
         background-color: {_DARK_TINT} !important;
     }}
-    /* Text/indicator accents from _BRAND_CSS that are too dark on a dark
-       backdrop: the slider value label and the multiselect focus outline.
-       (The filled thumb and chips stay navy, like the checkboxes/buttons.) */
     [data-testid="stSliderThumbValue"] {{
         color: {_DARK_ACCENT} !important;
     }}
-    [data-testid="stMultiSelect"] [data-baseweb="select"] > div:focus-within {{
-        border-color: {_DARK_ACCENT} !important;
+    /* The filled controls, lightened together so they read as one family. They
+       keep their white labels, which is what stops them taking _DARK_ACCENT. */
+    [data-testid="stBaseButton-primary"] {{
+        background-color: {_DARK_FILL} !important;
+        border-color: {_DARK_FILL} !important;
+    }}
+    [data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid]) {{
+        background-color: {_DARK_FILL} !important;
+        border-color: {_DARK_FILL} !important;
+    }}
+    label[data-testid="stRadioOption"][data-selected="true"] > div > div > div:not([data-testid]) {{
+        background-color: {_DARK_FILL} !important;
+    }}
+    [data-testid="stSlider"] div:has(> [data-testid="stSliderThumbValue"]) {{
+        background-color: {_DARK_FILL} !important;
+    }}
+    [data-testid="stMultiSelectTagsContainer"] > span > span {{
+        background-color: {_DARK_FILL} !important;
     }}
 </style>
 """

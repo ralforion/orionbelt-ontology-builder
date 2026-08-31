@@ -24,6 +24,7 @@ from .ui import (  # noqa: F401
     _CUSTOM_CSS,
     _DARK_ACCENT,
     _DARK_CSS,
+    _DARK_FILL,
     _DARK_TINT,
     _EDGE_ID_SEP,
     _FAVICON,

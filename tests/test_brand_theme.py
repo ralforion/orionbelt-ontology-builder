@@ -15,45 +15,56 @@ def test_brand_css_forces_the_brand_colour_on_every_accent_widget():
     css = app._BRAND_CSS
     assert app._BRAND in css  # the navy is actually referenced
 
-    # Each accent widget Streamlit would otherwise render in default red.
+    # Each accent widget Streamlit would otherwise render in default red, named
+    # by the hook it carries in the pinned Streamlit. These are internal DOM
+    # details: 1.62 moved these widgets to react-aria and every
+    # ``[data-baseweb=...]`` hook here stopped matching in silence (issue #368),
+    # so they want re-checking in the browser whenever the pin moves.
     required_hooks = [
         'data-testid="stBaseButton-primary"',  # primary buttons
-        'data-testid="stCheckbox"',  # checked checkbox
-        # The toggle track. st.toggle reuses stCheckbox's testid, so only the
-        # full selector tells its rule apart from the checkbox's.
-        (
-            '[data-testid="stCheckbox"] label[data-baseweb="checkbox"]'
-            ":has(input:checked) > div:first-child"
-        ),
-        'data-testid="stRadio"',  # selected radio
-        'data-testid="stSlider"',  # slider thumb
-        'data-testid="stSliderThumbValue"',  # slider value label
-        'data-testid="stMultiSelect"',  # multiselect chips + focus border
-        'data-baseweb="tag"',  # the selected chips themselves
-        # The active pill of a segmented control, which is how every page picker
-        # on this app is drawn. Named by its ARIA state: the testid this rule
-        # used to use is not on the button in Streamlit 1.62, so it quietly
-        # matched nothing (issue #368). Worth re-checking in the DOM whenever
-        # the Streamlit pin moves.
+        # A checked checkbox's box, and the track of a toggle that is on:
+        # st.toggle reuses stCheckbox's testid and marks state the same way.
+        '[data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid])',
+        # The dot inside a selected radio.
+        'label[data-testid="stRadioOption"][data-selected="true"]',
+        # The active pill of a segmented control: every page picker in the app.
         'button[data-variant="segmented_control"][aria-checked="true"]',
+        '[data-testid="stSlider"] div:has(> [data-testid="stSliderThumbValue"])',  # thumb
+        'data-testid="stSliderThumbValue"',  # slider value label
+        'data-testid="stMultiSelectTagsContainer"',  # multiselect chips
     ]
     missing = [h for h in required_hooks if h not in css]
     assert not missing, f"_BRAND_CSS no longer styles: {missing}"
 
 
-def test_dark_css_relightens_text_and_indicator_accents():
-    # Navy is too dark for text/indicator accents on a dark backdrop, so the
-    # dark-mode CSS must re-colour those to the lighter accent. The slider value
-    # label and the multiselect focus outline are text/line accents and must be
-    # covered (filled shapes like the thumb and chips stay navy).
+def test_dark_css_relightens_every_accent_the_navy_is_too_dark_for():
+    """On a dark backdrop the navy is 1.48:1 against the background — text drawn
+    in it cannot be read, and a control filled with it barely separates from the
+    page. Both directions are covered here: text/line accents take the lighter
+    accent, filled shapes take the fill.
+    """
     dark = app._DARK_CSS
     assert app._DARK_ACCENT in dark
+    assert app._DARK_FILL in dark
+
     for hook in [
-        'data-testid="stSliderThumbValue"',
-        'data-testid="stMultiSelect"',
-        # The active pill's label: Streamlit paints it with the configured
-        # primaryColor, and the brand navy is 1.48:1 on Streamlit's dark
-        # background — unreadable, and the reason for issue #368.
-        'button[data-variant="segmented_control"][aria-checked="true"]',
+        'data-testid="stSliderThumbValue"',  # a text accent
+        'button[data-variant="segmented_control"][aria-checked="true"]',  # its label
+        'data-testid="stBaseButton-primary"',  # and the filled controls
+        '[data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid])',
+        'label[data-testid="stRadioOption"][data-selected="true"]',
+        '[data-testid="stSlider"] div:has(> [data-testid="stSliderThumbValue"])',
+        'data-testid="stMultiSelectTagsContainer"',
     ]:
         assert hook in dark, f"_DARK_CSS missing a dark override for {hook}"
+
+
+def test_the_fill_and_the_text_accent_are_not_the_same_colour():
+    """They cannot be. A filled control carries white text, and white on the
+    text accent is 2.4:1; a blue dark enough to hold that label is too dark to
+    read as text itself. The split is the point, so it is asserted — and the
+    button, which carries a label, takes the fill rather than the accent."""
+    assert app._DARK_ACCENT != app._DARK_FILL
+    dark = app._DARK_CSS
+    button = dark[dark.index('[data-testid="stBaseButton-primary"]') :]
+    assert app._DARK_FILL in button[: button.index("}")]
