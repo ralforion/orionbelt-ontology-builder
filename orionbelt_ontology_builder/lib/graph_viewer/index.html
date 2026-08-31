@@ -415,6 +415,68 @@ function applyNeighbourHighlight(id) {
     if (updates.length) { try { ds.update(updates); } catch (e) {} }
 }
 
+// --- Shortest-path ring (issues #176, #357) ---------------------------------
+// A link on a highlighted path keeps its own colour — that colour says which
+// kind of link it is, and it is what the graph is scanned by — and is ringed in
+// the highlight colour instead, the way the path's nodes keep their fill and
+// take a coloured border. vis has no edge equivalent of a border, so the ring is
+// drawn here: a wider line in the highlight colour, stroked along the same curve
+// before vis draws anything, so the edge itself lands on top of it and only the
+// ring shows either side of it. Python marks the edges (`pathhl`).
+var RING_STEPS = 24;   // segments per link: enough to follow a curve smoothly
+
+// The points along the curve vis is drawing `edge` as. Falls back to the
+// straight line between its endpoints if this build has no getPoint: a ring that
+// misses a bend is still better than a link on the path left unmarked.
+function pathRingPoints(edge) {
+    var pts = [], i, p;
+    if (edge.edgeType && typeof edge.edgeType.getPoint === 'function') {
+        for (i = 0; i <= RING_STEPS; i++) {
+            try { p = edge.edgeType.getPoint(i / RING_STEPS); } catch (e) { p = null; }
+            if (!p || isNaN(p.x) || isNaN(p.y)) { pts = []; break; }
+            pts.push(p);
+        }
+    }
+    if (!pts.length && edge.from && edge.to) {
+        pts = [{x: edge.from.x, y: edge.from.y}, {x: edge.to.x, y: edge.to.y}];
+    }
+    return pts;
+}
+
+// `rings` is [{id, color, border, width}], resolved from the DataSet at render
+// time (see renderGraph): `pathhl` is our own field, and vis keeps only the
+// options it knows about on its edge objects.
+function drawPathRings(ctx, rings) {
+    if (!network || !network.body) return;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    rings.forEach(function(ring) {
+        var edge = network.body.edges[ring.id];
+        if (!edge || (edge.options && edge.options.hidden)) return;
+        var pts = pathRingPoints(edge);
+        if (pts.length < 2) return;
+        // A dashed link keeps its dashes: filling the gaps in would ring the
+        // link as solid and lose what the dashes say (a restriction, a data
+        // property, an annotation). [5, 5] is vis's own default pattern.
+        //
+        // Which is also why a dashed ring is capped square. A round cap spills
+        // half the line's width past each end of its dash, and the ring is
+        // wider than the gaps are long — so both ends of every gap would spill
+        // into it and meet, and the dashes the ring is preserving would be
+        // filled back in by the ring itself.
+        var dashes = edge.options && edge.options.dashes;
+        ctx.setLineDash(Array.isArray(dashes) ? dashes : (dashes ? [5, 5] : []));
+        ctx.lineCap = dashes ? 'butt' : 'round';
+        ctx.strokeStyle = ring.color;
+        ctx.lineWidth = ring.width + 2 * ring.border;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.stroke();
+    });
+    ctx.restore();
+}
+
 // Apply theme colours without rebuilding the graph, so a theme change (or the
 // first-render theme settling) doesn't reset the user's zoom/pan. Node colours
 // encode type, not theme, so only the background, overlays and edge labels change.
@@ -1005,6 +1067,20 @@ function renderGraph(args) {
     hlSource = null;
     hlSaved = null;
     hlJustSelected = false;
+    // Ring the links on a highlighted shortest path (issue #357). The DataSet
+    // assigns the ids vis keys its own edge objects by, so the ids have to be
+    // read back off it here, after the network has been handed the set.
+    var pathRings = [];
+    edges.forEach(function(e) {
+        if (!e || !e.pathhl || !e.pathhl.color || !e.pathhl.border) return;
+        pathRings.push({
+            id: e.id, color: e.pathhl.color, border: e.pathhl.border,
+            width: e.width || 1   // vis's default edge width, which Python leaves unset
+        });
+    });
+    if (pathRings.length) {
+        network.on('beforeDrawing', function(ctx) { drawPathRings(ctx, pathRings); });
+    }
     document.getElementById('download-btn').style.display = 'flex';
     // Only offer fullscreen where the API works — hidden in the desktop webview.
     if (fullscreenSupported()) {
@@ -1155,10 +1231,10 @@ function renderGraph(args) {
         var c = typeof e.color === 'string' ? e.color : (e.color && e.color.color) || '';
         var lbl = (e.label || '').toLowerCase();
         if (c) edgeColors[c.toUpperCase() + '|' + lbl] = true;
-        // An edge repainted as part of a highlight keeps the colour of its own
-        // kind in `basecolor`, and the legend counts both: the highlight earns
-        // its entry without the kind it painted over losing one (issue #176).
-        if (e.basecolor) edgeColors[e.basecolor.toUpperCase() + '|' + lbl] = true;
+        // A link on the highlighted path is ringed rather than repainted, so it
+        // is counted under its own kind above and the ring has to be counted
+        // here for "shortest path" to earn its entry (issues #176, #357).
+        if (e.pathhl && e.pathhl.color) edgeColors[e.pathhl.color.toUpperCase() + '|' + lbl] = true;
     });
 
     var nodeItems = [

@@ -1562,16 +1562,17 @@ def viz_node_id(kind: str, ref: str) -> str:
     return f"{_VIZ_NODE_ID_PREFIX[kind]}{_uid(ref)}"
 
 
-#: The colour a highlighted path is drawn in, and how wide its links are drawn.
-#: Deliberately outside the palette the graph already gives relation types —
-#: green for subclass, blue for properties, orange for individuals, teal for
-#: SKOS, red for disjoint — so a highlighted link reads as "on the path" rather
-#: than as one more kind of link (issue #176).
+#: The colour a highlighted path is ringed in. Deliberately outside the palette
+#: the graph already gives relation types — green for subclass, blue for
+#: properties, orange for individuals, teal for SKOS, red for disjoint — so the
+#: ring reads as "on the path" rather than as one more kind of link (issue #176).
 PATH_HIGHLIGHT_COLOR = "#FFEB3B"
-#: A path link is drawn thick enough to follow across a busy graph. Its nodes
-#: take a thinner border than that: a node box is small, and a border as wide as
-#: the links swallows the fill that says which kind of entity it is.
-PATH_HIGHLIGHT_WIDTH = 5
+#: How wide the ring around everything on the path is drawn — a border on its
+#: nodes, and a casing under its links, which the viewer draws because
+#: vis-network has no edge equivalent of a border. One width for both, so the
+#: two read as the same marking. What is ringed is otherwise left exactly as it
+#: was drawn, fill and line alike: that is what says which kind of entity or
+#: link it is, and it is what the graph is scanned by (issue #357).
 PATH_HIGHLIGHT_BORDER = 3
 
 
