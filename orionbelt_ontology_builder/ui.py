@@ -33,7 +33,7 @@ OrionBelt Ontology Builder - A Streamlit application for building, editing,
 and managing OWL ontologies.
 """
 APP_NAME = "OrionBelt Ontology Builder"
-APP_VERSION = "1.26.2"
+APP_VERSION = "1.27.0"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
