@@ -2329,6 +2329,27 @@ def confirm_delete(resource_name: str, resource_type: str, key_suffix: str) -> b
 LABEL_NAME_SEPARATOR = " · "
 
 
+def picker_option_caption(option: str, name: str, text: str) -> str:
+    """What a graph picker shows for one of its options.
+
+    The canvas draws a node under its rdfs:label (a concept's prefLabel), so
+    that is what someone reads off the graph and then goes looking for in Find,
+    in the focus seeds, or in the path finder — where the options were the local
+    name alone. In an ontology whose names are identifiers (``0-I`` labelled
+    "zero current") the two share nothing, and the entity could not be found by
+    the only name the user had seen.
+
+    The label is shown, never stored: ``option`` stays the identifier the rest of
+    the page is built on — focus seeds are persisted as it, the paste box
+    round-trips it, and rename notes re-point it (issues #142, #179, #275).
+    Only what is drawn in the dropdown changes, which is also what Streamlit
+    matches typed text against, so the label is searchable too.
+    """
+    if text and text != name:
+        return f"{option}{LABEL_NAME_SEPARATOR}{text}"
+    return option
+
+
 def format_label_name(name: str, label: str) -> str:
     """Format display string as 'name · Label' if label exists and differs from name."""
     if label and label != name:
