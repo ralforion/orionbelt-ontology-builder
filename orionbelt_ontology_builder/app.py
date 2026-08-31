@@ -197,6 +197,7 @@ from .ui import (  # noqa: F401
     path_nodes,
     persist_autosave,
     persist_language_packs,
+    picker_option_caption,
     prioritise_find_target,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
