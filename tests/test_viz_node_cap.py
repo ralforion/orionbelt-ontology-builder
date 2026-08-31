@@ -448,3 +448,56 @@ def test_find_does_not_rewrite_the_users_node_filter():
                     f"line {node.lineno}: Find must not write the node filter; "
                     "the graph exempts the target at build time instead"
                 )
+
+
+# --- what the pickers show ---------------------------------------------------
+
+
+class TestPickerCaptions:
+    """The canvas draws a node under its rdfs:label, so that is the name someone
+    reads off the graph — and the pickers listed the local name alone, which in
+    an ontology of identifiers shares nothing with it.
+    """
+
+    def test_a_label_is_shown_beside_the_name(self):
+        assert (
+            app.picker_option_caption("Class: 0-I", "0-I", "zero current")
+            == "Class: 0-I · zero current"
+        )
+
+    def test_no_label_leaves_the_option_alone(self):
+        assert (
+            app.picker_option_caption("Class: Person", "Person", "") == "Class: Person"
+        )
+
+    def test_a_label_equal_to_the_name_is_not_repeated(self):
+        assert (
+            app.picker_option_caption("Class: Person", "Person", "Person")
+            == "Class: Person"
+        )
+
+    def test_the_option_itself_is_untouched(self):
+        """It is the identifier the rest of the page runs on: focus seeds are
+        persisted as it, the paste box round-trips it, rename notes re-point it.
+        Only the caption carries the label."""
+        for var, value in (
+            ("N_CLASSES", "3"),
+            ("SEED", ""),
+            ("SHAPE", "chain"),
+            ("DEPTH", "1"),
+            ("FIND", ""),
+            ("EXTRA", ""),
+            ("HIDE", ""),
+            ("HIDE_ALL", ""),
+        ):
+            os.environ[var] = value
+        at = AppTest.from_function(_script)
+        at.run(timeout=300)
+        assert not at.exception, at.exception
+
+        options = at.selectbox(key="viz_find_entity").options
+        assert options
+        assert all(" · " not in o for o in options)
+        assert all(
+            o.startswith(("Class: ", "Individual: ", "Concept: ")) for o in options
+        )

@@ -60,6 +60,7 @@ from ..ui import (
     path_entity_kinds,
     path_highlight,
     path_nodes,
+    picker_option_caption,
     prioritise_find_target,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
@@ -767,11 +768,23 @@ def render_visualization():
         # The same targets in list form, carrying what the paste / copy box
         # needs to write one down and read it back (issue #283).
         focus_records: list[dict] = []
+        #: Option -> what the picker shows for it. Only entities whose label
+        #: differs from their name are in here; :func:`_picker_caption` falls
+        #: back to the option itself for the rest.
+        focus_captions: dict[str, str] = {}
 
-        def _focus_target(kind_word, name, node_kind, ref, uri=None):
-            """Register one focusable entity under the label the picker shows."""
+        def _focus_target(kind_word, name, node_kind, ref, uri=None, text=""):
+            """Register one focusable entity under the label the picker shows.
+
+            ``text`` is the entity's rdfs:label (a SKOS concept's prefLabel);
+            see :func:`picker_option_caption` for what it is used for and why it
+            is not what the option is keyed by.
+            """
             label = f"{kind_word}: {name}"
             focus_targets[label] = viz_node_id(node_kind, ref)
+            caption = picker_option_caption(label, name, text)
+            if caption != label:
+                focus_captions[label] = caption
             focus_records.append(
                 {
                     "kind": kind_word,
@@ -786,18 +799,39 @@ def render_visualization():
                 }
             )
 
+        # The labels the canvas draws, by URI, so a picker can show what the
+        # graph shows (see _focus_target).
+        _class_label_by_uri = {c["uri"]: c.get("label") or "" for c in classes}
+        _ind_label_by_uri = {i["uri"]: i.get("label") or "" for i in individuals}
         if show_classes:
             for e in class_entries:
-                _focus_target("Class", e["display"], "class", e["uri"], e["uri"])
+                _focus_target(
+                    "Class",
+                    e["display"],
+                    "class",
+                    e["uri"],
+                    e["uri"],
+                    _class_label_by_uri.get(e["uri"], ""),
+                )
         if show_individuals:
             for e in ind_entries:
                 _focus_target(
-                    "Individual", e["display"], "individual", e["uri"], e["uri"]
+                    "Individual",
+                    e["display"],
+                    "individual",
+                    e["uri"],
+                    e["uri"],
+                    _ind_label_by_uri.get(e["uri"], ""),
                 )
         if show_data_props:
             for prop in data_props:
                 _focus_target(
-                    "Data Property", prop["name"], "property", prop["uri"], prop["uri"]
+                    "Data Property",
+                    prop["name"],
+                    "property",
+                    prop["uri"],
+                    prop["uri"],
+                    prop.get("label") or "",
                 )
         if show_skos and _has_skos:
             for concept in ont.get_concepts():
@@ -809,7 +843,12 @@ def render_visualization():
                     "concept",
                     concept["name"],
                     concept.get("uri"),
+                    concept.get("prefLabel") or "",
                 )
+
+        def _picker_caption(option):
+            """What a picker shows for one of its options."""
+            return focus_captions.get(option, option)
 
         # A seed whose entity was renamed is held under a label that no longer
         # exists; re-point it at the new one first, or the prune below reads the
@@ -907,6 +946,7 @@ def render_visualization():
                 _find_choice = st.selectbox(
                     "Find entity in graph",
                     options=sorted(focus_targets),
+                    format_func=_picker_caption,
                     index=None,
                     placeholder="🔍 Find and centre on an entity…",
                     label_visibility="collapsed",
@@ -1024,6 +1064,7 @@ def render_visualization():
                     focus_seeds = st.multiselect(
                         "Focus node(s)",
                         options=focus_labels,
+                        format_func=_picker_caption,
                         key="viz_focus_seeds",
                         on_change=viz_focus_seeds_changed,
                         help="Classes, individuals or SKOS concepts to centre on. "
@@ -1385,6 +1426,7 @@ def render_visualization():
                     _path_source = st.selectbox(
                         "From",
                         options=sorted(path_choices),
+                        format_func=_picker_caption,
                         index=None,
                         placeholder="Start entity…",
                         key="viz_path_source",
@@ -1398,6 +1440,7 @@ def render_visualization():
                     _path_target = st.selectbox(
                         "To",
                         options=sorted(path_choices),
+                        format_func=_picker_caption,
                         index=None,
                         placeholder="End entity…",
                         key="viz_path_target",
