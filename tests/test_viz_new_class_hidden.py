@@ -41,18 +41,7 @@ def _script():
 
 
 def _rerun(at):
-    """Run the page again.
-
-    AppTest reads every button group's value as a list, but a single-select
-    ``st.segmented_control`` (the page's tab picker, and the filter's kind
-    picker) stores a plain string — so replaying the widget states for a second
-    run raises inside Streamlit's own element tree. Handing each group the list
-    form first is what lets this page be driven across renders at all.
-    """
-    for group in at.get("button_group"):
-        value = group.value
-        if not isinstance(value, list):
-            group.set_value([value])
+    """Run the page again."""
     at.run(timeout=300)
     assert not at.exception, at.exception
     return at

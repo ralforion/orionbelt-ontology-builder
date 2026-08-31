@@ -247,12 +247,7 @@ def _page():
 
 
 def _rerun(at):
-    """Run the page again; see tests/test_viz_new_class_hidden.py for the
-    button-group shim this needs."""
-    for group in at.get("button_group"):
-        value = group.value
-        if not isinstance(value, list):
-            group.set_value([value])
+    """Run the page again."""
     at.run(timeout=300)
     assert not at.exception, at.exception
     return at
@@ -335,10 +330,6 @@ def test_a_punned_resource_round_trips_through_the_page():
     # ...pastes back as both of them.
     at.text_area(key="viz_focus_paste").set_value("Class:Agent Concept:Agent")
     at.button(key="viz_focus_apply_paste").click()
-    for group in at.get("button_group"):
-        value = group.value
-        if not isinstance(value, list):
-            group.set_value([value])
     at.run(timeout=300)
     assert not at.exception, at.exception
     assert at.session_state["_viz_cfg_focus_seeds"] == [

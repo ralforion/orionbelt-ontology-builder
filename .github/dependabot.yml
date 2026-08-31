@@ -15,7 +15,7 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     ignore:
-      # streamlit is deliberately pinned (==1.54.0) rather than ranged, so its
+      # streamlit is deliberately pinned (==1.62.0) rather than ranged, so its
       # upgrades are done by hand after checking the app against the release.
       # Exact name only: streamlit-local-storage and streamlit-desktop-app are
       # still updated.
