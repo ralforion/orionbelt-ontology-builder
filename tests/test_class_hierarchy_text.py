@@ -1,6 +1,7 @@
-"""Text class-hierarchy rendering, including subClassOf cycles (issue #171)."""
+"""Text class-hierarchy rendering: subClassOf cycles (#171), and the DAG
+expansion that made it exponential (#371)."""
 
-from orionbelt_ontology_builder import app
+from orionbelt_ontology_builder import app, ui
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
 
 
@@ -102,3 +103,85 @@ def test_diamond_class_shown_under_each_parent():
 
     assert text.count("Bottom") == 2  # appears under Left and under Right
     assert "(cycle)" not in text
+
+
+def _diamond_chain(levels):
+    """A_i and B_i both inherit from A_(i-1) and B_(i-1).
+
+    A DAG of 2n+1 classes and no cycles, where the number of distinct paths from
+    the root doubles per level — so printing every path is exponential while the
+    ontology is tiny.
+    """
+    m = OntologyManager()
+    m.add_class("Root")
+    for i in range(levels):
+        for side in ("A", "B"):
+            parent = "Root" if i == 0 else f"A{i - 1}"
+            m.add_class(f"{side}{i}", parent=parent)
+            if i:
+                m.add_class_relation(f"{side}{i}", "subClassOf", f"B{i - 1}")
+    return m
+
+
+def test_a_class_reached_twice_is_expanded_once():
+    """Every path through a DAG used to be expanded in full: 33 classes rendered
+    131,071 lines, and one real ontology produced 1.1 GB of text (issue #371)."""
+    m = _diamond_chain(12)  # 25 classes; 8,191 lines before this was fixed
+
+    text = app.build_class_hierarchy_text(m.get_classes())
+
+    assert len(text.splitlines()) < 60
+    # Every class is still in there — the saving is repeats, not content.
+    for name in [f"{side}{i}" for i in range(12) for side in ("A", "B")]:
+        assert name in text
+
+
+def test_a_class_under_two_parents_is_listed_under_both():
+    """The repeat that is dropped is the *subtree*, not the class: being a
+    subclass of both parents is the fact the tree is there to show."""
+    m = OntologyManager()
+    m.add_class("Left")
+    m.add_class("Right")
+    m.add_class("Both", parent="Left")
+    m.add_class("Leaf", parent="Both")
+    m.add_class_relation("Both", "subClassOf", "Right")
+
+    text = app.build_class_hierarchy_text(m.get_classes())
+
+    assert text.count("Both") == 2  # under Left and under Right
+    assert text.count("Leaf") == 1  # its subtree is drawn once
+    assert "(shown above)" in text  # and the second listing says so
+
+
+def test_a_leaf_listed_twice_is_not_marked():
+    """Nothing was withheld, so there is nothing to say. The note would only be
+    noise on the classes that make up most of a hierarchy."""
+    m = OntologyManager()
+    m.add_class("Left")
+    m.add_class("Right")
+    m.add_class("Leaf", parent="Left")
+    m.add_class_relation("Leaf", "subClassOf", "Right")
+
+    text = app.build_class_hierarchy_text(m.get_classes())
+
+    assert text.count("Leaf") == 2
+    assert "(shown above)" not in text
+
+
+def test_the_tree_stops_at_the_line_cap_and_says_so(monkeypatch):
+    """The backstop for an ontology genuinely too large to print. Checked with a
+    small cap: what matters is that it stops, counts what it left out, and does
+    not read as a hierarchy that simply ends there."""
+    monkeypatch.setattr(ui, "CLASS_TREE_MAX_LINES", 5)
+    m = OntologyManager()
+    prev = None
+    for i in range(20):
+        m.add_class(f"C{i}", parent=prev)
+        prev = f"C{i}"
+
+    text = app.build_class_hierarchy_text(m.get_classes())
+
+    body, note = text.rsplit("\n\n", 1)
+    assert len(body.splitlines()) == 5
+    assert "stopped at 5 lines" in note
+    assert "15 of 20 classes are not shown" in note
