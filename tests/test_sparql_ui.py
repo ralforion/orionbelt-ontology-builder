@@ -258,7 +258,9 @@ def test_picking_an_example_remounts_the_editor():
 def _nonce(at) -> int:
     """The editor's remount counter, which does not exist until it first moves."""
     key = "sparql_editor_nonce"
-    return at.session_state[key] if key in at.session_state else 0
+    # SIM401 wants `.get` here, but AppTest's session_state has none: its
+    # rewrite raises instead of returning the default.
+    return at.session_state[key] if key in at.session_state else 0  # noqa: SIM401
 
 
 def test_an_example_the_editor_already_shows_is_not_reloaded():
