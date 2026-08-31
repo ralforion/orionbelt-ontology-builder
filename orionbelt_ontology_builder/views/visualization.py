@@ -2369,14 +2369,17 @@ def render_visualization():
                 _path_ids = set(path_node_ids)
                 for edge in net.edges:
                     if frozenset((edge["from"], edge["to"])) in path_pairs:
-                        # The colour it had says which kind of link it is, and
-                        # the legend is built from that. Kept, so highlighting
-                        # the only subClassOf edge on screen does not take
-                        # subClassOf out of the legend with it.
-                        if isinstance(edge.get("color"), str):
-                            edge["basecolor"] = edge["color"]
-                        edge["color"] = PATH_HIGHLIGHT_COLOR
+                        # Widened and ringed, not repainted: the colour it has
+                        # says which kind of link it is, and that is what the
+                        # graph is scanned by — the same reason the nodes below
+                        # keep their fill (issue #357). The ring is drawn by the
+                        # viewer, which strokes a wider line under the edge,
+                        # because vis-network has no edge border to set here.
                         edge["width"] = PATH_HIGHLIGHT_WIDTH
+                        edge["pathhl"] = {
+                            "color": PATH_HIGHLIGHT_COLOR,
+                            "border": PATH_HIGHLIGHT_BORDER,
+                        }
                 for node in net.nodes:
                     if node["id"] in _path_ids and isinstance(node.get("color"), dict):
                         # Border only: the fill is what says which kind of entity

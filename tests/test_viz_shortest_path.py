@@ -107,7 +107,7 @@ def _graph(at):
 
 
 def _highlighted_edges(edges):
-    return [e for e in edges if e.get("color") == PATH_HIGHLIGHT_COLOR]
+    return [e for e in edges if e.get("pathhl")]
 
 
 def _label_of(nodes, node_id):
@@ -122,28 +122,35 @@ def _panel_text(at):
 # --- the highlight ----------------------------------------------------------
 
 
-def test_the_links_along_the_path_are_repainted():
+def test_the_links_along_the_path_are_widened_and_ringed():
     nodes, edges = _graph(_render("Class: A", "Class: C"))
     lit = _highlighted_edges(edges)
     assert all(e["width"] == PATH_HIGHLIGHT_WIDTH for e in lit)
+    assert all(
+        e["pathhl"]
+        == {
+            "color": PATH_HIGHLIGHT_COLOR,
+            "border": PATH_HIGHLIGHT_BORDER,
+        }
+        for e in lit
+    )
     assert {
         frozenset((_label_of(nodes, e["from"]), _label_of(nodes, e["to"]))) for e in lit
     } == {frozenset(("A", "B")), frozenset(("B", "C"))}
 
 
-def test_a_repainted_link_remembers_the_colour_of_its_own_kind():
-    """The canvas legend is built from edge colours, so a highlight that simply
-    overwrote them would take the last subClassOf edge's entry off the legend."""
+def test_a_link_on_the_path_keeps_the_colour_of_its_own_kind():
+    """The colour is what says this is a subClassOf link, on the path or not, and
+    the canvas legend is built from it: a highlight that painted over it would
+    cost the graph both (issue #357)."""
     _, edges = _graph(_render("Class: A", "Class: C"))
-    assert [e["basecolor"] for e in _highlighted_edges(edges)] == ["#81C784"] * 2
+    assert [e["color"] for e in _highlighted_edges(edges)] == ["#81C784"] * 2
 
 
-def test_a_link_off_the_path_keeps_its_own_colour():
+def test_a_link_off_the_path_is_not_ringed():
     _, edges = _graph(_render("Class: A", "Class: B"))
     off_path = [
-        e
-        for e in edges
-        if e.get("color") != PATH_HIGHLIGHT_COLOR and e.get("label") == "subClassOf"
+        e for e in edges if not e.get("pathhl") and e.get("label") == "subClassOf"
     ]
     # B -> C is not on a path that stops at B.
     assert off_path
