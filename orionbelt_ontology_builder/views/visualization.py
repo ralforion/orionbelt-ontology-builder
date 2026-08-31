@@ -64,6 +64,7 @@ from ..ui import (
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
+    theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_filter_changed,
@@ -2534,14 +2535,7 @@ def render_visualization():
             # Theme the graph (canvas + legend) to match the app, so it isn't a
             # white box in dark mode. Standard Streamlit dark/light colours are
             # used, derived from the active theme type (issue #62).
-            _gv_dark = False
-            try:
-                _gv_dark = st.context.theme.get("type") == "dark"
-            except Exception:
-                logger.debug(
-                    "Graph theme defaulting to light: st.context.theme unavailable",
-                    exc_info=True,
-                )
+            _gv_dark = theme_is_dark()
             _gv_theme = (
                 {"bg": "#0e1117", "panel": "#262730", "text": "#fafafa"}
                 if _gv_dark

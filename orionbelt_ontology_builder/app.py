@@ -24,7 +24,7 @@ from .ui import (  # noqa: F401
     _CUSTOM_CSS,
     _DARK_ACCENT,
     _DARK_CSS,
-    _DARK_TINT,
+    _DARK_FILL,
     _EDGE_ID_SEP,
     _FAVICON,
     _FILTER_KINDS,
@@ -225,6 +225,7 @@ from .ui import (  # noqa: F401
     set_active_language_pack,
     set_flash_message,
     show_message,
+    theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_drop_focus_seeds,
@@ -324,13 +325,8 @@ def _configure_page() -> None:
     # themes would otherwise revert it to red), then lighten tab/pill accents in
     # dark mode (injected after, so it wins there).
     st.markdown(_BRAND_CSS, unsafe_allow_html=True)
-    try:
-        if st.context.theme.get("type") == "dark":
-            st.markdown(_DARK_CSS, unsafe_allow_html=True)
-    except Exception:
-        logger.debug(
-            "Dark-theme CSS skipped: st.context.theme unavailable", exc_info=True
-        )
+    if theme_is_dark():
+        st.markdown(_DARK_CSS, unsafe_allow_html=True)
     if "app_started" not in st.session_state:
         st.session_state.app_started = True
         logger.info(f"{APP_NAME} v{APP_VERSION}")
