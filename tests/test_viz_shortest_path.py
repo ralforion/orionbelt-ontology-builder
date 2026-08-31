@@ -188,6 +188,44 @@ def test_the_cached_graph_is_rebuilt_when_the_path_changes():
     assert first != second
 
 
+def test_a_path_that_is_only_half_drawn_says_so_over_the_cap_notice(patch_ui):
+    """A capped graph always had something to say about its own size, and that
+    silenced this: the path came out in disconnected pieces with nothing on
+    screen accounting for it (reported against v1.27.1). This message is the
+    more specific of the two, and the only one that names the way out."""
+    patch_ui("GRAPH_MAX_NODES", 2)  # the A -> B -> C path cannot fit
+
+    notice = _render("Class: A", "Class: C").session_state["last_graph_data"]["notice"]
+
+    assert "entities on this path are not drawn" in notice
+    assert "Focus on this path" in notice
+
+
+def test_a_focus_keeps_its_own_advice_when_the_path_is_half_drawn(patch_ui):
+    """The path line replaces the generic cap line and nothing else. The focus
+    messages are sharper — one of them explains an empty canvas — and their
+    advice is about the focus the user is already in, which "use Focus on this
+    path" would talk straight over (Codex review of PR #377)."""
+    patch_ui("GRAPH_MAX_NODES", 2)
+    at = _render("Class: A", "Class: C")
+
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: A", "Class: B", "Class: C"]
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    notice = at.session_state["last_graph_data"]["notice"]
+    assert "focus" in notice.lower()
+    assert "Focus on this path" not in notice
+
+
+def test_a_path_drawn_in_full_leaves_the_graph_notice_alone():
+    """Nothing is missing from the path, so there is nothing for it to say."""
+    notice = _render("Class: A", "Class: C").session_state["last_graph_data"]["notice"]
+
+    assert "entities on this path" not in notice
+
+
 # --- what the panel says ----------------------------------------------------
 
 
