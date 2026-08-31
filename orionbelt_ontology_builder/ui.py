@@ -263,17 +263,18 @@ _BRAND_CSS = f"""
         background-color: {_BRAND} !important;
         border-color: {_BRAND} !important;
     }}
-    /* Active segmented-control pill and tab */
-    [data-testid="stBaseButton-segmented_controlActive"] {{
-        color: {_BRAND} !important;
+    /* Active segmented-control pill (the page tab pickers). Selected by ARIA
+       state rather than by a testid: the testid this used to name,
+       ``stBaseButton-segmented_controlActive``, is not on the button in
+       Streamlit 1.62, so the rule matched nothing and went unnoticed — worth
+       re-checking in the DOM after a Streamlit upgrade (issue #368).
+       No ``color`` here: Streamlit paints the active label with the configured
+       primaryColor, which is the brand navy and reads at 12.6:1 on a light
+       background. Dark backgrounds are where that fails, and _DARK_CSS below
+       overrides it. */
+    button[data-variant="segmented_control"][aria-checked="true"] {{
         border-color: {_BRAND} !important;
         background-color: {_BRAND_TINT} !important;
-    }}
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
-        color: {_BRAND} !important;
-    }}
-    .stTabs [data-baseweb="tab-highlight"] {{
-        background-color: {_BRAND} !important;
     }}
     /* Slider thumb + its floating value label */
     [data-testid="stSlider"] [role="slider"] {{
@@ -302,16 +303,14 @@ _DARK_ACCENT = "#6EA8FE"
 _DARK_TINT = "rgba(110, 168, 254, 0.15)"
 _DARK_CSS = f"""
 <style>
-    [data-testid="stBaseButton-segmented_controlActive"] {{
+    /* The brand navy Streamlit puts on the active label is 1.48:1 against
+       Streamlit's own dark background and 1.61:1 against the darker custom one
+       in issue #368 — the selected tab was the single unreadable label on the
+       page. The accent below is 7:1 and 8.5:1 on those two. */
+    button[data-variant="segmented_control"][aria-checked="true"] {{
         color: {_DARK_ACCENT} !important;
         border-color: {_DARK_ACCENT} !important;
         background-color: {_DARK_TINT} !important;
-    }}
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
-        color: {_DARK_ACCENT} !important;
-    }}
-    .stTabs [data-baseweb="tab-highlight"] {{
-        background-color: {_DARK_ACCENT} !important;
     }}
     /* Text/indicator accents from _BRAND_CSS that are too dark on a dark
        backdrop: the slider value label and the multiselect focus outline.
@@ -324,6 +323,64 @@ _DARK_CSS = f"""
     }}
 </style>
 """
+
+
+#: A background counts as dark when white text reads better on it than black
+#: does. That is where the two contrast ratios cross, at a relative luminance of
+#: 0.179 by the W3C formula.
+_DARK_BACKGROUND_LUMINANCE = 0.179
+
+
+def _relative_luminance(colour: str) -> float | None:
+    """The W3C relative luminance of a ``#rgb`` or ``#rrggbb`` colour.
+
+    ``None`` for anything this cannot read, so a caller can fall back rather
+    than treat an unparsable colour as black.
+    """
+    text = colour.strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(channel * 2 for channel in text)
+    if len(text) != 6:
+        return None
+    try:
+        channels = [int(text[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    except ValueError:
+        return None
+    linear = [
+        c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def theme_is_dark() -> bool:
+    """Is the app being drawn on a dark background?
+
+    ``st.context.theme`` reports the theme's *base*, and a config.toml that
+    overrides only colours has no base — so an app themed to a near-black
+    background still reports ``light``, the dark styling never loads, and the
+    navy accents land on black (issue #368). Where the type says light, the
+    configured background colour is the better witness, and it is a colour, so
+    it can simply be measured.
+
+    Both lookups are guarded: ``st.context`` is unavailable outside a script
+    run, and the option is absent unless a theme sets it.
+    """
+    try:
+        if st.context.theme.get("type") == "dark":
+            return True
+    except Exception:  # theme detection is cosmetic, never fatal
+        logger.debug(
+            "Theme type unavailable; reading the configured colour", exc_info=True
+        )
+    try:
+        background = st.get_option("theme.backgroundColor")
+    except Exception:  # as above
+        logger.debug("Theme background unavailable; assuming light", exc_info=True)
+        return False
+    if not background:
+        return False
+    luminance = _relative_luminance(str(background))
+    return luminance is not None and luminance < _DARK_BACKGROUND_LUMINANCE
 
 
 def get_ontology_manager_class():

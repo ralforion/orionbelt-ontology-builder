@@ -30,7 +30,12 @@ def test_brand_css_forces_the_brand_colour_on_every_accent_widget():
         'data-testid="stSliderThumbValue"',  # slider value label
         'data-testid="stMultiSelect"',  # multiselect chips + focus border
         'data-baseweb="tag"',  # the selected chips themselves
-        ".stTabs",  # selected tab
+        # The active pill of a segmented control, which is how every page picker
+        # on this app is drawn. Named by its ARIA state: the testid this rule
+        # used to use is not on the button in Streamlit 1.62, so it quietly
+        # matched nothing (issue #368). Worth re-checking in the DOM whenever
+        # the Streamlit pin moves.
+        'button[data-variant="segmented_control"][aria-checked="true"]',
     ]
     missing = [h for h in required_hooks if h not in css]
     assert not missing, f"_BRAND_CSS no longer styles: {missing}"
@@ -46,5 +51,9 @@ def test_dark_css_relightens_text_and_indicator_accents():
     for hook in [
         'data-testid="stSliderThumbValue"',
         'data-testid="stMultiSelect"',
+        # The active pill's label: Streamlit paints it with the configured
+        # primaryColor, and the brand navy is 1.48:1 on Streamlit's dark
+        # background — unreadable, and the reason for issue #368.
+        'button[data-variant="segmented_control"][aria-checked="true"]',
     ]:
         assert hook in dark, f"_DARK_CSS missing a dark override for {hook}"
