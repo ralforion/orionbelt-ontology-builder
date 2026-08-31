@@ -6,7 +6,24 @@ on:
   pull_request:
     branches: [main]
 
+# Nothing in CI writes to the repository: it lints, type checks and runs the
+# suite. Scopes a job actually needs are granted on that job, never here.
+permissions:
+  contents: read
+
 jobs:
+  # Every `uses:` in every workflow must name an immutable commit SHA whose
+  # version comment really is the release that SHA was cut from. See the header
+  # of the script for what that buys and what it deliberately does not.
+  pins:
+    name: pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify every Action is pinned to its named release
+        run: ./scripts/check-action-pins.sh
+
   check:
     runs-on: ubuntu-latest
     strategy:
@@ -22,7 +39,7 @@ jobs:
         python: ["3.12", "3.14"]
     name: check (py${{ matrix.python }})
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # python-version sets UV_PYTHON, binding every uv command below to the
       # matrix interpreter: uv is otherwise free to pick any python satisfying
@@ -30,7 +47,7 @@ jobs:
       # one it names. It also feeds setup-uv's cache key, which would otherwise
       # be computed from the runner's system python and so collide across legs.
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
           python-version: ${{ matrix.python }}
@@ -68,7 +85,7 @@ jobs:
   desktop-extra:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Qt GUI runtime libraries
         run: |
@@ -78,7 +95,7 @@ jobs:
             libfontconfig1 libfreetype6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
 

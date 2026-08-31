@@ -8,6 +8,10 @@ on:
     tags: ["v*.*.*"]
   workflow_dispatch:
 
+# Read-only by default; the publish job below adds the one scope it needs.
+permissions:
+  contents: read
+
 jobs:
   pypi-publish:
     runs-on: ubuntu-latest
@@ -17,12 +21,21 @@ jobs:
       name: pypi
       url: https://pypi.org/project/orionbelt-ontology-builder/
     permissions:
+      contents: read # checkout; a job-level block sets every unlisted scope to none
       id-token: write # required for Trusted Publishing
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Before any other action runs: an action that has already executed could
+      # have rewritten the workspace, this script included, so a verifier placed
+      # after it would only be checking whatever that action left behind.
+      # Checkout itself runs unverified and has to, since nothing can be checked
+      # before the tree it fetches exists.
+      - name: Verify every Action is pinned to its named release
+        run: ./scripts/check-action-pins.sh
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -36,5 +49,9 @@ jobs:
           python -m pip install --upgrade twine
           python -m twine check dist/*
 
+      # Pinned to a commit rather than the `release/v1` branch this used to
+      # track: that branch was repointed at each new v1 release, which is
+      # exactly the mutability the pin is here to remove. Dependabot bumps the
+      # SHA and the comment together.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

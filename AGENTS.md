@@ -78,6 +78,15 @@ and the CI matrix in `.github/workflows/ci.yml` must agree, and
   missed.
 - Code is reviewed with OpenAI Codex — keep changes clean and minimal.
 - Match the surrounding style; add tests under `tests/` for new engine behavior.
+- **GitHub Actions are pinned to commit SHAs**, each with a `# vX.Y.Z` comment
+  naming the exact patch release it came from. Never write `uses: owner/repo@v7`.
+  Resolve a SHA with `git ls-remote https://github.com/owner/repo 'refs/tags/vX.Y.Z^{}'`,
+  and run `./scripts/check-action-pins.sh` (`--offline` skips the upstream
+  lookups) before pushing. CI enforces it as the `pins` job, and both release
+  workflows run it as the first step after checkout. Adding an action from a new
+  owner also means adding that owner to `ALLOWED_OWNERS` in the script, which is
+  a deliberate decision rather than a formality. See the README's Development
+  section for the reasoning.
 
 ## Deployment
 
