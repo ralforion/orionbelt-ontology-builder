@@ -919,11 +919,6 @@ def render_visualization():
         # sits beside the Filter Classes expander so it doesn't cost the graph a
         # whole row; the empty state is a placeholder (clearable), not a "—" row.
         _find_id: str | None = None
-        # Whether that target is a class. Class node ids carry no prefix, so the
-        # kind cannot be read back off the id the way the others can, and the
-        # class loop's own guard needs it: an emptied filter would otherwise skip
-        # the loop before the per-node bypass could run (issue #234 review).
-        _find_is_class = False
         focus_seed_ids: list = []
         # Declared with the rest, not left to the branch that draws the picker:
         # with focus mode on and every focusable type switched off, that branch
@@ -957,9 +952,6 @@ def render_visualization():
                 )
                 if _find_choice:
                     _find_id = focus_targets.get(_find_choice)
-                    _find_is_class = bool(_find_id) and _find_choice.startswith(
-                        "Class: "
-                    )
                     # The target may currently be hidden — by one of the display
                     # filters, or pruned away in focus mode — in which case its
                     # node isn't in the graph and the JS focus() would silently
@@ -1626,7 +1618,9 @@ def render_visualization():
         # now reports a path that is only half drawn, where before the generic
         # cap line suppressed it — a cached v21 payload carries the suppressed
         # one and would keep showing it until something unrelated evicted it.
-        _graph_ver = 22
+        # 23: the entities on a path are pinned past the node cap (issue #378),
+        # so a cached v22 payload is a graph built without them.
+        _graph_ver = 23
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -1796,8 +1790,17 @@ def render_visualization():
             # way back from a node it kept to the resource to read (issue #272).
             annotatable: dict = {}
 
-            # Add classes as nodes (only selected classes)
-            if show_classes and (selected_classes or _find_is_class):
+            # Class node ids are bare uids with no kind prefix, so a pinned
+            # class cannot be spotted the way _pinned_kind_is spots the others —
+            # it takes the class list to tell. Worth the set: without it this
+            # loop does not run at all when the filter is empty, and a path
+            # pinned into a graph whose class loop never ran is a path with
+            # nowhere to be drawn (Codex review of PR #379). Subsumes the old
+            # `_find_is_class`, since the Find target is pinned too.
+            _pinned_class_ids = _pinned_ids & {_uid(c["uri"]) for c in classes}
+
+            # Add classes as nodes (only selected ones, plus anything pinned)
+            if show_classes and (selected_classes or _pinned_class_ids):
                 for cls in prioritise_pinned(
                     classes, lambda c: _uid(c["uri"]), _pinned_ids
                 ):

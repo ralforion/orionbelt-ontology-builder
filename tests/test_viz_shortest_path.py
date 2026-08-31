@@ -204,6 +204,32 @@ def test_the_whole_path_is_drawn_even_when_the_cap_cannot_hold_it(patch_ui):
     assert len(_highlighted_edges(edges)) == 2
 
 
+def test_a_path_is_drawn_when_the_class_filter_is_empty():
+    """Pinning a class is no use if the loop that builds classes never runs.
+
+    Its gate opened for a non-empty filter or for a Find target that was a
+    class, and a pinned class satisfied neither — class node ids carry no kind
+    prefix, so nothing recognised them. With the filter emptied the graph came
+    out with no nodes at all and the path had nowhere to be drawn (Codex review
+    of PR #379).
+    """
+    at = _render("Class: A", "Class: C")
+    # The filter emptied, with the reveal already marked done so nothing
+    # re-adds the classes behind the test's back.
+    uris = {c["uri"] for c in at.session_state.ontology.get_classes()}
+    at.session_state["_viz_cfg_selected_class_uris"] = []
+    at.session_state["_viz_cfg_known_class_uris"] = uris
+    at.session_state["_viz_find_seq"] = 1
+    at.session_state["_viz_find_revealed_seq"] = 1
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    nodes, edges = _graph(at)
+    # Only the path: the filter still hides everything it was hiding.
+    assert {n["label"] for n in nodes} == {"A", "B", "C"}
+    assert len(_highlighted_edges(edges)) == 2
+
+
 def test_a_pinned_path_does_not_lift_the_cap_for_everything_else(patch_ui):
     """The cap is what protects the browser. Pinning buys the path its own
     nodes, not a bigger graph: D is unrelated and stays out."""
