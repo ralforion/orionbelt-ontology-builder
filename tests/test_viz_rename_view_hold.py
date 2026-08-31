@@ -134,14 +134,7 @@ def graph_args(monkeypatch):
 
 
 def _run(at):
-    """Run the page again. A single-select ``st.segmented_control`` reads back
-    as a plain string, which Streamlit refuses when replaying widget state, so
-    each button group is handed the list form first (see
-    test_viz_new_class_hidden.py)."""
-    for group in at.get("button_group"):
-        value = group.value
-        if not isinstance(value, list):
-            group.set_value([value])
+    """Run the page again."""
     at.run(timeout=300)
     assert not at.exception, at.exception
     return at

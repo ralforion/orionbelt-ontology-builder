@@ -252,12 +252,7 @@ def _page():
 
 
 def _rerun(at):
-    """Run the page again; see tests/test_viz_new_class_hidden.py for the
-    button-group shim this needs."""
-    for group in at.get("button_group"):
-        value = group.value
-        if not isinstance(value, list):
-            group.set_value([value])
+    """Run the page again."""
     at.run(timeout=300)
     assert not at.exception, at.exception
     return at

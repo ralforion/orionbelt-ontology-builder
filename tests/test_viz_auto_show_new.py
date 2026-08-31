@@ -211,10 +211,6 @@ def _script():
 
 
 def _rerun(at):
-    for group in at.get("button_group"):
-        value = group.value
-        if not isinstance(value, list):
-            group.set_value([value])
     at.run(timeout=300)
     assert not at.exception, at.exception
     return at
