@@ -1307,10 +1307,20 @@ def render_visualization():
             if r["node_kind"] != "property"
         }
         path_labels = {key: label for label, key in path_choices.items()}
+        # What the pickers hold has to outlive them. They are widgets inside the
+        # panel, and Streamlit drops a widget's state as soon as it stops being
+        # rendered, so switching the panel off and on again came back empty and
+        # the pair had to be picked from scratch (issue #360). These two keys are
+        # written after each render and seed the widgets on the next one.
+        _PATH_PICK_KEYS = (
+            ("viz_path_source", "_viz_cfg_path_source"),
+            ("viz_path_target", "_viz_cfg_path_target"),
+        )
         # A pick whose entity is gone — deleted, or its type toggled off — is no
         # longer an option, and Streamlit would otherwise carry the stale label
-        # into a widget that cannot show it.
-        for _pkey in ("viz_path_source", "viz_path_target"):
+        # into a widget that cannot show it. The remembered copy goes with it,
+        # or the entity would come back the next time the panel is opened.
+        for _pkey in (key for pair in _PATH_PICK_KEYS for key in pair):
             if st.session_state.get(_pkey) not in path_choices:
                 st.session_state.pop(_pkey, None)
 
@@ -1328,6 +1338,21 @@ def render_visualization():
         # goes on its own.
         if path_panel:
             with st.expander("Shortest path between two entities", expanded=False):
+                # Put the last pair back into the pickers. Written to the
+                # widgets' own keys, and only where they have none: Streamlit
+                # prefers a widget's stored state over anything passed in, so
+                # this seeds a picker that has just been rebuilt without ever
+                # overriding one the user is holding. Seeding by session state
+                # rather than by an ``index`` keeps ``index=None`` below, which
+                # is what makes these two clearable (tests/
+                # test_clearable_required_dropdowns.py).
+                for _widget_key, _remember_key in _PATH_PICK_KEYS:
+                    if _widget_key in st.session_state:
+                        continue
+                    _remembered = st.session_state.get(_remember_key)
+                    if _remembered in path_choices:
+                        st.session_state[_widget_key] = _remembered
+
                 _psrc_col, _ptgt_col = st.columns(2)
                 with _psrc_col:
                     _path_source = st.selectbox(
@@ -1352,6 +1377,21 @@ def render_visualization():
                         help="The path is undirected — it answers 'how are these "
                         "two related', so it reads a link either way round.",
                     )
+
+                # Remembered for the next time the panel is opened. Written
+                # every render rather than on change: the widgets' own state is
+                # the live value while the panel is up, and this only has to be
+                # right at the moment the panel goes away. A picker that has been
+                # cleared drops its key rather than remembering a None, so
+                # "nothing remembered" is one state and not two.
+                for _remember_key, _picked in (
+                    ("_viz_cfg_path_source", _path_source),
+                    ("_viz_cfg_path_target", _path_target),
+                ):
+                    if _picked:
+                        st.session_state[_remember_key] = _picked
+                    else:
+                        st.session_state.pop(_remember_key, None)
 
                 _src_key = path_choices.get(_path_source)
                 _tgt_key = path_choices.get(_path_target)
