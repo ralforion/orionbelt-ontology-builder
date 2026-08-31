@@ -255,6 +255,66 @@ def test_picking_an_example_remounts_the_editor():
     assert at.session_state["sparql_query_text"] == EXAMPLE_QUERIES["Class hierarchy"]
 
 
+def _nonce(at) -> int:
+    """The editor's remount counter, which does not exist until it first moves."""
+    key = "sparql_editor_nonce"
+    return at.session_state[key] if key in at.session_state else 0
+
+
+def test_an_example_the_editor_already_shows_is_not_reloaded():
+    """Picking an example whose text is already in the editor has nothing to
+    load, and remounting for it would cost a fresh component iframe and throw
+    away a result that still answers that very query (issue #356)."""
+    at = _run(EXAMPLE_QUERIES["Class hierarchy"], click=True)
+    before = _nonce(at)
+    assert "sparql_last_result" in at.session_state
+
+    at.selectbox[0].select("Class hierarchy").run(timeout=120)
+    assert not at.exception, at.exception
+    assert _nonce(at) == before
+    assert "sparql_last_result" in at.session_state
+
+
+def test_the_plain_editor_is_a_text_area_and_needs_no_remount():
+    """The plain box takes its content straight from session state, so loading
+    an example into it does not have to remount anything (issue #356)."""
+    at = _run("", click=False)
+    assert not at.get("text_area"), "the component editor is the default"
+
+    at.toggle(key="sparql_plain_editor").set_value(True).run(timeout=120)
+    assert not at.exception, at.exception
+    assert at.text_area(key="sparql_query_box") is not None
+    before = _nonce(at)
+
+    at.selectbox[0].select("Class hierarchy").run(timeout=120)
+    assert not at.exception, at.exception
+    assert at.session_state["sparql_query_text"] == EXAMPLE_QUERIES["Class hierarchy"]
+    assert (
+        at.text_area(key="sparql_query_box").value == EXAMPLE_QUERIES["Class hierarchy"]
+    )
+    assert _nonce(at) == before
+
+
+def test_the_query_survives_switching_editors_both_ways():
+    """The two editors are different widgets, and a widget's state goes away the
+    moment it stops being rendered — so neither may own the query (issue #356)."""
+    at = _run("", click=False)
+    at.selectbox[0].select("Class hierarchy").run(timeout=120)
+    written = EXAMPLE_QUERIES["Class hierarchy"]
+
+    at.toggle(key="sparql_plain_editor").set_value(True).run(timeout=120)
+    assert at.text_area(key="sparql_query_box").value == written
+    assert at.session_state["sparql_query_text"] == written
+
+    at.toggle(key="sparql_plain_editor").set_value(False).run(timeout=120)
+    assert at.session_state["sparql_query_text"] == written
+
+    at.toggle(key="sparql_plain_editor").set_value(True).run(timeout=120)
+    assert not at.exception, at.exception
+    assert at.text_area(key="sparql_query_box").value == written
+    assert at.session_state["sparql_query_text"] == written
+
+
 def test_the_page_still_works_without_the_editor_component(monkeypatch):
     """The editor is a nicety; querying is the feature. If streamlit-ace cannot
     be imported the page must still render and run queries."""

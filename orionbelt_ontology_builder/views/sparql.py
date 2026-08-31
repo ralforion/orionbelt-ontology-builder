@@ -69,6 +69,21 @@ WHERE {
 }
 
 _QUERY_KEY = "sparql_query_text"
+#: Swaps the Ace editor for a plain text area. Ace is a Streamlit component,
+#: which means an iframe the browser loads on its own, and picking an example
+#: remounts it (see ``_EDITOR_NONCE``) — a fresh iframe refetching about a
+#: megabyte of editor, served without a cache header that would let the browser
+#: keep it. Where that download outruns the three seconds Streamlit waits for a
+#: component to report in, the page says it is having trouble loading the
+#: editor: alarming, and about a component the query does not need at all. The
+#: plain box has nothing to load and nothing to remount (issue #356).
+_PLAIN_KEY = "sparql_plain_editor"
+#: The plain box's own widget key. It is deliberately not ``_QUERY_KEY``: a
+#: widget's state is dropped as soon as it stops being rendered, so with the two
+#: editors sharing one key, switching from the plain box to Ace threw the query
+#: away. ``_QUERY_KEY`` is the source of truth and belongs to neither widget;
+#: each editor seeds itself from it and writes back to it.
+_BOX_KEY = "sparql_query_box"
 #: Bumped to force a fresh editor instance. The Ace component treats ``value``
 #: as initial content, so loading an example has to remount it under a new key
 #: or the editor keeps showing what the user had before.
@@ -84,11 +99,28 @@ def _load_example() -> None:
     session-state key can still be written for the coming rerun.
     """
     name = st.session_state.get("sparql_example")
-    if name and name in EXAMPLE_QUERIES:
-        st.session_state[_QUERY_KEY] = EXAMPLE_QUERIES[name]
+    if not name or name not in EXAMPLE_QUERIES:
+        return
+    query = EXAMPLE_QUERIES[name]
+    if st.session_state.get(_QUERY_KEY) == query:
+        # Already on screen: nothing to load, and a result still answering this
+        # very query is worth keeping (issue #356).
+        return
+    st.session_state[_QUERY_KEY] = query
+    if _BOX_KEY in st.session_state:
+        # The plain box is on screen and holds its own state. A callback is the
+        # one place a widget's key can still be written for the coming rerun.
+        st.session_state[_BOX_KEY] = query
+    if st_ace is not None and not st.session_state.get(_PLAIN_KEY):
+        # Only Ace needs the remount: it takes ``value`` as initial content and
+        # ignores it afterwards, so a new key is the one way to change what it
+        # shows. That costs a new iframe refetching about a megabyte of editor
+        # the browser is not allowed to cache, so it is spent only when there is
+        # an Ace editor on screen to update. The plain box reads the text
+        # straight back out of session state (issue #356).
         st.session_state[_EDITOR_NONCE] = st.session_state.get(_EDITOR_NONCE, 0) + 1
-        st.session_state.pop(_RESULT_KEY, None)
-        st.session_state.pop(_ERROR_KEY, None)
+    st.session_state.pop(_RESULT_KEY, None)
+    st.session_state.pop(_ERROR_KEY, None)
 
 
 _EDITOR_HELP = (
@@ -138,20 +170,43 @@ def _render_editor() -> str:
     would submit the previous query. On, it commits after a short debounce, so
     what is on screen is what runs.
     """
-    st.caption("Query")
+    label_col, plain_col = st.columns([4, 1], vertical_alignment="bottom")
+    with label_col:
+        st.caption("Query")
+    with plain_col:
+        # Short-circuits when the component is not installed: there is no choice
+        # to offer then, and a toggle that changed nothing would be a lie.
+        plain = st_ace is None or st.toggle(
+            "Plain editor",
+            key=_PLAIN_KEY,
+            help=(
+                "Swap the highlighted editor for a plain text box. The "
+                "highlighted one is a separate component your browser loads, "
+                "and picking an example loads it again; on a slow connection "
+                "that can take long enough for a warning to appear. The plain "
+                "box loads nothing."
+            ),
+        )
     current = st.session_state.get(_QUERY_KEY, "")
-    if st_ace is None:
+    if plain:
+        # Seeded rather than passed as ``value``: on the runs after the first the
+        # box has its own state, which is what carries the user's typing, and
+        # only a fresh box (a first render, or one Ace has since replaced) should
+        # take the query from session state.
+        st.session_state.setdefault(_BOX_KEY, current)
         # Keyed container so the monospace rule in _CUSTOM_CSS reaches this one
         # text area without restyling every other text area in the app.
         with st.container(key="sparql_editor"):
-            return st.text_area(
+            edited = st.text_area(
                 "Query",
                 height=240,
-                key=_QUERY_KEY,
+                key=_BOX_KEY,
                 placeholder=_PLACEHOLDER,
                 help=_EDITOR_HELP,
                 label_visibility="collapsed",
             )
+        st.session_state[_QUERY_KEY] = edited
+        return edited
     edited = st_ace(
         value=current,
         placeholder=_PLACEHOLDER,
