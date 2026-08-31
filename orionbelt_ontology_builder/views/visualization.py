@@ -2432,11 +2432,20 @@ def render_visualization():
                         }
                         node["borderWidth"] = PATH_HIGHLIGHT_BORDER
                 _path_missing = len(_path_ids - {n["id"] for n in net.nodes})
-                if _path_missing and not graph_notice:
+                if _path_missing:
+                    # Said instead of whatever the graph had to say about its own
+                    # size, not only when it had nothing to say. The two have the
+                    # same cause — the view holds less than the ontology — but on
+                    # a graph at the node cap the generic line was always set
+                    # first, so this one never appeared: the path came out in
+                    # disconnected pieces with nothing on screen accounting for
+                    # it, which reads as a broken highlight rather than as a view
+                    # that does not hold all of it. This one also names the way
+                    # out, and it is the more specific of the two.
                     graph_notice = (
-                        f"{_path_missing} of the {len(_path_ids)} entities on the "
-                        f"path are not drawn, so the highlight is partial. Use "
-                        f"“Focus on this path” to bring all of it into view."
+                        f"{_path_missing} of the {len(_path_ids)} entities on this "
+                        f"path are not drawn, so the highlight is broken into "
+                        f"pieces. Use “Focus on this path” to see all of it."
                     )
 
             # Spread parallel edges so they don't overlap
