@@ -307,34 +307,47 @@ _BRAND_CSS = f"""
     }}
 </style>
 """
-#: Text and line accents on a dark backdrop: the active tab's label, the slider
-#: value, borders. The brand navy is 1.48:1 against Streamlit's dark background
-#: and cannot be read there; this is 7.8:1, and 8.5:1 against the darker custom
-#: theme in issue #368.
-_DARK_ACCENT = "#6EA8FE"
-_DARK_TINT = "rgba(110, 168, 254, 0.15)"
-#: Filled controls — a button, a checkbox, a radio dot, a slider thumb. They
-#: cannot take _DARK_ACCENT, because a filled control carries white text and
-#: white on that accent is 2.4:1. This is the brightest blue that still holds a
-#: white label: 4.6:1 for the label, and 4.1:1 for the control against the page,
-#: comfortably past the 3:1 WCAG asks of a control against its surroundings.
-_DARK_FILL = "#3B6FE0"
+#: Accent *text* on a dark backdrop: links, the slider value. The brand navy is
+#: 1.48:1 against Streamlit's dark background and cannot be read there at all;
+#: this is 4.35:1, which is as dark as text in this family can go and stay
+#: near the 4.5:1 AA asks of body text.
+_DARK_ACCENT = "#4275DE"
+#: Filled controls: a button, a checkbox, a radio dot, a slider thumb, and the
+#: active tab. One step darker than the text accent, which buys the white label
+#: they all carry 5.8:1 instead of 4.35:1, while the control itself still clears
+#: the 3:1 WCAG asks against its surroundings (3.26:1). The two are a step apart
+#: on purpose and read as one family; going darker still would take the link
+#: text down with it, since for a colour used both ways the two numbers move
+#: together.
+_DARK_FILL = "#3560C4"
 _DARK_CSS = f"""
 <style>
-    /* The active pill's label: Streamlit paints it with primaryColor, and the
-       brand navy is 1.48:1 on Streamlit's dark background and 1.61:1 on the
-       custom one in issue #368 — the single unreadable label on the page. The
-       accent is 7.8:1 and 8.5:1 on those two. */
+    /* The active pill is filled rather than written in the accent. Streamlit
+       paints its label with primaryColor, and the brand navy is 1.48:1 on
+       Streamlit's dark background — the single unreadable label on the page,
+       which is issue #368. Writing it in the accent fixed that but left the
+       selected tab dimmer than the two unselected ones beside it, which read at
+       18:1 in the theme's own white: the selected item looked like the weakest.
+       Filled, it is the strongest, it matches the button, and the accent is
+       never dim text — the tint below is left to the light theme. */
     button[data-variant="segmented_control"][aria-checked="true"] {{
-        color: {_DARK_ACCENT} !important;
-        border-color: {_DARK_ACCENT} !important;
-        background-color: {_DARK_TINT} !important;
+        color: #FFFFFF !important;
+        border-color: {_DARK_FILL} !important;
+        background-color: {_DARK_FILL} !important;
     }}
     [data-testid="stSliderThumbValue"] {{
         color: {_DARK_ACCENT} !important;
     }}
-    /* The filled controls, lightened together so they read as one family. They
-       keep their white labels, which is what stops them taking _DARK_ACCENT. */
+    /* Links, which Streamlit draws in a blue of its own (#3D9DF3) that belongs
+       to no other accent on the page. On the accent they read at 7.8:1 and look
+       like the rest of the theme. */
+    a,
+    a:visited {{
+        color: {_DARK_ACCENT} !important;
+    }}
+    /* The filled controls take the same accent as the text above: one blue for
+       the whole theme. They keep their white labels, which is half of what set
+       the colour — see _DARK_ACCENT. */
     [data-testid="stBaseButton-primary"] {{
         background-color: {_DARK_FILL} !important;
         border-color: {_DARK_FILL} !important;

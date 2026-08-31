@@ -45,7 +45,6 @@ def test_dark_css_relightens_every_accent_the_navy_is_too_dark_for():
     """
     dark = app._DARK_CSS
     assert app._DARK_ACCENT in dark
-    assert app._DARK_FILL in dark
 
     for hook in [
         'data-testid="stSliderThumbValue"',  # a text accent
@@ -55,16 +54,35 @@ def test_dark_css_relightens_every_accent_the_navy_is_too_dark_for():
         'label[data-testid="stRadioOption"][data-selected="true"]',
         '[data-testid="stSlider"] div:has(> [data-testid="stSliderThumbValue"])',
         'data-testid="stMultiSelectTagsContainer"',
+        # Links: Streamlit's own link blue belongs to no other accent here.
+        "a:visited",
     ]:
         assert hook in dark, f"_DARK_CSS missing a dark override for {hook}"
 
 
-def test_the_fill_and_the_text_accent_are_not_the_same_colour():
-    """They cannot be. A filled control carries white text, and white on the
-    text accent is 2.4:1; a blue dark enough to hold that label is too dark to
-    read as text itself. The split is the point, so it is asserted — and the
-    button, which carries a label, takes the fill rather than the accent."""
-    assert app._DARK_ACCENT != app._DARK_FILL
+def test_text_accents_and_filled_controls_take_their_own_blue():
+    """Two blues a step apart, on purpose. A filled control carries a white
+    label, which wants the darker one; text on the page wants the lighter one,
+    and for a colour used both ways those two demands move together — so one
+    colour cannot serve both without giving up 1.5:1 somewhere. The rules are
+    asserted by job, so a future edit cannot quietly swap them."""
     dark = app._DARK_CSS
-    button = dark[dark.index('[data-testid="stBaseButton-primary"]') :]
-    assert app._DARK_FILL in button[: button.index("}")]
+
+    def rule_for(selector):
+        rule = dark[dark.index(selector) :]
+        return rule[: rule.index("}")]
+
+    for selector in [
+        "a,",  # links
+        'data-testid="stSliderThumbValue"',  # the slider's value label
+    ]:
+        assert app._DARK_ACCENT in rule_for(selector), (
+            f"{selector} is not text-accented"
+        )
+
+    for selector in [
+        '[data-testid="stBaseButton-primary"]',
+        'button[data-variant="segmented_control"][aria-checked="true"]',  # a filled pill
+        '[data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid])',
+    ]:
+        assert app._DARK_FILL in rule_for(selector), f"{selector} is not filled"
