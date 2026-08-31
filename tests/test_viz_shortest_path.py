@@ -331,6 +331,62 @@ def test_nothing_is_highlighted_when_the_switch_is_off():
     assert all(n["color"]["border"] != PATH_HIGHLIGHT_COLOR for n in nodes)
 
 
+def _panel(at, shown):
+    """Show or hide the panel for the next run, and check that it moved.
+
+    The *config* key is what to set: the page copies it onto the switch's widget
+    key on every render (see the ``_viz_cfg`` loop), so setting the widget key
+    would be overwritten and the panel would never move — which is a way this
+    test can pass while proving nothing. Clicking the switch is no good either:
+    that fires the persist callback, which marks the settings dirty and mounts
+    the localStorage component, and that waits for a browser.
+    """
+    at.session_state["_viz_cfg_path_panel"] = shown
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    drawn = bool([b for b in at.button if b.label == "Focus on this path"])
+    assert drawn is shown, f"panel {'hidden' if shown else 'still drawn'}"
+    return at
+
+
+def test_the_pair_survives_the_panel_being_switched_off_and_on():
+    """The pickers are widgets inside the panel, and Streamlit drops a widget's
+    state as soon as it stops being rendered — so the pair used to have to be
+    chosen again every time the panel was reopened (issue #360)."""
+    at = _render("Class: A", "Class: C")
+    assert at.session_state["viz_path_source"] == "Class: A"
+
+    _panel(at, False)
+    _panel(at, True)
+
+    assert at.selectbox(key="viz_path_source").value == "Class: A"
+    assert at.selectbox(key="viz_path_target").value == "Class: C"
+
+
+def test_a_remembered_pick_whose_entity_is_gone_is_forgotten():
+    """The remembered copy outlives the widget, so it has to be pruned with it:
+    an entity that has since been deleted must not come back when the panel is
+    reopened."""
+    at = _render("Class: A", "Class: C")
+    assert at.session_state["_viz_cfg_path_source"] == "Class: A"
+
+    at.session_state.ontology.delete_class(
+        next(
+            c["uri"]
+            for c in at.session_state.ontology.get_classes()
+            if c["name"] == "A"
+        )
+    )
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    assert "_viz_cfg_path_source" not in at.session_state
+    # The picker itself comes back empty rather than naming a class that is gone.
+    assert at.selectbox(key="viz_path_source").value is None
+    # The other half of the pair is untouched — only the gone one is dropped.
+    assert at.session_state["_viz_cfg_path_target"] == "Class: C"
+
+
 def test_the_switch_is_offered_beside_the_display_options_switch():
     at = _render("", "")
     labels = [t.label for t in at.toggle]
