@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-ontology-builder"
-version = "1.26.2"
+version = "1.27.0"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
 # SPDX. Business Source License 1.1 is BUSL-1.1; BSL-1.0 is the Boost Software
@@ -75,7 +75,7 @@ gtk = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff==0.16.4",
+    "ruff==0.16.5",
     "mypy==2.3.1",
 ]
 
