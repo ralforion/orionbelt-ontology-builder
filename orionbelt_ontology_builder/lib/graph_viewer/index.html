@@ -449,7 +449,6 @@ function pathRingPoints(edge) {
 function drawPathRings(ctx, rings) {
     if (!network || !network.body) return;
     ctx.save();
-    ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     rings.forEach(function(ring) {
         var edge = network.body.edges[ring.id];
@@ -459,8 +458,15 @@ function drawPathRings(ctx, rings) {
         // A dashed link keeps its dashes: filling the gaps in would ring the
         // link as solid and lose what the dashes say (a restriction, a data
         // property, an annotation). [5, 5] is vis's own default pattern.
+        //
+        // Which is also why a dashed ring is capped square. A round cap spills
+        // half the line's width past each end of its dash, and the ring is
+        // wider than the gaps are long — so both ends of every gap would spill
+        // into it and meet, and the dashes the ring is preserving would be
+        // filled back in by the ring itself.
         var dashes = edge.options && edge.options.dashes;
         ctx.setLineDash(Array.isArray(dashes) ? dashes : (dashes ? [5, 5] : []));
+        ctx.lineCap = dashes ? 'butt' : 'round';
         ctx.strokeStyle = ring.color;
         ctx.lineWidth = ring.width + 2 * ring.border;
         ctx.beginPath();
