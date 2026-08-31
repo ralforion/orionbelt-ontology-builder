@@ -5512,6 +5512,14 @@ def render_add_annotation(ont, all_resources):
                     st.rerun()
 
 
+#: How many lines the text hierarchy will print before it stops.
+#:
+#: A backstop, not the fix: the expansion below is linear in subClassOf edges,
+#: so this is only reached by an ontology genuinely that large. 20,000 lines is
+#: about a megabyte of text, which ``st.code`` still shows without complaint.
+CLASS_TREE_MAX_LINES = 20_000
+
+
 def build_class_hierarchy_text(classes):
     """Render the class list as an indented subClassOf tree.
 
@@ -5524,6 +5532,16 @@ def build_class_hierarchy_text(classes):
     subClassOf cycle (e.g. A ⊑ B and B ⊑ A) terminates too. After the normal
     roots are walked, any class not yet emitted is walked as an extra root, so
     disconnected or wholly-cyclic components are shown rather than dropped.
+
+    A subClassOf graph is a DAG, not a tree, and printing it as one means a
+    class with two parents is reached by two paths — so expanding it under each
+    of them costs a second copy of everything below it. That compounds: a chain
+    of diamonds doubles per level, and 33 classes rendered 131,071 lines. One
+    real ontology produced 1.1 GB of text and took the browser down with it
+    (issue #371). So a class is expanded once. It is still listed under every
+    parent, because being a subclass of both is the fact the tree is drawing —
+    only the repeat of its subtree is withheld, and marked where anything was
+    actually withheld. That makes the output linear in subClassOf edges.
     """
     by_name = {}
     for c in classes:
@@ -5531,11 +5549,18 @@ def build_class_hierarchy_text(classes):
 
     lines = []
     emitted = set()  # classes shown as a real node (not just a cycle back-edge)
+    truncated = False
 
     def walk(start):
+        nonlocal truncated
         # Explicit stack of (name, level, ancestors-on-this-branch).
         stack = [(start, 0, frozenset())]
         while stack:
+            if len(lines) >= CLASS_TREE_MAX_LINES:
+                # Checked here rather than at the end: the point is not to build
+                # the text and then trim it, but never to build it.
+                truncated = True
+                return
             cls_name, level, path = stack.pop()
             cls = by_name.get(cls_name)
             if not cls:
@@ -5545,6 +5570,13 @@ def build_class_hierarchy_text(classes):
             if cls_name in path:
                 lines.append(f"{prefix}{cls['name']}{label}  (cycle)")
                 continue
+            if cls_name in emitted:
+                # Already expanded under another parent. Listed again, because
+                # it really is a subclass of this one too; the note is only
+                # added where there was a subtree to withhold.
+                note = "  (shown above)" if cls["children"] else ""
+                lines.append(f"{prefix}{cls['name']}{label}{note}")
+                continue
             lines.append(f"{prefix}{cls['name']}{label}")
             emitted.add(cls_name)
             child_path = path | {cls_name}
@@ -5553,13 +5585,29 @@ def build_class_hierarchy_text(classes):
                 stack.append((child, level + 1, child_path))
 
     for c in classes:
+        if truncated:
+            break
         if not c["parents"]:
             walk(c["name"])
     # Cover components that no root reaches (disconnected trees, all-cyclic
     # ontologies, multiple detached cycles).
     for c in classes:
+        if truncated:
+            break
         if c["name"] not in emitted:
             walk(c["name"])
+
+    if truncated:
+        # Said in the text itself: this is what the reader is looking at, and a
+        # tree that simply stopped would read as a tree that ends there.
+        left = len(by_name) - len(emitted)
+        lines.append("")
+        lines.append(
+            f"… stopped at {CLASS_TREE_MAX_LINES:,} lines. "
+            f"{left:,} of {len(by_name):,} classes are not shown. "
+            f"The Interactive Graph draws a subset of an ontology this size, "
+            f"and the Classes page lists all of it."
+        )
 
     return "\n".join(lines)
 

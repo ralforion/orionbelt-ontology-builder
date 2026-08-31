@@ -230,6 +230,33 @@ BAND_SWITCH_CSS = """<style>
 }
 </style>"""
 
+#: The "not everything is drawn" line above the canvas, and its dismiss button.
+#:
+#: It used to be an ``st.warning`` box: three lines of padding around one line of
+#: text, permanently, on every ontology past the node cap — which is where a user
+#: spends their time, so it was always there taking the room the graph wanted.
+#: Written as a caption with the warning glyph in front of it, it says the same
+#: thing in one line. The button beside it is stripped back to the glyph so the
+#: pair reads as one line rather than as a control bar.
+GRAPH_NOTICE_CSS = """<style>
+.st-key-viz_graph_notice [data-testid="stCaptionContainer"] {
+    margin-bottom: 0;
+}
+.st-key-viz_graph_notice [data-testid="stButton"] button {
+    border: none;
+    background: transparent;
+    padding: 0 0.25rem;
+    min-height: 0;
+    line-height: 1.2;
+    color: inherit;
+    opacity: 0.6;
+}
+.st-key-viz_graph_notice [data-testid="stButton"] button:hover {
+    opacity: 1;
+    color: inherit;
+}
+</style>"""
+
 
 def graph_overlay_css(dark: bool) -> str:
     """CSS that floats the graph page's panels over the canvas.
@@ -2555,8 +2582,32 @@ def render_visualization():
         # status used. Written on every render, not only on a rebuild: the slot
         # is reserved either way (issue #189), and the reason still holds while
         # the cached graph is reused.
-        if gdata and gdata.get("notice"):
-            status.warning(gdata["notice"], icon="⚠️")
+        #
+        # Dismissable, and remembered by its own text: an ontology past the node
+        # cap says this on every render, and once it has been read it is just the
+        # canvas being pushed down. Keyed by the text rather than by a flag so a
+        # notice that changes — a different count, or a different reason
+        # altogether — is shown again rather than swallowed by an earlier
+        # dismissal. Emptying the slot is safe where removing the element would
+        # not be: the placeholder stays either way, so the graph component below
+        # keeps its place in the element tree (issue #189).
+        _notice = (gdata or {}).get("notice") or ""
+        if _notice and st.session_state.get("_viz_notice_dismissed") != _notice:
+            st.html(GRAPH_NOTICE_CSS)
+            with status.container(key="viz_graph_notice"):
+                _notice_col, _dismiss_col = st.columns(
+                    [40, 1], vertical_alignment="center"
+                )
+                with _notice_col:
+                    st.caption(f"⚠️ {_notice}")
+                with _dismiss_col:
+                    if st.button(
+                        "✕",
+                        key="viz_notice_dismiss",
+                        help="Hide this. It comes back if what it says changes.",
+                    ):
+                        st.session_state["_viz_notice_dismissed"] = _notice
+                        st.rerun()
         # Recompute the note for the Node options label now that the focus
         # controls have rendered and the prune has run. One rerun when it
         # actually changes, so the label is never a step behind what the graph
