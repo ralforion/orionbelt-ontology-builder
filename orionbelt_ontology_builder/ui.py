@@ -363,19 +363,49 @@ _DARK_BACKGROUND_LUMINANCE = 0.179
 
 
 def _relative_luminance(colour: str) -> float | None:
-    """The W3C relative luminance of a ``#rgb`` or ``#rrggbb`` colour.
+    """The W3C relative luminance of a CSS colour, or ``None`` if unreadable.
 
-    ``None`` for anything this cannot read, so a caller can fall back rather
-    than treat an unparsable colour as black.
+    Streamlit hands a configured theme colour to the browser untouched, so it
+    can be any CSS colour at all: verified against 1.62, ``rgb(3,4,5)``,
+    ``#030405ff`` and ``black`` all render. The hex forms and the ``rgb()``
+    family are read here; a colour name, ``hsl()``, ``oklch()`` and the rest are
+    not, and deliberately so — knowing them all means carrying CSS's 148 colour
+    names and its colour spaces around. ``None`` is the "cannot say" answer, and
+    :func:`theme_is_dark` falls back to the theme's reported type rather than
+    guessing from a colour it did not understand.
+
+    Alpha is accepted and ignored: what sits behind a translucent background is
+    the browser's, not ours, and the opaque colour is the better guess of the
+    two.
     """
-    text = colour.strip().lstrip("#")
-    if len(text) == 3:
-        text = "".join(channel * 2 for channel in text)
-    if len(text) != 6:
-        return None
-    try:
-        channels = [int(text[i : i + 2], 16) / 255 for i in (0, 2, 4)]
-    except ValueError:
+    text = colour.strip().lower()
+    if text.startswith("#"):
+        digits = text[1:]
+        if len(digits) in (3, 4):  # #rgb, #rgba
+            digits = "".join(digit * 2 for digit in digits[:3])
+        elif len(digits) in (6, 8):  # #rrggbb, #rrggbbaa
+            digits = digits[:6]
+        else:
+            return None
+        try:
+            channels = [int(digits[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+        except ValueError:
+            return None
+    elif text.startswith(("rgb(", "rgba(")) and text.endswith(")"):
+        # Commas or spaces, and a "/ alpha" tail: rgb(3, 4, 5), rgb(3 4 5) and
+        # rgb(3 4 5 / 50%) are all the same colour. Percentages are not read.
+        parts = (
+            text[text.index("(") + 1 : -1].replace(",", " ").replace("/", " ").split()
+        )
+        if len(parts) < 3:
+            return None
+        try:
+            channels = [float(part) / 255 for part in parts[:3]]
+        except ValueError:
+            return None
+        if any(not 0.0 <= channel <= 1.0 for channel in channels):
+            return None
+    else:
         return None
     linear = [
         c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
