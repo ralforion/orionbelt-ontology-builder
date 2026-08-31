@@ -201,6 +201,24 @@ def test_a_path_that_is_only_half_drawn_says_so_over_the_cap_notice(patch_ui):
     assert "Focus on this path" in notice
 
 
+def test_a_focus_keeps_its_own_advice_when_the_path_is_half_drawn(patch_ui):
+    """The path line replaces the generic cap line and nothing else. The focus
+    messages are sharper — one of them explains an empty canvas — and their
+    advice is about the focus the user is already in, which "use Focus on this
+    path" would talk straight over (Codex review of PR #377)."""
+    patch_ui("GRAPH_MAX_NODES", 2)
+    at = _render("Class: A", "Class: C")
+
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: A", "Class: B", "Class: C"]
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    notice = at.session_state["last_graph_data"]["notice"]
+    assert "focus" in notice.lower()
+    assert "Focus on this path" not in notice
+
+
 def test_a_path_drawn_in_full_leaves_the_graph_notice_alone():
     """Nothing is missing from the path, so there is nothing for it to say."""
     notice = _render("Class: A", "Class: C").session_state["last_graph_data"]["notice"]
