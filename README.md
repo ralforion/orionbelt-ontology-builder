@@ -519,10 +519,55 @@ orionbelt-ontology-builder/
 │   ├── assets/                         # Logos and screenshots
 │   └── favicon.png
 ├── pyproject.toml                      # Project metadata
+├── scripts/                            # Repo tooling (check-action-pins.sh)
 └── tests/                              # pytest suite
 ```
 
 Dependencies: streamlit, rdflib, owlrl, networkx, streamlit-ace.
+
+---
+
+## Development
+
+### Pinned GitHub Actions
+
+Every `uses:` in `.github/workflows/` names a 40-character commit SHA followed
+by a comment giving the exact release it came from:
+
+```yaml
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+A tag such as `v7` is a movable label, so it runs whichever commit the action's
+owner has pointed it at by the time the job starts. A SHA cannot move. The
+comment is what makes the line readable again, and `scripts/check-action-pins.sh`
+is what keeps it honest: it walks every workflow and requires a SHA, an owner on
+its `ALLOWED_OWNERS` list, and a comment naming an exact patch release, then
+resolves that tag upstream with `git ls-remote` and fails if the commit it names
+is not the one pinned. Without it, a pull request could swap the hash for one
+taken from a fork, leave `# v7.0.1` in place, and read as a routine Dependabot
+bump.
+
+```bash
+./scripts/check-action-pins.sh            # every check, including the upstream lookups
+./scripts/check-action-pins.sh --offline  # SHA and comment format only, no network
+```
+
+CI runs it as the `pins` job, and both release workflows run it as the first
+step after checkout, before any other action gets to touch the workspace.
+
+The comment must be a patch release, never `# v7`: a major tag moves with every
+upstream release, so checking against one would fail a pin that is still good.
+Dependabot updates the SHA and the comment together, so routine bumps need no
+manual work. Adding an owner to `ALLOWED_OWNERS` is a deliberate decision — a
+pin verifying against its own tag says nothing about whether that action belongs
+in this repo.
+
+What the check does *not* do: it does not judge whether an action is safe, only
+that the hash matches its own label, so a pinned SHA of a genuinely malicious
+release passes. It does not stop a downgrade to a real but ancient version. And
+`actions/checkout` necessarily runs before the check, since nothing can be
+verified before the tree it fetches exists.
 
 ---
 

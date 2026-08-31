@@ -51,6 +51,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# No job here writes to the repository: the Hub push and the description sync
+# authenticate with DOCKERHUB_TOKEN, not GITHUB_TOKEN. A scope any future job
+# needs belongs on that job, not up here.
+permissions:
+  contents: read
+
 env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orionbelt-ontology-builder
 
@@ -65,8 +71,12 @@ jobs:
       docker: ${{ steps.filter.outputs.docker }}
       readme: ${{ steps.filter.outputs.readme }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify every Action is pinned to its named release
+        run: ./scripts/check-action-pins.sh
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -97,15 +107,18 @@ jobs:
       && (github.event_name == 'workflow_dispatch'
           || (github.event_name == 'pull_request' && needs.changes.outputs.docker == 'true')) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify every Action is pinned to its named release
+        run: ./scripts/check-action-pins.sh
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       # linux/amd64 only: it matches the runner, so this needs no QEMU and can
       # load the result for the smoke test. The release build covers both arches.
       - name: Build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64
@@ -152,7 +165,10 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify every Action is pinned to its named release
+        run: ./scripts/check-action-pins.sh
 
       # linux/amd64 -> linux-amd64, for cache scopes and artifact names (neither
       # accepts a slash).
@@ -160,10 +176,10 @@ jobs:
         run: echo "PLATFORM_SLUG=${{ matrix.platform }}" | tr / - >> "$GITHUB_ENV"
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -172,7 +188,7 @@ jobs:
       # applied once, to the manifest list, by the merge job below.
       - name: Derive labels
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           labels: |
@@ -181,7 +197,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -208,7 +224,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ env.PLATFORM_SLUG }}
           path: /tmp/digests/*
@@ -216,29 +232,31 @@ jobs:
           retention-days: 1
 
   manifest:
+    # No pin check here: this job checks nothing out, and it runs only after
+    # `image`, which verified the pins before it built anything.
     needs: image
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Derive tags
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -290,10 +308,13 @@ jobs:
           || startsWith(github.ref, 'refs/tags/v')
           || needs.changes.outputs.readme == 'true') }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify every Action is pinned to its named release
+        run: ./scripts/check-action-pins.sh
 
       - name: Sync Docker Hub description
-        uses: peter-evans/dockerhub-description@v5
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
