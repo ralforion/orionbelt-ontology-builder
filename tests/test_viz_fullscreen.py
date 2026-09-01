@@ -97,7 +97,8 @@ def test_the_fullscreen_state_lives_on_the_page():
     assert f"var FS_CLASS = '{GRAPH_FS_CLASS}'" in src
     assert GRAPH_FS_CLASS in graph_fullscreen_css(dark=False)
     # And the button reads it back on mount rather than assuming "not fullscreen".
-    assert "setFullscreenIcon(stageOn())" in src
+    assert "setFullscreenIcon(on)" in src
+    assert "syncFullscreenState()" in src
 
 
 def test_only_our_own_page_fullscreen_is_followed():
@@ -131,6 +132,22 @@ def test_selections_reach_python_while_fullscreen():
         assert "setComponentValue" not in handler, (
             f"{event} must not send to Streamlit directly"
         )
+
+
+def test_the_native_exit_hook_is_reclaimed_by_every_mount():
+    """The desktop host calls a hook on the top window when its own window
+    leaves fullscreen (Esc, the green button, the Window menu). The hook is a
+    function of the document that installed it, and fullscreen now outlives
+    that document — so a mount that finds the page still fullscreen has to
+    claim the hook back, or the chrome stays hidden with nobody to put it back.
+    """
+    src = _VIEWER.read_text(encoding="utf-8")
+    sync = src[src.index("function syncFullscreenState(") :].split("\n}", 1)[0]
+    assert "installNativeFsExitHook()" in sync
+    assert "setNativeFsExitHook(null)" in sync
+    # ...and that is what a fresh render runs.
+    assert "syncFullscreenState();" in src
+    assert "setFullscreenIcon(stageOn())" not in src
 
 
 def test_the_page_listener_is_removed_with_the_document():

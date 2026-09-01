@@ -501,6 +501,9 @@ def test_the_switch_is_remembered_across_sessions():
     from orionbelt_ontology_builder.ui import _VIZ_PERSIST_KEYS
 
     assert "path_panel" in _VIZ_PERSIST_KEYS
+    # The Find & focus switch is presented as one of the same set, so it is
+    # remembered like one (issue #381).
+    assert "find_row_open" in _VIZ_PERSIST_KEYS
 
 
 def test_turning_the_switch_off_rebuilds_the_graph_without_the_highlight():

@@ -57,6 +57,7 @@ _VIZ_PERSIST_KEYS = (
     "focus_depth",
     "options_open",
     "path_panel",
+    "find_row_open",
 )
 _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),

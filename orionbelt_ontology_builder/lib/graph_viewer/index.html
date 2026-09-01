@@ -773,6 +773,24 @@ function setNativeFsExitHook(fn) {
     try { if (window.top) window.top[TOP_FS_EXIT_HOOK] = fn; } catch (e) {}
 }
 
+// The hook is a function belonging to *this* document, and fullscreen now
+// outlives it: Streamlit re-mounts the component and the closure the old
+// document installed goes with it, so the desktop window leaving fullscreen
+// would have nobody left to tell and the chrome would stay hidden. Every mount
+// that finds the page still fullscreen claims it again (review P2).
+function installNativeFsExitHook() {
+    setNativeFsExitHook(function () { if (stageOn()) leaveFullscreen(true); });
+}
+
+// What a fresh document has to work out for itself: the page may already be
+// fullscreen, and nothing in here knows it (issue #372).
+function syncFullscreenState() {
+    var on = stageOn();
+    setFullscreenIcon(on);
+    if (on) installNativeFsExitHook();
+    else setNativeFsExitHook(null);
+}
+
 function rememberViewport() {
     if (!network) { fsRestoreView = null; return; }
     try {
@@ -802,7 +820,7 @@ function enterFullscreen() {
         }
     }
     if (!asked) toggleNativeWindow();
-    setNativeFsExitHook(function () { if (stageOn()) leaveFullscreen(true); });
+    installNativeFsExitHook();
     settleFullscreen(true);
 }
 
@@ -1146,8 +1164,9 @@ function renderGraph(args) {
     if (fullscreenSupported()) {
         document.getElementById('fullscreen-btn').style.display = 'flex';
         // A re-mount lands in a document that knows nothing, while the page may
-        // still be fullscreen: take the state from the page (issue #372).
-        setFullscreenIcon(stageOn());
+        // still be fullscreen: take the state from the page, and take over the
+        // hooks the last document owned.
+        syncFullscreenState();
     }
     // Restore selection + viewport after a genuine re-mount (e.g. the panel
     // toggled), so the node stays highlighted and the zoom/pan don't reset —
