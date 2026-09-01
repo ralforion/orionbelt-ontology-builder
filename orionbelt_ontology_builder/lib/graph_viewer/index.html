@@ -2,8 +2,41 @@
 <html>
 <head>
 <meta charset="utf-8">
+<script>
+// Paint the background before anything else is parsed.
+//
+// This document is replaced whenever Streamlit re-mounts the component — which
+// a click on the Display options or Path finder switch is enough to do — and a
+// fresh one used to paint the stylesheet's white until the theme arrived over
+// the round trip from Python. Two or three frames of white, in the middle of a
+// dark app, on a control people toggle constantly (issue #372).
+//
+// The colour is the one this component last drew, kept per session and per
+// origin. The stylesheet below carries the fallbacks for a first-ever load,
+// where nothing is remembered yet.
+(function () {
+    try {
+        var bg = sessionStorage.getItem('viz_theme_bg');
+        // Straight into a stylesheet, so it applies to a <body> that does not
+        // exist yet. Only a colour is let through: this value is written by
+        // applyTheme from what Python sends, and a stylesheet is not the place
+        // to find out that something else got in.
+        if (bg && /^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%/]+\))$/.test(bg)) {
+            var early = document.createElement('style');
+            early.textContent = 'html, body { background: ' + bg + '; }';
+            document.head.appendChild(early);
+        }
+    } catch (e) {}   // private mode, or storage blocked: fall through to the CSS
+})();
+</script>
 <style>
 html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
+/* Nothing remembered yet — a first load in a fresh session. The OS preference
+   is the best guess available before Python has said anything, and it is right
+   for the common case of a dark app on a dark desktop. */
+@media (prefers-color-scheme: dark) {
+    html, body { background: #0e1117; }
+}
 #graph { width: 100%; }
 #legend {
     position: absolute; top: 8px; left: 8px; background: rgba(255,255,255,0.92);
@@ -483,6 +516,9 @@ function drawPathRings(ctx, rings) {
 function applyTheme(theme) {
     theme = theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
     currentTheme = theme;
+    // Remembered for the next document this component gets: see the script in
+    // the head, which paints it before the first frame (issue #372).
+    try { sessionStorage.setItem('viz_theme_bg', theme.bg); } catch (e) {}
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
     document.getElementById('container').style.background = theme.bg;
