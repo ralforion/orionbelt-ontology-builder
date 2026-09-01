@@ -57,6 +57,7 @@ _VIZ_PERSIST_KEYS = (
     "focus_depth",
     "options_open",
     "path_panel",
+    "find_row_open",
 )
 _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
@@ -121,11 +122,16 @@ _CUSTOM_CSS = """
     /* CSS injected through st.markdown leaves an empty element behind, which
        is invisible but still takes a slot in the page column's 16px gap grid.
        Four of them ride above the graph, so the canvas started ~64px lower than
-       it had to. Nothing to show, so take them out of the flow. */
+       it had to. Nothing to show, so take them out of the flow.
+
+       Descendant combinators, not the child chain this used to be written as:
+       Streamlit put another wrapper div between the markdown element and its
+       container, the chain stopped matching, and all four blocks quietly came
+       back into the layout (measured: 0 elements matched, 4 in the page). The
+       `style:only-child` test is what makes this safe — a markdown block with
+       anything to show never matches. */
     [data-testid="stElementContainer"]:has(
-        > [data-testid="stMarkdown"]
-        > [data-testid="stMarkdownContainer"]
-        > style:only-child
+        [data-testid="stMarkdownContainer"] > style:only-child
     ) {
         display: none !important;
     }
