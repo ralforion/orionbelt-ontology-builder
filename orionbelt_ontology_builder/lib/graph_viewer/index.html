@@ -34,6 +34,35 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #fullscreen-btn:hover, #download-btn:hover, #copy-btn:hover { opacity: 1; }
 #fullscreen-btn svg, #download-btn svg, #copy-btn svg {
     width: 18px; height: 18px; fill: #555;
+    /* The button is the hover target, not the icon: a tooltip is not looked up
+       from inside an <svg>, which is why the native `title` on these three
+       never appeared. */
+    pointer-events: none;
+}
+/* ...and the tooltips themselves, drawn by the page rather than left to the
+   browser: they show at once instead of after a second, and they can be read
+   over a busy graph. The colours are the theme's own, swapped — the text
+   colour as the chip and the background as the type — which is maximum
+   contrast in both themes by construction (see themeToolbarButtons). */
+#fullscreen-btn::after, #download-btn::after, #copy-btn::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font: 500 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+    white-space: nowrap;
+    background: var(--tip-bg, #333333);
+    color: var(--tip-fg, #ffffff);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+}
+#fullscreen-btn:hover::after, #download-btn:hover::after, #copy-btn:hover::after {
+    opacity: 1;
 }
 /* In fullscreen the container fills the screen, so the graph doesn't fall back
    to the browser's default black backdrop. Percentages, not vw/vh: this document
@@ -78,13 +107,13 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 <div id="container" style="position: relative;">
     <div id="graph"></div>
     <div id="legend"></div>
-    <button id="fullscreen-btn" title="Fullscreen" style="display:none;" onclick="toggleFullscreen()">
+    <button id="fullscreen-btn" data-tip="Fullscreen" aria-label="Fullscreen" style="display:none;" onclick="toggleFullscreen()">
         <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
     </button>
-    <button id="download-btn" title="Download as PNG" style="display:none;" onclick="downloadGraph()">
+    <button id="download-btn" data-tip="Download as PNG" aria-label="Download as PNG" style="display:none;" onclick="downloadGraph()">
         <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v6h3.66V9h3.84L12 2z" transform="rotate(180 12 12)"/></svg>
     </button>
-    <button id="copy-btn" title="Copy what is selected" style="display:none;" onclick="copySelection()">
+    <button id="copy-btn" data-tip="Copy what is selected" aria-label="Copy what is selected" style="display:none;" onclick="copySelection()">
         <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
     </button>
 </div>
@@ -104,6 +133,19 @@ function themeToolbarButtons(theme) {
         var svg = btn.querySelector('svg');
         if (svg) svg.style.fill = theme.text;
     });
+    // The tooltip chip: the theme's colours the other way round, so it reads
+    // over the canvas whichever theme is on.
+    var root = document.documentElement;
+    root.style.setProperty('--tip-bg', theme.text);
+    root.style.setProperty('--tip-fg', theme.bg);
+}
+
+// What a toolbar button says on hover. The tooltip is drawn from data-tip (see
+// the CSS); aria-label carries the same words for anyone not hovering at all.
+function setButtonTip(btn, text) {
+    if (!btn) return;
+    btn.setAttribute('data-tip', text);
+    btn.setAttribute('aria-label', text);
 }
 
 // --- Copy what is selected (issue #312) ------------------------------------
@@ -157,11 +199,11 @@ function flashCopied(ok) {
     if (!btn) return;
     var svg = btn.querySelector('svg');
     if (svg) svg.innerHTML = ok ? DONE_ICON : COPY_ICON;
-    btn.title = ok ? 'Copied' : 'Could not copy — select the text instead';
+    setButtonTip(btn, ok ? 'Copied' : 'Could not copy — select the text instead');
     setTimeout(function () {
         var s2 = btn.querySelector('svg');
         if (s2) s2.innerHTML = COPY_ICON;
-        btn.title = COPY_TITLE;
+        setButtonTip(btn, COPY_TITLE);
     }, 1400);
 }
 
@@ -337,12 +379,24 @@ function measureReserve() {
     return Math.min(lowest - bottom, AUTOFIT_MAX_RESERVE);
 }
 
+// The page's own viewport, which while the page is fullscreen is the screen.
+// Read from the parent's root element as well as from innerHeight: this document
+// is a component iframe, and a fullscreen page does not resize it, so its own
+// window.innerHeight says nothing about the box the canvas has to fill (issue
+// #177 follow-up). The larger of the two is the page's current viewport in both
+// states — out of fullscreen they agree, bar a scrollbar.
+function viewportHeight() {
+    var d = parentDoc();
+    var client = (d && d.documentElement && d.documentElement.clientHeight) || 0;
+    return Math.max(client, window.parent.innerHeight || 0);
+}
+
 function autofitHeight() {
     try {
         var fe = window.frameElement;
         if (!fe) return null;
         var rect = fe.getBoundingClientRect();
-        var avail = window.parent.innerHeight - rect.top - autofitReserve() - 8;
+        var avail = viewportHeight() - rect.top - autofitReserve() - 8;
         return Math.max(Math.round(avail), 300);
     } catch (e) {
         return null;  // cross-origin or unavailable: fall back to fixed height
@@ -544,10 +598,6 @@ function applyTheme(theme) {
 
 function autofitApply() {
     if (!network) return;
-    // In fullscreen the graph fills the screen instead of the toolbar height, and
-    // that target can change after the transition (a moved window, another
-    // monitor), so re-fit rather than bailing out.
-    if (isFullscreen() || desktopFsOn) { fitFullscreenGraph(); return; }
     if (!autofitOn) return;
     var h = autofitHeight();
     if (h) { applyHeight(h); network.redraw(); }
@@ -596,20 +646,71 @@ function downloadGraph() {
     }
 }
 
-// True when the document is fullscreen, checking the prefixed property too so a
-// WebKit implementation isn't misread as "not fullscreen" (review P3).
-function isFullscreen() {
-    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+// --- Fullscreen (issues #177, #189, #381) -----------------------------------
+//
+// Fullscreen is taken on the *parent page's* root element, not on this iframe's
+// #container, and the app's chrome is hidden by a class the page's own CSS
+// selects (visualization.graph_fullscreen_css). Fullscreening the container gave
+// the graph the screen and left every control outside it: Display options, Find
+// & focus, Path finder, Node options and the details panel are all Streamlit's
+// DOM, out here in the parent, so reaching any of them meant leaving fullscreen
+// and going back in (issue #381).
+//
+// Taking the page also retires the workaround from issue #189. The fullscreen
+// element used to live in this document, which Streamlit replaces whenever it
+// re-mounts the component, so a selection that reached Python destroyed it and
+// dropped fullscreen; selections had to be held back until exit. The parent's
+// root element survives every rerun, so they round-trip again and the details
+// panel behind the graph is the live one.
+var FS_CLASS = 'orionbelt-graph-fullscreen';
+
+// The parent document, or null where it can't be reached — a cross-origin host,
+// where there is no page to fullscreen and the button stays hidden.
+function parentDoc() {
+    try {
+        var fe = window.frameElement;
+        return fe ? fe.ownerDocument : null;
+    } catch (e) {
+        return null;
+    }
 }
 
-// Whether the HTML Fullscreen API is actually available here. The desktop
-// pywebview doesn't support it — requestFullscreen throws "Fullscreen is not
-// supported" (#177) — in which case we fall back to toggling the native window.
+// True while the *page* is the fullscreen element. Only the page: Streamlit
+// fullscreens elements of its own (the chart and image expanders), and adopting
+// one of those would hide the app's chrome behind it. The prefixed property is
+// read too, so a WebKit implementation isn't misread as "not fullscreen".
+function pageFullscreenOn() {
+    var d = parentDoc();
+    if (!d) return false;
+    var el = d.fullscreenElement || d.webkitFullscreenElement;
+    return !!el && el === d.documentElement;
+}
+
+// The chrome-hidden state. It lives on the parent's <body> rather than in a
+// variable here, because Streamlit replaces this document on every re-mount
+// (issue #372) and a flag in it would be lost while the app was still
+// fullscreen — leaving the button offering to enter what it is already in.
+function stageOn() {
+    var d = parentDoc();
+    return !!(d && d.body && d.body.classList.contains(FS_CLASS));
+}
+
+function setStage(on) {
+    var d = parentDoc();
+    if (!d || !d.body) return;
+    if (on) d.body.classList.add(FS_CLASS);
+    else d.body.classList.remove(FS_CLASS);
+}
+
+// Whether the HTML Fullscreen API is actually available for the page. The
+// desktop pywebview doesn't support it — requestFullscreen throws "Fullscreen is
+// not supported" (#177) — in which case we fall back to the native window.
 function htmlFullscreenSupported() {
     try {
-        var c = document.getElementById('container');
-        return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) &&
-            !!(c && (c.requestFullscreen || c.webkitRequestFullscreen));
+        var d = parentDoc();
+        var root = d && d.documentElement;
+        return !!(d && (d.fullscreenEnabled || d.webkitFullscreenEnabled) &&
+            root && (root.requestFullscreen || root.webkitRequestFullscreen));
     } catch (e) {
         return false;
     }
@@ -626,47 +727,32 @@ function desktopFullscreenToggle() {
     return null;
 }
 
-// Offer the button when either the HTML API works (web) or we can build the
-// desktop overlay (a same-origin frame plus the native pywebview toggle); hide
-// it only where neither path exists.
+// Offer the button wherever the page can be reached and either path works: the
+// HTML API on the web, the native window in the desktop app. Hide it only where
+// neither exists.
 function fullscreenSupported() {
-    return htmlFullscreenSupported() ||
-        (!!desktopFullscreenToggle() && !!window.frameElement);
+    return !!parentDoc() && (htmlFullscreenSupported() || !!desktopFullscreenToggle());
 }
 
-var desktopFsOn = false;   // tracked pseudo-fullscreen state (no fullscreenchange)
-var pseudoFsPrevStyle = null;  // saved inline style of this iframe in the parent
+function toggleNativeWindow() {
+    var toggle = desktopFullscreenToggle();
+    if (!toggle) return;
+    try {
+        var r = toggle();
+        if (r && r.catch) r.catch(function () {});
+    } catch (e) {}
+}
 
-// While the graph is fullscreen, selections stay client-side. Sending one to
-// Streamlit reruns the app, which repaints the details panel / status bar that
-// nobody can see behind the fullscreen graph — and it was that rerun's rebuild
-// of this component that dropped fullscreen altogether (issue #189). vis still
-// highlights the clicked node locally, so the feedback is immediate; the last
-// selection is flushed on exit, so the panel comes back showing the node the
-// user left selected.
-var pendingSelection = null;
-
+// Selections round-trip even while fullscreen: the details panel and status bar
+// they repaint are on screen now, and the fullscreen element is the page, which
+// no rerun replaces (issues #189, #381).
 function sendSelection(value) {
-    if (isFullscreen() || desktopFsOn) { pendingSelection = value; return; }
     sendToStreamlit("streamlit:setComponentValue", {value: value});
 }
 
-function flushPendingSelection() {
-    if (!pendingSelection) return;
-    var value = pendingSelection;
-    pendingSelection = null;
-    sendToStreamlit("streamlit:setComponentValue", {value: value});
-}
-
-// Desktop graph-only fullscreen. The webview has no HTML Fullscreen API and the
-// native-window toggle alone fullscreens the whole app (sidebar + toolbar), not
-// the graph (issue #177 follow-up). So promote this same-origin iframe to a
-// fixed, full-viewport overlay — it covers the sidebar and toolbar, leaving just
-// the graph — and also toggle the native window so it fills the monitor.
-// Run fn after the browser has reflowed (two frames), falling back to a timer,
-// so window.innerHeight reflects the iframe's new full-viewport size. Reading it
-// synchronously after the style change returns the stale pre-overlay height,
-// which left the graph filling only part of the screen.
+// Run fn after the browser has reflowed (two frames), falling back to a timer.
+// The fullscreen box is not at its final size when the request resolves, and
+// reading it synchronously returns the pre-fullscreen height.
 function afterReflow(fn) {
     if (window.requestAnimationFrame) {
         requestAnimationFrame(function () { requestAnimationFrame(fn); });
@@ -678,176 +764,96 @@ function afterReflow(fn) {
 // Name of the hook the native host (desktop.py) calls when its window leaves
 // fullscreen without going through our button — Esc, the macOS green button, the
 // Window menu. The webview surfaces no fullscreenchange for the native window,
-// so without this the overlay stays pinned at 100vw/100vh while the window
-// shrinks back, leaving the graph covering the whole app (issue #177 follow-up).
-// It lives
-// on the top window because that is the frame Python's evaluate_js runs in.
+// so without this the chrome would stay hidden while the window shrank back
+// (issue #177 follow-up). It lives on the top window because that is the frame
+// Python's evaluate_js runs in.
 var TOP_FS_EXIT_HOOK = '__orionbeltNativeFullscreenExit';
 
 function setNativeFsExitHook(fn) {
     try { if (window.top) window.top[TOP_FS_EXIT_HOOK] = fn; } catch (e) {}
 }
 
-function enterPseudoFullscreen() {
-    var fe = window.frameElement;
-    if (!fe) return false;
-    if (network) {
-        try { fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()}; }
-        catch (e) { fsRestoreView = null; }
+function rememberViewport() {
+    if (!network) { fsRestoreView = null; return; }
+    try {
+        fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()};
+    } catch (e) {
+        fsRestoreView = null;
     }
-    pseudoFsPrevStyle = fe.getAttribute('style') || '';
-    fe.style.position = 'fixed';
-    fe.style.top = '0';
-    fe.style.left = '0';
-    fe.style.width = '100vw';
-    fe.style.height = '100vh';
-    fe.style.zIndex = '2147483647';
-    fe.style.background = currentTheme.bg;
-    desktopFsOn = true;
-    // The native window can leave fullscreen on its own; drop the overlay then
-    // (without toggling the window back, it has already left).
-    setNativeFsExitHook(function () { if (desktopFsOn) exitPseudoFullscreen(); });
+}
+
+function enterFullscreen() {
+    rememberViewport();
+    setStage(true);
     setFullscreenIcon(true);
-    afterReflow(function () { if (desktopFsOn) scheduleFullscreenView(true); });
-    watchFullscreenBox();
-    return true;
-}
-
-function exitPseudoFullscreen() {
-    var fe = window.frameElement;
-    if (fe) fe.setAttribute('style', pseudoFsPrevStyle || '');
-    desktopFsOn = false;
-    setNativeFsExitHook(null);
-    unwatchFullscreenBox();
-    setFullscreenIcon(false);
-    scheduleFullscreenView(false);
-    flushPendingSelection();
-}
-
-// Toggle desktop fullscreen: the overlay (graph-only) plus, when available, the
-// native window (fills the monitor). Returns true if it handled the toggle.
-function tryDesktopFullscreen() {
-    if (!window.frameElement) return false;  // can't build the overlay
-    var nativeToggle = desktopFullscreenToggle();
-    var callNative = function () {
-        if (!nativeToggle) return;
-        try { var r = nativeToggle(); if (r && r.catch) r.catch(function () {}); } catch (e) {}
-    };
-    if (!desktopFsOn) {
-        callNative();
-        enterPseudoFullscreen();
-    } else {
-        exitPseudoFullscreen();
-        callNative();
-    }
-    return true;
-}
-
-// Enter/exit fullscreen for just the graph. The whole vis-network canvas lives
-// in this iframe, so fullscreening the container makes the graph fill the
-// physical screen — no sidebar, no toolbar, no black borders (issue #177). On
-// the web the HTML Fullscreen API does this; in the desktop app it's
-// unavailable, so tryDesktopFullscreen() builds an equivalent graph-only overlay
-// (used both when the API is reported unsupported and if a requestFullscreen
-// attempt throws/rejects anyway). Before entering, remember the viewport so
-// exiting restores it.
-function toggleFullscreen() {
-    var c = document.getElementById('container');
-    if (htmlFullscreenSupported()) {
+    var d = parentDoc();
+    var root = d && d.documentElement;
+    var req = root && (root.requestFullscreen || root.webkitRequestFullscreen);
+    var asked = false;
+    if (htmlFullscreenSupported() && req) {
         try {
-            if (!isFullscreen()) {
-                if (network) {
-                    try {
-                        fsRestoreView = {scale: network.getScale(), position: network.getViewPosition()};
-                    } catch (e) { fsRestoreView = null; }
-                }
-                var req = c.requestFullscreen || c.webkitRequestFullscreen;
-                var p = req && req.call(c);
-                // If the request rejects (e.g. a webview that claims support but
-                // refuses), fall back to the native toggle instead of no-op.
-                if (p && p.catch) p.catch(function () { tryDesktopFullscreen(); });
-            } else {
-                var exit = document.exitFullscreen || document.webkitExitFullscreen;
-                var pe = exit && exit.call(document);
-                if (pe && pe.catch) pe.catch(function () {});
-            }
-            return;
+            var p = req.call(root);
+            asked = true;
+            // A webview can claim support and still refuse: fall back to the
+            // native window rather than leaving the page half changed.
+            if (p && p.catch) p.catch(function () { toggleNativeWindow(); });
         } catch (e) {
-            // Synchronous failure: fall through to the native toggle.
+            asked = false;
         }
     }
-    tryDesktopFullscreen();
+    if (!asked) toggleNativeWindow();
+    setNativeFsExitHook(function () { if (stageOn()) leaveFullscreen(true); });
+    settleFullscreen(true);
+}
+
+// fromNative: the desktop window has already left fullscreen on its own, so the
+// only thing left to do is put the chrome back.
+function leaveFullscreen(fromNative) {
+    setStage(false);
+    setFullscreenIcon(false);
+    setNativeFsExitHook(null);
+    if (pageFullscreenOn()) {
+        var d = parentDoc();
+        var exit = d && (d.exitFullscreen || d.webkitExitFullscreen);
+        try {
+            var p = exit && exit.call(d);
+            if (p && p.catch) p.catch(function () {});
+        } catch (e) {}
+    } else if (!fromNative) {
+        toggleNativeWindow();
+    }
+    settleFullscreen(false);
+}
+
+// Enter/exit fullscreen for the graph page: the canvas plus the controls that
+// drive it, with the app's chrome hidden (issue #381).
+function toggleFullscreen() {
+    if (stageOn()) leaveFullscreen(false);
+    else enterFullscreen();
 }
 
 // Swap the button glyph/hint between the "enter" and "exit" states.
 function setFullscreenIcon(on) {
     var fsBtn = document.getElementById('fullscreen-btn');
     if (!fsBtn) return;
-    fsBtn.title = on ? 'Exit fullscreen' : 'Fullscreen';
+    setButtonTip(fsBtn, on ? 'Exit fullscreen' : 'Fullscreen');
     fsBtn.querySelector('svg').innerHTML = on
         ? '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>'
         : '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';
 }
 
-// Height the graph canvas needs to fill the screen while fullscreen. This
-// document is a Streamlit component iframe, so window.innerHeight stays the
-// *iframe's* height even while the container is fullscreen: reading it here left
-// the canvas at the pre-fullscreen height, cutting the graph off whenever the
-// browser window was smaller than the screen (issue #177 follow-up). Measure the
-// fullscreen box itself instead. The desktop overlay has no fullscreen element
-// and falls back to the iframe height — which is the full window by then, hence
-// the afterReflow() before its call.
-function fullscreenHeight() {
-    var c = document.getElementById('container');
-    var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-    if (c && fsEl === c && c.clientHeight) return c.clientHeight;
-    return window.innerHeight;
-}
-
-// Keep the canvas matched to the fullscreen box. Redraws only on a real change,
-// so the observer below cannot feed itself.
-function fitFullscreenGraph() {
-    var el = document.getElementById('graph');
-    if (!el) return;
-    var h = fullscreenHeight();
-    if (!h || parseInt(el.style.height, 10) === h) return;
-    el.style.height = h + 'px';
-    if (network) network.redraw();
-}
-
-// The fullscreen box isn't always at its final size when fullscreenchange fires
-// (the transition animates, and inside an iframe no window 'resize' need follow),
-// so watch it while fullscreen lasts and re-fit as it settles.
-var fsBoxObserver = null;
-
-function watchFullscreenBox() {
-    if (fsBoxObserver || !window.ResizeObserver) return;
-    var c = document.getElementById('container');
-    if (!c) return;
-    fsBoxObserver = new ResizeObserver(function () {
-        if (isFullscreen() || desktopFsOn) fitFullscreenGraph();
-    });
-    try { fsBoxObserver.observe(c); } catch (e) { fsBoxObserver = null; }
-}
-
-function unwatchFullscreenBox() {
-    if (!fsBoxObserver) return;
-    try { fsBoxObserver.disconnect(); } catch (e) {}
-    fsBoxObserver = null;
-}
-
-// Size the graph to the fullscreen viewport (on enter) or back to the
-// toolbar-driven height (on exit), then hold the viewport steady. vis rescales
-// the view on each of the several 'resize' events it fires while the canvas
-// changes size, and a moveTo() *inside* that emit is overwritten by vis — so we
-// re-apply after each resize via a deferred call (which sticks) and detach after
-// a window so we never fight the user later. On enter the graph zooms out ~30%
-// around the same centre; on exit the pre-fullscreen viewport is restored, so a
-// round-trip leaves the user's zoom/pan untouched (review P2). Used by both the
-// web HTML path and the desktop overlay. Measures the fullscreen box when called,
-// so callers must call it *after* the box has reflowed to its full size.
+// Size the canvas to the new box and hold the viewport steady. There is no
+// separate fullscreen measurement any more: fullscreen or not, the canvas takes
+// the room left below the controls, which is what autofitHeight() measures — it
+// reads the page's viewport, and in fullscreen the page's viewport is the screen.
+//
+// vis rescales the view on each of the several 'resize' events it fires while
+// the canvas changes size, and a moveTo() *inside* that emit is overwritten by
+// vis — so we re-apply after each resize via a deferred call (which sticks) and
+// detach after a window so we never fight the user later. On enter the graph
+// zooms out ~30% around the same centre; on exit the pre-fullscreen viewport is
+// restored, so a round trip leaves the user's zoom/pan untouched (review P2).
 function scheduleFullscreenView(entering) {
-    var el = document.getElementById('graph');
     // Each transition gets a generation id; a deferred callback only acts if it
     // still matches, so a superseded transition (e.g. a quick enter/exit) can't
     // apply its zoom after a newer one has run (review P3).
@@ -857,13 +863,10 @@ function scheduleFullscreenView(entering) {
         var scale = entering ? fsRestoreView.scale * FS_ZOOM_OUT : fsRestoreView.scale;
         try { network.moveTo({scale: scale, position: fsRestoreView.position}); } catch (e) {}
     }
-    if (entering) {
-        el.style.height = fullscreenHeight() + 'px';
-    } else {
-        var h = autofitOn ? (autofitHeight() || currentHeight) : currentHeight;
-        el.style.height = h + 'px';
-        sendToStreamlit("streamlit:setFrameHeight", {height: h});
-    }
+    // Fullscreen always fills; out of it, a user who turned autofit off keeps
+    // the height they asked for.
+    var h = (entering || autofitOn) ? (autofitHeight() || currentHeight) : currentHeight;
+    if (h) applyHeight(h);
     if (network) {
         // Tear down the previous transition's listener/timer before redraw(),
         // which synchronously emits 'resize' — otherwise a stale "entering"
@@ -884,23 +887,39 @@ function scheduleFullscreenView(entering) {
     }
 }
 
-function onFullscreenChange() {
-    var entering = isFullscreen();
-    setFullscreenIcon(entering);
+// The box arrives at its final size in its own time — the browser animates the
+// transition, the desktop window resizes after its own toggle, and hiding the
+// sidebar reflows the page underneath. Re-measure as it settles rather than
+// trusting the first read.
+function settleFullscreen(entering) {
     scheduleFullscreenView(entering);
-    if (entering) {
-        // The fullscreen box is often still the old size at this point, so
-        // re-measure once the browser has reflowed and keep watching it settle.
-        afterReflow(function () { if (isFullscreen()) scheduleFullscreenView(true); });
-        watchFullscreenBox();
-    } else {
-        unwatchFullscreenBox();
-        // Hand the panel/status bar the node the user left selected (issue #189).
-        flushPendingSelection();
-    }
+    afterReflow(function () { scheduleFullscreenView(entering); });
+    setTimeout(function () { scheduleFullscreenView(entering); }, 250);
 }
-document.addEventListener('fullscreenchange', onFullscreenChange);
-document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+// Esc, or the browser dropping fullscreen on its own. Only our own page
+// fullscreen is followed; anything else on the page fullscreening something of
+// its own is none of our business.
+function onPageFullscreenChange() {
+    if (!stageOn() || pageFullscreenOn()) return;
+    setStage(false);
+    setFullscreenIcon(false);
+    setNativeFsExitHook(null);
+    settleFullscreen(false);
+}
+
+(function () {
+    var d = parentDoc();
+    if (!d) return;
+    d.addEventListener('fullscreenchange', onPageFullscreenChange);
+    d.addEventListener('webkitfullscreenchange', onPageFullscreenChange);
+    // This document is replaced on every re-mount, so leave the parent as we
+    // found it: otherwise each mount piles another dead listener onto it.
+    window.addEventListener('pagehide', function () {
+        d.removeEventListener('fullscreenchange', onPageFullscreenChange);
+        d.removeEventListener('webkitfullscreenchange', onPageFullscreenChange);
+    });
+})();
 // Fullscreen from inside an iframe needs the frame to permit it. Streamlit's
 // component iframe is same-origin, so grant it defensively (belt and braces on
 // top of Streamlit's own allowFullScreen).
@@ -924,7 +943,7 @@ function renderGraph(args) {
     if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
         applyTheme(args.theme);
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
-        if (hh) { currentHeight = hh; if (!isFullscreen() && !desktopFsOn) applyHeight(hh); }
+        if (hh) { currentHeight = hh; applyHeight(hh); }
         // A fresh "Find entity" pick is a same-data re-render (only focus_seq
         // changed), so centre on the new node here without rebuilding the whole
         // network (issue #144). Anything that isn't a new pick leaves the
@@ -957,14 +976,9 @@ function renderGraph(args) {
         if (af) height = af;
     }
     var el = document.getElementById('graph');
-    // In fullscreen the graph fills the screen; don't clobber that with the
-    // toolbar height. Remember the requested height so exiting fullscreen can
-    // restore it.
+    // Remember the requested height so a fullscreen round trip can restore it.
     currentHeight = height;
-    if (!isFullscreen() && !desktopFsOn) {
-        el.style.height = height + 'px';
-        sendToStreamlit("streamlit:setFrameHeight", {height: height});
-    }
+    applyHeight(height);
 
     // Theme the canvas + overlays to match the app, so the graph isn't a white
     // box in dark mode (issue #62). Defaults keep the original light look.
@@ -1128,22 +1142,20 @@ function renderGraph(args) {
         network.on('beforeDrawing', function(ctx) { drawPathRings(ctx, pathRings); });
     }
     document.getElementById('download-btn').style.display = 'flex';
-    // Only offer fullscreen where the API works — hidden in the desktop webview.
+    // Only offer fullscreen where there is a page to fullscreen.
     if (fullscreenSupported()) {
         document.getElementById('fullscreen-btn').style.display = 'flex';
+        // A re-mount lands in a document that knows nothing, while the page may
+        // still be fullscreen: take the state from the page (issue #372).
+        setFullscreenIcon(stageOn());
     }
     // Restore selection + viewport after a genuine re-mount (e.g. the panel
     // toggled), so the node stays highlighted and the zoom/pan don't reset —
     // making the rebuild invisible. selectNodes() does not fire selectNode, so
-    // this doesn't loop back to Streamlit.
-    // A selection made while fullscreen hasn't reached Streamlit yet (it is
-    // flushed on exit), so args.selected_node is stale for the rebuilds that do
-    // still happen in fullscreen — a Ctrl/Cmd-click focus expand. Restore what
-    // the user actually has selected instead (issue #189).
+    // this doesn't loop back to Streamlit. Python's value is authoritative in
+    // both states now: a selection made while fullscreen reaches it like any
+    // other (issue #381).
     var restoreNode = args.selected_node;
-    if (pendingSelection) {
-        restoreNode = pendingSelection.selected ? (pendingSelection.nodeId || null) : null;
-    }
     // A node comes back by id and the rest is read off it; an edge has no id to
     // come back by, so Python hands its copy text over instead.
     setCopyTarget(restoreNode !== null && restoreNode !== undefined

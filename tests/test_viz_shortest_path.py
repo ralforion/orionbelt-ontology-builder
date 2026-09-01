@@ -487,11 +487,12 @@ def test_a_remembered_pick_whose_entity_is_gone_is_forgotten():
     assert at.session_state["_viz_cfg_path_target"] == "Class: C"
 
 
-def test_the_switch_is_offered_beside_the_display_options_switch():
+def test_the_switch_is_offered_in_the_band_switch_row():
+    """One row of switches above the canvas, one per band, in the order the
+    bands sit in: Display options, Find & focus, Path finder (issue #381)."""
     at = _render("", "")
     labels = [t.label for t in at.toggle]
-    assert "Path finder" in labels
-    assert labels.index("Path finder") == labels.index("Display options") + 1
+    assert labels[:3] == ["Display options", "Find & focus", "Path finder"]
 
 
 def test_the_switch_is_remembered_across_sessions():

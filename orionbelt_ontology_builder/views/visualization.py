@@ -98,6 +98,11 @@ _GRAPH_ROW = '[data-testid="stHorizontalBlock"]:has(.st-key-graph_viewer)'
 # it. test_viz_overlays.py keeps this in step with the buttons' own CSS.
 _TOOLBAR_CLEARANCE = "2.75rem"
 
+#: Class the graph viewer puts on the app's ``<body>`` while the graph is
+#: fullscreen (see ``lib/graph_viewer/index.html``). The rules it selects live
+#: here, in the page whose chrome they hide.
+GRAPH_FS_CLASS = "orionbelt-graph-fullscreen"
+
 # The canvas always fits itself to the window: it measures the room left below
 # the controls and re-measures whenever the layout shifts, which is the only
 # sizing anyone wants — a fixed height was an option that could only ever leave
@@ -349,6 +354,104 @@ def graph_overlay_css(dark: bool) -> str:
     </style>"""
 
 
+def graph_space_css(find_row_open: bool) -> str:
+    """CSS that hands room above the canvas back to the graph (issue #381).
+
+    The canvas already fits itself to whatever is left below the controls, so
+    the only way to make it taller is to spend less above it. Two things here
+    do: the Render button, cut back to its label, and the Find row when its
+    switch is off. The page's own spacing — the title, the section tabs and the
+    gaps between the rows — is left exactly as it is.
+
+    The Find row is hidden rather than skipped. What it holds — the find target,
+    the node filter, the focus seeds and their depth — is read further down by
+    the run that builds the graph, so a run that never rendered it would have to
+    rebuild all of that from the saved config; taking it out of the flow costs
+    the same height and none of that.
+    """
+    # The row's own wrapper as well as the row: hidden on its own, the container
+    # collapses to nothing but Streamlit's block still holds its slot in the
+    # column's 16px gap grid, which is a band of empty page where the row was.
+    hide_find_row = (
+        ""
+        if find_row_open
+        else """
+    .st-key-viz_find_row,
+    [data-testid="stLayoutWrapper"]:has(> .st-key-viz_find_row) {
+        display: none !important;
+    }"""
+    )
+    return f"""<style>
+    /* Render, cut back to its label. Streamlit's default button is 38px tall
+       and stretched across its whole column, which made it the largest thing
+       above the canvas — for a button that is only reached after changing
+       something else. */
+    .st-key-viz_render_btn button {{
+        min-height: 28px;
+        height: 28px;
+        padding: 0 0.9rem;
+        line-height: 1.2;
+    }}{hide_find_row}
+    </style>"""
+
+
+def graph_fullscreen_css(dark: bool) -> str:
+    """CSS for fullscreen: the graph keeps its controls, the app loses its chrome.
+
+    Fullscreen used to be taken on the canvas' own container, which lives inside
+    the component iframe. That gave the graph the screen and left every control
+    outside it: Display options, Find & focus, Path finder, Node options and the
+    details panel are all Streamlit's DOM, so reaching any of them meant leaving
+    fullscreen and going back in (issue #381). The viewer now fullscreens the
+    page itself and puts this class on the body, which hides what is not the
+    graph page — the sidebar, Streamlit's own header, the title and the section
+    tabs — so the controls come along and the room still goes to the canvas.
+
+    The rules are injected with the rest of the graph page, so they exist only
+    while that page is on screen: if a rerun ever navigates away with the class
+    still set, the chrome comes back by itself.
+    """
+    bg = "#0e1117" if dark else "#ffffff"
+    return f"""<style>
+    body.{GRAPH_FS_CLASS} [data-testid="stSidebar"],
+    body.{GRAPH_FS_CLASS} [data-testid="stSidebarCollapsedControl"],
+    body.{GRAPH_FS_CLASS} [data-testid="stHeader"],
+    body.{GRAPH_FS_CLASS} [data-testid="stToolbar"],
+    body.{GRAPH_FS_CLASS} [data-testid="stDecoration"] {{
+        display: none !important;
+    }}
+    /* Everything above the switch row: the breadcrumb, the page title, the
+       section tabs. Named by where it sits rather than one by one — it is
+       whatever precedes the row the switches are in — so a fourth thing landing
+       above the canvas is covered without touching this.
+
+       `~ * .st-key-…` and not `~ *:has(.st-key-…)`: a :has() inside a :has() is
+       invalid, and an invalid selector takes the whole rule down with it in
+       silence — which is exactly what it did, leaving the title and the tabs on
+       screen in fullscreen. The form here says the same thing: a following
+       sibling with the switches somewhere inside it. */
+    body.{GRAPH_FS_CLASS} .stMainBlockContainer > [data-testid="stVerticalBlock"]
+        > *:has(~ * .st-key-viz_band_switches),
+    body.{GRAPH_FS_CLASS} .stMainBlockContainer > [data-testid="stVerticalBlock"]
+        > *:has(~ .st-key-viz_band_switches) {{
+        display: none !important;
+    }}
+    body.{GRAPH_FS_CLASS} .stMainBlockContainer {{
+        padding: 0.5rem 1rem 0 !important;
+        max-width: none !important;
+    }}
+    /* The page is the fullscreen box now: nothing should be scrolled out of it,
+       and the ground behind it is the graph's own, not the browser's black. */
+    body.{GRAPH_FS_CLASS} {{
+        overflow: hidden;
+        background: {bg};
+    }}
+    body.{GRAPH_FS_CLASS} [data-testid="stAppViewContainer"] {{
+        background: {bg};
+    }}
+    </style>"""
+
+
 def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
     """Hang ``subject_uri``'s annotations off its node, at most ``room`` of them.
 
@@ -470,6 +573,10 @@ def render_visualization():
             # Off by default: the panel is a tool you reach for, not something
             # every graph needs, and off it costs no vertical space at all.
             "path_panel": False,
+            # The Find / Node options / Focus row. On by default, because Find
+            # is how you get around a large graph; off, the row costs the canvas
+            # nothing (issue #381).
+            "find_row_open": True,
         }
         # Bring back settings saved in a previous session before applying
         # defaults, so a returning user opens with their own preferences (#142).
@@ -489,13 +596,15 @@ def render_visualization():
         # persisted viz settings, so a band you collapsed stays collapsed.
         # Render sits outside it, since redrawing is the one thing still worth
         # doing while the rest is out of the way.
-        # Both bands above the canvas are switched from the same row, and Render
-        # sits outside them: redrawing is the one thing still worth doing while
-        # the rest is out of the way. The two switches share one column and are
-        # laid out inline (see BAND_SWITCH_CSS), so they read as a pair and
-        # neither label can be squeezed into breaking.
+        # All three bands above the canvas are switched from the same row, and
+        # Render sits outside them: redrawing is the one thing still worth doing
+        # while the rest is out of the way. The switches share one column and are
+        # laid out inline (see BAND_SWITCH_CSS), so they read as a set and no
+        # label can be squeezed into breaking.
         st.html(BAND_SWITCH_CSS)
-        _switch_col, _, _render_col = st.columns([2.4, 2.6, 1])
+        _switch_col, _, _render_col = st.columns(
+            [3.6, 1.9, 0.5], vertical_alignment="center"
+        )
         with _switch_col.container(key="viz_band_switches"):
             options_open = st.toggle(
                 "Display options",
@@ -503,6 +612,15 @@ def render_visualization():
                 on_change=viz_sync,
                 args=("_viz_cfg_options_open", "viz_options_open"),
                 help="Which node types to draw and how far apart to space them.",
+            )
+            find_row_open = st.toggle(
+                "Find & focus",
+                key="viz_find_row_open",
+                on_change=viz_sync,
+                args=("_viz_cfg_find_row_open", "viz_find_row_open"),
+                help="The row that finds an entity, narrows which ones are "
+                "drawn, and focuses on one node. Off, it gives its height to "
+                "the canvas and keeps whatever it was set to.",
             )
             path_panel = st.toggle(
                 "Path finder",
@@ -514,10 +632,13 @@ def render_visualization():
                 "Off, the panel takes no room and nothing is highlighted.",
             )
         with _render_col:
+            # Sized to its label, not to its column: stretched across a third of
+            # the row it was the largest thing above the canvas, for a button
+            # that is only reached after changing something else (issue #381).
             render_graph = st.button(
                 "Render",
+                key="viz_render_btn",
                 type="primary",
-                use_container_width=True,
                 help="Redraw the graph and re-run the layout. Also re-centres on "
                 "the current Find selection.",
             )
@@ -935,7 +1056,13 @@ def render_visualization():
         # The mode column is sized to the checkbox, not to an even third: the
         # spare width goes to the panel, whose collapsed label carries the note
         # about what the view is holding back.
-        _find_col, _mode_col, _filter_col = st.columns([1, 0.5, 2.5])
+        # Hidden by CSS rather than skipped, so the switch above costs nothing
+        # but height: the focus seeds, the node filter and the find target are
+        # all read out of this block further down, and a run that never rendered
+        # it would have to reconstruct every one of them from the saved config
+        # (see graph_overlay_css). The container is what the rule has to aim at.
+        _find_row = st.container(key="viz_find_row")
+        _find_col, _mode_col, _filter_col = _find_row.columns([1, 0.5, 2.5])
         with _find_col:
             if focus_targets:
                 _find_choice = st.selectbox(
@@ -2738,6 +2865,10 @@ def render_visualization():
             # reopen toggle took a sliver of it, and the Node options picker
             # pushed the graph down far enough to squeeze it to its floor.
             st.markdown(graph_overlay_css(_gv_dark), unsafe_allow_html=True)
+            # ...and the room above it, which is the rest of what the canvas
+            # has to work with (issue #381).
+            st.markdown(graph_space_css(find_row_open), unsafe_allow_html=True)
+            st.markdown(graph_fullscreen_css(_gv_dark), unsafe_allow_html=True)
 
             _panel_on = bool(st.session_state.get("_viz_cfg_details_panel", True))
             if _panel_on:
