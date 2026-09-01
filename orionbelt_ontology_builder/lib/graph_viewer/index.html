@@ -2,33 +2,6 @@
 <html>
 <head>
 <meta charset="utf-8">
-<script>
-// Paint the background before anything else is parsed.
-//
-// This document is replaced whenever Streamlit re-mounts the component — which
-// a click on the Display options or Path finder switch is enough to do — and a
-// fresh one used to paint the stylesheet's white until the theme arrived over
-// the round trip from Python. Two or three frames of white, in the middle of a
-// dark app, on a control people toggle constantly (issue #372).
-//
-// The colour is the one this component last drew, kept per session and per
-// origin. The stylesheet below carries the fallbacks for a first-ever load,
-// where nothing is remembered yet.
-(function () {
-    try {
-        var bg = sessionStorage.getItem('viz_theme_bg');
-        // Straight into a stylesheet, so it applies to a <body> that does not
-        // exist yet. Only a colour is let through: this value is written by
-        // applyTheme from what Python sends, and a stylesheet is not the place
-        // to find out that something else got in.
-        if (bg && /^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%/]+\))$/.test(bg)) {
-            var early = document.createElement('style');
-            early.textContent = 'html, body { background: ' + bg + '; }';
-            document.head.appendChild(early);
-        }
-    } catch (e) {}   // private mode, or storage blocked: fall through to the CSS
-})();
-</script>
 <style>
 html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 /* Nothing remembered yet — a first load in a fresh session. The OS preference
@@ -70,6 +43,36 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
    the fullscreen box the UA gives us, which is the screen. */
 #container:fullscreen { width: 100%; height: 100%; }
 </style>
+<script>
+// Paint the remembered background before the first frame.
+//
+// This document is replaced whenever Streamlit re-mounts the component — which
+// a click on the Display options or Path finder switch is enough to do — and a
+// fresh one used to paint the stylesheet's white until the theme arrived over
+// the round trip from Python. Two or three frames of white, in the middle of a
+// dark app, on a control people toggle constantly (issue #372).
+//
+// The colour is the one this component last drew, kept per session and per
+// origin. This runs *after* the stylesheet above so the rule it inserts is the
+// last one standing: same specificity, so document order decides, and the
+// remembered colour has to beat both the white default and the dark media
+// query. The stylesheet is the fallback for a first-ever load, where nothing
+// is remembered yet.
+(function () {
+    try {
+        var bg = sessionStorage.getItem('viz_theme_bg');
+        // Straight into a stylesheet, so it applies to a <body> that does not
+        // exist yet. Only a colour is let through: this value is written by
+        // rememberThemeBg from what Python sends, and a stylesheet is not the
+        // place to find out that something else got in.
+        if (bg && /^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%/]+\))$/.test(bg)) {
+            var early = document.createElement('style');
+            early.textContent = 'html, body { background: ' + bg + '; }';
+            document.head.appendChild(early);
+        }
+    } catch (e) {}   // private mode, or storage blocked: fall through to the CSS
+})();
+</script>
 </head>
 <body>
 <div id="container" style="position: relative;">
@@ -513,12 +516,18 @@ function drawPathRings(ctx, rings) {
 // Apply theme colours without rebuilding the graph, so a theme change (or the
 // first-render theme settling) doesn't reset the user's zoom/pan. Node colours
 // encode type, not theme, so only the background, overlays and edge labels change.
+// Remembered for the next document this component gets: see the script in the
+// head, which paints it before the first frame (issue #372). Both theme paths
+// call this — a fresh mount rebuilds rather than calling applyTheme, and a
+// session that only ever rebuilt would have nothing to paint.
+function rememberThemeBg(bg) {
+    try { sessionStorage.setItem('viz_theme_bg', bg); } catch (e) {}
+}
+
 function applyTheme(theme) {
     theme = theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
     currentTheme = theme;
-    // Remembered for the next document this component gets: see the script in
-    // the head, which paints it before the first frame (issue #372).
-    try { sessionStorage.setItem('viz_theme_bg', theme.bg); } catch (e) {}
+    rememberThemeBg(theme.bg);
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
     document.getElementById('container').style.background = theme.bg;
@@ -961,6 +970,7 @@ function renderGraph(args) {
     // box in dark mode (issue #62). Defaults keep the original light look.
     var theme = args.theme || {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
     currentTheme = theme;
+    rememberThemeBg(theme.bg);
     document.documentElement.style.background = theme.bg;
     document.body.style.background = theme.bg;
     document.getElementById('container').style.background = theme.bg;
