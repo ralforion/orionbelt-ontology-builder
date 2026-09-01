@@ -4325,31 +4325,45 @@ VIZ_NODE_PANEL = "Node options"
 FOCUS_BUILD_MAX_NODES = 5000
 
 
-def prioritise_find_target(items, node_id_of, find_id):
-    """Build the entity picked in Find first, so the cap cannot drop it (#234).
+def prioritise_pinned(items, node_id_of, pinned):
+    """Build the entities in ``pinned`` first, so the cap cannot drop them.
 
     Each loop stops at a fixed node budget, in list order, so an entity far
-    enough down was never drawn. The Find dropdown lists every entity regardless
-    of what was drawn, so picking one of those left the viewer nothing to centre
-    on. It then dropped the camera pin, and dropping the pin re-enables the
-    post-layout auto-fit, so the graph visibly reframed while the entity the user
-    asked for was missing: movement, and no result, which is exactly what the
-    issue describes.
+    enough down was never drawn. The pickers list every entity regardless of
+    what was drawn, so an entity picked from one of them could be missing from
+    the graph that is supposed to answer for it.
+
+    Two things are pinned. The entity picked in **Find** (issue #234): picking
+    one the cap had cut left the viewer nothing to centre on, it dropped the
+    camera pin, and dropping the pin re-enabled the post-layout auto-fit — so
+    the graph visibly reframed while the entity the user asked for was missing.
+    And every entity on a **highlighted path** (issue #378): a path whose middle
+    is not drawn is ringed in disconnected pieces, which reads as a broken
+    highlight rather than as a view that does not hold all of it.
 
     Ordering alone is enough for classes, which are built first and so still fit
     inside the budget. It is not enough for the kinds after them: by the time
-    those loops run the budget is spent, so each also lets the target itself past
-    its own cap check. That costs at most one node over the cap, since only the
-    single entity the user named is let through. One extra node is immaterial to
-    the browser the cap protects; a graph silently missing what you asked for is
-    not.
+    those loops run the budget is spent, so each also lets a pinned entity past
+    its own cap check. That costs at most one node over the cap per pinned
+    entity — one for Find, at most the length of the path for a path — which is
+    immaterial to the browser the cap protects. A graph silently missing what
+    you asked for is not.
+
+    ``pinned`` may be a single id or any collection of them; ``None`` and empty
+    both mean "nothing pinned", and the items are returned untouched.
     """
-    if not find_id:
+    if not pinned:
         return items
-    for i, item in enumerate(items):
-        if node_id_of(item) == find_id:
-            return [item, *items[:i], *items[i + 1 :]]
-    return items
+    if isinstance(pinned, str):
+        pinned = {pinned}
+    else:
+        pinned = set(pinned)
+    first, rest = [], []
+    for item in items:
+        (first if node_id_of(item) in pinned else rest).append(item)
+    if not first:
+        return items
+    return [*first, *rest]
 
 
 def graph_node_cap(focus_pruning: bool) -> int:

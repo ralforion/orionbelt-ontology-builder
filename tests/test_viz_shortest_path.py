@@ -188,16 +188,78 @@ def test_the_cached_graph_is_rebuilt_when_the_path_changes():
     assert first != second
 
 
-def test_a_path_that_is_only_half_drawn_says_so_over_the_cap_notice(patch_ui):
-    """A capped graph always had something to say about its own size, and that
-    silenced this: the path came out in disconnected pieces with nothing on
-    screen accounting for it (reported against v1.27.1). This message is the
-    more specific of the two, and the only one that names the way out."""
-    patch_ui("GRAPH_MAX_NODES", 2)  # the A -> B -> C path cannot fit
+# --- the path survives the node cap (issue #378) -----------------------------
 
-    notice = _render("Class: A", "Class: C").session_state["last_graph_data"]["notice"]
 
+def test_the_whole_path_is_drawn_even_when_the_cap_cannot_hold_it(patch_ui):
+    """The reported case, in miniature: on an ontology past the cap the middle
+    of a path was simply not built, so it was ringed in disconnected pieces —
+    the answer to the question, drawn with the answer missing."""
+    patch_ui("GRAPH_MAX_NODES", 2)  # the A -> B -> C path is three
+
+    nodes, edges = _graph(_render("Class: A", "Class: C"))
+
+    assert {"A", "B", "C"} <= {n["label"] for n in nodes}
+    # And ringed end to end, not in pieces: both links, not one.
+    assert len(_highlighted_edges(edges)) == 2
+
+
+def test_a_path_is_drawn_when_the_class_filter_is_empty():
+    """Pinning a class is no use if the loop that builds classes never runs.
+
+    Its gate opened for a non-empty filter or for a Find target that was a
+    class, and a pinned class satisfied neither — class node ids carry no kind
+    prefix, so nothing recognised them. With the filter emptied the graph came
+    out with no nodes at all and the path had nowhere to be drawn (Codex review
+    of PR #379).
+    """
+    at = _render("Class: A", "Class: C")
+    # The filter emptied, with the reveal already marked done so nothing
+    # re-adds the classes behind the test's back.
+    uris = {c["uri"] for c in at.session_state.ontology.get_classes()}
+    at.session_state["_viz_cfg_selected_class_uris"] = []
+    at.session_state["_viz_cfg_known_class_uris"] = uris
+    at.session_state["_viz_find_seq"] = 1
+    at.session_state["_viz_find_revealed_seq"] = 1
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    nodes, edges = _graph(at)
+    # Only the path: the filter still hides everything it was hiding.
+    assert {n["label"] for n in nodes} == {"A", "B", "C"}
+    assert len(_highlighted_edges(edges)) == 2
+
+
+def test_a_pinned_path_does_not_lift_the_cap_for_everything_else(patch_ui):
+    """The cap is what protects the browser. Pinning buys the path its own
+    nodes, not a bigger graph: D is unrelated and stays out."""
+    patch_ui("GRAPH_MAX_NODES", 2)
+
+    nodes, _ = _graph(_render("Class: A", "Class: B"))
+
+    labels = {n["label"] for n in nodes}
+    assert {"A", "B"} <= labels
+    assert "D" not in labels
+
+
+def test_a_path_the_view_cannot_draw_says_so():
+    """A path drawn in pieces with nothing accounting for it reads as a broken
+    highlight rather than as a view that does not hold all of it, and this is
+    the only line that names the way out.
+
+    Focused elsewhere, because since #378 the node cap cannot do this: the
+    entities on a path are pinned past it. The focus prune runs after the build
+    and takes them out again, which is what is left.
+    """
+    at = _render("Class: A", "Class: C")
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: D"]  # not on the path
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    notice = at.session_state["last_graph_data"]["notice"]
     assert "entities on this path are not drawn" in notice
+    # Here the advice is the right advice: they are focused on something else.
     assert "Focus on this path" in notice
 
 
