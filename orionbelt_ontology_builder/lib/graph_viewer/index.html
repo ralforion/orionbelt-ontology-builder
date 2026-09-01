@@ -31,7 +31,13 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #fullscreen-btn { right: 8px; }
 #download-btn { right: 48px; }
 #copy-btn { right: 88px; }
-#fullscreen-btn:hover, #download-btn:hover, #copy-btn:hover { opacity: 1; }
+#fullscreen-btn:hover, #download-btn:hover, #copy-btn:hover {
+    opacity: 1;
+    /* Over its neighbours while its tooltip is out: the three buttons share a
+       z-index and the tip reaches back across the ones to its left, so the
+       later button in the markup painted over the words. */
+    z-index: 11;
+}
 #fullscreen-btn svg, #download-btn svg, #copy-btn svg {
     width: 18px; height: 18px; fill: #555;
     /* The button is the hover target, not the icon: a tooltip is not looked up
@@ -47,8 +53,12 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #fullscreen-btn::after, #download-btn::after, #copy-btn::after {
     content: attr(data-tip);
     position: absolute;
+    /* Under the button, shifted left of the right-hand strip: the panel's
+       reopen toggle is a Streamlit element floating over the canvas from just
+       below this toolbar, outside this iframe, so it paints over anything the
+       viewer draws in its 30px. 32px of offset clears it. */
     top: calc(100% + 6px);
-    right: 0;
+    right: 32px;
     padding: 4px 8px;
     border-radius: 6px;
     font: 500 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
@@ -63,6 +73,17 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 }
 #fullscreen-btn:hover::after, #download-btn:hover::after, #copy-btn:hover::after {
     opacity: 1;
+}
+/* ...and beside the button when the space under it is taken. The details panel
+   is a Streamlit card floating over the canvas from just below this toolbar and
+   it is outside this iframe, so a tooltip dropped underneath is not dimmed or
+   clipped — it is simply not there. See placeTip(). */
+#fullscreen-btn.tip-left::after,
+#download-btn.tip-left::after,
+#copy-btn.tip-left::after {
+    top: 50%;
+    right: calc(100% + 8px);
+    transform: translateY(-50%);
 }
 /* In fullscreen the container fills the screen, so the graph doesn't fall back
    to the browser's default black backdrop. Percentages, not vw/vh: this document
@@ -147,6 +168,31 @@ function setButtonTip(btn, text) {
     btn.setAttribute('data-tip', text);
     btn.setAttribute('aria-label', text);
 }
+
+// Where the tooltip goes: under the button, or beside it when the app has
+// something parked under it. Everything the graph page floats over the canvas —
+// the details panel, its reopen toggle, the Node options card — is Streamlit's
+// DOM in the parent, which always paints over this iframe, so a tip underneath
+// one of them is invisible rather than merely dimmed. The page is same-origin,
+// so ask it what is at the spot and step aside when the answer isn't us.
+function placeTip(btn) {
+    var flip = false;
+    try {
+        var fe = window.frameElement;
+        var d = parentDoc();
+        if (fe && d && d.elementFromPoint) {
+            var fr = fe.getBoundingClientRect();
+            var r = btn.getBoundingClientRect();
+            flip = d.elementFromPoint(fr.left + r.right - 40, fr.top + r.bottom + 12) !== fe;
+        }
+    } catch (e) {}   // cross-origin: leave it under the button
+    btn.classList.toggle('tip-left', flip);
+}
+
+['fullscreen-btn', 'download-btn', 'copy-btn'].forEach(function (id) {
+    var btn = document.getElementById(id);
+    if (btn) btn.addEventListener('mouseenter', function () { placeTip(btn); });
+});
 
 // --- Copy what is selected (issue #312) ------------------------------------
 // The bar under the graph cuts its line to fit and a node's own label is cut to

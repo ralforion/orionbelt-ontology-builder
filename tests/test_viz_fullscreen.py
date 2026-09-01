@@ -213,3 +213,18 @@ def test_the_toolbar_says_what_its_buttons_do():
     # Every later change of what a button says goes through the one helper.
     assert "btn.title =" not in src
     assert src.count("setButtonTip(") >= 4
+
+
+def test_a_tooltip_steps_aside_for_whatever_is_under_the_button():
+    """The tip drops under its button, where the details panel's card also
+    floats — and that card is Streamlit's DOM in the parent, which always paints
+    over this iframe, so a tip behind it is not dimmed but absent. The viewer
+    asks the page what is at the spot and moves the tip beside the button when
+    the answer is not itself."""
+    src = _VIEWER.read_text(encoding="utf-8")
+    fn = src[src.index("function placeTip(") :].split("\n}", 1)[0]
+    assert "elementFromPoint" in fn
+    assert "!== fe" in fn, "the test must be 'is the page showing us, or itself'"
+    assert "classList.toggle('tip-left'" in fn
+    assert ".tip-left::after" in src
+    assert "addEventListener('mouseenter'" in src
