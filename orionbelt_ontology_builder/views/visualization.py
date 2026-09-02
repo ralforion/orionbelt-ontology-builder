@@ -402,10 +402,14 @@ def graph_fullscreen_css(dark: bool) -> str:
     the component iframe. That gave the graph the screen and left every control
     outside it: Display options, Find & focus, Path finder, Node options and the
     details panel are all Streamlit's DOM, so reaching any of them meant leaving
-    fullscreen and going back in (issue #381). The viewer now fullscreens the
-    page itself and puts this class on the body, which hides what is not the
-    graph page — the sidebar, Streamlit's own header, the title and the section
-    tabs — so the controls come along and the room still goes to the canvas.
+    fullscreen and going back in (issue #381). The viewer puts this class on the
+    body instead, and it hides what is not the graph page — the sidebar,
+    Streamlit's own header, the title and the section tabs — so the controls come
+    along and the room still goes to the canvas.
+
+    This class is now the whole of fullscreen: the browser window is left alone,
+    because people build an ontology alongside other windows and the OS already
+    has a shortcut for anyone who does want the screen (issue #390).
 
     The rules are injected with the rest of the graph page, so they exist only
     while that page is on screen: if a rerun ever navigates away with the class
@@ -440,8 +444,8 @@ def graph_fullscreen_css(dark: bool) -> str:
         padding: 0.5rem 1rem 0 !important;
         max-width: none !important;
     }}
-    /* The page is the fullscreen box now: nothing should be scrolled out of it,
-       and the ground behind it is the graph's own, not the browser's black. */
+    /* The window is the fullscreen box: nothing should be scrolled out of it,
+       and the ground behind it is the graph's own. */
     body.{GRAPH_FS_CLASS} {{
         overflow: hidden;
         background: {bg};
