@@ -229,12 +229,8 @@ class _FakeWindow:
         self.exposed = []
         self.title = None
         self.evaluated = []
-        self.uid = "master"
-        self.gui = None
-        # Real pywebview keeps the fullscreen state on the platform window, not
-        # here, so the fake tracks toggles rather than exposing a state field the
-        # bridge could read (a stub that did would overstate the API).
-        self.toggle_fullscreen_calls = 0
+        # `restored` is real pywebview's; it is kept here so a bridge that
+        # started watching it again would be caught rather than skipped.
         self.events = types.SimpleNamespace(loaded=_Event(), restored=_Event())
 
     def expose(self, *fns):
@@ -242,9 +238,6 @@ class _FakeWindow:
 
     def set_title(self, title):
         self.title = title
-
-    def toggle_fullscreen(self):
-        self.toggle_fullscreen_calls += 1
 
     def evaluate_js(self, js):
         self.evaluated.append(js)
@@ -328,9 +321,14 @@ def test_window_bridges_wire_clipboard(monkeypatch):
     assert any("__orionbeltClipboardBridge" in js for js in window.evaluated)
 
 
-def test_window_bridges_wire_fullscreen_toggle(monkeypatch):
-    """The bridge exposes a native fullscreen toggle for the graph button to call
-    when the webview lacks the HTML Fullscreen API (issue #177)."""
+def test_the_window_is_never_put_into_fullscreen(monkeypatch):
+    """The graph's Fullscreen button hides the app's chrome and stops there.
+
+    It used to route through a bridge to pywebview's toggle_fullscreen() where
+    the webview had no HTML Fullscreen API (issue #177), which took the whole
+    desktop window into fullscreen along with the graph. Nothing asks for the
+    screen any more (issue #390), so nothing is exposed to ask with.
+    """
     window = _FakeWindow()
     fake_webview = types.ModuleType("webview")
     fake_webview.create_window = lambda *a, **k: window
@@ -342,67 +340,12 @@ def test_window_bridges_wire_fullscreen_toggle(monkeypatch):
 
     webview.create_window("AppName", "http://localhost")
 
-    toggler = next(
-        fn for fn in window.exposed if fn.__name__ == "orionbelt_toggle_fullscreen"
-    )
-    # Each call reaches the native window and reports only that it got there:
-    # pywebview holds the resulting state on its platform window, and Qt flips it
-    # asynchronously, so the bridge deliberately doesn't claim to know it.
-    assert toggler() is True
-    assert window.toggle_fullscreen_calls == 1
-    assert toggler() is True
-    assert window.toggle_fullscreen_calls == 2
-
-    # A backend that can't toggle reports failure rather than raising into JS.
-    def _boom():
-        raise RuntimeError("no fullscreen here")
-
-    window.toggle_fullscreen = _boom
-    assert toggler() is None
-
-
-def test_native_fullscreen_exit_notifies_page(monkeypatch):
-    """Leaving fullscreen outside our button (Esc) must reach the page and reset
-    pywebview's tracked flag, or the graph overlay keeps covering the shrunken
-    window (issue #177 follow-up)."""
-    window = _FakeWindow()
-    view = types.SimpleNamespace(is_fullscreen=True)
-    window.gui = types.SimpleNamespace(
-        BrowserView=types.SimpleNamespace(instances={window.uid: view})
-    )
-    fake_webview = types.ModuleType("webview")
-    fake_webview.create_window = lambda *a, **k: window
-    monkeypatch.setitem(sys.modules, "webview", fake_webview)
-
-    desktop._install_window_bridges("AppName")
-
-    import webview
-
-    webview.create_window("AppName", "http://localhost")
-
-    assert window.events.restored, "no restored handler registered"
-    window.events.restored[0]()
-
-    assert any("__orionbeltNativeFullscreenExit" in js for js in window.evaluated)
-    # The stale flag is cleared so the next Fullscreen click enters again.
-    assert view.is_fullscreen is False
-
-
-def test_native_fullscreen_exit_survives_unknown_backend(monkeypatch):
-    """A backend without the internals we poke at must still notify the page."""
-    window = _FakeWindow()  # gui is None: no BrowserView to reach
-    fake_webview = types.ModuleType("webview")
-    fake_webview.create_window = lambda *a, **k: window
-    monkeypatch.setitem(sys.modules, "webview", fake_webview)
-
-    desktop._install_window_bridges("AppName")
-
-    import webview
-
-    webview.create_window("AppName", "http://localhost")
-    window.events.restored[0]()
-
-    assert any("__orionbeltNativeFullscreenExit" in js for js in window.evaluated)
+    assert [fn.__name__ for fn in window.exposed] == [
+        "orionbelt_set_window_title",
+        "orionbelt_copy_to_clipboard",
+    ]
+    # ...and no window event is watched for a fullscreen exit that can't happen.
+    assert not window.events.restored, "nothing should watch for a native exit"
 
 
 def test_copy_to_clipboard_uses_platform_command(monkeypatch):

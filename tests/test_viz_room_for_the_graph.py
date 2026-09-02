@@ -68,6 +68,19 @@ def test_render_is_sized_to_its_label():
     assert ".st-key-viz_render_btn button" in graph_space_css(True)
 
 
+def test_the_render_label_never_breaks():
+    """The button's column is a share of the row, so a narrow window squeezed
+    it until "Render" broke into "Rend / er". The label is held on one line and
+    the button keeps its own width whatever the column does."""
+    css = graph_space_css(True)
+    button = css[css.index(".st-key-viz_render_btn button {") :]
+    button = button[: button.index("}")]
+    assert "white-space: nowrap" in button
+    assert "width: max-content" in button
+    # The label is its own element inside the button, and it wraps on its own.
+    assert ".st-key-viz_render_btn button p" in css
+
+
 def test_the_page_keeps_its_own_spacing():
     """The title, the section tabs and the gaps between the rows are left
     alone: the room comes from the controls, not from crowding the page."""

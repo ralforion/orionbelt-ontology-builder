@@ -85,13 +85,6 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
     right: calc(100% + 8px);
     transform: translateY(-50%);
 }
-/* In fullscreen the container fills the screen, so the graph doesn't fall back
-   to the browser's default black backdrop. Percentages, not vw/vh: this document
-   is a Streamlit component iframe, where vw/vh resolve against the *iframe's*
-   viewport, so a browser window smaller than the screen left the container that
-   size with black bands around it (issue #177 follow-up). 100% resolves against
-   the fullscreen box the UA gives us, which is the screen. */
-#container:fullscreen { width: 100%; height: 100%; }
 </style>
 <script>
 // Paint the remembered background before the first frame.
@@ -128,7 +121,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 <div id="container" style="position: relative;">
     <div id="graph"></div>
     <div id="legend"></div>
-    <button id="fullscreen-btn" data-tip="Fullscreen" aria-label="Fullscreen" style="display:none;" onclick="toggleFullscreen()">
+    <button id="fullscreen-btn" data-tip="Maximize" aria-label="Maximize" style="display:none;" onclick="toggleFullscreen()">
         <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
     </button>
     <button id="download-btn" data-tip="Download as PNG" aria-label="Download as PNG" style="display:none;" onclick="downloadGraph()">
@@ -425,12 +418,12 @@ function measureReserve() {
     return Math.min(lowest - bottom, AUTOFIT_MAX_RESERVE);
 }
 
-// The page's own viewport, which while the page is fullscreen is the screen.
-// Read from the parent's root element as well as from innerHeight: this document
-// is a component iframe, and a fullscreen page does not resize it, so its own
-// window.innerHeight says nothing about the box the canvas has to fill (issue
-// #177 follow-up). The larger of the two is the page's current viewport in both
-// states — out of fullscreen they agree, bar a scrollbar.
+// The page's own viewport, which is the box the graph has to fit into. Read
+// from the parent's root element as well as from innerHeight: this document is a
+// component iframe, so its own window.innerHeight is the height of the slot it
+// has been given, not of the page (issue #177 follow-up). The larger of the two
+// is the page's current viewport, in fullscreen and out of it — they agree bar a
+// scrollbar, and in fullscreen the page has no scrollbar.
 function viewportHeight() {
     var d = parentDoc();
     var client = (d && d.documentElement && d.documentElement.clientHeight) || 0;
@@ -692,26 +685,32 @@ function downloadGraph() {
     }
 }
 
-// --- Fullscreen (issues #177, #189, #381) -----------------------------------
+// --- Fullscreen (issues #177, #189, #381, #390) ------------------------------
 //
-// Fullscreen is taken on the *parent page's* root element, not on this iframe's
-// #container, and the app's chrome is hidden by a class the page's own CSS
-// selects (visualization.graph_fullscreen_css). Fullscreening the container gave
-// the graph the screen and left every control outside it: Display options, Find
-// & focus, Path finder, Node options and the details panel are all Streamlit's
-// DOM, out here in the parent, so reaching any of them meant leaving fullscreen
-// and going back in (issue #381).
+// Fullscreen here means the graph page filling the browser window, not the
+// window filling the screen. The app's chrome is hidden by a class the page's
+// own CSS selects (visualization.graph_fullscreen_css) and that is the whole of
+// it: no requestFullscreen on the page, and no native window toggle on the
+// desktop. Taking the screen fought the way people actually work — an ontology
+// is built alongside other windows, and the OS already has a shortcut for
+// anyone who does want the screen (issue #390).
 //
-// Taking the page also retires the workaround from issue #189. The fullscreen
-// element used to live in this document, which Streamlit replaces whenever it
-// re-mounts the component, so a selection that reached Python destroyed it and
-// dropped fullscreen; selections had to be held back until exit. The parent's
-// root element survives every rerun, so they round-trip again and the details
-// panel behind the graph is the live one.
+// The class goes on the *parent page's* body, not on this iframe's #container.
+// Fullscreening the container gave the graph the room and left every control
+// outside it: Display options, Find & focus, Path finder, Node options and the
+// details panel are all Streamlit's DOM, out here in the parent, so reaching any
+// of them meant leaving fullscreen and going back in (issue #381).
+//
+// Working on the page also retires the workaround from issue #189. The
+// fullscreen element used to live in this document, which Streamlit replaces
+// whenever it re-mounts the component, so a selection that reached Python
+// destroyed it and dropped fullscreen; selections had to be held back until
+// exit. A class on the parent's body survives every rerun, so they round-trip
+// again and the details panel behind the graph is the live one.
 var FS_CLASS = 'orionbelt-graph-fullscreen';
 
 // The parent document, or null where it can't be reached — a cross-origin host,
-// where there is no page to fullscreen and the button stays hidden.
+// where there is no page to expand into and the button stays hidden.
 function parentDoc() {
     try {
         var fe = window.frameElement;
@@ -719,17 +718,6 @@ function parentDoc() {
     } catch (e) {
         return null;
     }
-}
-
-// True while the *page* is the fullscreen element. Only the page: Streamlit
-// fullscreens elements of its own (the chart and image expanders), and adopting
-// one of those would hide the app's chrome behind it. The prefixed property is
-// read too, so a WebKit implementation isn't misread as "not fullscreen".
-function pageFullscreenOn() {
-    var d = parentDoc();
-    if (!d) return false;
-    var el = d.fullscreenElement || d.webkitFullscreenElement;
-    return !!el && el === d.documentElement;
 }
 
 // The chrome-hidden state. It lives on the parent's <body> rather than in a
@@ -748,57 +736,23 @@ function setStage(on) {
     else d.body.classList.remove(FS_CLASS);
 }
 
-// Whether the HTML Fullscreen API is actually available for the page. The
-// desktop pywebview doesn't support it — requestFullscreen throws "Fullscreen is
-// not supported" (#177) — in which case we fall back to the native window.
-function htmlFullscreenSupported() {
-    try {
-        var d = parentDoc();
-        var root = d && d.documentElement;
-        return !!(d && (d.fullscreenEnabled || d.webkitFullscreenEnabled) &&
-            root && (root.requestFullscreen || root.webkitRequestFullscreen));
-    } catch (e) {
-        return false;
-    }
-}
-
-// The native desktop window's fullscreen toggle, exposed by the pywebview host
-// (desktop.py). Reached via window.top since the graph is in a same-origin
-// iframe; returns null on the web (cross-origin access throws, or no pywebview).
-function desktopFullscreenToggle() {
-    try {
-        var api = window.top && window.top.pywebview && window.top.pywebview.api;
-        if (api && api.orionbelt_toggle_fullscreen) return api.orionbelt_toggle_fullscreen;
-    } catch (e) {}
-    return null;
-}
-
-// Offer the button wherever the page can be reached and either path works: the
-// HTML API on the web, the native window in the desktop app. Hide it only where
-// neither exists.
+// Offer the button wherever there is a page whose chrome we can hide. That is
+// every host the component is embedded in same-origin — Streamlit on the web and
+// the desktop webview alike — and nowhere else.
 function fullscreenSupported() {
-    return !!parentDoc() && (htmlFullscreenSupported() || !!desktopFullscreenToggle());
-}
-
-function toggleNativeWindow() {
-    var toggle = desktopFullscreenToggle();
-    if (!toggle) return;
-    try {
-        var r = toggle();
-        if (r && r.catch) r.catch(function () {});
-    } catch (e) {}
+    return !!parentDoc();
 }
 
 // Selections round-trip even while fullscreen: the details panel and status bar
-// they repaint are on screen now, and the fullscreen element is the page, which
+// they repaint are on screen now, and the state is a class on the page, which
 // no rerun replaces (issues #189, #381).
 function sendSelection(value) {
     sendToStreamlit("streamlit:setComponentValue", {value: value});
 }
 
 // Run fn after the browser has reflowed (two frames), falling back to a timer.
-// The fullscreen box is not at its final size when the request resolves, and
-// reading it synchronously returns the pre-fullscreen height.
+// Hiding the chrome reflows the page around this iframe, and reading the height
+// synchronously returns the box as it was before.
 function afterReflow(fn) {
     if (window.requestAnimationFrame) {
         requestAnimationFrame(function () { requestAnimationFrame(fn); });
@@ -807,34 +761,10 @@ function afterReflow(fn) {
     }
 }
 
-// Name of the hook the native host (desktop.py) calls when its window leaves
-// fullscreen without going through our button — Esc, the macOS green button, the
-// Window menu. The webview surfaces no fullscreenchange for the native window,
-// so without this the chrome would stay hidden while the window shrank back
-// (issue #177 follow-up). It lives on the top window because that is the frame
-// Python's evaluate_js runs in.
-var TOP_FS_EXIT_HOOK = '__orionbeltNativeFullscreenExit';
-
-function setNativeFsExitHook(fn) {
-    try { if (window.top) window.top[TOP_FS_EXIT_HOOK] = fn; } catch (e) {}
-}
-
-// The hook is a function belonging to *this* document, and fullscreen now
-// outlives it: Streamlit re-mounts the component and the closure the old
-// document installed goes with it, so the desktop window leaving fullscreen
-// would have nobody left to tell and the chrome would stay hidden. Every mount
-// that finds the page still fullscreen claims it again (review P2).
-function installNativeFsExitHook() {
-    setNativeFsExitHook(function () { if (stageOn()) leaveFullscreen(true); });
-}
-
 // What a fresh document has to work out for itself: the page may already be
 // fullscreen, and nothing in here knows it (issue #372).
 function syncFullscreenState() {
-    var on = stageOn();
-    setFullscreenIcon(on);
-    if (on) installNativeFsExitHook();
-    else setNativeFsExitHook(null);
+    setFullscreenIcon(stageOn());
 }
 
 function rememberViewport() {
@@ -850,57 +780,32 @@ function enterFullscreen() {
     rememberViewport();
     setStage(true);
     setFullscreenIcon(true);
-    var d = parentDoc();
-    var root = d && d.documentElement;
-    var req = root && (root.requestFullscreen || root.webkitRequestFullscreen);
-    var asked = false;
-    if (htmlFullscreenSupported() && req) {
-        try {
-            var p = req.call(root);
-            asked = true;
-            // A webview can claim support and still refuse: fall back to the
-            // native window rather than leaving the page half changed.
-            if (p && p.catch) p.catch(function () { toggleNativeWindow(); });
-        } catch (e) {
-            asked = false;
-        }
-    }
-    if (!asked) toggleNativeWindow();
-    installNativeFsExitHook();
     settleFullscreen(true);
 }
 
-// fromNative: the desktop window has already left fullscreen on its own, so the
-// only thing left to do is put the chrome back.
-function leaveFullscreen(fromNative) {
+function leaveFullscreen() {
     setStage(false);
     setFullscreenIcon(false);
-    setNativeFsExitHook(null);
-    if (pageFullscreenOn()) {
-        var d = parentDoc();
-        var exit = d && (d.exitFullscreen || d.webkitExitFullscreen);
-        try {
-            var p = exit && exit.call(d);
-            if (p && p.catch) p.catch(function () {});
-        } catch (e) {}
-    } else if (!fromNative) {
-        toggleNativeWindow();
-    }
     settleFullscreen(false);
 }
 
 // Enter/exit fullscreen for the graph page: the canvas plus the controls that
 // drive it, with the app's chrome hidden (issue #381).
 function toggleFullscreen() {
-    if (stageOn()) leaveFullscreen(false);
+    if (stageOn()) leaveFullscreen();
     else enterFullscreen();
 }
 
 // Swap the button glyph/hint between the "enter" and "exit" states.
+//
+// The button says Maximize/Restore rather than Fullscreen: what it does is
+// fill the browser window, and the screen and the OS window are left alone
+// (issue #390). Only the words a user reads changed — everything else here
+// keeps the fullscreen names the issues behind it use.
 function setFullscreenIcon(on) {
     var fsBtn = document.getElementById('fullscreen-btn');
     if (!fsBtn) return;
-    setButtonTip(fsBtn, on ? 'Exit fullscreen' : 'Fullscreen');
+    setButtonTip(fsBtn, on ? 'Restore' : 'Maximize');
     fsBtn.querySelector('svg').innerHTML = on
         ? '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>'
         : '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';
@@ -908,8 +813,9 @@ function setFullscreenIcon(on) {
 
 // Size the canvas to the new box and hold the viewport steady. There is no
 // separate fullscreen measurement any more: fullscreen or not, the canvas takes
-// the room left below the controls, which is what autofitHeight() measures — it
-// reads the page's viewport, and in fullscreen the page's viewport is the screen.
+// the room left below the controls, which is what autofitHeight() measures — and
+// what fullscreen changes is how much of the page is left over once the chrome
+// around it is hidden.
 //
 // vis rescales the view on each of the several 'resize' events it fires while
 // the canvas changes size, and a moveTo() *inside* that emit is overwritten by
@@ -951,46 +857,36 @@ function scheduleFullscreenView(entering) {
     }
 }
 
-// The box arrives at its final size in its own time — the browser animates the
-// transition, the desktop window resizes after its own toggle, and hiding the
-// sidebar reflows the page underneath. Re-measure as it settles rather than
-// trusting the first read.
+// The box arrives at its final size in its own time: hiding the sidebar, the
+// header and the tabs reflows the page around this iframe, and Streamlit's own
+// layout settles after that. Re-measure as it goes rather than trusting the
+// first read.
 function settleFullscreen(entering) {
     scheduleFullscreenView(entering);
     afterReflow(function () { scheduleFullscreenView(entering); });
     setTimeout(function () { scheduleFullscreenView(entering); }, 250);
 }
 
-// Esc, or the browser dropping fullscreen on its own. Only our own page
-// fullscreen is followed; anything else on the page fullscreening something of
-// its own is none of our business.
-function onPageFullscreenChange() {
-    if (!stageOn() || pageFullscreenOn()) return;
-    setStage(false);
-    setFullscreenIcon(false);
-    setNativeFsExitHook(null);
-    settleFullscreen(false);
+// Esc leaves fullscreen. The browser used to do this for us, back when the page
+// was the fullscreen element; expanding inside the window means wiring it up
+// (issue #390). Both documents are listened to: the key lands in this one while
+// the canvas has focus and in the parent while any of the controls do.
+function onEscape(e) {
+    if ((e.key !== 'Escape' && e.keyCode !== 27) || !stageOn()) return;
+    leaveFullscreen();
 }
 
+document.addEventListener('keydown', onEscape);
 (function () {
     var d = parentDoc();
     if (!d) return;
-    d.addEventListener('fullscreenchange', onPageFullscreenChange);
-    d.addEventListener('webkitfullscreenchange', onPageFullscreenChange);
+    d.addEventListener('keydown', onEscape);
     // This document is replaced on every re-mount, so leave the parent as we
     // found it: otherwise each mount piles another dead listener onto it.
     window.addEventListener('pagehide', function () {
-        d.removeEventListener('fullscreenchange', onPageFullscreenChange);
-        d.removeEventListener('webkitfullscreenchange', onPageFullscreenChange);
+        d.removeEventListener('keydown', onEscape);
     });
 })();
-// Fullscreen from inside an iframe needs the frame to permit it. Streamlit's
-// component iframe is same-origin, so grant it defensively (belt and braces on
-// top of Streamlit's own allowFullScreen).
-try {
-    var _fe = window.frameElement;
-    if (_fe) { _fe.allowFullscreen = true; _fe.setAttribute('allow', 'fullscreen'); }
-} catch (e) {}
 
 function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
@@ -1206,12 +1102,11 @@ function renderGraph(args) {
         network.on('beforeDrawing', function(ctx) { drawPathRings(ctx, pathRings); });
     }
     document.getElementById('download-btn').style.display = 'flex';
-    // Only offer fullscreen where there is a page to fullscreen.
+    // Only offer fullscreen where there is a page whose chrome we can hide.
     if (fullscreenSupported()) {
         document.getElementById('fullscreen-btn').style.display = 'flex';
         // A re-mount lands in a document that knows nothing, while the page may
-        // still be fullscreen: take the state from the page, and take over the
-        // hooks the last document owned.
+        // still be fullscreen: take the state from the page.
         syncFullscreenState();
     }
     // Restore selection + viewport after a genuine re-mount (e.g. the panel

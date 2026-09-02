@@ -6,6 +6,7 @@ details panel behind it, and no other test would notice.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import sources
@@ -68,8 +69,8 @@ def test_graph_status_placeholder_is_unconditional():
     )
 
 
-def test_fullscreen_is_taken_on_the_page_not_on_the_canvas():
-    """The fullscreen element must be the *parent page's* root element.
+def test_fullscreen_hides_the_chrome_and_nothing_else():
+    """Entering fullscreen is one thing: the class on the *parent page's* body.
 
     Fullscreening the canvas' own container put the whole of Streamlit's DOM —
     Display options, Find & focus, Path finder, Node options, the details panel
@@ -79,13 +80,42 @@ def test_fullscreen_is_taken_on_the_page_not_on_the_canvas():
     src = _VIEWER.read_text(encoding="utf-8")
 
     enter = src[src.index("function enterFullscreen(") :].split("\n}", 1)[0]
-    assert "parentDoc()" in enter and "documentElement" in enter, (
-        "fullscreen must be requested on the parent page's root element"
+    assert "setStage(true)" in enter, (
+        "fullscreen is the chrome-hiding class on the page's body"
     )
     assert "getElementById('container')" not in enter, (
         "fullscreening the component's own container leaves every control "
         "outside it behind (issue #381)"
     )
+
+
+def test_the_window_is_left_alone():
+    """Fullscreen must not take the screen as well as the page.
+
+    The button used to call requestFullscreen() on the page (and pywebview's
+    toggle_fullscreen() on the desktop), which put the whole OS window into
+    fullscreen. An ontology is built alongside other windows, and the OS has its
+    own shortcut for anyone who does want the screen (issue #390).
+    """
+    # Comment lines are dropped: they are where the old behaviour is explained,
+    # and the point is that no code does it any more.
+    code = "\n".join(
+        line
+        for line in _VIEWER.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("//")
+    )
+
+    for banned in (
+        "requestFullscreen",
+        "exitFullscreen",
+        "fullscreenEnabled",
+        "fullscreenElement",
+        "orionbelt_toggle_fullscreen",
+        "allowFullscreen",
+    ):
+        assert banned not in code, (
+            f"{banned} takes the OS window into fullscreen with the graph (issue #390)"
+        )
 
 
 def test_the_fullscreen_state_lives_on_the_page():
@@ -97,17 +127,8 @@ def test_the_fullscreen_state_lives_on_the_page():
     assert f"var FS_CLASS = '{GRAPH_FS_CLASS}'" in src
     assert GRAPH_FS_CLASS in graph_fullscreen_css(dark=False)
     # And the button reads it back on mount rather than assuming "not fullscreen".
-    assert "setFullscreenIcon(on)" in src
+    assert "setFullscreenIcon(stageOn())" in src
     assert "syncFullscreenState()" in src
-
-
-def test_only_our_own_page_fullscreen_is_followed():
-    """Streamlit fullscreens elements of its own (the chart and image
-    expanders). Following one of those would hide the app's chrome behind
-    somebody else's fullscreen element."""
-    src = _VIEWER.read_text(encoding="utf-8")
-    fn = src[src.index("function pageFullscreenOn(") :].split("\n}", 1)[0]
-    assert "=== d.documentElement" in fn
 
 
 def test_selections_reach_python_while_fullscreen():
@@ -134,28 +155,33 @@ def test_selections_reach_python_while_fullscreen():
         )
 
 
-def test_the_native_exit_hook_is_reclaimed_by_every_mount():
-    """The desktop host calls a hook on the top window when its own window
-    leaves fullscreen (Esc, the green button, the Window menu). The hook is a
-    function of the document that installed it, and fullscreen now outlives
-    that document — so a mount that finds the page still fullscreen has to
-    claim the hook back, or the chrome stays hidden with nobody to put it back.
-    """
+def test_the_state_is_read_back_by_every_mount():
+    """A re-mount lands in a document that knows nothing while the page may still
+    be fullscreen, so the button would offer to enter what it is already in."""
     src = _VIEWER.read_text(encoding="utf-8")
     sync = src[src.index("function syncFullscreenState(") :].split("\n}", 1)[0]
-    assert "installNativeFsExitHook()" in sync
-    assert "setNativeFsExitHook(null)" in sync
+    assert "stageOn()" in sync
     # ...and that is what a fresh render runs.
     assert "syncFullscreenState();" in src
-    assert "setFullscreenIcon(stageOn())" not in src
+
+
+def test_escape_leaves_fullscreen():
+    """The browser used to do this for us, back when the page was the fullscreen
+    element. Expanding inside the window means wiring Esc up by hand, in both
+    documents: the key lands in the viewer's while the canvas has focus and in
+    the page's while any of the controls do (issue #390)."""
+    src = _VIEWER.read_text(encoding="utf-8")
+    fn = src[src.index("function onEscape(") :].split("\n}", 1)[0]
+    assert "'Escape'" in fn and "leaveFullscreen()" in fn
+    assert "document.addEventListener('keydown', onEscape)" in src
+    assert "d.addEventListener('keydown', onEscape)" in src
 
 
 def test_the_page_listener_is_removed_with_the_document():
     """The listener is registered on the parent, which outlives this document by
     many re-mounts. Without the teardown each mount piles another dead one on."""
     src = _VIEWER.read_text(encoding="utf-8")
-    assert "d.addEventListener('fullscreenchange', onPageFullscreenChange)" in src
-    assert "d.removeEventListener('fullscreenchange', onPageFullscreenChange)" in src
+    assert "d.removeEventListener('keydown', onEscape)" in src
     assert "window.addEventListener('pagehide'" in src
 
 
@@ -185,10 +211,10 @@ def test_fullscreen_hides_the_app_chrome_but_not_the_controls():
 
 
 def test_the_canvas_measures_the_page_not_its_own_iframe():
-    """A fullscreen page does not resize the component iframe, so the iframe's
-    own window.innerHeight says nothing about the box to fill. The height comes
-    from the page's viewport in both states — there is no separate fullscreen
-    measurement left to drift (issue #177 follow-up)."""
+    """The iframe's own window.innerHeight is the height of the slot Streamlit
+    gave it, not of the page, so it says nothing about the box to fill. The
+    height comes from the page's viewport in both states — there is no separate
+    fullscreen measurement left to drift (issue #177 follow-up)."""
     src = _VIEWER.read_text(encoding="utf-8")
     fn = src[src.index("function viewportHeight(") :].split("\n}", 1)[0]
     assert "documentElement.clientHeight" in fn
@@ -203,7 +229,7 @@ def test_the_toolbar_says_what_its_buttons_do():
     up from there. The page draws them instead."""
     src = _VIEWER.read_text(encoding="utf-8")
 
-    for tip in ("Fullscreen", "Download as PNG", "Copy what is selected"):
+    for tip in ("Maximize", "Download as PNG", "Copy what is selected"):
         assert f'data-tip="{tip}"' in src
         assert f'aria-label="{tip}"' in src
     assert "title=" not in src.split("<body>", 1)[1].split("</button>", 1)[0]
@@ -213,6 +239,23 @@ def test_the_toolbar_says_what_its_buttons_do():
     # Every later change of what a button says goes through the one helper.
     assert "btn.title =" not in src
     assert src.count("setButtonTip(") >= 4
+
+
+def test_the_button_says_maximize_not_fullscreen():
+    """What the button does is fill the browser window; the screen and the OS
+    window are left alone (issue #390). So it is labelled the way a window
+    control is — Maximize, and Restore once it is one — and the word fullscreen
+    never reaches a user. Everything else here keeps the fullscreen names the
+    issues behind it use."""
+    src = _VIEWER.read_text(encoding="utf-8")
+    fn = src[src.index("function setFullscreenIcon(") :].split("\n}", 1)[0]
+    assert "'Restore' : 'Maximize'" in fn
+
+    said = re.findall(r'(?:data-tip|aria-label)="([^"]*)"', src)
+    said += re.findall(r"setButtonTip\([^,]+,\s*'([^']*)'", src)
+    assert said, "the button labels are read from the page, so they must be found"
+    for words in said:
+        assert "fullscreen" not in words.lower(), f"{words!r} says fullscreen"
 
 
 def test_a_tooltip_steps_aside_for_whatever_is_under_the_button():

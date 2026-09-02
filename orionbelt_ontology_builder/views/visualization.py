@@ -385,12 +385,28 @@ def graph_space_css(find_row_open: bool) -> str:
     /* Render, cut back to its label. Streamlit's default button is 38px tall
        and stretched across its whole column, which made it the largest thing
        above the canvas — for a button that is only reached after changing
-       something else. */
+       something else.
+
+       Sized to its label means never below it: the column is a share of the
+       row, so on a narrow window it squeezed the button until "Render" broke
+       into "Rend / er". The label is held on one line and the button keeps its
+       own width, and it sits at the end of its column so the spare width stays
+       in the gap before it rather than between it and the page edge. */
+    .st-key-viz_render_btn {{
+        display: flex;
+        justify-content: flex-end;
+        width: 100%;
+    }}
     .st-key-viz_render_btn button {{
         min-height: 28px;
         height: 28px;
         padding: 0 0.9rem;
         line-height: 1.2;
+        width: max-content;
+        white-space: nowrap;
+    }}
+    .st-key-viz_render_btn button p {{
+        white-space: nowrap;
     }}{hide_find_row}
     </style>"""
 
@@ -402,10 +418,14 @@ def graph_fullscreen_css(dark: bool) -> str:
     the component iframe. That gave the graph the screen and left every control
     outside it: Display options, Find & focus, Path finder, Node options and the
     details panel are all Streamlit's DOM, so reaching any of them meant leaving
-    fullscreen and going back in (issue #381). The viewer now fullscreens the
-    page itself and puts this class on the body, which hides what is not the
-    graph page — the sidebar, Streamlit's own header, the title and the section
-    tabs — so the controls come along and the room still goes to the canvas.
+    fullscreen and going back in (issue #381). The viewer puts this class on the
+    body instead, and it hides what is not the graph page — the sidebar,
+    Streamlit's own header, the title and the section tabs — so the controls come
+    along and the room still goes to the canvas.
+
+    This class is now the whole of fullscreen: the browser window is left alone,
+    because people build an ontology alongside other windows and the OS already
+    has a shortcut for anyone who does want the screen (issue #390).
 
     The rules are injected with the rest of the graph page, so they exist only
     while that page is on screen: if a rerun ever navigates away with the class
@@ -440,8 +460,8 @@ def graph_fullscreen_css(dark: bool) -> str:
         padding: 0.5rem 1rem 0 !important;
         max-width: none !important;
     }}
-    /* The page is the fullscreen box now: nothing should be scrolled out of it,
-       and the ground behind it is the graph's own, not the browser's black. */
+    /* The window is the fullscreen box: nothing should be scrolled out of it,
+       and the ground behind it is the graph's own. */
     body.{GRAPH_FS_CLASS} {{
         overflow: hidden;
         background: {bg};
@@ -602,8 +622,10 @@ def render_visualization():
         # laid out inline (see BAND_SWITCH_CSS), so they read as a set and no
         # label can be squeezed into breaking.
         st.html(BAND_SWITCH_CSS)
+        # The last column is wide enough for the button at the widths the app
+        # is actually used at; the spare width sits in the gap between the two.
         _switch_col, _, _render_col = st.columns(
-            [3.6, 1.9, 0.5], vertical_alignment="center"
+            [3.6, 1.4, 1.0], vertical_alignment="center"
         )
         with _switch_col.container(key="viz_band_switches"):
             options_open = st.toggle(
