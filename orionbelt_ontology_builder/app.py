@@ -61,7 +61,9 @@ from .ui import (  # noqa: F401
     SPARQL_STATE_KEY,
     VIZ_FILE_STATE_KEY,
     VIZ_FILE_STATE_MAX_FILES,
+    VIZ_FOCUS_SEED_KINDS,
     VIZ_NODE_PANEL,
+    VIZ_PARKED_SEEDS_KEY,
     VIZ_SETTINGS_KEY,
     _apply_annotation_edit,
     _apply_class_edit,
@@ -254,9 +256,12 @@ from .ui import (  # noqa: F401
     viz_node_id,
     viz_note_rename,
     viz_ontology_was_replaced,
+    viz_park_focus_seeds,
     viz_rename_map,
     viz_set_focus_seeds,
+    viz_show_kind_toggled,
     viz_sync,
+    viz_unpark_focus_seeds,
 )
 
 # The pages, re-exported so ``app.render_classes`` and friends still resolve.

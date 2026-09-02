@@ -82,6 +82,7 @@ from ..ui import (
     viz_ontology_was_replaced,
     viz_rename_map,
     viz_set_focus_seeds,
+    viz_show_kind_toggled,
     viz_sync,
 )
 
@@ -675,8 +676,8 @@ def render_visualization():
                 st.checkbox(
                     "Classes",
                     key="viz_show_classes",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_classes", "viz_show_classes"),
+                    on_change=viz_show_kind_toggled,
+                    args=("_viz_cfg_show_classes", "viz_show_classes", "Class"),
                 )
             with _cols[1]:
                 st.checkbox(
@@ -689,8 +690,12 @@ def render_visualization():
                 st.checkbox(
                     "Data Props",
                     key="viz_show_data_props",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_data_props", "viz_show_data_props"),
+                    on_change=viz_show_kind_toggled,
+                    args=(
+                        "_viz_cfg_show_data_props",
+                        "viz_show_data_props",
+                        "Data Property",
+                    ),
                 )
             with _cols[3]:
                 st.checkbox(
@@ -703,8 +708,12 @@ def render_visualization():
                 st.checkbox(
                     "Individuals",
                     key="viz_show_individuals",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_individuals", "viz_show_individuals"),
+                    on_change=viz_show_kind_toggled,
+                    args=(
+                        "_viz_cfg_show_individuals",
+                        "viz_show_individuals",
+                        "Individual",
+                    ),
                 )
             _ind_edge_col, _triple_col = (
                 (_cols[6], _cols[7]) if _has_skos else (_cols[5], _cols[6])
@@ -714,8 +723,8 @@ def render_visualization():
                     st.checkbox(
                         "SKOS",
                         key="viz_show_skos",
-                        on_change=viz_sync,
-                        args=("_viz_cfg_show_skos", "viz_show_skos"),
+                        on_change=viz_show_kind_toggled,
+                        args=("_viz_cfg_show_skos", "viz_show_skos", "Concept"),
                     )
             with _ind_edge_col:
                 st.checkbox(

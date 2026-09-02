@@ -63,6 +63,20 @@ _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
     "focus_depth": (1, 5),
 }
+#: Which display switch each focus-seed kind rides on. A seed label carries its
+#: kind (``Class: Person``, see ``_focus_target``), which is what lets a seed
+#: whose entity is gone be told from one whose type is merely switched off
+#: (issue #396).
+VIZ_FOCUS_SEED_KINDS = {
+    "Class": "_viz_cfg_show_classes",
+    "Individual": "_viz_cfg_show_individuals",
+    "Data Property": "_viz_cfg_show_data_props",
+    "Concept": "_viz_cfg_show_skos",
+}
+#: Seeds set aside while their entity type is switched off, as
+#: ``{kind: {"seeds": [...], "focus_mode": bool}}``. Session-only: a focus does
+#: not outlive a reload either.
+VIZ_PARKED_SEEDS_KEY = "_viz_parked_focus_seeds"
 VIZ_FILE_STATE_KEY = "viz_file_state"
 VIZ_FILE_STATE_MAX_FILES = 20
 #: Where the chosen language pack and any custom ones are stored (issue #252) —
@@ -1661,6 +1675,73 @@ def viz_apply_focus_click(label, replace=False):
     return seeds, focus_on
 
 
+def _viz_seeds_of_kind(kind_word):
+    """The current focus seeds belonging to ``kind_word``."""
+    prefix = f"{kind_word}: "
+    seeds = st.session_state.get("_viz_cfg_focus_seeds") or []
+    return [s for s in seeds if isinstance(s, str) and s.startswith(prefix)]
+
+
+def viz_park_focus_seeds(kind_word) -> None:
+    """Set this kind's focus seeds aside while its entity type is switched off.
+
+    The render prune still drops them from the live seeds, as it must: they
+    resolve to nothing while the type is off, and a seed that resolves to
+    nothing cannot be left in play (the Codex review of PR #336). What is kept
+    here is the copy to put back, along with whether focus mode was running,
+    since restoring the seeds and leaving the mode off is only half the job.
+    """
+    going = _viz_seeds_of_kind(kind_word)
+    if not going:
+        return
+    parked = dict(st.session_state.get(VIZ_PARKED_SEEDS_KEY) or {})
+    parked[kind_word] = {
+        "seeds": going,
+        "focus_mode": bool(st.session_state.get("_viz_cfg_focus_mode")),
+    }
+    st.session_state[VIZ_PARKED_SEEDS_KEY] = parked
+
+
+def viz_unpark_focus_seeds(kind_word) -> None:
+    """Put this kind's seeds back now its entity type is drawn again (#396).
+
+    Merged rather than assigned: seeds picked while the type was off are the
+    user's current focus and stay. Nothing is validated here — the seeds come
+    back with no entry in the label -> id map, which is the state of a seed the
+    user has just picked, so the next render's prune keeps the ones that resolve
+    and drops the ones whose entity has gone in the meantime.
+    """
+    parked = dict(st.session_state.get(VIZ_PARKED_SEEDS_KEY) or {})
+    entry = parked.pop(kind_word, None)
+    if not entry:
+        return
+    st.session_state[VIZ_PARKED_SEEDS_KEY] = parked
+    seeds = list(st.session_state.get("_viz_cfg_focus_seeds") or [])
+    seen = set(seeds)
+    viz_set_focus_seeds(seeds + [s for s in entry["seeds"] if s not in seen])
+    if entry.get("focus_mode") and not st.session_state.get("_viz_cfg_focus_mode"):
+        # The config key only: the next render copies it into the checkbox's
+        # widget key, and writing that here raises once the checkbox exists.
+        st.session_state["_viz_cfg_focus_mode"] = True
+        st.session_state["_viz_settings_dirty"] = True
+
+
+def viz_show_kind_toggled(cfg_key, wid_key, kind_word) -> None:
+    """An entity-type switch that focus seeds depend on (issue #396).
+
+    Persists the setting like any other display switch, and then parks or
+    restores the seeds of that kind. Done here rather than in the render prune
+    because this is the one place that knows the switch is what changed: to the
+    prune, a seed whose type was just switched off and one whose entity was just
+    deleted look exactly alike.
+    """
+    viz_sync(cfg_key, wid_key)
+    if st.session_state.get(cfg_key):
+        viz_unpark_focus_seeds(kind_word)
+    else:
+        viz_park_focus_seeds(kind_word)
+
+
 def viz_focus_toggle():
     """Persist the focus toggle, seeding the focus nodes on first use.
 
@@ -1680,6 +1761,11 @@ def viz_focus_toggle():
     on = st.session_state["viz_focus_mode"]
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
+    if not on:
+        # Switching the mode off by hand is a decision about the focus, so a
+        # parked type coming back must not switch it on again behind the user
+        # (issue #396).
+        st.session_state.pop(VIZ_PARKED_SEEDS_KEY, None)
     if on and not st.session_state.get("_viz_cfg_focus_seeds"):
         # Forgotten wholesale rather than trimmed: these labels are derived
         # from the class selection, not picked by the user as seeds, so an id on
