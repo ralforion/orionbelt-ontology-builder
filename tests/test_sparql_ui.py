@@ -371,6 +371,29 @@ def test_the_editor_choice_and_the_query_survive_another_page():
     assert at.text_area(key="sparql_query_box").value == "ASK { ?s ?p ?o }"
 
 
+def test_the_limits_survive_another_page():
+    """The row limit and the time limit are widgets like the toggle, and were
+    lost the same way: back to 1000 rows and 10 seconds on the way to any other
+    page (issue #388)."""
+    os.environ["SPARQL_AWAY"] = "0"
+    at = AppTest.from_function(_away_script)
+    at.run(timeout=120)
+
+    at.number_input(key="sparql_max_rows").set_value(25).run(timeout=120)
+    at.number_input(key="sparql_timeout").set_value(3).run(timeout=120)
+    assert at.session_state["_sparql_cfg_max_rows"] == 25
+    assert at.session_state["_sparql_cfg_timeout_seconds"] == 3
+
+    os.environ["SPARQL_AWAY"] = "1"
+    at.run(timeout=120)
+    os.environ["SPARQL_AWAY"] = "0"
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+
+    assert at.number_input(key="sparql_max_rows").value == 25
+    assert at.number_input(key="sparql_timeout").value == 3
+
+
 def test_a_change_is_marked_for_saving():
     """The store is only written after the user changes something, so the page
     has to say when they have (the gate itself is in test_sparql_state.py)."""

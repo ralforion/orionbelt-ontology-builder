@@ -93,6 +93,22 @@ _QUERY_KEY = SPARQL_QUERY_KEY
 #: widget stops being rendered, so with the choice living here it was lost the
 #: moment the user looked at another page (issue #388).
 _PLAIN_WIDGET_KEY = "sparql_plain_editor"
+#: The two limits, and what they start from when nothing is stored. The engine's
+#: own defaults, so the page and the query agree about what "unset" means.
+_LIMIT_DEFAULTS = {
+    "_sparql_cfg_max_rows": sparql.DEFAULT_MAX_ROWS,
+    "_sparql_cfg_timeout_seconds": int(sparql.DEFAULT_TIMEOUT_SECONDS),
+}
+#: Every widget on this page that is seeded from a stored choice rather than
+#: holding it, as ``{widget key: the key holding the choice}``. Streamlit drops a
+#: widget's state as soon as the widget stops being rendered, so a widget that
+#: was its own source of truth reset itself on the way to any other page, and
+#: had nothing to hand the store either (issue #388).
+_SEEDED_WIDGETS = {
+    _PLAIN_WIDGET_KEY: SPARQL_PLAIN_KEY,
+    "sparql_max_rows": "_sparql_cfg_max_rows",
+    "sparql_timeout": "_sparql_cfg_timeout_seconds",
+}
 #: The plain box's own widget key. It is deliberately not ``_QUERY_KEY``: a
 #: widget's state is dropped as soon as it stops being rendered, so with the two
 #: editors sharing one key, switching from the plain box to Ace threw the query
@@ -191,20 +207,43 @@ def _restore_editor_state() -> None:
     None of this marks the state dirty: what was restored is what is stored.
     """
     before_query = st.session_state.get(_QUERY_KEY, "")
-    before_plain = bool(st.session_state.get(SPARQL_PLAIN_KEY))
+    before = {key: st.session_state.get(key) for key in _SEEDED_WIDGETS.values()}
     restore_sparql_state()
+    for wid_key, cfg_key in _SEEDED_WIDGETS.items():
+        value = st.session_state.get(cfg_key)
+        if value is not None and value != before[cfg_key]:
+            # A seed only lands on a widget that is not there yet, and these may
+            # have rendered already. Writing the key is allowed until they do.
+            st.session_state[wid_key] = value
+    _seed_widgets()
     query = st.session_state.get(_QUERY_KEY, "")
-    plain = bool(st.session_state.get(SPARQL_PLAIN_KEY))
-    if plain != before_plain:
-        # The toggle seeds itself from the choice, and a seed only lands on a
-        # widget that is not there yet; this one may have rendered already.
-        st.session_state[_PLAIN_WIDGET_KEY] = plain
     if query == before_query:
         return
     if _BOX_KEY in st.session_state:
         st.session_state[_BOX_KEY] = query
-    if st_ace is not None and not plain:
+    if st_ace is not None and not st.session_state.get(SPARQL_PLAIN_KEY):
         st.session_state[_EDITOR_NONCE] = st.session_state.get(_EDITOR_NONCE, 0) + 1
+
+
+def _seed_widgets() -> None:
+    """Start each seeded widget from the choice it follows.
+
+    ``setdefault``, because a widget that is on the page holds the newer value:
+    the seed is for the ones Streamlit has thrown away, or has yet to build.
+    """
+    for cfg_key, default in _LIMIT_DEFAULTS.items():
+        st.session_state.setdefault(cfg_key, default)
+    for wid_key, cfg_key in _SEEDED_WIDGETS.items():
+        if cfg_key in st.session_state:
+            st.session_state.setdefault(wid_key, st.session_state[cfg_key])
+
+
+def _limit_changed(cfg_key: str, wid_key: str) -> None:
+    """Mirror a limit widget into the key that outlives it, and save it."""
+    if wid_key not in st.session_state:
+        return
+    st.session_state[cfg_key] = st.session_state[wid_key]
+    sparql_state_changed()
 
 
 def _plain_editor_toggled() -> None:
@@ -239,13 +278,7 @@ def _render_editor() -> str:
     with label_col:
         st.caption("Query")
     with plain_col:
-        # Seeded from the choice, not holding it: Streamlit drops a widget's
-        # state as soon as the widget stops being rendered, so a toggle that was
-        # its own source of truth reset itself every time the user visited
-        # another page (issue #388).
-        st.session_state.setdefault(
-            _PLAIN_WIDGET_KEY, bool(st.session_state.get(SPARQL_PLAIN_KEY))
-        )
+        # Seeded from the choice rather than holding it (see _SEEDED_WIDGETS).
         # Short-circuits when the component is not installed: there is no choice
         # to offer then, and a toggle that changed nothing would be a lie.
         plain = st_ace is None or st.toggle(
@@ -464,9 +497,10 @@ def render_sparql():
             "Row limit",
             min_value=1,
             max_value=sparql.MAX_ROWS_CEILING,
-            value=sparql.DEFAULT_MAX_ROWS,
             step=100,
             key="sparql_max_rows",
+            on_change=_limit_changed,
+            args=("_sparql_cfg_max_rows", "sparql_max_rows"),
             help=(
                 "Stops reading results past this many rows. A query with "
                 "ORDER BY or GROUP BY still has to evaluate in full before the "
@@ -478,9 +512,10 @@ def render_sparql():
             "Time limit (seconds)",
             min_value=int(sparql.MIN_TIMEOUT_SECONDS),
             max_value=int(sparql.MAX_TIMEOUT_SECONDS),
-            value=int(sparql.DEFAULT_TIMEOUT_SECONDS),
             step=1,
             key="sparql_timeout",
+            on_change=_limit_changed,
+            args=("_sparql_cfg_timeout_seconds", "sparql_timeout"),
             help="A query that runs longer than this is stopped.",
         )
     with run_col:

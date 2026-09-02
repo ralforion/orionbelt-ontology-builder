@@ -58,6 +58,38 @@ def test_a_stored_query_is_capped(monkeypatch, patch_ui):
     assert len(payload["query"]) == app.SPARQL_QUERY_MAX_CHARS
 
 
+def test_the_limit_ranges_come_from_the_engine():
+    """Written out again here, they could outlive a change to either ceiling —
+    and a stored value outside its widget's range does not merely read stale, it
+    stops the widget rendering at all."""
+    from orionbelt_ontology_builder import sparql
+
+    ranges = app._sparql_limit_ranges()
+    assert ranges["max_rows"] == (1, sparql.MAX_ROWS_CEILING)
+    assert ranges["timeout_seconds"] == (
+        int(sparql.MIN_TIMEOUT_SECONDS),
+        int(sparql.MAX_TIMEOUT_SECONDS),
+    )
+
+
+def test_a_stored_limit_is_clamped_and_type_checked(monkeypatch, patch_ui):
+    fake: dict = {}
+    monkeypatch.setattr(app.st, "session_state", fake)
+    ranges = app._sparql_limit_ranges()
+
+    app._apply_sparql_state({"max_rows": 10**9, "timeout_seconds": 0})
+    assert fake["_sparql_cfg_max_rows"] == ranges["max_rows"][1]
+    assert fake["_sparql_cfg_timeout_seconds"] == ranges["timeout_seconds"][0]
+
+    app._apply_sparql_state({"max_rows": "500", "timeout_seconds": True})
+    assert fake["_sparql_cfg_max_rows"] == ranges["max_rows"][1], (
+        "a string is not a limit"
+    )
+    assert fake["_sparql_cfg_timeout_seconds"] == ranges["timeout_seconds"][0], (
+        "nor is a bool, which Python would otherwise pass off as an int"
+    )
+
+
 def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
@@ -67,6 +99,8 @@ def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
         "_sparql_state_dirty": True,
         "sparql_query_text": "SELECT * WHERE { ?s ?p ?o }",
         "_sparql_cfg_plain_editor": True,
+        "_sparql_cfg_max_rows": 25,
+        "_sparql_cfg_timeout_seconds": 3,
     }
     monkeypatch.setattr(app.st, "session_state", save_state)
     app.persist_sparql_state()
@@ -74,6 +108,8 @@ def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
     assert stored == {
         "query": "SELECT * WHERE { ?s ?p ?o }",
         "plain_editor": True,
+        "max_rows": 25,
+        "timeout_seconds": 3,
     }
 
     restore_state: dict = {}
@@ -82,6 +118,8 @@ def test_disk_persist_and_restore_roundtrip(monkeypatch, patch_ui, tmp_path):
     assert restore_state["_sparql_state_restored"] is True
     assert restore_state["sparql_query_text"] == "SELECT * WHERE { ?s ?p ?o }"
     assert restore_state["_sparql_cfg_plain_editor"] is True
+    assert restore_state["_sparql_cfg_max_rows"] == 25
+    assert restore_state["_sparql_cfg_timeout_seconds"] == 3
 
 
 def test_persist_requires_a_user_change(monkeypatch, patch_ui, tmp_path):
@@ -223,3 +261,12 @@ def test_a_restore_that_changes_nothing_leaves_the_editors_alone(monkeypatch):
     state = {"sparql_query_text": "ASK {}", "sparql_query_box": "ASK {}"}
     _late_restore(monkeypatch, state, {"sparql_query_text": "ASK {}"})
     assert "sparql_editor_nonce" not in state
+
+
+def test_a_late_restore_reaches_a_limit_already_on_screen(monkeypatch):
+    """The limits are seeded the same way the toggle is, so a value that lands
+    after they have rendered has to be written to them as well."""
+    state = {"sparql_query_text": "", "sparql_max_rows": 1000, "sparql_timeout": 10}
+    _late_restore(monkeypatch, state, {"_sparql_cfg_max_rows": 25})
+    assert state["sparql_max_rows"] == 25
+    assert state["sparql_timeout"] == 10, "a limit nothing restored is left alone"

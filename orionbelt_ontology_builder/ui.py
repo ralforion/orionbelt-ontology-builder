@@ -98,6 +98,9 @@ SPARQL_PLAIN_KEY = "_sparql_cfg_plain_editor"
 #: pasted-in wall of SPARQL cannot crowd out the ontology's own autosave, which
 #: shares the browser's storage.
 SPARQL_QUERY_MAX_CHARS = 20_000
+#: The page's two limits, stored alongside the query. Session keys are these
+#: names under ``_sparql_cfg_``; see ``views.sparql`` for the widgets they seed.
+SPARQL_LIMIT_KEYS = ("max_rows", "timeout_seconds")
 AUTOSAVE_DEBOUNCE_SECONDS = 2.0
 # The package directory, not this module's: assets are the package's, and a
 # module that moves into a subpackage must not take their paths with it — the
@@ -1052,12 +1055,31 @@ def persist_language_packs() -> None:
     st.session_state["_lang_packs_saved_json"] = payload
 
 
+def _sparql_limit_ranges() -> dict[str, tuple[int, int]]:
+    """What each stored limit may be, read off the engine that enforces them.
+
+    Taken from there rather than written out again, so a stored value cannot
+    outlive a change to either ceiling — and a value outside its widget's range
+    is not merely stale, it stops the widget from rendering at all.
+    """
+    from . import sparql
+
+    return {
+        "max_rows": (1, sparql.MAX_ROWS_CEILING),
+        "timeout_seconds": (
+            int(sparql.MIN_TIMEOUT_SECONDS),
+            int(sparql.MAX_TIMEOUT_SECONDS),
+        ),
+    }
+
+
 def _apply_sparql_state(data) -> None:
     """Copy a saved SPARQL editor state into the session keys the page reads.
 
     Types are checked the way :func:`_apply_viz_settings` checks them: a saved
     value of the wrong type is left at its default rather than trusted, so a
-    stale or hand-edited store cannot put a non-string in front of the editor.
+    stale or hand-edited store cannot put a non-string in front of the editor,
+    and the limits are clamped to the ranges their widgets accept.
     """
     if not isinstance(data, dict):
         return
@@ -1067,18 +1089,24 @@ def _apply_sparql_state(data) -> None:
     plain = data.get("plain_editor")
     if isinstance(plain, bool):
         st.session_state[SPARQL_PLAIN_KEY] = plain
+    for name, (lo, hi) in _sparql_limit_ranges().items():
+        value = data.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            st.session_state[f"_sparql_cfg_{name}"] = max(lo, min(hi, value))
 
 
 def _sparql_state_payload() -> str:
     """Serialize the SPARQL editor state for change detection and storage."""
     query = st.session_state.get(SPARQL_QUERY_KEY, "")
-    return json.dumps(
-        {
-            "query": query[:SPARQL_QUERY_MAX_CHARS] if isinstance(query, str) else "",
-            "plain_editor": bool(st.session_state.get(SPARQL_PLAIN_KEY)),
-        },
-        sort_keys=True,
-    )
+    data: dict = {
+        "query": query[:SPARQL_QUERY_MAX_CHARS] if isinstance(query, str) else "",
+        "plain_editor": bool(st.session_state.get(SPARQL_PLAIN_KEY)),
+    }
+    for name in SPARQL_LIMIT_KEYS:
+        value = st.session_state.get(f"_sparql_cfg_{name}")
+        if isinstance(value, int) and not isinstance(value, bool):
+            data[name] = value
+    return json.dumps(data, sort_keys=True)
 
 
 def sparql_state_changed() -> None:
