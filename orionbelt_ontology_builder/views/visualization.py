@@ -16,6 +16,7 @@ from ..ui import (
     PATH_HIGHLIGHT_COLOR,
     PKG_DIR,
     VIZ_NODE_PANEL,
+    VIZ_PARKED_SEEDS_KEY,
     _build_name_collision_set,
     _disambiguated_name,
     _edge_id,
@@ -82,6 +83,7 @@ from ..ui import (
     viz_ontology_was_replaced,
     viz_rename_map,
     viz_set_focus_seeds,
+    viz_show_kind_toggled,
     viz_sync,
 )
 
@@ -675,8 +677,8 @@ def render_visualization():
                 st.checkbox(
                     "Classes",
                     key="viz_show_classes",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_classes", "viz_show_classes"),
+                    on_change=viz_show_kind_toggled,
+                    args=("_viz_cfg_show_classes", "viz_show_classes", "Class"),
                 )
             with _cols[1]:
                 st.checkbox(
@@ -689,8 +691,12 @@ def render_visualization():
                 st.checkbox(
                     "Data Props",
                     key="viz_show_data_props",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_data_props", "viz_show_data_props"),
+                    on_change=viz_show_kind_toggled,
+                    args=(
+                        "_viz_cfg_show_data_props",
+                        "viz_show_data_props",
+                        "Data Property",
+                    ),
                 )
             with _cols[3]:
                 st.checkbox(
@@ -703,8 +709,12 @@ def render_visualization():
                 st.checkbox(
                     "Individuals",
                     key="viz_show_individuals",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_show_individuals", "viz_show_individuals"),
+                    on_change=viz_show_kind_toggled,
+                    args=(
+                        "_viz_cfg_show_individuals",
+                        "viz_show_individuals",
+                        "Individual",
+                    ),
                 )
             _ind_edge_col, _triple_col = (
                 (_cols[6], _cols[7]) if _has_skos else (_cols[5], _cols[6])
@@ -714,8 +724,8 @@ def render_visualization():
                     st.checkbox(
                         "SKOS",
                         key="viz_show_skos",
-                        on_change=viz_sync,
-                        args=("_viz_cfg_show_skos", "viz_show_skos"),
+                        on_change=viz_show_kind_toggled,
+                        args=("_viz_cfg_show_skos", "viz_show_skos", "Concept"),
                     )
             with _ind_edge_col:
                 st.checkbox(
@@ -1006,6 +1016,15 @@ def render_visualization():
             # whatever happens to hold that URI now, which is the very thing the
             # reuse prune below exists to stop (issue #180).
             _renames = None
+            # So do seeds parked while their type is hidden (issue #396), and
+            # they slip past that prune rather than being caught by it: a
+            # restored seed deliberately carries no id, which is the state of a
+            # seed just picked, so the prune keeps it — against whatever now
+            # answers to that label. An id would not save it either, since a
+            # same-named entity in the new ontology can be given the same node
+            # id, which is why the prune exists at all. Dropped, like the notes
+            # (Codex review of PR #397).
+            st.session_state.pop(VIZ_PARKED_SEEDS_KEY, None)
         # The graph component carries a renamed node's cached position over to
         # the id it now has, so the render it lands on stays where it was
         # instead of re-framing the whole graph (issue #329). Flattened here

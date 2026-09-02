@@ -422,6 +422,29 @@ def test_relinking_does_not_write_the_old_files_seeds_under_the_new_file(
     assert stored[FILE_B]["focus_seed_ids"] == [app._uid(NS + "Person")]
 
 
+def test_relinking_forgets_seeds_parked_in_the_previous_file(monkeypatch, tmp_path):
+    """A seed set aside while its type is hidden (issue #396) names entities of
+    the file it was parked in, so the switch that clears the rest of a file's
+    session state has to take it too — or switching the type back on in the new
+    file restores the old file's label into it."""
+    _desktop(monkeypatch, tmp_path, linked=FILE_B)
+    session = _Session()
+    monkeypatch.setattr(app.st, "session_state", session)
+
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = ["Class: Person"]
+    session["viz_show_classes"] = False
+    app.viz_show_kind_toggled("_viz_cfg_show_classes", "viz_show_classes", "Class")
+    assert session[app.VIZ_PARKED_SEEDS_KEY]["Class"]["seeds"] == ["Class: Person"]
+
+    app._clear_viz_file_session_state()
+
+    assert app.VIZ_PARKED_SEEDS_KEY not in session
+    session["viz_show_classes"] = True
+    app.viz_show_kind_toggled("_viz_cfg_show_classes", "viz_show_classes", "Class")
+    assert not session.get("_viz_cfg_focus_seeds")
+
+
 def test_relinking_mid_session_restores_the_new_file(monkeypatch, tmp_path):
     _desktop(monkeypatch, tmp_path, linked=FILE_B)
     monkeypatch.setattr(app.st, "session_state", {})
