@@ -2802,10 +2802,29 @@ def render_visualization():
             (gdata or {}).get("focus_hidden", 0),
             (len(filters["class"]["uris"]) - len(filters["class"]["selected_uris"]))
             + (len(filters["ind"]["uris"]) - len(filters["ind"]["selected_uris"])),
+            focusable_drawn=bool(focus_targets),
         )
         if _note_now != st.session_state.get("_viz_hidden_note", ""):
             st.session_state["_viz_hidden_note"] = _note_now
             st.rerun()
+        # What is worth a toast, and what is not (issue #389).
+        #
+        # A toast is for what the user did *not* do: something the app decided
+        # on its own (focus leaving itself, entities a filter held back), or an
+        # action of theirs that could not be carried out. What they did on
+        # purpose is shown in the page instead — the note on the Node options
+        # label, the status bar under the canvas — where it stays put and can be
+        # read at leisure.
+        #
+        # This is not a style preference. Streamlit shows a toast when its
+        # element mounts and will not re-show one already on screen, so a second
+        # message inside the four seconds a toast lives is dropped: the corner
+        # keeps the older text and the newer event goes unreported. Anything
+        # that can fire twice in quick succession — a click, above all — is
+        # therefore the worst possible fit for this channel. The per-click focus
+        # confirmation that used to live below did exactly that, and lied about
+        # which node was focused while it did.
+        #
         # Past that rerun, so it survives to reach the user: what the filter
         # kept out of the view when it was created (issue #194).
         for _announcement in (

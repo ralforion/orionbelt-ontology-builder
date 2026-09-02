@@ -5808,7 +5808,12 @@ _FILTER_KINDS = (
 
 
 def viz_hidden_caption(
-    focus_mode, focus_seeds, focus_depth, focus_hidden, hidden_by_filter
+    focus_mode,
+    focus_seeds,
+    focus_depth,
+    focus_hidden,
+    hidden_by_filter,
+    focusable_drawn=True,
 ) -> str:
     """One line saying what is not on screen, or "" when everything is.
 
@@ -5818,7 +5823,19 @@ def viz_hidden_caption(
 
     Seeds are listed by name up to five, then counted, so a focus on half the
     ontology stays one short line.
+
+    ``focusable_drawn`` is False when Classes, Individuals and SKOS are all
+    switched off: focus mode is still on and still holding its seeds, but there
+    is nothing it can act on. The page says so inside the Node options panel,
+    which is closed by default, so on its own that left the switch on, the graph
+    unfocused and no visible reason why (issue #389 follow-up). This line is
+    read whether the panel is open or shut, so it is where the state belongs.
     """
+    if focus_mode and not focusable_drawn:
+        stalled = "Focus is on, but Classes, Individuals and SKOS are all off"
+        if hidden_by_filter:
+            stalled += f" · {hidden_by_filter} hidden by the node filter"
+        return stalled
     parts = []
     if focus_mode and focus_seeds:
         shown = [s.split(": ", 1)[-1] for s in focus_seeds[:5]]

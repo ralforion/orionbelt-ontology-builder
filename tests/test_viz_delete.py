@@ -14,6 +14,7 @@ cannot run the Visualization page twice, and the panel is what is under test.
 
 import os
 
+import sources
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -280,6 +281,39 @@ def test_many_seeds_stay_one_short_line():
     assert app.viz_hidden_caption(True, seeds, 2, 3, 0) == (
         "Focused on C0, C1, C2, C3, C4, … (+4) · 2 hops · 3 hidden by focus"
     )
+
+
+def test_a_focus_with_nothing_focusable_says_so():
+    """Switch Classes, Individuals and SKOS all off and focus mode is still on,
+    still holding its seeds, with nothing it can act on. The page says so inside
+    the Node options panel, which is shut by default, so on its own that left
+    the switch on and no visible reason why (issue #389 follow-up)."""
+    assert app.viz_hidden_caption(
+        True, ["Class: Person"], 1, 0, 0, focusable_drawn=False
+    ) == ("Focus is on, but Classes, Individuals and SKOS are all off")
+
+
+def test_a_stalled_focus_still_reports_the_node_filter():
+    assert app.viz_hidden_caption(
+        True, ["Class: Person"], 1, 0, 4, focusable_drawn=False
+    ) == (
+        "Focus is on, but Classes, Individuals and SKOS are all off · 4 hidden "
+        "by the node filter"
+    )
+
+
+def test_the_caption_assumes_something_focusable_is_drawn():
+    """The flag is the exception, so the ordinary call sites read as they did."""
+    assert app.viz_hidden_caption(True, ["Class: Person"], 1, 6, 0) == (
+        "Focused on Person · 1 hop · 6 hidden by focus"
+    )
+
+
+def test_the_page_tells_the_caption_whether_anything_is_focusable():
+    """The caption cannot see the display switches; the page passes what it
+    found. Pinned at the source: the graph component does not render under
+    AppTest, and this line is what makes the case above reachable."""
+    assert "focusable_drawn=bool(focus_targets)" in sources.viz_text()
 
 
 def test_the_node_filter_is_reported_on_its_own():
