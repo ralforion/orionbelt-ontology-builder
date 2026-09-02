@@ -385,12 +385,28 @@ def graph_space_css(find_row_open: bool) -> str:
     /* Render, cut back to its label. Streamlit's default button is 38px tall
        and stretched across its whole column, which made it the largest thing
        above the canvas — for a button that is only reached after changing
-       something else. */
+       something else.
+
+       Sized to its label means never below it: the column is a share of the
+       row, so on a narrow window it squeezed the button until "Render" broke
+       into "Rend / er". The label is held on one line and the button keeps its
+       own width, and it sits at the end of its column so the spare width stays
+       in the gap before it rather than between it and the page edge. */
+    .st-key-viz_render_btn {{
+        display: flex;
+        justify-content: flex-end;
+        width: 100%;
+    }}
     .st-key-viz_render_btn button {{
         min-height: 28px;
         height: 28px;
         padding: 0 0.9rem;
         line-height: 1.2;
+        width: max-content;
+        white-space: nowrap;
+    }}
+    .st-key-viz_render_btn button p {{
+        white-space: nowrap;
     }}{hide_find_row}
     </style>"""
 
@@ -606,8 +622,10 @@ def render_visualization():
         # laid out inline (see BAND_SWITCH_CSS), so they read as a set and no
         # label can be squeezed into breaking.
         st.html(BAND_SWITCH_CSS)
+        # The last column is wide enough for the button at the widths the app
+        # is actually used at; the spare width sits in the gap between the two.
         _switch_col, _, _render_col = st.columns(
-            [3.6, 1.9, 0.5], vertical_alignment="center"
+            [3.6, 1.4, 1.0], vertical_alignment="center"
         )
         with _switch_col.container(key="viz_band_switches"):
             options_open = st.toggle(

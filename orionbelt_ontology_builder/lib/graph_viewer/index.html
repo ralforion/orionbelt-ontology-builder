@@ -121,7 +121,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 <div id="container" style="position: relative;">
     <div id="graph"></div>
     <div id="legend"></div>
-    <button id="fullscreen-btn" data-tip="Fullscreen" aria-label="Fullscreen" style="display:none;" onclick="toggleFullscreen()">
+    <button id="fullscreen-btn" data-tip="Maximize" aria-label="Maximize" style="display:none;" onclick="toggleFullscreen()">
         <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
     </button>
     <button id="download-btn" data-tip="Download as PNG" aria-label="Download as PNG" style="display:none;" onclick="downloadGraph()">
@@ -797,10 +797,15 @@ function toggleFullscreen() {
 }
 
 // Swap the button glyph/hint between the "enter" and "exit" states.
+//
+// The button says Maximize/Restore rather than Fullscreen: what it does is
+// fill the browser window, and the screen and the OS window are left alone
+// (issue #390). Only the words a user reads changed — everything else here
+// keeps the fullscreen names the issues behind it use.
 function setFullscreenIcon(on) {
     var fsBtn = document.getElementById('fullscreen-btn');
     if (!fsBtn) return;
-    setButtonTip(fsBtn, on ? 'Exit fullscreen' : 'Fullscreen');
+    setButtonTip(fsBtn, on ? 'Restore' : 'Maximize');
     fsBtn.querySelector('svg').innerHTML = on
         ? '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>'
         : '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';

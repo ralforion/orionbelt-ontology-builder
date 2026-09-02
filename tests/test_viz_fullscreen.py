@@ -6,6 +6,7 @@ details panel behind it, and no other test would notice.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import sources
@@ -228,7 +229,7 @@ def test_the_toolbar_says_what_its_buttons_do():
     up from there. The page draws them instead."""
     src = _VIEWER.read_text(encoding="utf-8")
 
-    for tip in ("Fullscreen", "Download as PNG", "Copy what is selected"):
+    for tip in ("Maximize", "Download as PNG", "Copy what is selected"):
         assert f'data-tip="{tip}"' in src
         assert f'aria-label="{tip}"' in src
     assert "title=" not in src.split("<body>", 1)[1].split("</button>", 1)[0]
@@ -238,6 +239,23 @@ def test_the_toolbar_says_what_its_buttons_do():
     # Every later change of what a button says goes through the one helper.
     assert "btn.title =" not in src
     assert src.count("setButtonTip(") >= 4
+
+
+def test_the_button_says_maximize_not_fullscreen():
+    """What the button does is fill the browser window; the screen and the OS
+    window are left alone (issue #390). So it is labelled the way a window
+    control is — Maximize, and Restore once it is one — and the word fullscreen
+    never reaches a user. Everything else here keeps the fullscreen names the
+    issues behind it use."""
+    src = _VIEWER.read_text(encoding="utf-8")
+    fn = src[src.index("function setFullscreenIcon(") :].split("\n}", 1)[0]
+    assert "'Restore' : 'Maximize'" in fn
+
+    said = re.findall(r'(?:data-tip|aria-label)="([^"]*)"', src)
+    said += re.findall(r"setButtonTip\([^,]+,\s*'([^']*)'", src)
+    assert said, "the button labels are read from the page, so they must be found"
+    for words in said:
+        assert "fullscreen" not in words.lower(), f"{words!r} says fullscreen"
 
 
 def test_a_tooltip_steps_aside_for_whatever_is_under_the_button():
