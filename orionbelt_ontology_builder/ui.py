@@ -81,6 +81,26 @@ LANG_PACK_TAB_KEY = "lang_pack_edit_select"
 #: Session key holding ``{pack name: [{"code", "label"}, ...]}`` of the user's
 #: own packs.
 CUSTOM_LANG_PACKS_KEY = "lang_packs_custom"
+#: Where the SPARQL page's editor state — the query and the plain-editor choice
+#: — is kept (issue #388): the local config file when the launcher allows disk,
+#: browser localStorage on the cloud, the same two places the viz settings and
+#: the language packs use.
+SPARQL_STATE_KEY = "orionbelt_sparql_state"
+#: Session key holding the query being written. Deliberately not a widget's key:
+#: two editors write one query (see ``views.sparql``), and a widget's state is
+#: dropped the moment its widget stops being rendered.
+SPARQL_QUERY_KEY = "sparql_query_text"
+#: Session key holding the plain-editor choice, and for the same reason: the
+#: toggle's own key went with the page, so coming back from another page put the
+#: highlighted editor back whatever had been chosen (issue #388).
+SPARQL_PLAIN_KEY = "_sparql_cfg_plain_editor"
+#: Longest query kept. A query is a screen or two of text; the cap is here so a
+#: pasted-in wall of SPARQL cannot crowd out the ontology's own autosave, which
+#: shares the browser's storage.
+SPARQL_QUERY_MAX_CHARS = 20_000
+#: The page's two limits, stored alongside the query. Session keys are these
+#: names under ``_sparql_cfg_``; see ``views.sparql`` for the widgets they seed.
+SPARQL_LIMIT_KEYS = ("max_rows", "timeout_seconds")
 AUTOSAVE_DEBOUNCE_SECONDS = 2.0
 # The package directory, not this module's: assets are the package's, and a
 # module that moves into a subpackage must not take their paths with it — the
@@ -1033,6 +1053,135 @@ def persist_language_packs() -> None:
         h = _content_hash(payload)
         ls.setItem(LANG_PACKS_KEY, payload, key=f"orionbelt_lang_packs_set_{h[:12]}")
     st.session_state["_lang_packs_saved_json"] = payload
+
+
+def _sparql_limit_ranges() -> dict[str, tuple[int, int]]:
+    """What each stored limit may be, read off the engine that enforces them.
+
+    Taken from there rather than written out again, so a stored value cannot
+    outlive a change to either ceiling — and a value outside its widget's range
+    is not merely stale, it stops the widget from rendering at all.
+    """
+    from . import sparql
+
+    return {
+        "max_rows": (1, sparql.MAX_ROWS_CEILING),
+        "timeout_seconds": (
+            int(sparql.MIN_TIMEOUT_SECONDS),
+            int(sparql.MAX_TIMEOUT_SECONDS),
+        ),
+    }
+
+
+def _apply_sparql_state(data) -> None:
+    """Copy a saved SPARQL editor state into the session keys the page reads.
+
+    Types are checked the way :func:`_apply_viz_settings` checks them: a saved
+    value of the wrong type is left at its default rather than trusted, so a
+    stale or hand-edited store cannot put a non-string in front of the editor,
+    and the limits are clamped to the ranges their widgets accept.
+    """
+    if not isinstance(data, dict):
+        return
+    query = data.get("query")
+    if isinstance(query, str):
+        st.session_state[SPARQL_QUERY_KEY] = query[:SPARQL_QUERY_MAX_CHARS]
+    plain = data.get("plain_editor")
+    if isinstance(plain, bool):
+        st.session_state[SPARQL_PLAIN_KEY] = plain
+    for name, (lo, hi) in _sparql_limit_ranges().items():
+        value = data.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            st.session_state[f"_sparql_cfg_{name}"] = max(lo, min(hi, value))
+
+
+def _sparql_state_payload() -> str:
+    """Serialize the SPARQL editor state for change detection and storage."""
+    query = st.session_state.get(SPARQL_QUERY_KEY, "")
+    data: dict = {
+        "query": query[:SPARQL_QUERY_MAX_CHARS] if isinstance(query, str) else "",
+        "plain_editor": bool(st.session_state.get(SPARQL_PLAIN_KEY)),
+    }
+    for name in SPARQL_LIMIT_KEYS:
+        value = st.session_state.get(f"_sparql_cfg_{name}")
+        if isinstance(value, int) and not isinstance(value, bool):
+            data[name] = value
+    return json.dumps(data, sort_keys=True)
+
+
+def sparql_state_changed() -> None:
+    """Note that the query or the editor choice is now the user's own.
+
+    Two jobs, both of them the dirty flag's: it is what lets the state be saved
+    at all (an untouched page must never write over what is stored), and it is
+    what stops a late restore from replacing what the user is typing right now.
+    """
+    st.session_state["_sparql_state_dirty"] = True
+
+
+def restore_sparql_state() -> None:
+    """Restore the saved query and editor choice once per session (issue #388).
+
+    Mirrors :func:`restore_language_packs`, retry included: on the cloud the
+    localStorage value only arrives on a later rerun, so this is not finished
+    until a real value is read. It has to run before the toggle and the editor
+    are drawn, because it seeds the keys they start from.
+    """
+    if st.session_state.get("_sparql_state_restored"):
+        return
+    if st.session_state.get("_sparql_state_dirty"):
+        st.session_state["_sparql_state_restored"] = True
+        return
+    if local_store.local_persist_enabled():
+        _apply_sparql_state(local_store.load_config().get(SPARQL_STATE_KEY))
+        st.session_state["_sparql_state_restored"] = True
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        st.session_state["_sparql_state_restored"] = True
+        return
+    saved = ls.getItem(SPARQL_STATE_KEY)
+    if isinstance(saved, dict):
+        saved = saved.get(SPARQL_STATE_KEY) or next(
+            (v for v in saved.values() if isinstance(v, str)), None
+        )
+    if isinstance(saved, str) and saved.strip():
+        try:
+            _apply_sparql_state(json.loads(saved))
+        except (ValueError, TypeError):
+            pass
+        st.session_state["_sparql_state_restored"] = True
+
+
+def persist_sparql_state() -> None:
+    """Save the query and the editor choice after a change. No-op otherwise.
+
+    The browser write is re-offered until a pass survives, for the reason
+    :func:`_persist_viz_settings` spells out: it is a component render, and a
+    pass that ends in ``st.rerun()`` is discarded along with everything it drew.
+    The component is keyed by the payload's hash, so the re-offers are one
+    component writing one value rather than a queue of writes.
+    """
+    if not st.session_state.get("_sparql_state_dirty"):
+        return
+    payload = _sparql_state_payload()
+    if local_store.local_persist_enabled():
+        if payload == st.session_state.get("_sparql_state_saved_json"):
+            return
+        try:
+            cfg = local_store.load_config()
+            cfg[SPARQL_STATE_KEY] = json.loads(payload)
+            local_store.save_config(cfg)
+        except OSError as e:
+            log_error(e, context="SPARQL editor state save")
+            return
+        st.session_state["_sparql_state_saved_json"] = payload
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        return
+    h = _content_hash(payload)
+    ls.setItem(SPARQL_STATE_KEY, payload, key=f"orionbelt_sparql_state_set_{h[:12]}")
 
 
 def render_language_pack_sidebar() -> None:

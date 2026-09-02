@@ -8,7 +8,15 @@ pages where they are checkpointed and can be undone.
 import streamlit as st
 
 from .. import sparql
-from ..ui import _download_or_save, log_error
+from ..ui import (
+    SPARQL_PLAIN_KEY,
+    SPARQL_QUERY_KEY,
+    _download_or_save,
+    log_error,
+    persist_sparql_state,
+    restore_sparql_state,
+    sparql_state_changed,
+)
 
 try:
     from streamlit_ace import st_ace
@@ -68,7 +76,9 @@ WHERE {
 }""",
 }
 
-_QUERY_KEY = "sparql_query_text"
+#: The query being written. It lives in ``ui`` with the rest of the state that
+#: outlives a session, and belongs to neither editor widget.
+_QUERY_KEY = SPARQL_QUERY_KEY
 #: Swaps the Ace editor for a plain text area. Ace is a Streamlit component,
 #: which means an iframe the browser loads on its own, and picking an example
 #: remounts it (see ``_EDITOR_NONCE``) — a fresh iframe refetching about a
@@ -77,7 +87,28 @@ _QUERY_KEY = "sparql_query_text"
 #: component to report in, the page says it is having trouble loading the
 #: editor: alarming, and about a component the query does not need at all. The
 #: plain box has nothing to load and nothing to remount (issue #356).
-_PLAIN_KEY = "sparql_plain_editor"
+#:
+#: The toggle's own widget key. The choice itself is held in ``SPARQL_PLAIN_KEY``
+#: and the toggle is seeded from it: a widget's state is dropped as soon as its
+#: widget stops being rendered, so with the choice living here it was lost the
+#: moment the user looked at another page (issue #388).
+_PLAIN_WIDGET_KEY = "sparql_plain_editor"
+#: The two limits, and what they start from when nothing is stored. The engine's
+#: own defaults, so the page and the query agree about what "unset" means.
+_LIMIT_DEFAULTS = {
+    "_sparql_cfg_max_rows": sparql.DEFAULT_MAX_ROWS,
+    "_sparql_cfg_timeout_seconds": int(sparql.DEFAULT_TIMEOUT_SECONDS),
+}
+#: Every widget on this page that is seeded from a stored choice rather than
+#: holding it, as ``{widget key: the key holding the choice}``. Streamlit drops a
+#: widget's state as soon as the widget stops being rendered, so a widget that
+#: was its own source of truth reset itself on the way to any other page, and
+#: had nothing to hand the store either (issue #388).
+_SEEDED_WIDGETS = {
+    _PLAIN_WIDGET_KEY: SPARQL_PLAIN_KEY,
+    "sparql_max_rows": "_sparql_cfg_max_rows",
+    "sparql_timeout": "_sparql_cfg_timeout_seconds",
+}
 #: The plain box's own widget key. It is deliberately not ``_QUERY_KEY``: a
 #: widget's state is dropped as soon as it stops being rendered, so with the two
 #: editors sharing one key, switching from the plain box to Ace threw the query
@@ -107,11 +138,12 @@ def _load_example() -> None:
         # very query is worth keeping (issue #356).
         return
     st.session_state[_QUERY_KEY] = query
+    sparql_state_changed()
     if _BOX_KEY in st.session_state:
         # The plain box is on screen and holds its own state. A callback is the
         # one place a widget's key can still be written for the coming rerun.
         st.session_state[_BOX_KEY] = query
-    if st_ace is not None and not st.session_state.get(_PLAIN_KEY):
+    if st_ace is not None and not st.session_state.get(SPARQL_PLAIN_KEY):
         # Only Ace needs the remount: it takes ``value`` as initial content and
         # ignores it afterwards, so a new key is the one way to change what it
         # shows. That costs a new iframe refetching about a megabyte of editor
@@ -162,6 +194,78 @@ def _editor_theme() -> str:
     return _EDITOR_THEME_DARK if is_dark else _EDITOR_THEME_LIGHT
 
 
+def _restore_editor_state() -> None:
+    """Put the saved query and editor choice in front of the user (issue #388).
+
+    More than :func:`restore_sparql_state` on its own, because on the cloud the
+    store answers on a later rerun, by which time both editors have rendered:
+    the plain box is holding its own state and Ace took its value at mount, so a
+    restore that wrote only the query would show up in neither — and the empty
+    box would then be written straight back over it. Each editor is handed the
+    restored query the same way :func:`_load_example` hands it a new one.
+
+    None of this marks the state dirty: what was restored is what is stored.
+    """
+    before_query = st.session_state.get(_QUERY_KEY, "")
+    before = {key: st.session_state.get(key) for key in _SEEDED_WIDGETS.values()}
+    restore_sparql_state()
+    for wid_key, cfg_key in _SEEDED_WIDGETS.items():
+        value = st.session_state.get(cfg_key)
+        if value is not None and value != before[cfg_key]:
+            # A seed only lands on a widget that is not there yet, and these may
+            # have rendered already. Writing the key is allowed until they do.
+            st.session_state[wid_key] = value
+    _seed_widgets()
+    query = st.session_state.get(_QUERY_KEY, "")
+    if query == before_query:
+        return
+    if _BOX_KEY in st.session_state:
+        st.session_state[_BOX_KEY] = query
+    if st_ace is not None and not st.session_state.get(SPARQL_PLAIN_KEY):
+        st.session_state[_EDITOR_NONCE] = st.session_state.get(_EDITOR_NONCE, 0) + 1
+
+
+def _seed_widgets() -> None:
+    """Start each seeded widget from the choice it follows.
+
+    ``setdefault``, because a widget that is on the page holds the newer value:
+    the seed is for the ones Streamlit has thrown away, or has yet to build.
+    """
+    for cfg_key, default in _LIMIT_DEFAULTS.items():
+        st.session_state.setdefault(cfg_key, default)
+    for wid_key, cfg_key in _SEEDED_WIDGETS.items():
+        if cfg_key in st.session_state:
+            st.session_state.setdefault(wid_key, st.session_state[cfg_key])
+
+
+def _limit_changed(cfg_key: str, wid_key: str) -> None:
+    """Mirror a limit widget into the key that outlives it, and save it."""
+    if wid_key not in st.session_state:
+        return
+    st.session_state[cfg_key] = st.session_state[wid_key]
+    sparql_state_changed()
+
+
+def _plain_editor_toggled() -> None:
+    """Mirror the toggle into the key that outlives it, and save the choice."""
+    st.session_state[SPARQL_PLAIN_KEY] = bool(st.session_state.get(_PLAIN_WIDGET_KEY))
+    sparql_state_changed()
+
+
+def _remember_query(edited: str) -> str:
+    """Hold the query where both editors — and the next session — find it.
+
+    Returns it, so the one call site is the editor's own return. A change is
+    noted rather than assumed: the page renders on every rerun, and saving on
+    each of those would write the empty starting query over a stored one before
+    the browser had handed it back.
+    """
+    if edited != st.session_state.get(_QUERY_KEY, ""):
+        sparql_state_changed()
+    st.session_state[_QUERY_KEY] = edited
+    return edited
+
+
 def _render_editor() -> str:
     """The query editor, syntax-highlighted where the component is available.
 
@@ -174,11 +278,13 @@ def _render_editor() -> str:
     with label_col:
         st.caption("Query")
     with plain_col:
+        # Seeded from the choice rather than holding it (see _SEEDED_WIDGETS).
         # Short-circuits when the component is not installed: there is no choice
         # to offer then, and a toggle that changed nothing would be a lie.
         plain = st_ace is None or st.toggle(
             "Plain editor",
-            key=_PLAIN_KEY,
+            key=_PLAIN_WIDGET_KEY,
+            on_change=_plain_editor_toggled,
             help=(
                 "Swap the highlighted editor for a plain text box. The "
                 "highlighted one is a separate component your browser loads, "
@@ -205,8 +311,7 @@ def _render_editor() -> str:
                 help=_EDITOR_HELP,
                 label_visibility="collapsed",
             )
-        st.session_state[_QUERY_KEY] = edited
-        return edited
+        return _remember_query(edited)
     edited = st_ace(
         value=current,
         placeholder=_PLACEHOLDER,
@@ -220,8 +325,7 @@ def _render_editor() -> str:
         auto_update=True,
         key=f"sparql_ace_{st.session_state.get(_EDITOR_NONCE, 0)}",
     )
-    edited = edited or ""
-    st.session_state[_QUERY_KEY] = edited
+    edited = _remember_query(edited or "")
     st.caption(_EDITOR_HELP)
     return edited
 
@@ -364,6 +468,9 @@ def _render_result(result: sparql.QueryResult) -> None:
 
 def render_sparql():
     """Render the SPARQL query page."""
+    # Before anything is drawn: it seeds the keys the toggle and the editor
+    # start from, and a widget's key cannot be written once its widget exists.
+    _restore_editor_state()
     st.header("SPARQL Query")
     st.caption(
         "Query the loaded ontology with SELECT, ASK, CONSTRUCT or DESCRIBE. "
@@ -390,9 +497,10 @@ def render_sparql():
             "Row limit",
             min_value=1,
             max_value=sparql.MAX_ROWS_CEILING,
-            value=sparql.DEFAULT_MAX_ROWS,
             step=100,
             key="sparql_max_rows",
+            on_change=_limit_changed,
+            args=("_sparql_cfg_max_rows", "sparql_max_rows"),
             help=(
                 "Stops reading results past this many rows. A query with "
                 "ORDER BY or GROUP BY still has to evaluate in full before the "
@@ -404,9 +512,10 @@ def render_sparql():
             "Time limit (seconds)",
             min_value=int(sparql.MIN_TIMEOUT_SECONDS),
             max_value=int(sparql.MAX_TIMEOUT_SECONDS),
-            value=int(sparql.DEFAULT_TIMEOUT_SECONDS),
             step=1,
             key="sparql_timeout",
+            on_change=_limit_changed,
+            args=("_sparql_cfg_timeout_seconds", "sparql_timeout"),
             help="A query that runs longer than this is stopped.",
         )
     with run_col:
@@ -436,3 +545,5 @@ def render_sparql():
         st.error(st.session_state[_ERROR_KEY])
     elif st.session_state.get(_RESULT_KEY) is not None:
         _render_result(st.session_state[_RESULT_KEY])
+
+    persist_sparql_state()
