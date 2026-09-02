@@ -123,6 +123,7 @@ def _script():
         # The cross-session restore mounts the localStorage component, which
         # blocks forever without a browser to answer it.
         st.session_state["_viz_settings_restored"] = True
+        st.session_state["_local_storage"] = None
 
     tab_key, tab = os.environ["SMOKE_TAB"].split("|", 1)
     if tab_key:

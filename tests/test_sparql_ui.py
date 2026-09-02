@@ -30,6 +30,11 @@ def _script():
         om.add_class("Tandem", parent="Bicycle", label="Tandem")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
+        # No browser storage: mounting that component under AppTest hangs, and
+        # what is driven here is the editor, not the persistence (which
+        # test_sparql_state.py covers). ``None`` is the cached handle
+        # _get_local_storage() hands back when the component is unavailable.
+        st.session_state["_local_storage"] = None
         st.session_state["sparql_query_text"] = os.environ["SPARQL_Q"]
         rows = os.environ.get("SPARQL_ROWS")
         if rows:
@@ -315,6 +320,68 @@ def test_the_query_survives_switching_editors_both_ways():
     assert not at.exception, at.exception
     assert at.text_area(key="sparql_query_box").value == written
     assert at.session_state["sparql_query_text"] == written
+
+
+def _away_script():
+    """The page, unless the session has been sent off to another one.
+
+    Streamlit drops a widget's state as soon as the widget stops being rendered,
+    so "another page" here is simply a rerun that does not render this one —
+    which is exactly what the nav does.
+    """
+    import os
+
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_class("Bicycle", label="Bicycle")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_local_storage"] = None
+
+    if os.environ.get("SPARQL_AWAY") == "1":
+        st.write("another page")
+        return
+    app.render_sparql()
+
+
+def test_the_editor_choice_and_the_query_survive_another_page():
+    """Both used to be lost on the way to any other page: the query only looked
+    safe, because the toggle reset with it and the highlighted editor kept its
+    own copy (issue #388)."""
+    os.environ["SPARQL_AWAY"] = "0"
+    at = AppTest.from_function(_away_script)
+    at.run(timeout=120)
+
+    at.toggle(key="sparql_plain_editor").set_value(True).run(timeout=120)
+    at.text_area(key="sparql_query_box").set_value("ASK { ?s ?p ?o }").run(timeout=120)
+    assert at.session_state["sparql_query_text"] == "ASK { ?s ?p ?o }"
+
+    os.environ["SPARQL_AWAY"] = "1"
+    at.run(timeout=120)
+    os.environ["SPARQL_AWAY"] = "0"
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+
+    assert at.toggle(key="sparql_plain_editor").value is True
+    assert at.text_area(key="sparql_query_box").value == "ASK { ?s ?p ?o }"
+
+
+def test_a_change_is_marked_for_saving():
+    """The store is only written after the user changes something, so the page
+    has to say when they have (the gate itself is in test_sparql_state.py)."""
+    os.environ["SPARQL_AWAY"] = "0"
+    at = AppTest.from_function(_away_script)
+    at.run(timeout=120)
+    assert "_sparql_state_dirty" not in at.session_state, "rendering is not a change"
+
+    at.toggle(key="sparql_plain_editor").set_value(True).run(timeout=120)
+    assert at.session_state["_sparql_state_dirty"] is True
+    assert at.session_state["_sparql_cfg_plain_editor"] is True
 
 
 def test_the_page_still_works_without_the_editor_component(monkeypatch):
