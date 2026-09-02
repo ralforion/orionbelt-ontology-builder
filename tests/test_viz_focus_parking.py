@@ -157,6 +157,25 @@ def test_switching_focus_off_by_hand_forgets_what_was_parked(session):
     assert not session["_viz_cfg_focus_seeds"]
 
 
+def test_the_focus_reset_forgets_what_was_parked(session):
+    """viz_drop_focus_seeds is also the focus half of the reset that runs when
+    the linked file changes, and a parked seed names the entities of the file it
+    was parked in. Left behind, switching the type back on in the next file
+    would restore that label into it, and a restored seed carries no id, so a
+    file that happens to have a class of the same name would be focused, and
+    saved, as though the user had asked for it (Codex review of PR #397)."""
+    session["_viz_cfg_focus_mode"] = True
+    session["_viz_cfg_focus_seeds"] = [PERSON]
+    _switch_off(session)
+    assert session[ui.VIZ_PARKED_SEEDS_KEY]["Class"]["seeds"] == [PERSON]
+
+    ui.viz_drop_focus_seeds()
+
+    assert ui.VIZ_PARKED_SEEDS_KEY not in session
+    _switch_on(session)
+    assert not session.get("_viz_cfg_focus_seeds")
+
+
 def test_a_type_with_no_seeds_parks_nothing(session):
     session["_viz_cfg_focus_mode"] = True
     session["_viz_cfg_focus_seeds"] = [ALICE]

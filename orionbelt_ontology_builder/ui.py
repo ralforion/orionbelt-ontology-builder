@@ -1498,6 +1498,15 @@ def viz_drop_focus_seeds() -> None:
     # Notes about entities the seeds were meant to follow; with no seeds left
     # there is nothing to re-point (see viz_note_rename).
     st.session_state.pop("_viz_pending_renames", None)
+    # And the seeds set aside while their type is hidden (issue #396). This
+    # helper is also the focus half of the reset that runs when the linked file
+    # changes (see _clear_viz_file_session_state), and a parked seed names the
+    # entities of the file it was parked in. Left behind, switching the type
+    # back on in the *next* file would restore that label into it — and a
+    # restored seed deliberately carries no id, so a file that happens to have a
+    # class of the same name would be focused, and saved, as though the user had
+    # asked for it.
+    st.session_state.pop(VIZ_PARKED_SEEDS_KEY, None)
 
 
 def _viz_widget_missing(wid_key: str) -> bool:
