@@ -1636,10 +1636,10 @@ def focus_seeds_after_request(seeds, label, replace=False, focus_on=False):
 def viz_apply_focus_click(label, replace=False):
     """Apply a modifier-click on ``label`` to the focus state in session.
 
-    Returns the ``(seeds, focus_on)`` it wrote, so the caller can word the
-    toast. Split out from the page so the state it touches can be tested: the
-    click arrives through the graph component, which does not render under
-    AppTest, so nothing else can reach this path.
+    Returns the ``(seeds, focus_on)`` it wrote. Split out from the page so the
+    state it touches can be tested: the click arrives through the graph
+    component, which does not render under AppTest, so nothing else can reach
+    this path.
 
     Mode and seeds are written together, never across renders: focus mode with
     no seeds backfills an arbitrary first label, so a pass through that state
