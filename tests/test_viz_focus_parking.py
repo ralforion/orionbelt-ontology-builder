@@ -176,6 +176,54 @@ def test_the_focus_reset_forgets_what_was_parked(session):
     assert not session.get("_viz_cfg_focus_seeds")
 
 
+def _replacement_script():
+    """The page, rendered with a seed parked and an ontology swap pending."""
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager(base_uri="http://test.org/ont#")
+        om.add_class("Person", label="Person")
+        om.add_class("Org", label="Org")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+        st.session_state["_local_storage"] = None
+        # A focus parked while Classes is hidden, in the ontology being left.
+        st.session_state["_viz_cfg_show_classes"] = False
+        st.session_state[app.VIZ_PARKED_SEEDS_KEY] = {
+            "Class": {"seeds": ["Class: Person"], "focus_mode": True}
+        }
+        # Counters that say "swapped, not edited": a load, import, new or undo.
+        st.session_state["_viz_cfg_seen_mutation"] = 1
+        st.session_state["_viz_cfg_seen_edits"] = 0
+        st.session_state["_ont_mutation_count"] = 2
+        st.session_state["_ont_edit_count"] = 0
+
+    app.render_visualization()
+
+
+def test_a_replaced_ontology_forgets_what_was_parked():
+    """Park a seed, then import a different ontology over the same file. The
+    label names an entity that is gone, and a restored seed carries no id by
+    design, so the reuse prune would read it as freshly picked and keep it
+    against whatever now answers to that label, which is the very thing that
+    prune exists to stop (#180, Codex review of PR #397). An id would not help
+    either: a same-named entity in the new ontology can be given the same node
+    id."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_replacement_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+
+    assert app.VIZ_PARKED_SEEDS_KEY not in at.session_state, (
+        "seeds parked in the ontology that was swapped out must not survive it"
+    )
+
+
 def test_a_type_with_no_seeds_parks_nothing(session):
     session["_viz_cfg_focus_mode"] = True
     session["_viz_cfg_focus_seeds"] = [ALICE]
