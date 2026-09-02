@@ -2980,20 +2980,16 @@ def render_visualization():
                     _id_to_label = {v: k for k, v in focus_targets.items()}
                     _focus_label = _id_to_label.get(selection.get("nodeId"))
                     if _focus_label:
-                        _replace = bool(selection.get("replace"))
-                        _seeds, _focus_on = viz_apply_focus_click(
-                            _focus_label, replace=_replace
+                        # Applied without a word about it. A toast confirming a
+                        # click the user just made is a second telling: the
+                        # canvas redraws to the focus, and the standing note on
+                        # the Node options label names the seeds, the depth and
+                        # what is held back — and stays there instead of fading
+                        # (issues #389, #222 follow-up). What is still said here
+                        # is the case below, where the click did nothing.
+                        viz_apply_focus_click(
+                            _focus_label, replace=bool(selection.get("replace"))
                         )
-                        if not _focus_on:
-                            _note = "Focus off"
-                        elif _focus_label not in _seeds:
-                            # Ctrl/Cmd-click took it out and left others behind.
-                            _note = f"Dropped {_focus_label} from the focus"
-                        else:
-                            _note = f"Focusing on {_focus_label}" + (
-                                " only" if _replace else ""
-                            )
-                        st.toast(_note, icon="🎯")
                         st.rerun()
                     else:
                         st.toast(

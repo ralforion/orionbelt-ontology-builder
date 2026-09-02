@@ -12,6 +12,7 @@ that changed was a no-op before.
 """
 
 import pytest
+import sources
 
 from orionbelt_ontology_builder import app, ui
 
@@ -195,3 +196,31 @@ def test_a_click_that_leaves_the_mode_alone_does_not_mark_it_dirty(session):
 
     assert session["_viz_cfg_focus_seeds"] == [PERSON, ORG]
     assert "_viz_settings_dirty" not in session
+
+
+def test_a_focus_click_is_not_announced():
+    """A toast confirming a click the user just made was a second telling, and
+    a distracting one while working (issue #389): the canvas redraws to the
+    focus, and the standing note on the Node options label names the seeds, the
+    depth and what is held back, without fading.
+
+    Pinned at the source because the click arrives through the graph component,
+    which does not render under AppTest.
+    """
+    src = sources.viz_text()
+    branch = src[src.index('selection.get("focusRequest")') :]
+    branch = branch[: branch.index("# Status bar outside iframe")]
+
+    assert "viz_apply_focus_click(" in branch, "the click must still be applied"
+    assert 'icon="🎯"' not in branch
+    # What is still said here is the click that did nothing at all, which
+    # nothing else on the page explains.
+    assert "Focus is available for classes" in branch
+
+
+def test_the_focus_that_ended_itself_still_says_so():
+    """The other 🎯 toast stays: focus mode ending on its own is not something
+    the user did, and un-ticking the box in silence is what issue #335 was."""
+    src = sources.viz_text()
+    assert "_viz_focus_left_note" in src
+    assert "Focus off: nothing left to focus on" in src
