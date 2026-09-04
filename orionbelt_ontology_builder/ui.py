@@ -1956,10 +1956,19 @@ PATH_HIGHLIGHT_COLOR = "#FFEB3B"
 #: link it is, and it is what the graph is scanned by (issue #357).
 PATH_HIGHLIGHT_BORDER = 3
 
-#: How far a selected node's fill moves away from its own label, 0-1.
-#: Enough to read as a state change at a glance without leaving the colour the
-#: node's type is recognised by.
+#: How far a selected node's fill moves away from its own label at the least,
+#: 0-1. Enough to read as a state change at a glance, and applied even where the
+#: label already has all the contrast it needs: selection has to *show*.
 SELECTED_FILL_SHIFT = 0.32
+#: And at the most, so a fill that would need more than this to hit the target
+#: below lands on the best colour it can rather than collapsing into flat black
+#: or white and losing the type it is recognised by.
+SELECTED_FILL_SHIFT_MAX = 0.6
+#: What the label is aimed at against the fill it ends up on: WCAG AA for body
+#: text. Aimed at rather than asserted, hence the ceiling above — but every
+#: colour the graph currently draws clears it, the individuals' orange only just
+#: (Codex review of PR #403).
+SELECTED_LABEL_CONTRAST = 4.5
 #: The node label colour the graph options set, and so what a node's label is
 #: drawn in unless it names its own.
 DEFAULT_NODE_FONT = "#f0f0f0"
@@ -1989,6 +1998,12 @@ def _luminance(rgb: tuple[int, int, int]) -> float:
     return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
 
 
+def _contrast(one: tuple[int, int, int], other: tuple[int, int, int]) -> float:
+    """The WCAG contrast ratio between two colours, 1 (none) to 21."""
+    a, b = _luminance(one), _luminance(other)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
 def selected_fill(fill: str, label: str, shift: float = SELECTED_FILL_SHIFT) -> str:
     """The fill a node is drawn in while it is selected.
 
@@ -1997,6 +2012,13 @@ def selected_fill(fill: str, label: str, shift: float = SELECTED_FILL_SHIFT) -> 
     nodes use. So the selected node still reads as the type its colour says it
     is, and its label reads at least as well as it did unselected — which is the
     whole complaint in issue #400, where the label vanished into the fill.
+
+    ``shift`` is where the move starts, not where it stops: it keeps going in
+    small steps until the label clears :data:`SELECTED_LABEL_CONTRAST`, up to
+    :data:`SELECTED_FILL_SHIFT_MAX`. A single fixed shift is a number that
+    happens to work for today's palette — the orange the individuals are drawn
+    in needs half again what the class green does to read as well, and a colour
+    added later could need more than either (Codex review of PR #403).
     """
     base = _hex_rgb(fill)
     text = _hex_rgb(label)
@@ -2007,8 +2029,20 @@ def selected_fill(fill: str, label: str, shift: float = SELECTED_FILL_SHIFT) -> 
     if text is None:
         text = _hex_rgb(DEFAULT_NODE_FONT) or (240, 240, 240)
     toward = 0 if _luminance(text) >= _luminance(base) else 255
-    moved = (round(c + (toward - c) * shift) for c in base)
-    return "#" + "".join(f"{c:02X}" for c in moved)
+
+    def moved(by: float) -> tuple[int, int, int]:
+        r, g, b = (round(c + (toward - c) * by) for c in base)
+        return (r, g, b)
+
+    step = 0.02
+    out = moved(shift)
+    by = shift
+    while _contrast(out, text) < SELECTED_LABEL_CONTRAST and by < (
+        SELECTED_FILL_SHIFT_MAX - 1e-9
+    ):
+        by = min(by + step, SELECTED_FILL_SHIFT_MAX)
+        out = moved(by)
+    return "#" + "".join(f"{c:02X}" for c in out)
 
 
 def add_selection_colours(

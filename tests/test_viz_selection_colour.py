@@ -16,6 +16,9 @@ import json
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder.ui import (
+    SELECTED_FILL_SHIFT,
+    SELECTED_FILL_SHIFT_MAX,
+    SELECTED_LABEL_CONTRAST,
     _hex_rgb,
     _luminance,
     add_selection_colours,
@@ -49,27 +52,64 @@ def test_a_dark_label_lightens_it_instead():
     )
 
 
-def test_the_label_reads_at_least_as_well_as_it_did():
+PALETTE = [
+    ("#4CAF50", NEAR_WHITE),  # class
+    ("#2196F3", NEAR_WHITE),  # object property
+    ("#9C27B0", NEAR_WHITE),  # data property
+    ("#FF9800", NEAR_WHITE),  # individual
+    ("#795548", NEAR_WHITE),  # annotation
+    ("#00897B", NEAR_WHITE),  # SKOS concept
+    ("#90A4AE", NEAR_WHITE),  # triple subject
+    ("#B0BEC5", "#333333"),  # literal
+]
+
+
+def test_every_label_the_graph_draws_clears_the_target():
     """Every fill the graph uses, against the label it is written in."""
-    palette = [
-        ("#4CAF50", NEAR_WHITE),  # class
-        ("#2196F3", NEAR_WHITE),  # object property
-        ("#9C27B0", NEAR_WHITE),  # data property
-        ("#FF9800", NEAR_WHITE),  # individual
-        ("#795548", NEAR_WHITE),  # annotation
-        ("#00897B", NEAR_WHITE),  # SKOS concept
-        ("#90A4AE", NEAR_WHITE),  # triple subject
-        ("#B0BEC5", "#333333"),  # literal
-    ]
-    for fill, label in palette:
+    for fill, label in PALETTE:
         selected = selected_fill(fill, label)
         assert _contrast(label, selected) > _contrast(label, fill), fill
+        assert _contrast(label, selected) >= SELECTED_LABEL_CONTRAST, fill
         if label == NEAR_WHITE:
             # The reported case: a near-white label on the pale default is 1.12,
             # which is no contrast at all. (A dark label reads fine on it, which
             # is why the one node written in dark ink was never the complaint.)
             assert _contrast(label, VIS_DEFAULT_HIGHLIGHT) < 1.2
-            assert _contrast(label, selected) > 3, fill
+
+
+def test_a_fill_that_needs_more_of_a_move_gets_it():
+    """The individuals' orange starts far worse off than the class green.
+
+    One shift for both left it at 3.91 while the green cleared 4.5 comfortably,
+    which is what the review of PR #403 found. The move now runs until the
+    label reads, so the orange simply travels further.
+    """
+    orange, green = "#FF9800", CLASS_GREEN
+    assert _contrast(NEAR_WHITE, orange) < _contrast(NEAR_WHITE, green)
+
+    def moved(fill):
+        return _contrast(fill, selected_fill(fill, NEAR_WHITE))
+
+    assert moved(orange) > moved(green)
+
+
+def test_a_fill_already_dark_enough_only_moves_the_minimum():
+    """The target is a floor, not a look: nothing moves further than it must."""
+    annotation = "#795548"  # 5.75 unselected, so the floor alone clears it
+    assert selected_fill(annotation, NEAR_WHITE) == selected_fill(
+        annotation, NEAR_WHITE, shift=SELECTED_FILL_SHIFT
+    )
+
+
+def test_an_unreachable_target_stops_at_the_ceiling():
+    """A mid grey under a mid grey label can't get there by darkening alone.
+
+    It takes the best colour within the ceiling rather than running on to black
+    and losing the colour the node is recognised by.
+    """
+    grey = "#7F7F7F"
+    capped = tuple(round(c * (1 - SELECTED_FILL_SHIFT_MAX)) for c in _hex_rgb(grey))
+    assert _hex_rgb(selected_fill(grey, "#808080")) == capped
 
 
 def test_the_selected_fill_is_visibly_a_different_colour():
