@@ -66,6 +66,28 @@ def test_empty_query_is_a_syntax_error(populated_om):
         sparql.run_query(populated_om.graph, "   ")
 
 
+def test_the_engine_s_own_wording_is_marked_as_such(populated_om):
+    """What the page shows in a copyable block hangs off this flag (#399)."""
+    with pytest.raises(sparql.QuerySyntaxError) as caught:
+        sparql.run_query(populated_om.graph, "SELECT * WHERE { ?s ?p")
+    assert caught.value.engine_text
+    assert "Expected" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "   ",  # ours: "Enter a query to run."
+        "DELETE WHERE { ?s ?p ?o }",  # ours: the console is read-only
+        "SELECT * WHERE { SERVICE <http://x/> { ?s ?p ?o } }",  # ours: no SERVICE
+    ],
+)
+def test_our_own_wording_is_not(populated_om, query):
+    with pytest.raises(sparql.QueryError) as caught:
+        sparql.run_query(populated_om.graph, query)
+    assert not caught.value.engine_text
+
+
 def test_a_query_cannot_mutate_the_ontology(populated_om):
     before = len(populated_om.graph)
     sparql.run_query(populated_om.graph, "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }")

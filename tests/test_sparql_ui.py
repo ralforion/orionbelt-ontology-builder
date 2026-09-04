@@ -89,6 +89,42 @@ def test_a_syntax_error_is_shown_not_raised():
     assert at.error
 
 
+def _code_blocks(at):
+    """Every code block on the page. A failed run is the only thing that puts
+    one there for a SELECT; a CONSTRUCT result is the other source."""
+    return [c.value for c in at.code]
+
+
+def test_the_engine_s_message_is_put_somewhere_it_can_be_copied():
+    """A code block is where Streamlit puts a copy button (issue #399)."""
+    at = _run("SELECT ?c WHERE { ?c a owl:Class")
+    assert at.error, "the failure is still announced"
+    assert any("Expected" in block for block in _code_blocks(at)), _code_blocks(at)
+
+
+def test_the_message_is_copied_out_verbatim():
+    """It reaches the block as rdflib wrote it, markdown characters and all.
+
+    ``st.error`` renders markdown: the prefix below came out as *odd* in
+    italics, and copying it back gave a prefix that does not exist.
+    """
+    at = _run("SELECT ?s WHERE { ?s a my_odd_prefix:Bar }")
+    assert "Unknown namespace prefix : my_odd_prefix" in _code_blocks(at)
+
+
+def test_our_own_words_stay_in_the_error_box():
+    """A refusal is prose written to be read, not a diagnostic to copy."""
+    at = _run("INSERT DATA { <http://a> <http://b> <http://c> }")
+    assert "read-only" in at.error[0].value
+    assert not _code_blocks(at)
+
+
+def test_a_query_that_runs_leaves_no_error_block_behind():
+    at = _run("SELECT ?c WHERE { ?c a owl:Class }")
+    assert not at.error
+    assert not _code_blocks(at)
+
+
 def test_the_row_limit_is_applied_and_announced():
     at = _run("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", max_rows=2)
     assert not at.error

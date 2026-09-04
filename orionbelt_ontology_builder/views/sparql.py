@@ -121,6 +121,10 @@ _BOX_KEY = "sparql_query_box"
 _EDITOR_NONCE = "sparql_editor_nonce"
 _RESULT_KEY = "sparql_last_result"
 _ERROR_KEY = "sparql_last_error"
+#: Whether what ``_ERROR_KEY`` holds is the engine's wording rather than ours.
+#: Kept beside the message rather than folded into it so a session that was
+#: showing an error when the app reloaded still renders (it reads as "ours").
+_ERROR_ENGINE_KEY = "sparql_last_error_engine"
 
 
 def _load_example() -> None:
@@ -153,6 +157,7 @@ def _load_example() -> None:
         st.session_state[_EDITOR_NONCE] = st.session_state.get(_EDITOR_NONCE, 0) + 1
     st.session_state.pop(_RESULT_KEY, None)
     st.session_state.pop(_ERROR_KEY, None)
+    st.session_state.pop(_ERROR_ENGINE_KEY, None)
 
 
 _EDITOR_HELP = (
@@ -373,6 +378,28 @@ def _render_prefixes(ont) -> None:
         )
 
 
+def _render_error(message: str, engine_text: bool) -> None:
+    """Show a run that failed.
+
+    Our own messages are prose, written to be read where they are: the console
+    is read-only, the query is empty, this shape cannot be bounded. They stay in
+    the error box.
+
+    The engine's are not. They are diagnostics — copied into a search box, or
+    handed to someone (or something) that can explain them, which is what
+    issue #399 asked for. A code block is where Streamlit puts a copy button,
+    and it fixes two more things on the way past: the box renders markdown, so
+    ``Unknown namespace prefix : my_odd_prefix`` lost its underscores and copied
+    back as a prefix that does not exist, and the positions rdflib reports
+    ("at char 25", "line:1, col:26") only line up under a monospace font.
+    """
+    if not engine_text:
+        st.error(message)
+        return
+    st.error("The query could not be run.")
+    st.code(message, language=None, wrap_lines=True)
+
+
 def _matched_nothing() -> None:
     """Say the result is empty, and name the likeliest reason it is.
 
@@ -525,6 +552,7 @@ def render_sparql():
     if run:
         st.session_state.pop(_RESULT_KEY, None)
         st.session_state.pop(_ERROR_KEY, None)
+        st.session_state.pop(_ERROR_ENGINE_KEY, None)
         try:
             with st.spinner("Running query…"):
                 st.session_state[_RESULT_KEY] = sparql.run_query(
@@ -535,14 +563,20 @@ def render_sparql():
                 )
         except sparql.QueryError as e:
             st.session_state[_ERROR_KEY] = str(e)
+            st.session_state[_ERROR_ENGINE_KEY] = e.engine_text
         except Exception as e:  # noqa: BLE001 - a bad query must not take the page down
             log_error(e, context="SPARQL query")
             st.session_state[_ERROR_KEY] = str(e)
+            # Nothing wrote this one for a reader either.
+            st.session_state[_ERROR_ENGINE_KEY] = True
 
     # Held in session state so the result survives the rerun a download button
     # or a control change triggers.
     if st.session_state.get(_ERROR_KEY):
-        st.error(st.session_state[_ERROR_KEY])
+        _render_error(
+            st.session_state[_ERROR_KEY],
+            bool(st.session_state.get(_ERROR_ENGINE_KEY)),
+        )
     elif st.session_state.get(_RESULT_KEY) is not None:
         _render_result(st.session_state[_RESULT_KEY])
 

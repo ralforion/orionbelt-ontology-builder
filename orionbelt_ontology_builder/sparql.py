@@ -80,7 +80,17 @@ READ_ONLY_FORMS = ("SELECT", "ASK", "CONSTRUCT", "DESCRIBE")
 
 
 class QueryError(Exception):
-    """Base class for a query the console refuses to run."""
+    """Base class for a query the console refuses to run.
+
+    ``engine_text`` marks a message that is rdflib's wording rather than ours:
+    a parse or evaluation failure passed straight through. The page shows the
+    two differently — ours is prose written to be read, the engine's is a
+    diagnostic to be copied somewhere else (issue #399).
+    """
+
+    def __init__(self, message: str, *, engine_text: bool = False):
+        super().__init__(message)
+        self.engine_text = engine_text
 
 
 class QuerySyntaxError(QueryError):
@@ -258,7 +268,7 @@ def prepare(query_text: str, init_ns: dict[str, Any] | None = None) -> PreparedQ
         try:
             parseUpdate(query_text)
         except Exception:  # noqa: BLE001 - not an update either, so it is a syntax error
-            raise QuerySyntaxError(str(exc)) from exc
+            raise QuerySyntaxError(str(exc), engine_text=True) from exc
         raise QueryNotAllowed(
             "This console is read-only: it runs SELECT, ASK, CONSTRUCT and "
             "DESCRIBE queries. Updates (INSERT, DELETE, LOAD, CLEAR, DROP) are "
@@ -482,7 +492,7 @@ def run_query(
     except Exception as exc:
         # An evaluation failure belongs to the user's query (a bad datatype in a
         # FILTER, say), so it is reported as one rather than as an app crash.
-        raise QueryError(str(exc)) from exc
+        raise QueryError(str(exc), engine_text=True) from exc
     result.elapsed = time.monotonic() - started
     return result
 
