@@ -1956,6 +1956,135 @@ PATH_HIGHLIGHT_COLOR = "#FFEB3B"
 #: link it is, and it is what the graph is scanned by (issue #357).
 PATH_HIGHLIGHT_BORDER = 3
 
+#: How far a selected node's fill moves away from its own label at the least,
+#: 0-1. Enough to read as a state change at a glance, and applied even where the
+#: label already has all the contrast it needs: selection has to *show*.
+SELECTED_FILL_SHIFT = 0.32
+#: And at the most, so a fill that would need more than this to hit the target
+#: below lands on the best colour it can rather than collapsing into flat black
+#: or white and losing the type it is recognised by.
+SELECTED_FILL_SHIFT_MAX = 0.6
+#: What the label is aimed at against the fill it ends up on: WCAG AA for body
+#: text. Aimed at rather than asserted, hence the ceiling above — but every
+#: colour the graph currently draws clears it, the individuals' orange only just
+#: (Codex review of PR #403).
+SELECTED_LABEL_CONTRAST = 4.5
+#: The node label colour the graph options set, and so what a node's label is
+#: drawn in unless it names its own.
+DEFAULT_NODE_FONT = "#f0f0f0"
+
+
+def _hex_rgb(colour: str) -> tuple[int, int, int] | None:
+    """``#rgb`` / ``#rrggbb`` as channels, or ``None`` for anything else."""
+    if not isinstance(colour, str):
+        return None
+    value = colour.strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(c * 2 for c in value)
+    if len(value) != 6:
+        return None
+    try:
+        return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+    except ValueError:
+        return None
+
+
+def _luminance(rgb: tuple[int, int, int]) -> float:
+    """WCAG relative luminance, so two colours can be compared for contrast."""
+    channels = []
+    for raw in rgb:
+        c = raw / 255
+        channels.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def _contrast(one: tuple[int, int, int], other: tuple[int, int, int]) -> float:
+    """The WCAG contrast ratio between two colours, 1 (none) to 21."""
+    a, b = _luminance(one), _luminance(other)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def selected_fill(fill: str, label: str, shift: float = SELECTED_FILL_SHIFT) -> str:
+    """The fill a node is drawn in while it is selected.
+
+    Its own colour, moved *away from its label*: darker under the near-white
+    labels most of the palette carries, lighter under the dark one the literal
+    nodes use. So the selected node still reads as the type its colour says it
+    is, and its label reads at least as well as it did unselected — which is the
+    whole complaint in issue #400, where the label vanished into the fill.
+
+    ``shift`` is where the move starts, not where it stops: it keeps going in
+    small steps until the label clears :data:`SELECTED_LABEL_CONTRAST`, up to
+    :data:`SELECTED_FILL_SHIFT_MAX`. A single fixed shift is a number that
+    happens to work for today's palette — the orange the individuals are drawn
+    in needs half again what the class green does to read as well, and a colour
+    added later could need more than either (Codex review of PR #403).
+    """
+    base = _hex_rgb(fill)
+    text = _hex_rgb(label)
+    if base is None:
+        return fill
+    # An unreadable label colour is no reason to leave the fill alone; assume
+    # the near-white the options set, which is what all but one node carries.
+    if text is None:
+        text = _hex_rgb(DEFAULT_NODE_FONT) or (240, 240, 240)
+    toward = 0 if _luminance(text) >= _luminance(base) else 255
+
+    def moved(by: float) -> tuple[int, int, int]:
+        r, g, b = (round(c + (toward - c) * by) for c in base)
+        return (r, g, b)
+
+    step = 0.02
+    out = moved(shift)
+    by = shift
+    while _contrast(out, text) < SELECTED_LABEL_CONTRAST and by < (
+        SELECTED_FILL_SHIFT_MAX - 1e-9
+    ):
+        by = min(by + step, SELECTED_FILL_SHIFT_MAX)
+        out = moved(by)
+    return "#" + "".join(f"{c:02X}" for c in out)
+
+
+def add_selection_colours(
+    nodes: list[dict], default_font: str = DEFAULT_NODE_FONT
+) -> None:
+    """Give every node an explicit colour for its selected state (issue #400).
+
+    vis-network paints a selected node in *its own* default highlight — a pale
+    ``#D2E5FF`` fill with a blue border — for any node that does not name one,
+    and a colour given as an object inherits nothing from the object's own
+    background. Every node here names its background and border and nothing
+    else, so clicking one replaced the colour that says what it is with a wash
+    of near-white, under a near-white label: the label disappeared, most
+    obviously in dark mode where the pale fill also glares.
+
+    So each node is given the selected state it should have had: its own
+    background moved by :func:`selected_fill`, keeping its own border. Whatever
+    a node already named for its selected state wins — the red ring a node with
+    validation issues keeps while selected is set that way.
+
+    Nodes are edited in place, and a colour given as a plain string is left
+    alone: vis derives a highlight from a string itself, and none of the
+    builder's nodes use one.
+    """
+    for node in nodes:
+        colour = node.get("color")
+        if not isinstance(colour, dict):
+            continue
+        background = colour.get("background")
+        if not isinstance(background, str):
+            continue
+        font = node.get("font")
+        label = font.get("color") if isinstance(font, dict) else None
+        highlight = colour.get("highlight")
+        highlight = dict(highlight) if isinstance(highlight, dict) else {}
+        highlight.setdefault(
+            "background", selected_fill(background, label or default_font)
+        )
+        if colour.get("border"):
+            highlight.setdefault("border", colour["border"])
+        colour["highlight"] = highlight
+
 
 def path_entity_kinds(
     show_classes: bool, show_individuals: bool, show_skos: bool
