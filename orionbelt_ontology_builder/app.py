@@ -195,6 +195,7 @@ from .ui import (  # noqa: F401
     maybe_restore_autosave,
     missing_required,
     newly_hidden_uris,
+    note_undo_redo,
     panel_heading_html,
     panel_subject_uri,
     parent_option_index,
@@ -540,9 +541,7 @@ def main():
                 key="btn_undo",
             ):
                 label = um.undo()
-                st.session_state["_ont_mutation_count"] = (
-                    st.session_state.get("_ont_mutation_count", 0) + 1
-                )
+                note_undo_redo()
                 set_flash_message(f"Undid: {label}", "info")
                 st.rerun()
         with redo_col:
@@ -553,9 +552,7 @@ def main():
                 key="btn_redo",
             ):
                 label = um.redo()
-                st.session_state["_ont_mutation_count"] = (
-                    st.session_state.get("_ont_mutation_count", 0) + 1
-                )
+                note_undo_redo()
                 set_flash_message(f"Redid: {label}", "info")
                 st.rerun()
 

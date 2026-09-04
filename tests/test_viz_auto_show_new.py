@@ -107,7 +107,7 @@ def test_taking_the_queue_in_makes_the_filter_non_empty_again():
 
 
 def test_on_does_not_change_a_replacement():
-    """A load/import/undo shows everything either way."""
+    """A load/import/new shows everything either way."""
     for auto in (False, True):
         selected, _known = app.reconcile_filter_selection(
             _uris("A", "B"),

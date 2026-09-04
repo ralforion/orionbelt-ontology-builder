@@ -792,7 +792,7 @@ def render_visualization():
         # instead of resetting it on every ontology mutation, which used to wipe
         # a narrowed filter whenever a class or restriction was added (#180).
         # A mutation-counter jump not matched by the edit counter means the whole
-        # ontology was replaced (load/import/new/undo), so reset to "all" rather
+        # ontology was replaced (load/import/new), so reset to "all" rather
         # than diffing against a now-unrelated ontology that may reuse URIs.
         #
         # The widget lists the namespace-tagged display names, so two classes

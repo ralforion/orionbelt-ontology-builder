@@ -2206,7 +2206,7 @@ def viz_ontology_was_replaced() -> bool:
     """Whether the whole ontology was swapped since the last graph render.
 
     A mutation-counter jump not matched by the edit counter means a
-    load/import/new/undo rather than an incremental edit, so the node filters
+    load/import/new rather than an incremental edit, so the node filters
     reset to "everything shown" instead of diffing against an ontology that may
     reuse URIs for unrelated entities.
 
@@ -2434,6 +2434,23 @@ def _render_disk_autosave_sidebar():
                 st.rerun()
         if linked is not None:
             st.caption(f"Linked: `{linked}`")
+
+
+def note_undo_redo() -> None:
+    """Move the revision for an undo or a redo.
+
+    Both counters move, the way an edit's do. An undo restores an earlier
+    snapshot of the *same* ontology, and the Visualization reads a mutation
+    bump with no matching edit bump as "the whole graph was swapped" and resets
+    its node filters to show everything, so undoing one edit used to put every
+    hidden class back on the canvas (issue #401). The undo history is rebuilt
+    from scratch wherever the ontology is genuinely replaced, so no undo can
+    reach back into an unrelated one.
+    """
+    st.session_state["_ont_mutation_count"] = (
+        st.session_state.get("_ont_mutation_count", 0) + 1
+    )
+    st.session_state["_ont_edit_count"] = st.session_state.get("_ont_edit_count", 0) + 1
 
 
 def save_checkpoint(label: str = "Edit"):
@@ -6052,7 +6069,7 @@ def reconcile_filter_selection(
     ``auto_show_new`` is that choice, off by default so the shipped behaviour
     is unchanged (issue #326).
 
-    ``replaced`` marks that the whole ontology was swapped (load/import/new/undo)
+    ``replaced`` marks that the whole ontology was swapped (load/import/new)
     rather than incrementally edited. Diffing must not run then: an unrelated
     ontology that happens to reuse a URI could otherwise inherit its
     hidden/narrowed state and load with entities missing. On a replacement — or
