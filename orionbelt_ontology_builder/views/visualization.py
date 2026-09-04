@@ -11,6 +11,7 @@ from ..ui import (
     _FILTER_KINDS,
     _PAGE_BY_TYPE,
     _PRECISE_NAV_TYPES,
+    DEFAULT_NODE_FONT,
     GRAPH_MAX_NODES,
     PATH_HIGHLIGHT_BORDER,
     PATH_HIGHLIGHT_COLOR,
@@ -39,6 +40,7 @@ from ..ui import (
     _str_list,
     _uid,
     _viz_live_selection,
+    add_selection_colours,
     annotation_ename,
     build_class_hierarchy_text,
     build_class_options,
@@ -2747,6 +2749,16 @@ def render_visualization():
             try:
                 import json as _json
 
+                # Selected nodes keep their own colour instead of vis's pale
+                # default, which used to swallow the near-white labels (issue
+                # #400). Done here rather than at each add_node so every kind of
+                # node gets it, and because the rule reads off the label colour
+                # the node ended up with.
+                add_selection_colours(
+                    net.nodes,
+                    net.options.get("nodes", {}).get("font", {}).get("color")
+                    or DEFAULT_NODE_FONT,
+                )
                 nodes_json = _json.dumps(net.nodes)
                 edges_json = _json.dumps(net.edges)
                 options_json = _json.dumps(net.options)
