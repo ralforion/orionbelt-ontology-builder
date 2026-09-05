@@ -187,6 +187,7 @@ from .ui import (  # noqa: F401
     get_ontology_manager_class,
     graph_node_cap,
     init_session_state,
+    install_help_capture,
     language_pack_entries,
     language_pack_names,
     language_selectbox,
@@ -217,6 +218,7 @@ from .ui import (  # noqa: F401
     render_add_class_form,
     render_add_restriction,
     render_annotation_form,
+    render_help_wiring,
     render_language_pack_sidebar,
     render_relation_form,
     render_relation_rows,
@@ -240,6 +242,7 @@ from .ui import (  # noqa: F401
     set_flash_message,
     show_message,
     sparql_state_changed,
+    start_help_capture,
     theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
@@ -405,6 +408,12 @@ def render_autosave_sidebar():
 def main():
     """Main application entry point."""
     _configure_page()
+    # Before anything renders: the widgets are wrapped so their help text is
+    # collected on the way past, and this render starts with none of it
+    # (issue #383). render_help_wiring() at the end puts it where a keyboard
+    # meets it.
+    install_help_capture()
+    start_help_capture()
     init_session_state()
     maybe_restore_autosave()
 
@@ -720,6 +729,11 @@ def main():
     # Mirror the current ontology to browser localStorage (after all edits for
     # this rerun have been applied) so a refresh can restore it.
     persist_autosave()
+
+    # Last, so it has seen every help= this page passed: the help buttons and
+    # the clear crosses leave the tab order and their text lands on the fields
+    # (issue #383).
+    render_help_wiring()
 
 
 if __name__ == "__main__":

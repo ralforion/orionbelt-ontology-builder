@@ -514,6 +514,280 @@ def get_ontology_manager_class():
     return OntologyManager
 
 
+#: Where this render's ``help=`` texts are collected, keyed by the widget label
+#: they were given with. Per session, because that is what session_state is, and
+#: rebuilt on every render so a page that no longer draws a field stops carrying
+#: its help.
+HELP_TEXTS_KEY = "_help_texts"
+
+#: The widget functions the app passes ``help=`` to. Wrapped once, at import, so
+#: every call site is covered — the alternative was routing 100-odd of them
+#: through a helper, and the next one added would have been the one that forgot.
+_HELPED_WIDGETS = (
+    "button",
+    "checkbox",
+    "file_uploader",
+    "multiselect",
+    "number_input",
+    "radio",
+    "selectbox",
+    "slider",
+    "text_area",
+    "text_input",
+    "toggle",
+)
+
+
+def _record_help(label, help_text, key=None) -> None:
+    """Note the help text this widget was given, under what identifies it.
+
+    By its ``key`` where it has one, because that is the only thing that tells
+    two widgets apart: a page can draw a row of identical 🗑️ buttons whose help
+    differs per row ("Delete this creator", "Delete this prefLabel"), and keyed
+    only by the label the last one would answer for all of them — putting the
+    wrong description on a control whose icon we had just taken out of the tab
+    order (Codex review of PR #410).
+
+    The label is kept as the fallback for the widgets that have no key, and a
+    label two widgets disagree over is dropped rather than guessed at.
+    """
+    if not isinstance(help_text, str):
+        return
+    try:
+        store = st.session_state.get(HELP_TEXTS_KEY)
+    except Exception:  # noqa: BLE001 - no session (a bare import, a worker thread)
+        return
+    if not isinstance(store, dict) or "by_key" not in store:
+        store = _empty_help_store()
+        st.session_state[HELP_TEXTS_KEY] = store
+    if isinstance(key, str) and key:
+        store["by_key"][key] = help_text
+    if isinstance(label, str):
+        by_label = store["by_label"]
+        if label in by_label and by_label[label] != help_text:
+            by_label[label] = None  # two widgets, two texts: neither is "the" one
+        else:
+            by_label.setdefault(label, help_text)
+
+
+def _empty_help_store() -> dict:
+    """What a render starts from: nothing recorded, under either identity."""
+    return {"by_key": {}, "by_label": {}}
+
+
+def _capturing_help(fn):
+    """``fn`` with its ``help=`` noted on the way past. Nothing else changes."""
+
+    def wrapped(*args, **kwargs):
+        if kwargs.get("help"):
+            # The label is the first string argument, not the first argument:
+            # the same function is called both as ``st.text_input(label, ...)``
+            # and — once the container class is patched — as
+            # ``dg.text_input(dg, label, ...)``, where the container comes
+            # first. Taking position 0 recorded the container and lost every
+            # sidebar widget's help.
+            label = kwargs.get("label")
+            if not isinstance(label, str):
+                label = next((a for a in args if isinstance(a, str)), None)
+            _record_help(label, kwargs["help"], kwargs.get("key"))
+        return fn(*args, **kwargs)
+
+    wrapped.__name__ = getattr(fn, "__name__", "widget")
+    wrapped.__doc__ = getattr(fn, "__doc__", None)
+    wrapped._orionbelt_help_capture = True  # so this is idempotent
+    return wrapped
+
+
+def _patch_help_capture(holder) -> None:
+    """Wrap ``holder``'s widget functions, once."""
+    for name in _HELPED_WIDGETS:
+        fn = getattr(holder, name, None)
+        if fn is None or getattr(fn, "_orionbelt_help_capture", False):
+            continue
+        setattr(holder, name, _capturing_help(fn))
+
+
+def install_help_capture() -> None:
+    """Record every ``help=`` the app passes to a widget (issue #383).
+
+    A help tooltip renders as a real button, and since Streamlit 1.62 rebuilt
+    the widgets on react-aria it sits in the tab order — before the field it
+    belongs to, so tabbing through a form stops twice per field. Taking it out
+    of the tab order is only honest if the text it holds goes somewhere a
+    keyboard reaches, and Streamlit does not put it on the field: the text is in
+    the tooltip and nowhere else until the tooltip opens.
+
+    So the text is collected here, on its way to the widget, and
+    :func:`render_help_wiring` puts it on the field itself. The widgets are
+    wrapped rather than each call site changed, which keeps this true for the
+    102nd ``help=`` as well as the 101 that exist.
+    """
+    # Both, because they are different objects: ``st.text_input`` is a method
+    # already bound to the main container, so patching the class it came from
+    # does not touch it — and patching only the module would miss every widget
+    # drawn on ``st.sidebar`` or inside a column, which is where the sidebar's
+    # own help icons come from.
+    _patch_help_capture(st)
+    try:
+        from streamlit.delta_generator import DeltaGenerator
+
+        _patch_help_capture(DeltaGenerator)
+    except Exception:
+        logger.debug("Help capture not installed on the container class", exc_info=True)
+
+
+def start_help_capture() -> None:
+    """Begin a render with an empty set of help texts."""
+    st.session_state[HELP_TEXTS_KEY] = _empty_help_store()
+
+
+#: The script :func:`help_wiring_html` wraps. A raw string, and deliberately
+#: free of selectors built from label text: a label carrying a quote or a
+#: backslash would have to be escaped into one, and the escaping is the part
+#: that breaks silently. Labels are compared as strings instead.
+_HELP_WIRING_JS = r"""
+var doc = window.parent && window.parent.document;
+if (doc) {
+  var HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;'
+             + 'overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;';
+  // What inside a widget's container takes the description: its own control,
+  // never the help icon that pointed us at it.
+  var CONTROLS = 'input, textarea, select, button:not([aria-label^="Help for "])';
+  var HELP_FOR = 'Help for ';
+  var seq = 0;
+
+  // The widget's key, which Streamlit puts on its container as a class. Read
+  // off the element rather than built into a selector: a key is app-authored
+  // text and could carry anything.
+  function keyOf(box) {
+    var classes = box.className ? String(box.className).split(' ') : [];
+    for (var i = 0; i < classes.length; i++) {
+      if (classes[i].indexOf('st-key-') === 0) return classes[i].slice(7);
+    }
+    return null;
+  }
+
+  // The help text, on the control itself: a visually hidden note next to it,
+  // named by aria-describedby. Both attributes are set — describedby is what
+  // the screen readers in use today read, aria-description is where the same
+  // thing is heading.
+  function describe(el, text) {
+    var id = el.getAttribute('data-orionbelt-help');
+    var note = id && doc.getElementById(id);
+    if (!note) {
+      id = 'orionbelt-help-' + (++seq);
+      note = doc.createElement('span');
+      note.id = id;
+      note.setAttribute('style', HIDDEN);
+      el.setAttribute('data-orionbelt-help', id);
+      (el.parentElement || doc.body).appendChild(note);
+    }
+    if (note.textContent !== text) note.textContent = text;
+    var described = el.getAttribute('aria-describedby') || '';
+    if (described.split(' ').indexOf(id) === -1) {
+      el.setAttribute('aria-describedby', (described + ' ' + id).trim());
+    }
+    if (el.getAttribute('aria-description') !== text) {
+      el.setAttribute('aria-description', text);
+    }
+  }
+
+  function apply() {
+    // Out of the tab order, so Tab walks field to field — but only where the
+    // text the icon holds has been put on the control. That is the rule that
+    // keeps this honest: an icon whose help cannot be placed keeps its tab
+    // stop rather than becoming unreachable (Codex review of PR #410).
+    //
+    // The icons are matched by their own label, not by the tooltip wrapper
+    // around them: Streamlit puts that same wrapper on real controls — the
+    // image Fullscreen button is one — and those keep their place regardless.
+    var icons = doc.querySelectorAll('button[aria-label^="Help for "]');
+    for (var i = 0; i < icons.length; i++) {
+      var icon = icons[i];
+      // Walk from the icon to the widget it belongs to rather than looking the
+      // control up by its label: a button's name is its text and not an
+      // aria-label, and two widgets on a page can carry the same label. The
+      // container Streamlit wraps each widget in answers both, and carries the
+      // widget's key as a class where it has one — which is the only thing
+      // that tells a row of identical buttons apart.
+      var box = icon.closest('[data-testid="stElementContainer"]');
+      if (!box) continue;
+      var key = keyOf(box);
+      var text = key && Object.prototype.hasOwnProperty.call(BY_KEY, key)
+        ? BY_KEY[key]
+        : BY_LABEL[icon.getAttribute('aria-label').slice(HELP_FOR.length)];
+      var control = text && box.querySelector(CONTROLS);
+      if (!control) continue;
+      describe(control, text);
+      icon.setAttribute('tabindex', '-1');
+    }
+    // The crosses need nothing carried anywhere first: they duplicate what the
+    // keyboard can already do in the combobox itself, which is the case
+    // Streamlit already made for the dropdown arrow beside them.
+    var clears = doc.querySelectorAll('button[aria-label="Clear value"]');
+    for (var j = 0; j < clears.length; j++) clears[j].setAttribute('tabindex', '-1');
+  }
+
+  var pending = null;
+  function schedule() {
+    if (pending) return;
+    pending = setTimeout(function () { pending = null; apply(); }, 50);
+  }
+
+  apply();
+  // Streamlit rebuilds its DOM on every rerun and this frame is mounted once,
+  // so the work is redone whenever the page under it changes. Batched, because
+  // a rerun lands as a burst of mutations.
+  try {
+    new MutationObserver(schedule).observe(doc.body, {childList: true, subtree: true});
+  } catch (e) {}
+}
+"""
+
+
+def help_wiring_html(texts: dict) -> str:
+    """The page's tab-order and help wiring, as a component document.
+
+    Two things, both in the parent document because that is where the widgets
+    are, and both re-applied by a MutationObserver because Streamlit rebuilds
+    that DOM on every rerun while this frame is mounted once:
+
+    * the help buttons and the selectboxes' clear crosses leave the tab order,
+      so Tab walks field to field (issue #383). The crosses are the same case
+      Streamlit already made for the dropdown arrow next to them, which it ships
+      as ``tabindex="-1"``: a control that duplicates something the keyboard can
+      already do — the combobox is an editable text field, so its value clears
+      by typing.
+    * the help text lands on the field as a description, so a screen reader
+      reads it when the field is focused rather than at a separate button that
+      is no longer reachable. This is the half that makes the first half honest.
+    """
+    by_key = texts.get("by_key") or {}
+    # A label two widgets disagreed over is not sent at all: an icon whose text
+    # cannot be placed keeps its tab stop instead, which is the safety rule the
+    # script below is built on.
+    by_label = {k: v for k, v in (texts.get("by_label") or {}).items() if v}
+    return (
+        "<script>\n"
+        "var BY_KEY = "
+        + json.dumps(by_key, ensure_ascii=False)
+        + ";\nvar BY_LABEL = "
+        + json.dumps(by_label, ensure_ascii=False)
+        + ";\n"
+        + _HELP_WIRING_JS
+        + "</script>"
+    )
+
+
+def render_help_wiring() -> None:
+    """Mount :func:`help_wiring_html` for this render, if there is a page."""
+    texts = st.session_state.get(HELP_TEXTS_KEY)
+    try:
+        st.components.v1.html(help_wiring_html(texts or {}), height=0)
+    except Exception:  # cosmetic: a page must not fail over its tab order
+        logger.debug("Help wiring not mounted", exc_info=True)
+
+
 def init_session_state():
     """Initialize session state variables."""
     if "ontology" not in st.session_state:
