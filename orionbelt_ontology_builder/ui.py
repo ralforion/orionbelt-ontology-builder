@@ -762,11 +762,16 @@ if (doc) {
 _ENTER_INSERTS_JS = r"""
 var doc = window.parent && window.parent.document;
 if (doc) {
-  // The bulk row, which selects every match at once. It is the first row, so it
-  // is what an unqualified "first option" would take, and inserting five
-  // classes when one was asked for is worse than doing nothing. Matched by the
-  // key it carries rather than by the words it shows.
-  var SELECT_ALL = '__select_all__';
+  // The bulk rows, which select every option or every match at once. One of
+  // them is always first, so it is what an unqualified "first option" would
+  // take, and inserting five classes when one was asked for is worse than doing
+  // nothing. They are matched by the shape of the key they carry, not by the
+  // words they show and not by either key literally: with the box empty it is
+  // "__select_all__" and with a query typed it is "__select_matches__", and
+  // taking one for the other is exactly the bug this comment exists to stop
+  // (Codex review of PR #412). Any option keyed like a sentinel is skipped;
+  // real options are keyed by their index in the list.
+  var SENTINEL = /^__.*__$/;
 
   // The first row that is a real, selectable option. The empty state ("No
   // results") is a row too, and clicking it is not harmless: it took the whole
@@ -777,7 +782,8 @@ if (doc) {
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
       if (option.getAttribute('aria-selected') === null) continue;
-      if (option.getAttribute('data-key') === SELECT_ALL) continue;
+      var key = option.getAttribute('data-key');
+      if (key === null || SENTINEL.test(key)) continue;
       return option;
     }
     return null;

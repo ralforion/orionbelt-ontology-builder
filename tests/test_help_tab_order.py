@@ -213,12 +213,19 @@ def test_enter_is_only_taken_over_in_a_multiselect():
 
 
 def test_the_bulk_row_is_not_what_enter_takes():
-    """The "Select N matches" row is first, so an unqualified "first option"
-    would insert every match when one was asked for. Matched by the key it
-    carries, not by the words it shows."""
+    """A bulk row is always first, so an unqualified "first option" would insert
+    every match when one was asked for.
+
+    Matched by the shape of its key rather than either key literally: Streamlit
+    uses "__select_all__" with the box empty and "__select_matches__" once a
+    query is typed, and skipping only the first let the second through — which
+    is the case that matters, since it is the one a typed query produces (Codex
+    review of PR #412).
+    """
     js = ui._ENTER_INSERTS_JS
-    assert "'__select_all__'" in js
-    assert "data-key" in js
+    assert "/^__.*__$/" in js, js
+    assert "SENTINEL.test(key)" in js
+    assert "'__select_all__'" not in js, "not one literal key"
 
 
 def test_the_empty_state_row_is_not_clicked():
