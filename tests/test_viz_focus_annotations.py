@@ -55,8 +55,14 @@ def _script():
     app.render_visualization()
 
 
-def _graph(seed="Class: A", depth=1, annotations=True, annotation_kind="custom"):
-    """Render once and return ``(nodes, edges)``. An empty seed means focus off."""
+def _render(seed="Class: A", depth=1, annotations=True, annotation_kind="custom"):
+    """Render once and return the app.
+
+    Every knob is written on every call, none defaulted from what is already in
+    the environment: these are process-wide, so a test that set one and a test
+    that did not would pass or fail by the order pytest happened to run them in
+    (Codex review of PR #407).
+    """
     os.environ["SEED"] = seed
     os.environ["DEPTH"] = str(depth)
     os.environ["ANNOTATIONS"] = "1" if annotations else "0"
@@ -64,9 +70,19 @@ def _graph(seed="Class: A", depth=1, annotations=True, annotation_kind="custom")
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
+    return at
+
+
+def _graph(seed="Class: A", depth=1, annotations=True, annotation_kind="custom"):
+    """Render once and return ``(nodes, edges)``. An empty seed means focus off."""
+    at = _render(seed, depth, annotations, annotation_kind)
     data = at.session_state["last_graph_data"]
     assert data, "the visualization built no graph"
     return json.loads(data["nodes"]), json.loads(data["edges"])
+
+
+def _notice(at):
+    return at.session_state["last_graph_data"].get("notice") or ""
 
 
 def _annotation_labels(nodes):
@@ -149,13 +165,7 @@ def test_annotations_are_dropped_before_the_focus_itself(patch_ui):
 
 def test_the_app_says_when_annotations_were_cut(patch_ui):
     patch_ui("GRAPH_MAX_NODES", 3)
-    os.environ["SEED"] = "Class: A"
-    os.environ["DEPTH"] = "2"
-    os.environ["ANNOTATIONS"] = "1"
-    at = AppTest.from_function(_script)
-    at.run(timeout=300)
-    assert not at.exception, at.exception
-    notice = at.session_state["last_graph_data"].get("notice") or ""
+    notice = _notice(_render(seed="Class: A", depth=2))
     assert "annotations" in notice.lower(), notice
 
 
@@ -168,13 +178,11 @@ def test_the_app_says_so_when_the_focus_itself_left_no_room(patch_ui):
     ticked, and said only that it was full. Both facts are now in the notice.
     """
     patch_ui("GRAPH_MAX_NODES", 2)
-    nodes, _ = _graph(seed="Class: A", depth=2)
-    assert _annotation_labels(nodes) == set(), "no room was left for any of them"
+    at = _render(seed="Class: A", depth=2)
+    nodes = json.loads(at.session_state["last_graph_data"]["nodes"])
 
-    at = AppTest.from_function(_script)
-    at.run(timeout=300)
-    assert not at.exception, at.exception
-    notice = at.session_state["last_graph_data"].get("notice") or ""
+    assert _annotation_labels(nodes) == set(), "no room was left for any of them"
+    notice = _notice(at)
     assert "annotation" in notice.lower(), notice
     assert "covers more than" in notice, notice
 
