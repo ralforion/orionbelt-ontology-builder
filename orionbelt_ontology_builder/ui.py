@@ -3695,7 +3695,7 @@ def render_add_class_form(
     on_close=None,
     after_add=None,
     checkpoint_label="Add class",
-    exclude_uri=None,
+    exclude_uris=None,
 ):
     """Render the "add a class" form. Returns True when a class was created.
 
@@ -3707,18 +3707,23 @@ def render_add_class_form(
     for you. ``on_close`` is what dismissing the form means; the page has no such
     thing (the tab is the form) so it passes None and gets no Cancel button.
 
-    ``after_add`` is called with the new class's name once it exists and before
+    ``after_add`` is called with the new class's *URI* once it exists and before
     the checkpoint, so a caller that has more to write — the panel's "Add
     superclass", which then hangs the selected class under it (issue #327) — is
-    one entry in the undo history rather than two. ``checkpoint_label`` is what
-    that entry is called, and ``exclude_uri`` drops a class from the parent
-    picker: offering the class that is about to become the new one's *child*
-    would make a cycle out of one dropdown.
+    one entry in the undo history rather than two. The URI and not the name it
+    was typed under: the class can be created in any bound namespace, and a
+    caller given the local name would resolve it through the base one and link
+    to a URI nothing declares (Codex review of PR #411).
+
+    ``checkpoint_label`` is what that undo entry is called, and ``exclude_uris``
+    drops classes from the parent picker: the class about to become the new
+    one's child, and everything already under it, would each close a cycle if
+    picked as its parent.
 
     The caller owns the rerun: the panel has to drop its open flag first.
     """
-    if exclude_uri:
-        classes = [c for c in classes if c["uri"] != exclude_uri]
+    if exclude_uris:
+        classes = [c for c in classes if c["uri"] not in exclude_uris]
     parent_options, parent_lookup = build_class_options(classes, include_none=True)
     parent_index = parent_option_index(parent_options, parent_lookup, parent_uri)
 
@@ -3767,7 +3772,7 @@ def render_add_class_form(
             elif taken := ont.name_conflict_reason(name, "class", ns_val):
                 show_message(taken, "error")
             else:
-                ont.add_class(
+                new_uri = ont.add_class(
                     name,
                     parent=parent_lookup.get(parent_display),
                     label=label,
@@ -3775,7 +3780,7 @@ def render_add_class_form(
                     namespace=ns_val,
                 )
                 if after_add is not None:
-                    after_add(name)
+                    after_add(str(new_uri))
                 save_checkpoint(checkpoint_label)
                 show_message(f"Class '{name}' added successfully!", "success")
                 return True
@@ -4419,6 +4424,29 @@ def _render_panel_add_class_form(ont, classes, ntype, ename):
         st.rerun()
 
 
+def class_descendant_uris(ont, root_uri) -> set:
+    """Every class under ``root_uri``, however deep.
+
+    Read from the ``rdfs:subClassOf`` edges by URI rather than from the local
+    names ``get_classes`` reports, which two namespaces can share. Walked with a
+    seen-set, so a hierarchy that already contains a cycle — an imported one can
+    — is answered rather than looped over.
+    """
+    children: dict = {}
+    for relation in ont.get_class_relations():
+        if relation.get("relation") != "subClassOf":
+            continue
+        children.setdefault(relation["object_uri"], []).append(relation["subject_uri"])
+    found: set = set()
+    stack = [root_uri]
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child not in found:
+                found.add(child)
+                stack.append(child)
+    return found
+
+
 def _render_panel_add_superclass_form(ont, classes, ntype, ename):
     """Add a class *above* the selected one, from the graph (issue #327).
 
@@ -4448,10 +4476,15 @@ def _render_panel_add_superclass_form(ont, classes, ntype, ename):
         classes,
         "panel_add_superclass_form",
         on_close=_panel_close_add,
-        after_add=lambda name: ont.update_class(child_uri, new_parent=name),
+        # By URI: the new class can be created in any bound namespace, and the
+        # link has to point at the class that was actually made. add_class_
+        # relation resolves both ends through the same URI handling, so a
+        # namespace with an unusual scheme works here too.
+        after_add=lambda uri: ont.add_class_relation(child_uri, "subClassOf", uri),
         checkpoint_label="Add superclass",
-        # The class about to become its child cannot also be its parent.
-        exclude_uri=child_uri,
+        # Neither the class about to become its child nor anything already under
+        # that class: picking one as this class's parent closes a cycle.
+        exclude_uris={child_uri} | class_descendant_uris(ont, child_uri),
     ):
         _panel_close_add()
         st.rerun()
