@@ -49,17 +49,16 @@ def session(monkeypatch):
 def test_a_widget_s_help_is_collected_on_its_way_past(session):
     ui.start_help_capture()
     ui.install_help_capture()
-    calls = []
     st.text_input("Class Name *", help="A local name", key="probe")
-    assert session[ui.HELP_TEXTS_KEY]["Class Name *"] == "A local name"
-    assert calls == []
+    assert session[ui.HELP_TEXTS_KEY]["by_label"]["Class Name *"] == "A local name"
+    assert session[ui.HELP_TEXTS_KEY]["by_key"]["probe"] == "A local name"
 
 
 def test_a_widget_without_help_is_not_recorded(session):
     ui.start_help_capture()
     ui.install_help_capture()
     st.text_input("Label", key="probe2")
-    assert "Label" not in session[ui.HELP_TEXTS_KEY]
+    assert "Label" not in session[ui.HELP_TEXTS_KEY]["by_label"]
 
 
 def test_the_label_is_found_by_type_not_by_position(session):
@@ -73,7 +72,9 @@ def test_the_label_is_found_by_type_not_by_position(session):
     ui.start_help_capture()
     ui.install_help_capture()
     st.sidebar.checkbox("Autosave to this browser", help="Keep a copy", key="probe4")
-    assert session[ui.HELP_TEXTS_KEY]["Autosave to this browser"] == "Keep a copy"
+    assert session[ui.HELP_TEXTS_KEY]["by_label"]["Autosave to this browser"] == (
+        "Keep a copy"
+    )
 
 
 def test_the_wrapping_is_idempotent():
@@ -92,17 +93,73 @@ def test_each_render_starts_from_nothing(session):
     ui.install_help_capture()
     st.text_input("Gone next time", help="x", key="probe3")
     ui.start_help_capture()
-    assert session[ui.HELP_TEXTS_KEY] == {}
+    assert session[ui.HELP_TEXTS_KEY] == {"by_key": {}, "by_label": {}}
 
 
 # --- what is handed to the browser ------------------------------------------
 
 
+def test_a_row_of_identical_buttons_keeps_its_own_help(session):
+    """The case the review of PR #410 found.
+
+    A page draws a 🗑️ per row, each with the help its own row needs — "Delete
+    this creator", "Delete this prefLabel". Keyed by the label, one of them
+    would answer for all of them, and every button would carry the wrong
+    description while its icon was taken out of the tab order. The widget key
+    is the only thing that tells them apart.
+    """
+    ui.start_help_capture()
+    ui.install_help_capture()
+    st.button("🗑️", key="del_meta_0", help="Delete this creator")
+    st.button("🗑️", key="del_meta_1", help="Delete this prefLabel")
+
+    store = session[ui.HELP_TEXTS_KEY]
+    assert store["by_key"]["del_meta_0"] == "Delete this creator"
+    assert store["by_key"]["del_meta_1"] == "Delete this prefLabel"
+    # And the label they share is dropped rather than guessed at.
+    assert store["by_label"]["🗑️"] is None
+    assert "🗑️" not in json.loads(_payload(ui.help_wiring_html(store), "BY_LABEL"))
+
+
+def test_a_label_two_widgets_agree_on_still_carries(session):
+    """Only disagreement is ambiguous. The same help twice is one answer."""
+    ui.start_help_capture()
+    ui.install_help_capture()
+    st.button("🗑️", key="del_a", help="Delete this row")
+    st.button("🗑️", key="del_b", help="Delete this row")
+    assert session[ui.HELP_TEXTS_KEY]["by_label"]["🗑️"] == "Delete this row"
+
+
+def test_an_icon_whose_help_cannot_be_placed_keeps_its_tab_stop():
+    """The safety rule: the tab stop goes only where the text has landed."""
+    js = ui._HELP_WIRING_JS
+    apply_fn = js[js.index("function apply(") :]
+    assert "if (!control) continue;" in apply_fn, apply_fn
+    assert apply_fn.index("if (!control) continue;") < apply_fn.index(
+        "icon.setAttribute('tabindex', '-1')"
+    ), "the icon is only de-tabbed after its text is placed"
+
+
+def test_the_key_is_read_off_the_container_not_built_into_a_selector():
+    """A widget key is app-authored text; it could carry anything."""
+    js = ui._HELP_WIRING_JS
+    assert "function keyOf(" in js
+    assert "'st-key-'" in js
+    assert "'.st-key-' +" not in js
+
+
+def _payload(html, name):
+    return html.split(f"var {name} = ", 1)[1].split(";\n", 1)[0]
+
+
 def test_the_text_reaches_the_page_as_data_not_as_script():
     """Quotes and backslashes in a help string must not be able to end the
     script they ride in."""
-    html = ui.help_wiring_html({'A "quoted" label': "back\\slash and 'quotes'"})
-    payload = html.split("var HELP = ", 1)[1].split(";\n", 1)[0]
+    store = {
+        "by_key": {},
+        "by_label": {'A "quoted" label': "back\\slash and 'quotes'"},
+    }
+    payload = _payload(ui.help_wiring_html(store), "BY_LABEL")
     assert json.loads(payload) == {'A "quoted" label': "back\\slash and 'quotes'"}
 
 
@@ -170,6 +227,6 @@ def test_a_rendered_page_hands_over_the_help_it_drew():
     at.run(timeout=300)
     assert not at.exception, at.exception
 
-    texts = at.session_state[ui.HELP_TEXTS_KEY]
+    texts = at.session_state[ui.HELP_TEXTS_KEY]["by_label"]
     assert texts, "the Add Class form passes help= to several fields"
-    assert any("class" in t.lower() for t in texts.values()), texts
+    assert any("class" in t.lower() for t in texts.values() if t), texts

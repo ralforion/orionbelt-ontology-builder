@@ -538,18 +538,41 @@ _HELPED_WIDGETS = (
 )
 
 
-def _record_help(label, help_text) -> None:
-    """Note that ``label``'s widget was given this help text."""
-    if not isinstance(label, str) or not isinstance(help_text, str):
+def _record_help(label, help_text, key=None) -> None:
+    """Note the help text this widget was given, under what identifies it.
+
+    By its ``key`` where it has one, because that is the only thing that tells
+    two widgets apart: a page can draw a row of identical 🗑️ buttons whose help
+    differs per row ("Delete this creator", "Delete this prefLabel"), and keyed
+    only by the label the last one would answer for all of them — putting the
+    wrong description on a control whose icon we had just taken out of the tab
+    order (Codex review of PR #410).
+
+    The label is kept as the fallback for the widgets that have no key, and a
+    label two widgets disagree over is dropped rather than guessed at.
+    """
+    if not isinstance(help_text, str):
         return
     try:
-        texts = st.session_state.get(HELP_TEXTS_KEY)
+        store = st.session_state.get(HELP_TEXTS_KEY)
     except Exception:  # noqa: BLE001 - no session (a bare import, a worker thread)
         return
-    if not isinstance(texts, dict):
-        texts = {}
-        st.session_state[HELP_TEXTS_KEY] = texts
-    texts[label] = help_text
+    if not isinstance(store, dict) or "by_key" not in store:
+        store = _empty_help_store()
+        st.session_state[HELP_TEXTS_KEY] = store
+    if isinstance(key, str) and key:
+        store["by_key"][key] = help_text
+    if isinstance(label, str):
+        by_label = store["by_label"]
+        if label in by_label and by_label[label] != help_text:
+            by_label[label] = None  # two widgets, two texts: neither is "the" one
+        else:
+            by_label.setdefault(label, help_text)
+
+
+def _empty_help_store() -> dict:
+    """What a render starts from: nothing recorded, under either identity."""
+    return {"by_key": {}, "by_label": {}}
 
 
 def _capturing_help(fn):
@@ -566,7 +589,7 @@ def _capturing_help(fn):
             label = kwargs.get("label")
             if not isinstance(label, str):
                 label = next((a for a in args if isinstance(a, str)), None)
-            _record_help(label, kwargs["help"])
+            _record_help(label, kwargs["help"], kwargs.get("key"))
         return fn(*args, **kwargs)
 
     wrapped.__name__ = getattr(fn, "__name__", "widget")
@@ -615,7 +638,7 @@ def install_help_capture() -> None:
 
 def start_help_capture() -> None:
     """Begin a render with an empty set of help texts."""
-    st.session_state[HELP_TEXTS_KEY] = {}
+    st.session_state[HELP_TEXTS_KEY] = _empty_help_store()
 
 
 #: The script :func:`help_wiring_html` wraps. A raw string, and deliberately
@@ -632,6 +655,17 @@ if (doc) {
   var CONTROLS = 'input, textarea, select, button:not([aria-label^="Help for "])';
   var HELP_FOR = 'Help for ';
   var seq = 0;
+
+  // The widget's key, which Streamlit puts on its container as a class. Read
+  // off the element rather than built into a selector: a key is app-authored
+  // text and could carry anything.
+  function keyOf(box) {
+    var classes = box.className ? String(box.className).split(' ') : [];
+    for (var i = 0; i < classes.length; i++) {
+      if (classes[i].indexOf('st-key-') === 0) return classes[i].slice(7);
+    }
+    return null;
+  }
 
   // The help text, on the control itself: a visually hidden note next to it,
   // named by aria-describedby. Both attributes are set — describedby is what
@@ -659,26 +693,37 @@ if (doc) {
   }
 
   function apply() {
-    // Out of the tab order, so Tab walks field to field. The help icons are
-    // matched by their own label, not by the tooltip wrapper around them:
-    // Streamlit puts that same wrapper on real controls — the image Fullscreen
-    // button is one — and those keep their place in the tab order.
+    // Out of the tab order, so Tab walks field to field — but only where the
+    // text the icon holds has been put on the control. That is the rule that
+    // keeps this honest: an icon whose help cannot be placed keeps its tab
+    // stop rather than becoming unreachable (Codex review of PR #410).
+    //
+    // The icons are matched by their own label, not by the tooltip wrapper
+    // around them: Streamlit puts that same wrapper on real controls — the
+    // image Fullscreen button is one — and those keep their place regardless.
     var icons = doc.querySelectorAll('button[aria-label^="Help for "]');
     for (var i = 0; i < icons.length; i++) {
       var icon = icons[i];
-      icon.setAttribute('tabindex', '-1');
-      var text = HELP[icon.getAttribute('aria-label').slice(HELP_FOR.length)];
-      if (!text) continue;
       // Walk from the icon to the widget it belongs to rather than looking the
       // control up by its label: a button's name is its text and not an
       // aria-label, and two widgets on a page can carry the same label. The
-      // container Streamlit wraps each widget in answers both exactly.
+      // container Streamlit wraps each widget in answers both, and carries the
+      // widget's key as a class where it has one — which is the only thing
+      // that tells a row of identical buttons apart.
       var box = icon.closest('[data-testid="stElementContainer"]');
-      var control = box && box.querySelector(CONTROLS);
-      if (control) describe(control, text);
+      if (!box) continue;
+      var key = keyOf(box);
+      var text = key && Object.prototype.hasOwnProperty.call(BY_KEY, key)
+        ? BY_KEY[key]
+        : BY_LABEL[icon.getAttribute('aria-label').slice(HELP_FOR.length)];
+      var control = text && box.querySelector(CONTROLS);
+      if (!control) continue;
+      describe(control, text);
+      icon.setAttribute('tabindex', '-1');
     }
-    // The crosses are the same case Streamlit already made for the dropdown
-    // arrow beside them, which it ships as tabindex="-1".
+    // The crosses need nothing carried anywhere first: they duplicate what the
+    // keyboard can already do in the combobox itself, which is the case
+    // Streamlit already made for the dropdown arrow beside them.
     var clears = doc.querySelectorAll('button[aria-label="Clear value"]');
     for (var j = 0; j < clears.length; j++) clears[j].setAttribute('tabindex', '-1');
   }
@@ -717,10 +762,17 @@ def help_wiring_html(texts: dict) -> str:
       reads it when the field is focused rather than at a separate button that
       is no longer reachable. This is the half that makes the first half honest.
     """
+    by_key = texts.get("by_key") or {}
+    # A label two widgets disagreed over is not sent at all: an icon whose text
+    # cannot be placed keeps its tab stop instead, which is the safety rule the
+    # script below is built on.
+    by_label = {k: v for k, v in (texts.get("by_label") or {}).items() if v}
     return (
         "<script>\n"
-        "var HELP = "
-        + json.dumps(texts, ensure_ascii=False)
+        "var BY_KEY = "
+        + json.dumps(by_key, ensure_ascii=False)
+        + ";\nvar BY_LABEL = "
+        + json.dumps(by_label, ensure_ascii=False)
         + ";\n"
         + _HELP_WIRING_JS
         + "</script>"
