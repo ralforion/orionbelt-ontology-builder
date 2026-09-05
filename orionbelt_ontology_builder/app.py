@@ -219,8 +219,8 @@ from .ui import (  # noqa: F401
     render_add_class_form,
     render_add_restriction,
     render_annotation_form,
-    render_help_wiring,
     render_language_pack_sidebar,
+    render_page_shims,
     render_relation_form,
     render_relation_rows,
     render_restriction_editor,
@@ -411,7 +411,7 @@ def main():
     _configure_page()
     # Before anything renders: the widgets are wrapped so their help text is
     # collected on the way past, and this render starts with none of it
-    # (issue #383). render_help_wiring() at the end puts it where a keyboard
+    # (issue #383). render_page_shims() at the end puts it where a keyboard
     # meets it.
     install_help_capture()
     start_help_capture()
@@ -733,8 +733,9 @@ def main():
 
     # Last, so it has seen every help= this page passed: the help buttons and
     # the clear crosses leave the tab order and their text lands on the fields
-    # (issue #383).
-    render_help_wiring()
+    # (issue #383), and Enter takes the first match in a multiselect again
+    # (issue #384).
+    render_page_shims()
 
 
 if __name__ == "__main__":

@@ -618,7 +618,7 @@ def install_help_capture() -> None:
     the tooltip and nowhere else until the tooltip opens.
 
     So the text is collected here, on its way to the widget, and
-    :func:`render_help_wiring` puts it on the field itself. The widgets are
+    :func:`render_page_shims` puts it on the field itself. The widgets are
     wrapped rather than each call site changed, which keeps this true for the
     102nd ``help=`` as well as the 101 that exist.
     """
@@ -641,7 +641,7 @@ def start_help_capture() -> None:
     st.session_state[HELP_TEXTS_KEY] = _empty_help_store()
 
 
-#: The script :func:`help_wiring_html` wraps. A raw string, and deliberately
+#: The help wiring :func:`page_shim_html` carries. A raw string, and deliberately
 #: free of selectors built from label text: a label carrying a quote or a
 #: backslash would have to be escaped into one, and the escaping is the part
 #: that breaks silently. Labels are compared as strings instead.
@@ -745,12 +745,87 @@ if (doc) {
 """
 
 
-def help_wiring_html(texts: dict) -> str:
-    """The page's tab-order and help wiring, as a component document.
+#: Enter takes the first match in a multiselect, the way it used to.
+#:
+#: Streamlit 1.62 rebuilt the widgets on react-aria, and the multiselect stopped
+#: marking the first filtered option as selected: 1.49 gave it
+#: ``aria-selected="true"`` and a tinted row, so Enter after typing a few
+#: letters inserted it (issue #384). Now nothing is marked, and Enter closes the
+#: list having done nothing — while the first arrow-key stop is the new "Select
+#: N matches" row, so the obvious recovery selects *every* match instead of the
+#: one that was wanted.
+#:
+#: Only the multiselect: the single selectbox still commits its first match on
+#: Enter, and is left alone. Only where Enter does nothing today, too — with the
+#: list open, something typed, and no option highlighted — so nothing that works
+#: is taken over, form submission included.
+_ENTER_INSERTS_JS = r"""
+var doc = window.parent && window.parent.document;
+if (doc) {
+  // The bulk rows, which select every option or every match at once. One of
+  // them is always first, so it is what an unqualified "first option" would
+  // take, and inserting five classes when one was asked for is worse than doing
+  // nothing. They are matched by the shape of the key they carry, not by the
+  // words they show and not by either key literally: with the box empty it is
+  // "__select_all__" and with a query typed it is "__select_matches__", and
+  // taking one for the other is exactly the bug this comment exists to stop
+  // (Codex review of PR #412). Any option keyed like a sentinel is skipped;
+  // real options are keyed by their index in the list.
+  var SENTINEL = /^__.*__$/;
 
-    Two things, both in the parent document because that is where the widgets
-    are, and both re-applied by a MutationObserver because Streamlit rebuilds
-    that DOM on every rerun while this frame is mounted once:
+  // The first row that is a real, selectable option. The empty state ("No
+  // results") is a row too, and clicking it is not harmless: it took the whole
+  // filter down to one class in testing. Real options carry aria-selected; it
+  // does not.
+  function firstMatch() {
+    var options = doc.querySelectorAll('[role="option"]');
+    for (var i = 0; i < options.length; i++) {
+      var option = options[i];
+      if (option.getAttribute('aria-selected') === null) continue;
+      var key = option.getAttribute('data-key');
+      if (key === null || SENTINEL.test(key)) continue;
+      return option;
+    }
+    return null;
+  }
+
+  function onEnter(event) {
+    if (event.key !== 'Enter' || event.defaultPrevented) return;
+    var input = event.target;
+    if (!input || !input.getAttribute) return;
+    if (input.getAttribute('role') !== 'combobox') return;
+    if (!input.closest('[data-testid="stMultiSelect"]')) return;
+    // Nothing typed, list closed, or an option already highlighted by the arrow
+    // keys: all cases react-aria answers itself.
+    if (!input.value) return;
+    if (input.getAttribute('aria-expanded') !== 'true') return;
+    if (input.getAttribute('aria-activedescendant')) return;
+    var option = firstMatch();
+    if (!option) return;
+    event.preventDefault();
+    event.stopPropagation();
+    option.click();
+  }
+
+  // Replaced rather than stacked: this frame is re-created whenever its
+  // arguments change, and each new document would otherwise leave the last
+  // one's handler registered on a parent that outlives it.
+  if (doc.__orionbeltEnterShim) {
+    try { doc.removeEventListener('keydown', doc.__orionbeltEnterShim, true); } catch (e) {}
+  }
+  doc.__orionbeltEnterShim = onEnter;
+  // Capture, so it runs before react-aria's own handler closes the list.
+  doc.addEventListener('keydown', onEnter, true);
+}
+"""
+
+
+def page_shim_html(texts: dict) -> str:
+    """The page's keyboard and help wiring, as a component document.
+
+    Three things, all in the parent document because that is where the widgets
+    are. The first two are re-applied by a MutationObserver, because Streamlit
+    rebuilds that DOM on every rerun while this frame is mounted once:
 
     * the help buttons and the selectboxes' clear crosses leave the tab order,
       so Tab walks field to field (issue #383). The crosses are the same case
@@ -761,6 +836,11 @@ def help_wiring_html(texts: dict) -> str:
     * the help text lands on the field as a description, so a screen reader
       reads it when the field is focused rather than at a separate button that
       is no longer reachable. This is the half that makes the first half honest.
+
+    The third is a keydown handler, and needs no observer: it is registered on
+    the parent document, which outlives every rerun. Enter in a multiselect
+    takes the first match again (issue #384), which is what it did before
+    Streamlit 1.62 rebuilt the widgets.
     """
     by_key = texts.get("by_key") or {}
     # A label two widgets disagreed over is not sent at all: an icon whose text
@@ -775,17 +855,23 @@ def help_wiring_html(texts: dict) -> str:
         + json.dumps(by_label, ensure_ascii=False)
         + ";\n"
         + _HELP_WIRING_JS
+        + "</script><script>"
+        + _ENTER_INSERTS_JS
         + "</script>"
     )
 
 
-def render_help_wiring() -> None:
-    """Mount :func:`help_wiring_html` for this render, if there is a page."""
+def render_page_shims() -> None:
+    """Mount :func:`page_shim_html` for this render.
+
+    One frame for both, rather than one each: they are mounted on every page and
+    every rerun, and a component is an iframe.
+    """
     texts = st.session_state.get(HELP_TEXTS_KEY)
     try:
-        st.components.v1.html(help_wiring_html(texts or {}), height=0)
-    except Exception:  # cosmetic: a page must not fail over its tab order
-        logger.debug("Help wiring not mounted", exc_info=True)
+        st.components.v1.html(page_shim_html(texts or {}), height=0)
+    except Exception:  # cosmetic: a page must not fail over its keyboard wiring
+        logger.debug("Page shims not mounted", exc_info=True)
 
 
 def init_session_state():
