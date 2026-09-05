@@ -706,6 +706,16 @@ def render_visualization():
                     key="viz_show_annotations",
                     on_change=viz_sync,
                     args=("_viz_cfg_show_annotations", "viz_show_annotations"),
+                    # Labels and comments are the annotations most entities
+                    # carry, and they are the two this does not draw — they are
+                    # in the tooltip instead. Without saying so, a graph of
+                    # entities annotated with nothing else looks like the
+                    # toggle does nothing (issue #405).
+                    help=(
+                        "Draw each annotation as a node hanging off what it "
+                        "annotates. Labels and comments are not drawn: they are "
+                        "already in the node's tooltip."
+                    ),
                 )
             with _cols[4]:
                 st.checkbox(
@@ -1789,8 +1799,12 @@ def render_visualization():
         # cap line suppressed it — a cached v21 payload carries the suppressed
         # one and would keep showing it until something unrelated evicted it.
         # 23: the entities on a path are pinned past the node cap (issue #378),
-        # so a cached v22 payload is a graph built without them.
-        _graph_ver = 23
+        # so a cached v22 payload is a graph built without them. 24: the notice
+        # now also reports the annotations a focus at the node cap left no room
+        # for (issue #405) — the same reasoning as 22, since the notice travels
+        # with the payload: a cached v23 focus graph would go on showing the one
+        # that says nothing about them.
+        _graph_ver = 24
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -2636,7 +2650,21 @@ def render_visualization():
                                 continue
                             room -= added
                             ann_left_out += left_out
-                        if ann_left_out and not graph_notice:
+                        if ann_left_out and graph_notice:
+                            # The focus was already too big to draw in full, and
+                            # the annotations are the first thing the cap takes:
+                            # a focus that overflows on its nodes alone leaves
+                            # them no room at all. Added to what the graph
+                            # already had to say rather than dropped, which is
+                            # what used to happen — Annotations ticked and not
+                            # one annotation drawn, with the notice talking only
+                            # about node counts, reads as the toggle being
+                            # broken (issue #405).
+                            graph_notice += (
+                                f" {ann_left_out} annotation(s) are not shown "
+                                f"for the same reason."
+                            )
+                        elif ann_left_out:
                             graph_notice = (
                                 f"This focus and its annotations cover more than "
                                 f"the {GRAPH_MAX_NODES} nodes the graph can draw, "

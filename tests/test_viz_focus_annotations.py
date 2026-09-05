@@ -36,7 +36,11 @@ def _script():
         om.add_class("B", parent="A")
         om.add_class("C", parent="B")
         for name in ("A", "B", "C"):
-            om.add_annotation(name, "wikidataId", f"Q-{name}")
+            if os.environ.get("ANNOTATION_KIND") == "label_comment":
+                # The two the graph deliberately does not draw.
+                om.add_annotation(name, "rdfs:comment", f"about {name}")
+            else:
+                om.add_annotation(name, "wikidataId", f"Q-{name}")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
         # The cross-session settings restore mounts the localStorage component,
@@ -51,17 +55,34 @@ def _script():
     app.render_visualization()
 
 
-def _graph(seed="Class: A", depth=1, annotations=True):
-    """Render once and return ``(nodes, edges)``. An empty seed means focus off."""
+def _render(seed="Class: A", depth=1, annotations=True, annotation_kind="custom"):
+    """Render once and return the app.
+
+    Every knob is written on every call, none defaulted from what is already in
+    the environment: these are process-wide, so a test that set one and a test
+    that did not would pass or fail by the order pytest happened to run them in
+    (Codex review of PR #407).
+    """
     os.environ["SEED"] = seed
     os.environ["DEPTH"] = str(depth)
     os.environ["ANNOTATIONS"] = "1" if annotations else "0"
+    os.environ["ANNOTATION_KIND"] = annotation_kind
     at = AppTest.from_function(_script)
     at.run(timeout=300)
     assert not at.exception, at.exception
+    return at
+
+
+def _graph(seed="Class: A", depth=1, annotations=True, annotation_kind="custom"):
+    """Render once and return ``(nodes, edges)``. An empty seed means focus off."""
+    at = _render(seed, depth, annotations, annotation_kind)
     data = at.session_state["last_graph_data"]
     assert data, "the visualization built no graph"
     return json.loads(data["nodes"]), json.loads(data["edges"])
+
+
+def _notice(at):
+    return at.session_state["last_graph_data"].get("notice") or ""
 
 
 def _annotation_labels(nodes):
@@ -144,14 +165,40 @@ def test_annotations_are_dropped_before_the_focus_itself(patch_ui):
 
 def test_the_app_says_when_annotations_were_cut(patch_ui):
     patch_ui("GRAPH_MAX_NODES", 3)
-    os.environ["SEED"] = "Class: A"
-    os.environ["DEPTH"] = "2"
-    os.environ["ANNOTATIONS"] = "1"
-    at = AppTest.from_function(_script)
-    at.run(timeout=300)
-    assert not at.exception, at.exception
-    notice = at.session_state["last_graph_data"].get("notice") or ""
+    notice = _notice(_render(seed="Class: A", depth=2))
     assert "annotations" in notice.lower(), notice
+
+
+def test_the_app_says_so_when_the_focus_itself_left_no_room(patch_ui):
+    """The gap the guard left (issue #405).
+
+    A focus too big to draw in full already sets a notice, and the annotation
+    shortfall was only reported when nothing else had spoken — so a focus that
+    overflowed on its nodes alone drew not one annotation with Annotations
+    ticked, and said only that it was full. Both facts are now in the notice.
+    """
+    patch_ui("GRAPH_MAX_NODES", 2)
+    at = _render(seed="Class: A", depth=2)
+    nodes = json.loads(at.session_state["last_graph_data"]["nodes"])
+
+    assert _annotation_labels(nodes) == set(), "no room was left for any of them"
+    notice = _notice(at)
+    assert "annotation" in notice.lower(), notice
+    assert "covers more than" in notice, notice
+
+
+def test_a_label_or_comment_is_not_drawn_as_a_node():
+    """What issue #405 turned out to be.
+
+    An entity whose only annotations are its label and comment draws none of
+    them: those two are in the node's tooltip instead. Nothing is wrong with
+    that, but it is the whole of "sometimes annotations are not shown", so it is
+    pinned here as a rule rather than left as an accident of the loop.
+    """
+    nodes, _ = _graph(seed="Class: A", depth=1, annotation_kind="label_comment")
+
+    assert _class_labels(nodes) == {"A", "B"}
+    assert _annotation_labels(nodes) == set()
 
 
 def test_annotations_survive_an_assembly_that_ran_out_of_room(patch_ui):
