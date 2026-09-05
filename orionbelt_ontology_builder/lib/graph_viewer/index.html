@@ -467,6 +467,62 @@ var hlSource = null;          // node whose neighbourhood is currently ringed
 var hlSaved = null;           // id -> styling we overwrote, for an exact restore
 var hlJustSelected = false;   // this tap changed the selection (see the click handler)
 
+// --- The selected node's links, in front (issue #385) ------------------------
+// vis draws the edges in one pass and their arrowheads in a second, both in the
+// order of `body.edgeIndices` — so which arrowhead lands on top of which comes
+// down to the order the builder happened to emit them in, and a restriction's
+// was always over a relation's because restrictions are assembled last. Nothing
+// about the ontology says one is above the other, so the answer is not to
+// reorder the builder but to put what you are *looking at* on top: selecting a
+// class raises its links over everything they cross.
+//
+// The order is a view concern, so it is changed here and not in the DataSet:
+// the edges themselves are untouched, and dropping the selection puts the order
+// back exactly. `edgeIndices` is mutated in place rather than reassigned — vis
+// hands the same array around its renderer, and a fresh one would leave those
+// holders pointing at the old order.
+var edgeOrder = null;   // the order to put back, captured before the first raise
+
+function setEdgeIndices(order) {
+    var idx = network && network.body && network.body.edgeIndices;
+    if (!idx) return;
+    idx.length = 0;
+    Array.prototype.push.apply(idx, order);
+}
+
+function raiseEdgesOf(id) {
+    var idx = network && network.body && network.body.edgeIndices;
+    if (!idx || id === null || id === undefined) return;
+    if (!edgeOrder) edgeOrder = idx.slice();
+    var connected = {};
+    try {
+        (network.getConnectedEdges(id) || []).forEach(function(eid) { connected[eid] = true; });
+    } catch (e) { return; }
+    // A stable partition: within the two groups the builder's order is kept, so
+    // the only thing that changes is that the selection is above the rest.
+    var back = [], front = [];
+    idx.forEach(function(eid) { (connected[eid] ? front : back).push(eid); });
+    setEdgeIndices(back.concat(front));
+    try { network.redraw(); } catch (e) {}
+}
+
+function restoreEdgeOrder() {
+    var idx = network && network.body && network.body.edgeIndices;
+    if (!edgeOrder || !idx) { edgeOrder = null; return; }
+    // Against what is in the graph now, not what was there when the order was
+    // taken: a rebuild between the two leaves ids that have gone and ids that
+    // were never in the saved order, and both have to come out right.
+    var present = {};
+    idx.forEach(function(eid) { present[eid] = true; });
+    var restored = edgeOrder.filter(function(eid) { return present[eid]; });
+    var known = {};
+    restored.forEach(function(eid) { known[eid] = true; });
+    idx.forEach(function(eid) { if (!known[eid]) restored.push(eid); });
+    setEdgeIndices(restored);
+    edgeOrder = null;
+    try { network.redraw(); } catch (e) {}
+}
+
 // Restore every ringed node to exactly what it looked like before.
 //
 // The saved values are written back explicitly rather than by passing the
@@ -494,6 +550,7 @@ function clearNeighbourHighlight() {
     }
     hlSource = null;
     hlSaved = null;
+    restoreEdgeOrder();
 }
 
 // Ring `id`'s neighbours: dashed for the ones pointing at it, solid for the ones
@@ -542,6 +599,10 @@ function applyNeighbourHighlight(id) {
     incoming.forEach(function(nid) { ringNode(nid, true); });
     outgoing.forEach(function(nid) { ringNode(nid, false); });
     if (updates.length) { try { ds.update(updates); } catch (e) {} }
+    // Ride along with the ring: every path that selects a node goes through
+    // here (issue #224), so the links follow the selection without each of
+    // those paths having to remember to say so.
+    raiseEdgesOf(id);
 }
 
 // --- Shortest-path ring (issues #176, #357) ---------------------------------
