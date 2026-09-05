@@ -177,6 +177,30 @@ def test_escape_leaves_fullscreen():
     assert "d.addEventListener('keydown', onEscape)" in src
 
 
+def test_leaving_captures_the_view_it_is_leaving():
+    """Restore has to keep where the user is, not rewind to where they were.
+
+    Exit re-applied the viewport captured on the way *in*, so a pan or a zoom
+    made while maximised — the whole reason for maximising — was thrown away by
+    Restore (issue #406). Captured before ``setStage()``, which is what resizes
+    the canvas and would otherwise have moved the view first.
+    """
+    src = _VIEWER.read_text(encoding="utf-8")
+    fn = src[src.index("function leaveFullscreen(") :].split("\n}", 1)[0]
+    assert "rememberViewport()" in fn, fn
+    assert fn.index("rememberViewport()") < fn.index("setStage("), fn
+
+
+def test_the_zoom_out_is_bought_back_on_the_way_out():
+    """Entering trades magnification for context, and leaving undoes exactly
+    that trade — so a round trip that touched nothing lands on the scale it
+    started from, and one that did keeps the share of the graph it ended on."""
+    src = _VIEWER.read_text(encoding="utf-8")
+    apply_view = src[src.index("function applyView(") :].split("\n    }", 1)[0]
+    assert "* FS_ZOOM_OUT" in apply_view, apply_view
+    assert "/ FS_ZOOM_OUT" in apply_view, apply_view
+
+
 def test_the_page_listener_is_removed_with_the_document():
     """The listener is registered on the parent, which outlives this document by
     many re-mounts. Without the teardown each mount piles another dead one on."""
