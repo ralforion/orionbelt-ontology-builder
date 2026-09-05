@@ -3687,7 +3687,16 @@ def parent_option_index(parent_options, parent_lookup, parent_uri) -> int:
     return 0
 
 
-def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None):
+def render_add_class_form(
+    ont,
+    classes,
+    form_key,
+    parent_uri=None,
+    on_close=None,
+    after_add=None,
+    checkpoint_label="Add class",
+    exclude_uri=None,
+):
     """Render the "add a class" form. Returns True when a class was created.
 
     Shared by the Classes page and the Visualization details panel, so both
@@ -3698,8 +3707,18 @@ def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None
     for you. ``on_close`` is what dismissing the form means; the page has no such
     thing (the tab is the form) so it passes None and gets no Cancel button.
 
+    ``after_add`` is called with the new class's name once it exists and before
+    the checkpoint, so a caller that has more to write — the panel's "Add
+    superclass", which then hangs the selected class under it (issue #327) — is
+    one entry in the undo history rather than two. ``checkpoint_label`` is what
+    that entry is called, and ``exclude_uri`` drops a class from the parent
+    picker: offering the class that is about to become the new one's *child*
+    would make a cycle out of one dropdown.
+
     The caller owns the rerun: the panel has to drop its open flag first.
     """
+    if exclude_uri:
+        classes = [c for c in classes if c["uri"] != exclude_uri]
     parent_options, parent_lookup = build_class_options(classes, include_none=True)
     parent_index = parent_option_index(parent_options, parent_lookup, parent_uri)
 
@@ -3755,7 +3774,9 @@ def render_add_class_form(ont, classes, form_key, parent_uri=None, on_close=None
                     comment=comment,
                     namespace=ns_val,
                 )
-                save_checkpoint("Add class")
+                if after_add is not None:
+                    after_add(name)
+                save_checkpoint(checkpoint_label)
                 show_message(f"Class '{name}' added successfully!", "success")
                 return True
     return False
@@ -4338,6 +4359,11 @@ def _render_panel_add_buttons(classes, ntype, ename, subject_uri):
     ]
     if parent_uri:
         actions += [
+            (
+                "Add superclass",
+                "super",
+                f"Add a class above '{parent_name}', alongside its parents.",
+            ),
             ("Add relation", "crel", "Then click the class this one points at."),
             ("Add restriction", "rest", "Then click the class it restricts to."),
             ("Add individual", "ind", f"Add an instance of '{parent_name}'."),
@@ -4388,6 +4414,44 @@ def _render_panel_add_class_form(ont, classes, ntype, ename):
         "panel_add_class_form",
         parent_uri=parent_uri,
         on_close=_panel_close_add,
+    ):
+        _panel_close_add()
+        st.rerun()
+
+
+def _render_panel_add_superclass_form(ont, classes, ntype, ename):
+    """Add a class *above* the selected one, from the graph (issue #327).
+
+    The panel could only ever grow a hierarchy downwards: everything it creates
+    hangs under the class you clicked. Realising a level is missing above one is
+    just as ordinary, and doing it meant leaving the graph, adding the class on
+    the Classes page and coming back to re-parent the first one.
+
+    The new class is added alongside whatever parents the selected class already
+    has, rather than being spliced between it and them. That is what the reporter
+    asked for and it matches the button next to this one: "Add subclass" writes
+    one ``rdfs:subClassOf`` and rewires nothing, so this writes one too. Moving a
+    class from one parent to another is a different act, and belongs to a control
+    that says so.
+    """
+    child_uri = _panel_add_parent(classes, ntype, ename)
+    child_name = next((c["name"] for c in classes if c["uri"] == child_uri), None)
+    if not child_uri:
+        # Nothing selected to hang under it: the button is only offered with a
+        # class selected, but a rerun can arrive after the selection is gone.
+        _panel_close_add()
+        st.rerun()
+    st.markdown(f"**New superclass of {child_name}**")
+    st.caption(f"'{child_name}' keeps the parents it has; this one is added alongside.")
+    if render_add_class_form(
+        ont,
+        classes,
+        "panel_add_superclass_form",
+        on_close=_panel_close_add,
+        after_add=lambda name: ont.update_class(child_uri, new_parent=name),
+        checkpoint_label="Add superclass",
+        # The class about to become its child cannot also be its parent.
+        exclude_uri=child_uri,
     ):
         _panel_close_add()
         st.rerun()

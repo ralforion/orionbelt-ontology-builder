@@ -34,6 +34,7 @@ from ..ui import (
     _render_panel_add_individual_form,
     _render_panel_add_relation_form,
     _render_panel_add_restriction_form,
+    _render_panel_add_superclass_form,
     _render_panel_entity_editor,
     _restore_viz_file_state,
     _restore_viz_settings,
@@ -3140,6 +3141,12 @@ def render_visualization():
                         # The add form owns the whole panel while it is open, so
                         # its fields can't be confused with the editor's.
                         _render_panel_add_class_form(
+                            ont, classes, _sel_ntype, _sel_ename
+                        )
+                    elif _add_kind == "super":
+                        # Same reason as the class form: it owns the panel while
+                        # it is open (issue #327).
+                        _render_panel_add_superclass_form(
                             ont, classes, _sel_ntype, _sel_ename
                         )
                     elif _add_kind == "crel":
