@@ -49,6 +49,11 @@ CHECKPOINTED_BY_CALLER = {
     # rollback path returns False having restored the graph, so there is nothing
     # to checkpoint there either (issue #223).
     "_apply_annotation_edit",
+    # Hands its write to render_add_class_form as the ``after_add`` callback,
+    # which that function calls immediately before its own save_checkpoint — on
+    # purpose, so creating a superclass and hanging the selected class under it
+    # is one entry in the undo history rather than two (issue #327).
+    "_render_panel_add_superclass_form",
     # Both hand their delete to _panel_delete_edge as a callback, and that is
     # where the checkpoint sits — the axiom has no URI, so the panel resolves it
     # and the shared helper confirms, deletes and checkpoints (issue #222).

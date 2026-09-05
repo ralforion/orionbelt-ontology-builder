@@ -135,6 +135,7 @@ from .ui import (  # noqa: F401
     _render_panel_add_individual_form,
     _render_panel_add_relation_form,
     _render_panel_add_restriction_form,
+    _render_panel_add_superclass_form,
     _render_panel_annotation_editor,
     _render_panel_entity_editor,
     _render_panel_relation_editor,
