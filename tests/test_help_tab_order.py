@@ -118,7 +118,7 @@ def test_a_row_of_identical_buttons_keeps_its_own_help(session):
     assert store["by_key"]["del_meta_1"] == "Delete this prefLabel"
     # And the label they share is dropped rather than guessed at.
     assert store["by_label"]["🗑️"] is None
-    assert "🗑️" not in json.loads(_payload(ui.help_wiring_html(store), "BY_LABEL"))
+    assert "🗑️" not in json.loads(_payload(ui.page_shim_html(store), "BY_LABEL"))
 
 
 def test_a_label_two_widgets_agree_on_still_carries(session):
@@ -159,7 +159,7 @@ def test_the_text_reaches_the_page_as_data_not_as_script():
         "by_key": {},
         "by_label": {'A "quoted" label': "back\\slash and 'quotes'"},
     }
-    payload = _payload(ui.help_wiring_html(store), "BY_LABEL")
+    payload = _payload(ui.page_shim_html(store), "BY_LABEL")
     assert json.loads(payload) == {'A "quoted" label': "back\\slash and 'quotes'"}
 
 
@@ -199,6 +199,68 @@ def test_the_field_is_found_from_the_icon_not_from_the_label():
     js = ui._HELP_WIRING_JS
     assert "closest('[data-testid=\"stElementContainer\"]')" in js
     assert 'button:not([aria-label^="Help for "])' in js, "never the icon itself"
+
+
+# --- Enter takes the first match again (issue #384) --------------------------
+
+
+def test_enter_is_only_taken_over_in_a_multiselect():
+    """The single selectbox still commits its first match on Enter in 1.62, so
+    it is left alone; the multiselect is the one that stopped."""
+    js = ui._ENTER_INSERTS_JS
+    assert '[data-testid="stMultiSelect"]' in js
+    assert "stSelectbox" not in js
+
+
+def test_the_bulk_row_is_not_what_enter_takes():
+    """The "Select N matches" row is first, so an unqualified "first option"
+    would insert every match when one was asked for. Matched by the key it
+    carries, not by the words it shows."""
+    js = ui._ENTER_INSERTS_JS
+    assert "'__select_all__'" in js
+    assert "data-key" in js
+
+
+def test_the_empty_state_row_is_not_clicked():
+    """ "No results" is a row like any other in the DOM, and clicking it is not
+    harmless: it took the whole filter down to one class in testing. Real
+    options carry aria-selected; it does not."""
+    js = ui._ENTER_INSERTS_JS
+    assert "aria-selected" in js
+    assert "=== null) continue" in js
+
+
+def test_enter_is_left_alone_wherever_it_already_does_something():
+    """Nothing typed, list closed, or an option already highlighted: react-aria
+    answers all three itself, and a form's Enter must still submit."""
+    js = ui._ENTER_INSERTS_JS
+    for guard in (
+        "if (!input.value) return;",
+        "aria-expanded",
+        "aria-activedescendant",
+        "event.defaultPrevented",
+    ):
+        assert guard in js, guard
+
+
+def test_the_handler_replaces_itself_rather_than_stacking():
+    """The frame is re-created whenever its arguments change, and each new
+    document would otherwise leave the last one's handler on the parent."""
+    js = ui._ENTER_INSERTS_JS
+    assert "removeEventListener('keydown'" in js
+    assert "__orionbeltEnterShim" in js
+
+
+def test_the_handler_runs_before_react_aria_closes_the_list():
+    js = ui._ENTER_INSERTS_JS
+    assert "addEventListener('keydown', onEnter, true)" in js, "capture phase"
+
+
+def test_both_shims_ride_in_one_frame():
+    """A component is an iframe, and these are mounted on every rerun."""
+    html = ui.page_shim_html({"by_key": {}, "by_label": {}})
+    assert html.count("<script>") == 2
+    assert "MutationObserver" in html and "__orionbeltEnterShim" in html
 
 
 # --- and on a real page -----------------------------------------------------
