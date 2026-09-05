@@ -783,7 +783,12 @@ function enterFullscreen() {
     settleFullscreen(true);
 }
 
+// Where the user is *now*, not where they were before they maximised: exit used
+// to re-apply the viewport captured on the way in, so everything done in the
+// maximised view — the whole reason for maximising — was undone by Restore
+// (issue #406). Captured before setStage(), which is what resizes the canvas.
 function leaveFullscreen() {
+    rememberViewport();
     setStage(false);
     setFullscreenIcon(false);
     settleFullscreen(false);
@@ -830,7 +835,15 @@ function scheduleFullscreenView(entering) {
     var gen = ++fsGen;
     function applyView() {
         if (!network || !fsRestoreView || gen !== fsGen) return;
-        var scale = entering ? fsRestoreView.scale * FS_ZOOM_OUT : fsRestoreView.scale;
+        // The zoom-out is a property of the box, not of the graph: entering
+        // trades magnification for the context the bigger canvas can hold, and
+        // leaving buys it back, so the same share of the graph is on screen
+        // either side of a transition. Undoing the factor rather than restoring
+        // a remembered number is what lets the viewport carried out of the
+        // maximised view be the one the user left it in (issue #406).
+        var scale = entering
+            ? fsRestoreView.scale * FS_ZOOM_OUT
+            : fsRestoreView.scale / FS_ZOOM_OUT;
         try { network.moveTo({scale: scale, position: fsRestoreView.position}); } catch (e) {}
     }
     // Fullscreen always fills; out of it, a user who turned autofit off keeps
