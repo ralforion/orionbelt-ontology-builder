@@ -4760,8 +4760,18 @@ class OntologyManager:
         the cycles its own way could break an edge the check never complained
         about, or leave the one it did.
         """
+        return self._cycles_in(self._skos_parent_map(concepts))
+
+    @staticmethod
+    def _cycles_in(parents: dict[str, list[str]]) -> list[list[str]]:
+        """Every distinct cycle in a ``child -> parents`` map, as a list of keys.
+
+        Lifted out of the SKOS check so the class hierarchy can be walked the
+        same way (issue #413). The walk is the part worth sharing: both are
+        "follow every parent and notice when the path meets itself", and a
+        second implementation would be a second set of edge cases.
+        """
         cycles: list[list[str]] = []
-        parents = self._skos_parent_map(concepts)
         WHITE, GREY, BLACK = 0, 1, 2
         colour = dict.fromkeys(parents, WHITE)
         seen_cycles: set[frozenset] = set()
@@ -4794,6 +4804,95 @@ class OntologyManager:
                     stack.pop()
                     path.pop()
         return cycles
+
+    def _class_parent_map(self) -> dict[str, list[str]]:
+        """``child URI -> parent URIs`` over ``rdfs:subClassOf``.
+
+        Named classes only, on both ends, and tested for what they are rather
+        than what they are not: a restriction is written as a subClassOf a blank
+        node, and following those would report a "cycle" through anonymous
+        classes that says nothing to anyone — while a malformed graph can carry
+        a *literal* whose text happens to read like a class URI, and skipping
+        only blank nodes let that literal stand in for the class it spells
+        (Codex review of PR #416). Every other hierarchy reader here requires a
+        URIRef; so does this one.
+        """
+        parents: dict[str, list[str]] = {}
+        for child, parent in self.graph.subject_objects(RDFS.subClassOf):
+            if not isinstance(child, URIRef) or not isinstance(parent, URIRef):
+                continue
+            parents.setdefault(str(child), []).append(str(parent))
+            parents.setdefault(str(parent), [])
+        return {uri: sorted(set(ps)) for uri, ps in parents.items()}
+
+    def _display_names(self, uris) -> dict[str, str]:
+        """URI -> the shortest form that still identifies it.
+
+        The local name where it is unique among ``uris``, the full URI where it
+        is not. Two namespaces can hold a class of the same name, and a message
+        that called both of them "A" would name nothing: a cross-namespace cycle
+        read "A -> A -> A" (Codex review of PR #416).
+
+        The same idea as :meth:`_skos_display_names`, which does it over concept
+        dicts that already carry their name; this one starts from URIs, which is
+        what the class hierarchy is keyed by.
+        """
+        names = {str(uri): self._local_name(URIRef(str(uri))) for uri in uris}
+        counts: dict[str, int] = {}
+        for name in names.values():
+            counts[name] = counts.get(name, 0) + 1
+        return {
+            uri: (name if counts[name] == 1 else uri) for uri, name in names.items()
+        }
+
+    def _class_cycle_issues(self) -> list[dict[str, str]]:
+        """One issue per ``rdfs:subClassOf`` cycle (issue #413).
+
+        A warning and not an error, because a cycle is legal OWL: ``A ⊑ B`` with
+        ``B ⊑ A`` says the two classes are equivalent, and a reasoner reads it
+        that way. It is usually a modelling slip and occasionally deliberate, so
+        the app says so rather than refusing it — and says what it means, since
+        "equivalent" is the part that surprises people who wrote it by accident.
+        """
+        parents = self._class_parent_map()
+        cycles = self._cycles_in(parents)
+        if not cycles:
+            return []
+        # Named over every class in the ontology, not over the cycle and not
+        # over the hierarchy: a class outside the loop can share a local name
+        # with one inside it, and a *declared* class with no subClassOf edge at
+        # all is absent from the hierarchy while being just as present on screen
+        # (Codex review of PR #416). Both are the reader's ontology, so both
+        # decide whether a name identifies anything.
+        declared = {
+            str(uri)
+            for uri in self.graph.subjects(RDF.type, OWL.Class)
+            if not isinstance(uri, BNode)
+        }
+        shown = self._display_names(set(parents) | declared)
+        issues = []
+        for cycle in cycles:
+            issues.append(
+                {
+                    "severity": "warning",
+                    "type": "class_cycle",
+                    # The local name, like every other issue this method
+                    # returns: a consumer matching on it should not have to
+                    # learn that one type sometimes answers with a URI instead
+                    # (Codex review of PR #416). Where that name is ambiguous
+                    # the URI below says which class is meant, and the message
+                    # spells the whole cycle out.
+                    "subject": self._local_name(URIRef(cycle[0])),
+                    "subject_uri": cycle[0],
+                    "message": (
+                        "subClassOf cycle: "
+                        + " -> ".join(shown[uri] for uri in [*cycle, cycle[0]])
+                        + ". Classes in a cycle are equivalent to one another, "
+                        "which is valid OWL but rarely what was meant."
+                    ),
+                }
+            )
+        return issues
 
     def _skos_cycle_issues(
         self, concepts: list[dict[str, Any]]
@@ -6307,6 +6406,11 @@ class OntologyManager:
     def validate(self, check_missing_domain_range: bool = True) -> list[dict[str, str]]:
         """Validate the ontology and return issues."""
         issues = []
+        # A subClassOf cycle, which nothing used to mention: the tree view marks
+        # the back-edge it walks into and the graph survives one, so an
+        # ontology could carry a loop with only its own hierarchy view to say
+        # so (issue #413).
+        issues += self._class_cycle_issues()
         # ``pred`` is reused across loops that bind it to both predicate URIRefs
         # and arbitrary graph terms; declare the broader rdflib type up front.
         pred: Node

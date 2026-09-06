@@ -799,10 +799,20 @@ def render_visualization():
         highlight_issues = _cfg["_viz_cfg_highlight_issues"]
         auto_show_new = _cfg["_viz_cfg_auto_show_new"]
 
-        validation_subjects = set()
+        # Two sets, because an issue names its subject two ways. Most carry a
+        # local name only, and two classes in different namespaces can share
+        # one — so an issue that also carries a URI is matched by that instead,
+        # and rings the class it actually means rather than both of them.
+        validation_subjects: set = set()
+        validation_subject_uris: set = set()
         if highlight_issues:
             issues = ont.validate()
-            validation_subjects = {i["subject"] for i in issues}
+            validation_subject_uris = {
+                i["subject_uri"] for i in issues if i.get("subject_uri")
+            }
+            validation_subjects = {
+                i["subject"] for i in issues if not i.get("subject_uri")
+            }
 
         # Class filter — reconcile the selection with the current class set
         # instead of resetting it on every ontology mutation, which used to wipe
@@ -2021,7 +2031,10 @@ def render_visualization():
                     if cls["comment"]:
                         title += f"\nComment: {cls['comment'][:100]}"
 
-                    has_issue = cls["name"] in validation_subjects
+                    has_issue = (
+                        cls["uri"] in validation_subject_uris
+                        or cls["name"] in validation_subjects
+                    )
                     node_color = (
                         {
                             "background": "#4CAF50",
@@ -2227,7 +2240,10 @@ def render_visualization():
                     if ind["classes"]:
                         title += f"\nType: {', '.join(ind['classes'])}"
 
-                    has_issue = ind["name"] in validation_subjects
+                    has_issue = (
+                        ind["uri"] in validation_subject_uris
+                        or ind["name"] in validation_subjects
+                    )
                     ind_color = (
                         {
                             "background": "#FF9800",
