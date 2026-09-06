@@ -178,6 +178,24 @@ def _viz_script():
     app.render_visualization()
 
 
+def test_a_declared_class_with_no_hierarchy_edge_still_counts(om):
+    """It is absent from the parent map and just as present on screen.
+
+    Naming the cycle against the hierarchy alone left the loop reading
+    "Bicycle -> Vehicle -> Bicycle" while a second Bicycle sat elsewhere in the
+    ontology (Codex review of PR #416).
+    """
+    from rdflib import OWL, RDF, URIRef
+
+    om.graph.add((URIRef("http://other.example/Bicycle"), RDF.type, OWL.Class))
+    om.update_class(NS + "Vehicle", new_parent="Bicycle")
+
+    message = _cycles(om)[0]["message"]
+    assert NS + "Bicycle" in message, message
+    # And the member whose name is still unique is still readable.
+    assert "-> Vehicle ->" in message, message
+
+
 def test_names_are_disambiguated_against_the_whole_hierarchy(om):
     """Not against the cycle alone: a class outside the loop can share a local
     name with one inside it, and the reader has the ontology in front of them."""

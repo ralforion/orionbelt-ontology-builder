@@ -4851,10 +4851,20 @@ class OntologyManager:
         """
         parents = self._class_parent_map()
         cycles = self._cycles_in(parents)
-        # Named over the whole hierarchy, not over each cycle: a class outside
-        # the loop can share a local name with one inside it, and the reader has
-        # the whole ontology in front of them, not the cycle.
-        shown = self._display_names(parents)
+        if not cycles:
+            return []
+        # Named over every class in the ontology, not over the cycle and not
+        # over the hierarchy: a class outside the loop can share a local name
+        # with one inside it, and a *declared* class with no subClassOf edge at
+        # all is absent from the hierarchy while being just as present on screen
+        # (Codex review of PR #416). Both are the reader's ontology, so both
+        # decide whether a name identifies anything.
+        declared = {
+            str(uri)
+            for uri in self.graph.subjects(RDF.type, OWL.Class)
+            if not isinstance(uri, BNode)
+        }
+        shown = self._display_names(set(parents) | declared)
         issues = []
         for cycle in cycles:
             issues.append(
