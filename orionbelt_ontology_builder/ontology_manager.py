@@ -4861,9 +4861,13 @@ class OntologyManager:
                 {
                     "severity": "warning",
                     "type": "class_cycle",
-                    "subject": shown[cycle[0]],
-                    # The URI as well, since the name may not be unique and this
-                    # is what navigating to the class has to go on.
+                    # The local name, like every other issue this method
+                    # returns: a consumer matching on it should not have to
+                    # learn that one type sometimes answers with a URI instead
+                    # (Codex review of PR #416). Where that name is ambiguous
+                    # the URI below says which class is meant, and the message
+                    # spells the whole cycle out.
+                    "subject": self._local_name(URIRef(cycle[0])),
                     "subject_uri": cycle[0],
                     "message": (
                         "subClassOf cycle: "

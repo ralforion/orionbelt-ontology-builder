@@ -115,7 +115,67 @@ def test_the_issue_carries_the_uri_to_navigate_by():
     issue = _cycles(o)[0]
 
     assert issue["subject_uri"] in {base_a, other_a}
-    assert issue["subject"] == issue["subject_uri"], "an ambiguous name shows in full"
+
+
+def test_the_subject_stays_a_local_name_like_every_other_issue():
+    """It briefly became a URI when the name was ambiguous, and the graph's
+    "Highlight issues" matches subjects against class names: nothing was marked
+    at all (Codex review of PR #416). The URI belongs in subject_uri."""
+    o, _base_a, _other_a = _cross_namespace_loop()
+    issue = _cycles(o)[0]
+
+    assert issue["subject"] == "A"
+    assert issue["subject_uri"].startswith("http")
+
+
+def test_the_graph_marks_the_class_a_cycle_names():
+    """Through the builder's own matching, which is where the regression was."""
+    import json
+    import os
+
+    from streamlit.testing.v1 import AppTest
+
+    os.environ["CYCLE_NAMESPACES"] = "cross"
+    at = AppTest.from_function(_viz_script)
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    nodes = json.loads(at.session_state["last_graph_data"]["nodes"])
+    ringed = [n for n in nodes if (n.get("color") or {}).get("border") == "#F44336"]
+
+    assert ringed, [
+        (n.get("label"), (n.get("color") or {}).get("border")) for n in nodes
+    ]
+
+
+def _viz_script():
+    import os
+
+    import streamlit as st
+    from rdflib import OWL, RDF, RDFS, Literal, URIRef
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        other = "http://other.example/"
+        cross = os.environ.get("CYCLE_NAMESPACES") == "cross"
+        first = om.namespace + "A"
+        second = (other if cross else om.namespace) + ("A" if cross else "B")
+        for uri in (first, second):
+            om.graph.add((URIRef(uri), RDF.type, OWL.Class))
+            # Labelled, so the cycle is the only issue: an unlabelled class
+            # raises missing_label, whose subject is the local name, and that
+            # would ring the node whatever the cycle issue said.
+            om.graph.add((URIRef(uri), RDFS.label, Literal(uri.rsplit("/", 1)[-1])))
+        om.graph.add((URIRef(first), RDFS.subClassOf, URIRef(second)))
+        om.graph.add((URIRef(second), RDFS.subClassOf, URIRef(first)))
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+        st.session_state["_local_storage"] = None
+        st.session_state["_viz_cfg_highlight_issues"] = True
+    app.render_visualization()
 
 
 def test_names_are_disambiguated_against_the_whole_hierarchy(om):
