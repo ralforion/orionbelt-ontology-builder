@@ -1804,8 +1804,10 @@ def render_visualization():
         # now also reports the annotations a focus at the node cap left no room
         # for (issue #405) — the same reasoning as 22, since the notice travels
         # with the payload: a cached v23 focus graph would go on showing the one
-        # that says nothing about them.
-        _graph_ver = 24
+        # that says nothing about them. 25: the Triples layer no longer redraws
+        # an edge another layer already drew, so a cached v24 payload is a graph
+        # with those duplicates still in it.
+        _graph_ver = 25
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -2474,6 +2476,19 @@ def render_visualization():
                         if concept.get("uri") and _skos_node in skos_node_ids:
                             _uri_to_node[concept["uri"]] = _skos_node
 
+                # What the layers above already drew, as (from, to, label). A
+                # triple whose edge is already on the canvas is not drawn again:
+                # "Show all RDF triples" means the ones nothing else shows, not
+                # a second subClassOf beside the first. Read off the edges
+                # themselves rather than from a list of predicates, so it stays
+                # true to what is actually on screen — turn Classes off and the
+                # subClassOf triple is drawn, because then nothing else is
+                # drawing it.
+                _already_drawn = {
+                    (edge["from"], edge["to"], edge.get("label") or "")
+                    for edge in net.edges
+                }
+
                 # Query only triples with visible subjects (avoid full graph scan)
                 _triple_new = 0
                 _max_triple_new = 200
@@ -2490,6 +2505,8 @@ def render_visualization():
                             o_str = str(o)
                             if o_str in _uri_to_node:
                                 o_node = _uri_to_node[o_str]
+                                if (s_node, o_node, p_label) in _already_drawn:
+                                    continue
                             else:
                                 if _triple_new >= _max_triple_new:
                                     continue
