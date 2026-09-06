@@ -299,3 +299,41 @@ def test_a_rendered_page_hands_over_the_help_it_drew():
     texts = at.session_state[ui.HELP_TEXTS_KEY]["by_label"]
     assert texts, "the Add Class form passes help= to several fields"
     assert any("class" in t.lower() for t in texts.values() if t), texts
+
+
+def test_the_frame_claims_no_page_height(session, monkeypatch):
+    """The shims draw nothing, so they must cost the page nothing.
+
+    ``height=0`` does not say that: Streamlit 1.62 reads a falsy height as "no
+    height given" and falls back to the component default of 150px, which left
+    an empty block that tall at the foot of every page — and took the same 150px
+    off the graph, which sizes itself to the room left below it. The frame goes
+    in a keyed container the CSS collapses instead.
+    """
+    import contextlib
+
+    mounted = {}
+    styles = []
+
+    @contextlib.contextmanager
+    def _container(*, key=None, **kwargs):
+        mounted["key"] = key
+        yield
+
+    monkeypatch.setattr(ui.st, "container", _container)
+    monkeypatch.setattr(ui.st, "markdown", lambda body, **kw: styles.append(body))
+    monkeypatch.setattr(
+        ui.st.components.v1,
+        "html",
+        lambda html, height=None, **kw: mounted.update(height=height),
+    )
+
+    ui.render_page_shims()
+
+    assert mounted["height"], "a falsy height is read as the 150px default"
+    assert mounted["key"] == ui.PAGE_SHIM_KEY
+    assert f".st-key-{ui.PAGE_SHIM_KEY}" in ui.PAGE_SHIM_CSS
+    assert "height: 0 !important" in ui.PAGE_SHIM_CSS
+    assert ui.PAGE_SHIM_CSS in styles, (
+        "the container is only collapsed if the CSS is on the page"
+    )
