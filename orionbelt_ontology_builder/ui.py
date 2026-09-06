@@ -861,15 +861,45 @@ def page_shim_html(texts: dict) -> str:
     )
 
 
+#: Container key for the page shims' frame (see :func:`render_page_shims`).
+PAGE_SHIM_KEY = "page_shim"
+
+#: Collapses that container to nothing. Out of the flow rather than
+#: ``display: none``: the frame is script, and hiding it outright is a stronger
+#: claim on how a browser treats a frame than this needs to make. Absolute also
+#: takes it out of the block's gap grid, which a zero-height child in the flow
+#: would still claim a slot in.
+PAGE_SHIM_CSS = f"""<style>
+.st-key-{PAGE_SHIM_KEY},
+[data-testid="stLayoutWrapper"]:has(> .st-key-{PAGE_SHIM_KEY}) {{
+    position: absolute !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+}}
+</style>"""
+
+
 def render_page_shims() -> None:
     """Mount :func:`page_shim_html` for this render.
 
     One frame for both, rather than one each: they are mounted on every page and
     every rerun, and a component is an iframe.
+
+    The frame carries script and draws nothing, but ``height=0`` does not keep
+    it out of the page: Streamlit 1.62 reads a falsy height as "no height given"
+    and falls back to the component default of 150px, which put an empty block
+    that tall at the foot of every page — and, on Visualization, took the same
+    150px off the graph, which sizes itself to the room left below it. So it is
+    mounted in a keyed container that :data:`PAGE_SHIM_CSS` collapses to
+    nothing, rather than trusting the height alone.
     """
     texts = st.session_state.get(HELP_TEXTS_KEY)
     try:
-        st.components.v1.html(page_shim_html(texts or {}), height=0)
+        st.markdown(PAGE_SHIM_CSS, unsafe_allow_html=True)
+        with st.container(key=PAGE_SHIM_KEY):
+            st.components.v1.html(page_shim_html(texts or {}), height=1)
     except Exception:  # cosmetic: a page must not fail over its keyboard wiring
         logger.debug("Page shims not mounted", exc_info=True)
 
