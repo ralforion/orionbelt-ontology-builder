@@ -3020,6 +3020,13 @@ def show_message(message: str, type: str = "info"):
 #: Icons for the toast form of a flash message, by message type.
 _FLASH_TOAST_ICON = {"success": "✅", "warning": "⚠️", "error": "🚫", "info": "ℹ️"}
 
+#: How long a confirmation toast stays up, in seconds. Streamlit's default is
+#: four, and these carry one piece of news each: the edit landed. That is read
+#: at a glance, and the rest of the four seconds is a message about the last
+#: edit sitting over the next one (issue #419). Only the confirmations are cut
+#: back; a warning or an error keeps the default, since neither is read as fast.
+_FLASH_TOAST_SECONDS = 2
+
 
 def set_flash_message(message: str, type: str = "info", toast: bool = False):
     """Set a flash message to be displayed after rerun.
@@ -3043,7 +3050,13 @@ def display_flash_message():
     if st.session_state.get("flash_message"):
         msg = st.session_state.flash_message
         if msg.get("toast"):
-            st.toast(msg["message"], icon=_FLASH_TOAST_ICON.get(msg["type"]))
+            st.toast(
+                msg["message"],
+                icon=_FLASH_TOAST_ICON.get(msg["type"]),
+                duration=(
+                    _FLASH_TOAST_SECONDS if msg["type"] == "success" else "short"
+                ),
+            )
         else:
             show_message(msg["message"], msg["type"])
         st.session_state.flash_message = None

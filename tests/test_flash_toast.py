@@ -29,7 +29,11 @@ def flash(monkeypatch):
     shown: list[tuple[str, str]] = []
     monkeypatch.setattr(ui.st, "session_state", state)
     monkeypatch.setattr(
-        ui.st, "toast", lambda message, icon=None: shown.append(("toast", message))
+        ui.st,
+        "toast",
+        lambda message, icon=None, duration=None: shown.append(
+            ("toast", message, duration)
+        ),
     )
     for kind in ("success", "warning", "error", "info"):
         monkeypatch.setattr(
@@ -54,7 +58,7 @@ def test_a_toast_flash_floats_over_the_page(flash):
 
     ui.display_flash_message()
 
-    assert shown == [("toast", "Relation updated!")]
+    assert shown == [("toast", "Relation updated!", ui._FLASH_TOAST_SECONDS)]
     assert state["flash_message"] is None
 
 
@@ -82,3 +86,27 @@ def test_the_editor_confirmations_are_the_ones_that_float():
         'set_flash_message(f"This {label} is no longer in the ontology.", "error")'
         in src
     )
+
+
+def test_a_confirmation_does_not_outstay_the_edit(flash):
+    """Two seconds, not Streamlit's four (issue #419).
+
+    The confirmation carries one piece of news, read at a glance. What is left
+    of the default is a message about the last edit sitting over the next one.
+    """
+    _state, shown = flash
+    ui.set_flash_message("Relation updated!", "success", toast=True)
+
+    ui.display_flash_message()
+
+    assert shown[0][2] == 2
+
+
+def test_a_warning_toast_keeps_the_default(flash):
+    """Only the confirmations are cut back: a warning is not read that fast."""
+    _state, shown = flash
+    ui.set_flash_message("Saved, but the label was dropped", "warning", toast=True)
+
+    ui.display_flash_message()
+
+    assert shown[0][2] == "short"
