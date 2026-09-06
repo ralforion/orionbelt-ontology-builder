@@ -74,6 +74,64 @@ def test_two_separate_loops_are_two_issues(om):
     assert len(_cycles(om)) == 2
 
 
+# --- naming the classes in the loop -----------------------------------------
+
+
+def _cross_namespace_loop():
+    """``base#A ⊑ other#A`` and back: one local name, two classes."""
+    from rdflib import OWL, RDF, RDFS, URIRef
+
+    o = OntologyManager()
+    other = "http://other.example/"
+    for uri in (o.namespace + "A", other + "A"):
+        o.graph.add((URIRef(uri), RDF.type, OWL.Class))
+    o.graph.add((URIRef(o.namespace + "A"), RDFS.subClassOf, URIRef(other + "A")))
+    o.graph.add((URIRef(other + "A"), RDFS.subClassOf, URIRef(o.namespace + "A")))
+    return o, o.namespace + "A", other + "A"
+
+
+def test_a_cross_namespace_cycle_names_both_classes():
+    """The local name alone read "A -> A -> A", which identifies nothing
+    (Codex review of PR #416)."""
+    o, base_a, other_a = _cross_namespace_loop()
+    message = _cycles(o)[0]["message"]
+
+    assert base_a in message and other_a in message, message
+    assert "A -> A -> A" not in message
+
+
+def test_a_cycle_within_one_namespace_still_reads_short(om):
+    """The URI is the fallback, not the default: unique names stay names."""
+    om.update_class(NS + "Vehicle", new_parent="Bicycle")
+    message = _cycles(om)[0]["message"]
+
+    assert "Bicycle -> Vehicle -> Bicycle" in message
+    assert "http://" not in message
+
+
+def test_the_issue_carries_the_uri_to_navigate_by():
+    """A name may not be unique; this is what a click has to go on."""
+    o, base_a, other_a = _cross_namespace_loop()
+    issue = _cycles(o)[0]
+
+    assert issue["subject_uri"] in {base_a, other_a}
+    assert issue["subject"] == issue["subject_uri"], "an ambiguous name shows in full"
+
+
+def test_names_are_disambiguated_against_the_whole_hierarchy(om):
+    """Not against the cycle alone: a class outside the loop can share a local
+    name with one inside it, and the reader has the ontology in front of them."""
+    from rdflib import OWL, RDF, RDFS, URIRef
+
+    other = "http://other.example/"
+    om.graph.add((URIRef(other + "Bicycle"), RDF.type, OWL.Class))
+    om.graph.add((URIRef(other + "Bicycle"), RDFS.subClassOf, URIRef(NS + "Vehicle")))
+    om.update_class(NS + "Vehicle", new_parent="Bicycle")
+
+    message = _cycles(om)[0]["message"]
+    assert NS + "Bicycle" in message, message
+
+
 # --- what must not be mistaken for a cycle ----------------------------------
 
 

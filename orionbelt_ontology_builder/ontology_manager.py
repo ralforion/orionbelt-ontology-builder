@@ -4820,6 +4820,26 @@ class OntologyManager:
             parents.setdefault(str(parent), [])
         return {uri: sorted(set(ps)) for uri, ps in parents.items()}
 
+    def _display_names(self, uris) -> dict[str, str]:
+        """URI -> the shortest form that still identifies it.
+
+        The local name where it is unique among ``uris``, the full URI where it
+        is not. Two namespaces can hold a class of the same name, and a message
+        that called both of them "A" would name nothing: a cross-namespace cycle
+        read "A -> A -> A" (Codex review of PR #416).
+
+        The same idea as :meth:`_skos_display_names`, which does it over concept
+        dicts that already carry their name; this one starts from URIs, which is
+        what the class hierarchy is keyed by.
+        """
+        names = {str(uri): self._local_name(URIRef(str(uri))) for uri in uris}
+        counts: dict[str, int] = {}
+        for name in names.values():
+            counts[name] = counts.get(name, 0) + 1
+        return {
+            uri: (name if counts[name] == 1 else uri) for uri, name in names.items()
+        }
+
     def _class_cycle_issues(self) -> list[dict[str, str]]:
         """One issue per ``rdfs:subClassOf`` cycle (issue #413).
 
@@ -4829,18 +4849,25 @@ class OntologyManager:
         the app says so rather than refusing it — and says what it means, since
         "equivalent" is the part that surprises people who wrote it by accident.
         """
-        cycles = self._cycles_in(self._class_parent_map())
+        parents = self._class_parent_map()
+        cycles = self._cycles_in(parents)
+        # Named over the whole hierarchy, not over each cycle: a class outside
+        # the loop can share a local name with one inside it, and the reader has
+        # the whole ontology in front of them, not the cycle.
+        shown = self._display_names(parents)
         issues = []
         for cycle in cycles:
-            names = [self._local_name(URIRef(uri)) for uri in [*cycle, cycle[0]]]
             issues.append(
                 {
                     "severity": "warning",
                     "type": "class_cycle",
-                    "subject": self._local_name(URIRef(cycle[0])),
+                    "subject": shown[cycle[0]],
+                    # The URI as well, since the name may not be unique and this
+                    # is what navigating to the class has to go on.
+                    "subject_uri": cycle[0],
                     "message": (
                         "subClassOf cycle: "
-                        + " -> ".join(names)
+                        + " -> ".join(shown[uri] for uri in [*cycle, cycle[0]])
                         + ". Classes in a cycle are equivalent to one another, "
                         "which is valid OWL but rarely what was meant."
                     ),
