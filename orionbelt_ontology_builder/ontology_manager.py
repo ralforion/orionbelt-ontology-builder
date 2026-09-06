@@ -4760,8 +4760,18 @@ class OntologyManager:
         the cycles its own way could break an edge the check never complained
         about, or leave the one it did.
         """
+        return self._cycles_in(self._skos_parent_map(concepts))
+
+    @staticmethod
+    def _cycles_in(parents: dict[str, list[str]]) -> list[list[str]]:
+        """Every distinct cycle in a ``child -> parents`` map, as a list of keys.
+
+        Lifted out of the SKOS check so the class hierarchy can be walked the
+        same way (issue #413). The walk is the part worth sharing: both are
+        "follow every parent and notice when the path meets itself", and a
+        second implementation would be a second set of edge cases.
+        """
         cycles: list[list[str]] = []
-        parents = self._skos_parent_map(concepts)
         WHITE, GREY, BLACK = 0, 1, 2
         colour = dict.fromkeys(parents, WHITE)
         seen_cycles: set[frozenset] = set()
@@ -4794,6 +4804,49 @@ class OntologyManager:
                     stack.pop()
                     path.pop()
         return cycles
+
+    def _class_parent_map(self) -> dict[str, list[str]]:
+        """``child URI -> parent URIs`` over ``rdfs:subClassOf``.
+
+        Named classes only: a restriction is written as a subClassOf a blank
+        node, and following those would report a "cycle" through anonymous
+        classes that says nothing to anyone.
+        """
+        parents: dict[str, list[str]] = {}
+        for child, parent in self.graph.subject_objects(RDFS.subClassOf):
+            if isinstance(child, BNode) or isinstance(parent, BNode):
+                continue
+            parents.setdefault(str(child), []).append(str(parent))
+            parents.setdefault(str(parent), [])
+        return {uri: sorted(set(ps)) for uri, ps in parents.items()}
+
+    def _class_cycle_issues(self) -> list[dict[str, str]]:
+        """One issue per ``rdfs:subClassOf`` cycle (issue #413).
+
+        A warning and not an error, because a cycle is legal OWL: ``A ⊑ B`` with
+        ``B ⊑ A`` says the two classes are equivalent, and a reasoner reads it
+        that way. It is usually a modelling slip and occasionally deliberate, so
+        the app says so rather than refusing it — and says what it means, since
+        "equivalent" is the part that surprises people who wrote it by accident.
+        """
+        cycles = self._cycles_in(self._class_parent_map())
+        issues = []
+        for cycle in cycles:
+            names = [self._local_name(URIRef(uri)) for uri in [*cycle, cycle[0]]]
+            issues.append(
+                {
+                    "severity": "warning",
+                    "type": "class_cycle",
+                    "subject": self._local_name(URIRef(cycle[0])),
+                    "message": (
+                        "subClassOf cycle: "
+                        + " -> ".join(names)
+                        + ". Classes in a cycle are equivalent to one another, "
+                        "which is valid OWL but rarely what was meant."
+                    ),
+                }
+            )
+        return issues
 
     def _skos_cycle_issues(
         self, concepts: list[dict[str, Any]]
@@ -6307,6 +6360,11 @@ class OntologyManager:
     def validate(self, check_missing_domain_range: bool = True) -> list[dict[str, str]]:
         """Validate the ontology and return issues."""
         issues = []
+        # A subClassOf cycle, which nothing used to mention: the tree view marks
+        # the back-edge it walks into and the graph survives one, so an
+        # ontology could carry a loop with only its own hierarchy view to say
+        # so (issue #413).
+        issues += self._class_cycle_issues()
         # ``pred`` is reused across loops that bind it to both predicate URIRefs
         # and arbitrary graph terms; declare the broader rdflib type up front.
         pred: Node
