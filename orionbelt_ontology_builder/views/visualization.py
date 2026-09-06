@@ -708,14 +708,17 @@ def render_visualization():
                     on_change=viz_sync,
                     args=("_viz_cfg_show_annotations", "viz_show_annotations"),
                     # Labels and comments are the annotations most entities
-                    # carry, and they are the two this does not draw — they are
-                    # in the tooltip instead. Without saying so, a graph of
-                    # entities annotated with nothing else looks like the
-                    # toggle does nothing (issue #405).
+                    # carry, and they are the two this does not draw. Without
+                    # saying so, a graph of entities annotated with nothing else
+                    # looks like the toggle does nothing (issue #405). Where to
+                    # read them is named as well, and named twice: the tooltip
+                    # was the only answer here until it turned out to be
+                    # rendering invisibly, and the details panel is the one that
+                    # cannot go quiet on us.
                     help=(
                         "Draw each annotation as a node hanging off what it "
-                        "annotates. Labels and comments are not drawn: they are "
-                        "already in the node's tooltip."
+                        "annotates. Labels and comments are not drawn: hover a "
+                        "node, or open the details panel, to read them."
                     ),
                 )
             with _cols[4]:

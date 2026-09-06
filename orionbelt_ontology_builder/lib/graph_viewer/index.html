@@ -11,6 +11,30 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
     html, body { background: #0e1117; }
 }
 #graph { width: 100%; }
+/* The node tooltip, which vis creates on hover and fills from a node's title.
+   vis ships its styling in vis-network.css, and only the script is vendored
+   here, so the element arrived with no box at all: black text on a transparent
+   background over a near-black canvas, and `position: static`, which meant the
+   top/left vis writes inline did nothing and it sat in the document flow rather
+   than beside the pointer. Visible in the DOM, invisible on screen.
+   Given the panel look the legend and the toolbar buttons already have. */
+.vis-tooltip {
+    position: absolute;
+    z-index: 20;
+    max-width: 340px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--node-tip-bg, rgba(255,255,255,0.96));
+    color: var(--node-tip-fg, #333333);
+    border: 1px solid rgba(127,127,127,0.35);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+    /* A title carries newlines (Class, Label, Comment on their own lines) and
+       a comment can be long, so it wraps rather than running off the canvas. */
+    white-space: pre-wrap;
+    pointer-events: none;
+}
 #legend {
     position: absolute; top: 8px; left: 8px; background: rgba(255,255,255,0.92);
     padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #333;
@@ -152,6 +176,11 @@ function themeToolbarButtons(theme) {
     var root = document.documentElement;
     root.style.setProperty('--tip-bg', theme.text);
     root.style.setProperty('--tip-fg', theme.bg);
+    // The node tooltip reads the other way round, as a panel rather than a
+    // chip, so it matches the legend beside it. Set as variables because vis
+    // creates that element on the first hover, long after this runs.
+    root.style.setProperty('--node-tip-bg', theme.panel);
+    root.style.setProperty('--node-tip-fg', theme.text);
 }
 
 // What a toolbar button says on hover. The tooltip is drawn from data-tip (see
