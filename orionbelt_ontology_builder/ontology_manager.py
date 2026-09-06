@@ -4808,13 +4808,18 @@ class OntologyManager:
     def _class_parent_map(self) -> dict[str, list[str]]:
         """``child URI -> parent URIs`` over ``rdfs:subClassOf``.
 
-        Named classes only: a restriction is written as a subClassOf a blank
+        Named classes only, on both ends, and tested for what they are rather
+        than what they are not: a restriction is written as a subClassOf a blank
         node, and following those would report a "cycle" through anonymous
-        classes that says nothing to anyone.
+        classes that says nothing to anyone — while a malformed graph can carry
+        a *literal* whose text happens to read like a class URI, and skipping
+        only blank nodes let that literal stand in for the class it spells
+        (Codex review of PR #416). Every other hierarchy reader here requires a
+        URIRef; so does this one.
         """
         parents: dict[str, list[str]] = {}
         for child, parent in self.graph.subject_objects(RDFS.subClassOf):
-            if isinstance(child, BNode) or isinstance(parent, BNode):
+            if not isinstance(child, URIRef) or not isinstance(parent, URIRef):
                 continue
             parents.setdefault(str(child), []).append(str(parent))
             parents.setdefault(str(parent), [])

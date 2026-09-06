@@ -221,6 +221,22 @@ def test_a_restriction_is_not_a_cycle(om):
     assert _cycles(om) == []
 
 
+def test_a_literal_that_spells_a_class_uri_is_not_an_edge(om):
+    """A malformed graph can carry `A subClassOf "…#B"` as a *literal*. Skipping
+    only blank nodes let that string stand in for the class it spells, and the
+    pair was reported as a cycle (Codex review of PR #416)."""
+    from rdflib import RDFS, Literal, URIRef
+
+    om.graph.add(
+        (
+            URIRef(NS + "Vehicle"),
+            RDFS.subClassOf,
+            Literal(NS + "Tandem"),
+        )
+    )
+    assert _cycles(om) == []
+
+
 def test_a_diamond_is_not_a_cycle(om):
     """Two paths to one ancestor is multiple inheritance, not a loop."""
     om.add_class("Machine")
