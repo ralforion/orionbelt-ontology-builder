@@ -544,6 +544,9 @@ def render_skos_vocabulary():
                                 _broader_opts,
                                 default=_cur_broader_disp,
                                 key=f"broader_{_ck}",
+                                # Every concept as this one's parent is never
+                                # the intent (see SELECT_ALL_NOTE in ui.py).
+                                select_all=False,
                                 format_func=_pad_option,
                                 help="A concept may have several parents. An "
                                 "edge that would make this concept its own "

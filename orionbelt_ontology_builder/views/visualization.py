@@ -1252,6 +1252,9 @@ def render_visualization():
                         options=focus_labels,
                         format_func=_picker_caption,
                         key="viz_focus_seeds",
+                        # A focus on everything is not a focus, so the row that
+                        # would offer it is not drawn (see SELECT_ALL_NOTE in ui.py).
+                        select_all=False,
                         on_change=viz_focus_seeds_changed,
                         help="Classes, individuals or SKOS concepts to centre on. "
                         "The neighbourhood grows from all of them. Starts from "

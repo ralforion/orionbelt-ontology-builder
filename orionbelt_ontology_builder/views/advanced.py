@@ -147,6 +147,9 @@ def render_advanced():
                     "Chain Properties (in order)",
                     options=obj_prop_names,
                     help="Select properties in the order they should be followed",
+                    # The order is the point, and a row that inserts every
+                    # property at once has none (see SELECT_ALL_NOTE in ui.py).
+                    select_all=False,
                 )
 
                 submitted = st.form_submit_button("Add Property Chain")
@@ -283,6 +286,9 @@ def render_advanced():
                     "Key Properties",
                     options=all_prop_names,
                     help="Properties that together uniquely identify instances",
+                    # A key is a handful of properties, never all of them
+                    # (see SELECT_ALL_NOTE in ui.py).
+                    select_all=False,
                 )
 
                 submitted = st.form_submit_button("Add hasKey")
