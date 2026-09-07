@@ -759,13 +759,30 @@ if (doc) {
 #: Enter, and is left alone. Only where Enter does nothing today, too — with the
 #: list open, something typed, and no option highlighted — so nothing that works
 #: is taken over, form submission included.
+# SELECT_ALL_NOTE
+# Why a few multiselects are drawn without their "Select N matches" row.
+#
+# Streamlit 1.63 made Enter commit the first visible row, and with two or more
+# matches that row is the bulk one, so type-and-Enter selects every match
+# (streamlit/streamlit#16841). The shim below takes the first real option
+# instead, on every multiselect, which leaves the row safe to keep wherever
+# selecting everything is a coherent thing to want: the three bulk delete pages,
+# and the graph's entity filters, whose own help text points at it by name.
+#
+# `select_all=False` is passed at the pickers where it is not coherent - a focus
+# on every node, a property chain of every property, a key of every property, a
+# concept under every parent - since there the row is only something to hit by
+# accident. It is a 1.63 parameter, which is part of why the pin moved.
 _ENTER_INSERTS_JS = r"""
 var doc = window.parent && window.parent.document;
 if (doc) {
   // The bulk rows, which select every option or every match at once. One of
   // them is always first, so it is what an unqualified "first option" would
   // take, and inserting five classes when one was asked for is worse than doing
-  // nothing. They are matched by the shape of the key they carry, not by the
+  // nothing. Since 1.63 that is also what Streamlit's own Enter does, so this
+  // is a deliberate override of an upstream default and not only a fix for a
+  // gap: keeping it is what lets the bulk pages keep their row (SELECT_ALL_NOTE
+  // above, and streamlit/streamlit#16841). They are matched by the shape of the key they carry, not by the
   // words they show and not by either key literally: with the box empty it is
   // "__select_all__" and with a query typed it is "__select_matches__", and
   // taking one for the other is exactly the bug this comment exists to stop
