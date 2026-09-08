@@ -123,12 +123,6 @@ PKG_DIR = _Path(__file__).resolve().parent
 _FAVICON = PKG_DIR / "favicon.png"
 _CUSTOM_CSS = """
 <style>
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 8px 16px;
-    }
     .metric-card {
         background-color: #f0f2f6;
         border-radius: 8px;
@@ -194,15 +188,11 @@ _CUSTOM_CSS = """
        and looked fine only because the CSS blocks above the title were each
        taking a 16px slot in the column; once those went out of the flow, the
        first line of the page slid under the header. */
-    .block-container, .stMainBlockContainer,
-    [data-testid="stAppViewBlockContainer"] {
+    .block-container, .stMainBlockContainer {
         padding-top: 4rem !important;
         padding-bottom: 0 !important;
         padding-left: 2rem !important;
         padding-right: 2rem !important;
-    }
-    footer, [data-testid="stBottom"] {
-        display: none !important;
     }
     .main .block-container { min-height: 0 !important; }
     /* Reduce iframe and element spacing */
