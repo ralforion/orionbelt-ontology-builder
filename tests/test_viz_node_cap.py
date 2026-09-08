@@ -161,6 +161,17 @@ def _render(n_classes, **kw):
     return at
 
 
+def _hidden_note(at):
+    """The Node options note, or "" when the page wrote none.
+
+    ``AppTest``'s session_state raises rather than returning a default, and a
+    render that hides nothing never writes the key at all.
+    """
+    if "_viz_hidden_note" not in at.session_state:
+        return ""
+    return at.session_state["_viz_hidden_note"] or ""
+
+
 def _notice_shown(at):
     return [c.value for c in at.caption if "are not drawn" in c.value]
 
@@ -470,6 +481,27 @@ def test_the_focus_prune_keeps_the_find_target():
     # The seed keeps its own neighbourhood, and the target brings the same one
     # hop the focus is set to, so it arrives in context rather than alone.
     assert drawn == {"C0000", "C0001", "C0006", "C0007", "C0008"}
+
+
+def test_a_find_target_the_focus_already_holds_widens_nothing():
+    """Centring on something already drawn must not change what is drawn.
+
+    Growing from the target unconditionally made a pick one hop from the seed
+    drag the ring beyond it onto the canvas, for an act that only meant "show me
+    where this is" (PR #428 review).
+    """
+    nodes, _, _ = _graph(6, seed="Class: C0000", depth=1, find="Class: C0001")
+
+    assert {n.get("label") for n in nodes} == {"C0000", "C0001"}
+
+
+def test_the_note_names_only_a_target_the_focus_does_not_reach():
+    """The line explains what the seeds do not, so it stays quiet otherwise."""
+    at = _render(6, seed="Class: C0000", depth=1, find="Class: C0001")
+    assert "kept by Find" not in _hidden_note(at)
+
+    at = _render(40, seed="Class: C0000", depth=1, find="Class: C0007")
+    assert "C0007 kept by Find" in at.session_state["_viz_hidden_note"]
 
 
 def test_the_find_target_does_not_join_the_saved_seeds():
