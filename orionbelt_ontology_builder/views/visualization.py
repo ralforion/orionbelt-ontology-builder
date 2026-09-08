@@ -1107,6 +1107,9 @@ def render_visualization():
         # sits beside the Filter Classes expander so it doesn't cost the graph a
         # whole row; the empty state is a placeholder (clearable), not a "—" row.
         _find_id: str | None = None
+        # The picked entity's display label, for the note that says the graph is
+        # holding it (see viz_hidden_caption).
+        _find_label: str | None = None
         focus_seed_ids: list = []
         # Declared with the rest, not left to the branch that draws the picker:
         # with focus mode on and every focusable type switched off, that branch
@@ -1146,31 +1149,23 @@ def render_visualization():
                 )
                 if _find_choice:
                     _find_id = focus_targets.get(_find_choice)
-                    # The target may currently be hidden — by one of the display
-                    # filters, or pruned away in focus mode — in which case its
-                    # node isn't in the graph and the JS focus() would silently
-                    # no-op (PR #144 review P2). On a fresh pick, reveal it:
-                    # restore a filtered-out entity and, in focus mode, add it as
-                    # a seed so the prune keeps it. Guarded by the find seq so
-                    # this runs once per pick.
-                    _cur_seq = st.session_state.get("_viz_find_seq", 0)
-                    if st.session_state.get("_viz_find_revealed_seq") != _cur_seq:
-                        st.session_state["_viz_find_revealed_seq"] = _cur_seq
-                        _reveal_rerun = False
-                        # A node filter hiding the target is handled where the
-                        # graph is built, against the live filter, so nothing is
-                        # written back here. Un-hiding it once per pick both
-                        # rewrote a filter the user had set and went stale the
-                        # moment a later filter change hid it again (issue #234).
-                        if st.session_state.get("_viz_cfg_focus_mode"):
-                            _seeds = list(
-                                st.session_state.get("_viz_cfg_focus_seeds") or []
-                            )
-                            if _find_choice not in _seeds:
-                                viz_set_focus_seeds(_seeds + [_find_choice])
-                                _reveal_rerun = True
-                        if _reveal_rerun:
-                            st.rerun()
+                    _find_label = _find_choice
+                    # Nothing is written back. The target may well be hidden —
+                    # by one of the display filters, or pruned away in focus
+                    # mode — in which case its node isn't in the graph and the
+                    # JS focus() would silently no-op (PR #144 review P2), but
+                    # that is the graph's problem to solve while it builds, not
+                    # a reason to edit the settings the user chose.
+                    #
+                    # It was solved that way for the node filter first: un-hiding
+                    # the entity once per pick both rewrote a filter the user had
+                    # set and went stale the moment a later filter change hid it
+                    # again (issue #234), so the builder exempts it instead.
+                    # Focus mode kept its own answer, adding the pick as a seed,
+                    # which left it in `Focus node(s)` for good — a saved setting
+                    # grown by an act of looking (issue #423). The prune takes
+                    # `_find_id` as a seed for the render instead, so clearing
+                    # the picker forgets it.
         # What the view is holding back, on the expander's own label: it costs
         # no vertical space there, and it sits on the control that causes it.
         # Written by the run that built the graph (below), because the numbers
@@ -2620,6 +2615,18 @@ def render_visualization():
                 _before_prune = len(net.nodes)
                 present_ids = {n["id"] for n in net.nodes}
                 seeds = {sid for sid in focus_seed_ids if sid in present_ids}
+                # The Find target grows the neighbourhood too, for this render
+                # only. It is the last gate that used to drop the entity the user
+                # just picked, and the one the builder's pin (see _pinned_ids)
+                # could not reach: the node is assembled, then pruned away again
+                # unless the focus happens to reach it. Adding it here is what
+                # lets the pick stay out of the saved seeds (issue #423).
+                #
+                # Only alongside seeds that are actually present: with none, the
+                # prune does not run at all, and a Find pick is not a reason to
+                # start narrowing a graph that was not being narrowed.
+                if seeds and _find_id and _find_id in present_ids:
+                    seeds.add(_find_id)
                 if seeds:
                     adj: dict = {}
                     for edge in net.edges:
@@ -2902,6 +2909,12 @@ def render_visualization():
             (len(filters["class"]["uris"]) - len(filters["class"]["selected_uris"]))
             + (len(filters["ind"]["uris"]) - len(filters["ind"]["selected_uris"])),
             focusable_drawn=bool(focus_targets),
+            # Only when the focus is not already explaining it.
+            find_kept=(
+                _find_label
+                if focus_mode and _find_label and _find_label not in focus_seeds
+                else None
+            ),
         )
         if _note_now != st.session_state.get("_viz_hidden_note", ""):
             st.session_state["_viz_hidden_note"] = _note_now

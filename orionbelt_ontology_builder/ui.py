@@ -6562,6 +6562,7 @@ def viz_hidden_caption(
     focus_hidden,
     hidden_by_filter,
     focusable_drawn=True,
+    find_kept=None,
 ) -> str:
     """One line saying what is not on screen, or "" when everything is.
 
@@ -6571,6 +6572,12 @@ def viz_hidden_caption(
 
     Seeds are listed by name up to five, then counted, so a focus on half the
     ontology stays one short line.
+
+    ``find_kept`` is the entity picked in "Find and centre" when a focus is
+    running and the pick is not one of its seeds. The graph holds it anyway, so
+    the line has to account for it: the seeds no longer describe everything on
+    the canvas, and a node the focus does not explain otherwise reads as the
+    focus leaking (issue #423).
 
     ``focusable_drawn`` is False when Classes, Individuals and SKOS are all
     switched off: focus mode is still on and still holding its seeds, but there
@@ -6592,6 +6599,8 @@ def viz_hidden_caption(
             names += f", … (+{len(focus_seeds) - 5})"
         hops = "hop" if focus_depth == 1 else "hops"
         parts.append(f"Focused on {names} · {focus_depth} {hops}")
+        if find_kept:
+            parts.append(f"{find_kept.split(': ', 1)[-1]} kept by Find")
     if focus_hidden:
         parts.append(f"{focus_hidden} hidden by focus")
     if hidden_by_filter:
