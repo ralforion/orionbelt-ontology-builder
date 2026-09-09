@@ -283,6 +283,22 @@ def test_many_seeds_stay_one_short_line():
     )
 
 
+def test_the_line_names_a_find_target_the_focus_does_not_explain():
+    """The graph holds the picked entity whatever the focus says (issue #423),
+    so a node the seeds do not account for is on the canvas. Unexplained, that
+    reads as the focus leaking."""
+    assert app.viz_hidden_caption(
+        True, ["Class: Person"], 1, 6, 0, find_kept="Class: Endurant"
+    ) == ("Focused on Person · 1 hop · Endurant kept by Find · 6 hidden by focus")
+
+
+def test_a_find_target_among_the_seeds_is_not_named_twice():
+    """The caller passes it only when the focus is not already explaining it."""
+    assert app.viz_hidden_caption(True, ["Class: Person"], 1, 6, 0) == (
+        "Focused on Person · 1 hop · 6 hidden by focus"
+    )
+
+
 def test_a_focus_with_nothing_focusable_says_so():
     """Switch Classes, Individuals and SKOS all off and focus mode is still on,
     still holding its seeds, with nothing it can act on. The page says so inside

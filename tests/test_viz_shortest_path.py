@@ -220,7 +220,6 @@ def test_a_path_is_drawn_when_the_class_filter_is_empty():
     at.session_state["_viz_cfg_selected_class_uris"] = []
     at.session_state["_viz_cfg_known_class_uris"] = uris
     at.session_state["_viz_find_seq"] = 1
-    at.session_state["_viz_find_revealed_seq"] = 1
     at.run(timeout=300)
     assert not at.exception, at.exception
 

@@ -88,10 +88,9 @@ def _script():
             # What picking an entity in "Find and centre" leaves behind.
             st.session_state["viz_find_entity"] = os.environ["FIND"]
         if os.environ.get("HIDE"):
-            # A narrowed node filter that does *not* include the Find target,
-            # and a find-seq already marked as revealed: the state left behind
-            # when an entity was visible at the moment it was picked and a later
-            # filter change hid it (issue #234).
+            # A narrowed node filter that does *not* include the Find target:
+            # the state left behind when an entity was visible at the moment it
+            # was picked and a later filter change hid it (issue #234).
             keep = set(os.environ["HIDE"].split())
             st.session_state["_viz_cfg_selected_class_uris"] = [
                 c["uri"] for c in om.get_classes() if c["name"] in keep
@@ -100,15 +99,13 @@ def _script():
                 c["uri"] for c in om.get_classes()
             }
             st.session_state["_viz_find_seq"] = 1
-            st.session_state["_viz_find_revealed_seq"] = 1
         if os.environ.get("HIDE_ALL"):
-            # The filter emptied completely, with the reveal already marked done.
+            # The filter emptied completely, after the pick.
             st.session_state["_viz_cfg_selected_class_uris"] = []
             st.session_state["_viz_cfg_known_class_uris"] = {
                 c["uri"] for c in om.get_classes()
             }
             st.session_state["_viz_find_seq"] = 1
-            st.session_state["_viz_find_revealed_seq"] = 1
 
     app.render_visualization()
 
@@ -162,6 +159,17 @@ def _render(n_classes, **kw):
     at.run(timeout=300)
     assert not at.exception, at.exception
     return at
+
+
+def _hidden_note(at):
+    """The Node options note, or "" when the page wrote none.
+
+    ``AppTest``'s session_state raises rather than returning a default, and a
+    render that hides nothing never writes the key at all.
+    """
+    if "_viz_hidden_note" not in at.session_state:
+        return ""
+    return at.session_state["_viz_hidden_note"] or ""
 
 
 def _notice_shown(at):
@@ -423,31 +431,153 @@ def test_a_find_target_survives_an_emptied_class_filter():
     assert {n.get("label") for n in nodes} == {"C0007"}
 
 
-def test_find_does_not_rewrite_the_users_node_filter():
-    """Picking an entity used to un-hide it by editing the filter, which both
-    changed a setting the user had chosen and went stale as soon as a later
-    filter change hid it again. The graph exempts it at build time instead, so
-    the filter is left exactly as it was found."""
+def test_a_find_pick_writes_no_setting_at_all():
+    """Picking an entity used to edit whatever was hiding it: the node filter
+    first, which went stale the moment a later filter change hid the entity
+    again (issue #234), and then the focus seeds, which kept the pick in
+    `Focus node(s)` for good (issue #423). Both are settings the user chose.
+    The graph holds the target while it builds instead, so a pick changes
+    nothing that outlives it."""
     import ast
 
-    src = sources.viz_text()
-    tree = ast.parse(src)
-    handlers = [
+    tree = ast.parse(sources.viz_text())
+    picked = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.If) and "_viz_find_revealed_seq" in ast.dump(node.test)
+        if isinstance(node, ast.If)
+        and ast.dump(node.test) == ast.dump(ast.Name(id="_find_choice", ctx=ast.Load()))
     ]
-    assert handlers, "the Find reveal handler was not found"
-    for handler in handlers:
-        for node in ast.walk(handler):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
-                dumped = ast.dump(target)
-                assert not ("_viz_cfg_selected_" in dumped and "_uris" in dumped), (
-                    f"line {node.lineno}: Find must not write the node filter; "
-                    "the graph exempts the target at build time instead"
+    assert picked, "the branch that runs on a Find pick was not found"
+    for branch in picked:
+        for node in ast.walk(branch):
+            if isinstance(node, ast.Call):
+                assert getattr(node.func, "id", "") != "viz_set_focus_seeds", (
+                    f"line {node.lineno}: a Find pick must not write the focus "
+                    "seeds; the prune takes the target for the render instead"
                 )
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    assert "_viz_cfg_" not in ast.dump(target), (
+                        f"line {node.lineno}: a Find pick must not write a saved "
+                        "setting; the graph exempts the target while it builds"
+                    )
+
+
+# --- Find and centre under a focus (issue #423) ------------------------------
+
+
+def test_the_focus_prune_keeps_the_find_target():
+    """The prune was the last gate that dropped the picked entity.
+
+    Everything else the builder does is exempted for the Find target, but focus
+    mode assembles the whole graph and then cuts it back to the seeds' reach, so
+    a target outside that reach was assembled and then thrown away again. It
+    joins the seeds for the render, which is why it survives.
+    """
+    nodes, _, _ = _graph(40, seed="Class: C0000", depth=1, find="Class: C0007")
+
+    drawn = {n.get("label") for n in nodes}
+    assert "C0007" in drawn, "the entity the user asked to see was pruned away"
+    # The seed keeps its own neighbourhood, and the target brings the same one
+    # hop the focus is set to, so it arrives in context rather than alone.
+    assert drawn == {"C0000", "C0001", "C0006", "C0007", "C0008"}
+
+
+def test_a_find_target_the_focus_already_holds_widens_nothing():
+    """Centring on something already drawn must not change what is drawn.
+
+    Growing from the target unconditionally made a pick one hop from the seed
+    drag the ring beyond it onto the canvas, for an act that only meant "show me
+    where this is" (PR #428 review).
+    """
+    nodes, _, _ = _graph(6, seed="Class: C0000", depth=1, find="Class: C0001")
+
+    assert {n.get("label") for n in nodes} == {"C0000", "C0001"}
+
+
+def test_the_note_names_only_a_target_the_focus_does_not_reach():
+    """The line explains what the seeds do not, so it stays quiet otherwise."""
+    at = _render(6, seed="Class: C0000", depth=1, find="Class: C0001")
+    assert "kept by Find" not in _hidden_note(at)
+
+    at = _render(40, seed="Class: C0000", depth=1, find="Class: C0007")
+    assert "C0007 kept by Find" in at.session_state["_viz_hidden_note"]
+
+
+def test_a_full_focus_still_leaves_room_for_the_find_target(monkeypatch, patch_ui):
+    """A focus that fills the cap on its own must not spend the pick's room.
+
+    The seeds used to take the whole allowance, leaving the pin nothing, so the
+    viewer was handed a focus_node for a node that is not in the payload: the
+    silent no-op the pin exists to prevent (PR #428 review).
+    """
+    patch_ui("GRAPH_MAX_NODES", 10)
+    nodes, edges, notice = _graph(
+        40, seed="Class: Hub", shape="star", find="Class: C0039"
+    )
+
+    labels = {n.get("label") for n in nodes}
+    assert "C0039" in labels, "the entity the user asked to see was cut by the cap"
+    assert len(nodes) == 10, "and the cap still holds"
+    kept = {n["id"] for n in nodes}
+    assert all(e["from"] in kept and e["to"] in kept for e in edges)
+    assert "more than the 10 nodes the graph can draw" in notice
+
+
+def test_a_capped_focus_draws_its_full_cap_when_the_target_is_a_seed(
+    monkeypatch, patch_ui
+):
+    """The room for the pin is only owed when the focus would drop the target.
+
+    Holding it back for every pick cost a capped focus one of the nodes it can
+    draw, for an entity that was already on the canvas (PR #428 review).
+    """
+    patch_ui("GRAPH_MAX_NODES", 10)
+    nodes, _, _ = _graph(40, seed="Class: Hub", shape="star", find="Class: Hub")
+
+    assert len(nodes) == 10
+
+
+def test_a_capped_focus_draws_its_full_cap_for_a_target_it_already_keeps(
+    monkeypatch, patch_ui
+):
+    """Same, for a target the focus reaches rather than one that is a seed."""
+    patch_ui("GRAPH_MAX_NODES", 10)
+    kept, _, _ = _graph(40, seed="Class: Hub", shape="star")
+    already = min(n.get("label") for n in kept if n.get("label") != "Hub")
+
+    nodes, _, _ = _graph(40, seed="Class: Hub", shape="star", find=f"Class: {already}")
+
+    assert len(nodes) == 10
+    assert {n.get("label") for n in nodes} == {n.get("label") for n in kept}
+
+
+def test_a_capped_focus_says_the_find_target_is_why_it_is_there(monkeypatch, patch_ui):
+    """It is on the canvas for no reason the seeds explain, so the note says so."""
+    patch_ui("GRAPH_MAX_NODES", 10)
+    at = _render(40, seed="Class: Hub", shape="star", find="Class: C0039")
+
+    assert "C0039 kept by Find" in _hidden_note(at)
+
+
+def test_the_find_target_does_not_join_the_saved_seeds():
+    """What the issue is about: a pick is an act of looking, not a setting.
+
+    Adding it to `Focus node(s)` was how the prune used to be persuaded to keep
+    it, and it stayed there afterwards - through a cleared picker, and through a
+    reload, since the seeds are saved.
+    """
+    at = _render(40, seed="Class: C0000", depth=1, find="Class: C0007")
+
+    assert at.session_state["_viz_cfg_focus_seeds"] == ["Class: C0000"]
+
+
+def test_a_find_pick_does_not_start_a_prune_of_its_own():
+    """With no seeds present there is nothing to narrow, and looking something
+    up is not a reason to start narrowing."""
+    nodes, _, _ = _graph(6, seed="", find="Class: C0003")
+
+    assert len({n.get("label") for n in nodes}) == 6
 
 
 # --- what the pickers show ---------------------------------------------------

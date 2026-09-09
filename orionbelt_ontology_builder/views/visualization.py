@@ -1107,6 +1107,9 @@ def render_visualization():
         # sits beside the Filter Classes expander so it doesn't cost the graph a
         # whole row; the empty state is a placeholder (clearable), not a "—" row.
         _find_id: str | None = None
+        # The picked entity's display label, for the note that says the graph is
+        # holding it (see viz_hidden_caption).
+        _find_label: str | None = None
         focus_seed_ids: list = []
         # Declared with the rest, not left to the branch that draws the picker:
         # with focus mode on and every focusable type switched off, that branch
@@ -1146,31 +1149,23 @@ def render_visualization():
                 )
                 if _find_choice:
                     _find_id = focus_targets.get(_find_choice)
-                    # The target may currently be hidden — by one of the display
-                    # filters, or pruned away in focus mode — in which case its
-                    # node isn't in the graph and the JS focus() would silently
-                    # no-op (PR #144 review P2). On a fresh pick, reveal it:
-                    # restore a filtered-out entity and, in focus mode, add it as
-                    # a seed so the prune keeps it. Guarded by the find seq so
-                    # this runs once per pick.
-                    _cur_seq = st.session_state.get("_viz_find_seq", 0)
-                    if st.session_state.get("_viz_find_revealed_seq") != _cur_seq:
-                        st.session_state["_viz_find_revealed_seq"] = _cur_seq
-                        _reveal_rerun = False
-                        # A node filter hiding the target is handled where the
-                        # graph is built, against the live filter, so nothing is
-                        # written back here. Un-hiding it once per pick both
-                        # rewrote a filter the user had set and went stale the
-                        # moment a later filter change hid it again (issue #234).
-                        if st.session_state.get("_viz_cfg_focus_mode"):
-                            _seeds = list(
-                                st.session_state.get("_viz_cfg_focus_seeds") or []
-                            )
-                            if _find_choice not in _seeds:
-                                viz_set_focus_seeds(_seeds + [_find_choice])
-                                _reveal_rerun = True
-                        if _reveal_rerun:
-                            st.rerun()
+                    _find_label = _find_choice
+                    # Nothing is written back. The target may well be hidden —
+                    # by one of the display filters, or pruned away in focus
+                    # mode — in which case its node isn't in the graph and the
+                    # JS focus() would silently no-op (PR #144 review P2), but
+                    # that is the graph's problem to solve while it builds, not
+                    # a reason to edit the settings the user chose.
+                    #
+                    # It was solved that way for the node filter first: un-hiding
+                    # the entity once per pick both rewrote a filter the user had
+                    # set and went stale the moment a later filter change hid it
+                    # again (issue #234), so the builder exempts it instead.
+                    # Focus mode kept its own answer, adding the pick as a seed,
+                    # which left it in `Focus node(s)` for good — a saved setting
+                    # grown by an act of looking (issue #423). The prune takes
+                    # `_find_id` as a seed for the render instead, so clearing
+                    # the picker forgets it.
         # What the view is holding back, on the expander's own label: it costs
         # no vertical space there, and it sits on the control that causes it.
         # Written by the run that built the graph (below), because the numbers
@@ -1822,8 +1817,12 @@ def render_visualization():
         # with the payload: a cached v23 focus graph would go on showing the one
         # that says nothing about them. 25: the Triples layer no longer redraws
         # an edge another layer already drew, so a cached v24 payload is a graph
-        # with those duplicates still in it.
-        _graph_ver = 25
+        # with those duplicates still in it. 26: the focus prune keeps the Find
+        # target for the render instead of the pick being written into the saved
+        # seeds (issue #423), so the same key can now mean a different graph — a
+        # cached v25 payload for a focus plus a find is one the pick was pruned
+        # out of, and nothing about the settings would evict it.
+        _graph_ver = 26
         # Include a mutation counter that bumps on every checkpoint / undo / redo,
         # so any change to the ontology — even one that preserves triple count —
         # invalidates the cached graph data and the iframe re-renders.
@@ -2616,6 +2615,10 @@ def render_visualization():
             # types, so depth counts real graph links rather than class hops).
             # Several seeds grow the neighbourhood from all of them at once.
             focus_hidden = 0
+            # Whether the Find target is on the canvas because the prune was told
+            # to keep it, rather than because the focus reaches it. The note says
+            # so, and only then (issue #423).
+            focus_find_kept = False
             if focus_pruning:
                 _before_prune = len(net.nodes)
                 present_ids = {n["id"] for n in net.nodes}
@@ -2625,33 +2628,84 @@ def render_visualization():
                     for edge in net.edges:
                         adj.setdefault(edge["from"], set()).add(edge["to"])
                         adj.setdefault(edge["to"], set()).add(edge["from"])
-                    # Ring by ring, starting with the seeds themselves, and never
-                    # past what can be drawn — the assembly was allowed over that
-                    # only because this holds the line. The seeds alone can
-                    # already overflow it: they default to every selected class.
-                    # Truncating mid-ring keeps the nearer hops, which are the
-                    # ones that were asked for.
-                    keep: set = set()
-                    ring = set(seeds)
-                    for _ in range(focus_depth + 1):
-                        if not ring:
-                            break
-                        room = GRAPH_MAX_NODES - len(keep)
-                        if len(ring) > room:
-                            keep |= set(sorted(ring)[:room])
-                            graph_notice = (
-                                f"This focus covers more than the "
-                                f"{GRAPH_MAX_NODES} nodes the graph can draw, so "
-                                f"only part of it is shown. Pick fewer focus "
-                                f"nodes, or a lower depth, to see it in full."
-                            )
-                            _notice_is_the_cap_line = False
-                            break
-                        keep |= ring
-                        nxt: set = set()
-                        for nid in ring:
-                            nxt |= adj.get(nid, set())
-                        ring = nxt - keep
+
+                    def _grow(from_ids, keep, budget, _adj=adj, _depth=focus_depth):
+                        """Ring by ring from *from_ids*, into *keep*.
+
+                        Never past *budget* nodes — the assembly was allowed over
+                        the render cap only because this holds the line. The
+                        seeds alone can already overflow it: they default to
+                        every selected class. Truncating mid-ring keeps the
+                        nearer hops, which are the ones that were asked for.
+                        Returns the keep set and whether it had to stop short.
+                        """
+                        ring = set(from_ids) - keep
+                        for _ in range(_depth + 1):
+                            if not ring:
+                                break
+                            room = budget - len(keep)
+                            if len(ring) > room:
+                                keep |= set(sorted(ring)[:room])
+                                return keep, True
+                            keep |= ring
+                            nxt: set = set()
+                            for nid in ring:
+                                nxt |= _adj.get(nid, set())
+                            ring = nxt - keep
+                        return keep, False
+
+                    _cap_line = (
+                        f"This focus covers more than the {GRAPH_MAX_NODES} "
+                        f"nodes the graph can draw, so only part of it is "
+                        f"shown. Pick fewer focus nodes, or a lower depth, to "
+                        f"see it in full."
+                    )
+                    _pin_find = bool(_find_id and _find_id in present_ids)
+                    keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES)
+
+                    # The Find target, but only when the focus does not already
+                    # hold it. It is the last gate that used to drop the entity
+                    # the user just picked, and the one the builder's pin (see
+                    # _pinned_ids) could not reach: the node is assembled, then
+                    # pruned away again unless the focus happens to reach it.
+                    # Growing it here is what lets the pick stay out of the
+                    # saved seeds (issue #423).
+                    #
+                    # Growing from it unconditionally would make Find widen the
+                    # graph even when it changed nothing about what is on it:
+                    # find a node one hop from the seed and the ring beyond it
+                    # came along, for a pick that only meant "show me where this
+                    # is" (PR #428 review). A target already drawn is left alone.
+                    #
+                    # Only alongside seeds that are actually present: with none,
+                    # the prune does not run at all, and a Find pick is not a
+                    # reason to start narrowing a graph that was not narrowed.
+                    focus_find_kept = False
+                    if _pin_find and _find_id not in keep:
+                        # A focus that fills the cap on its own leaves the pin
+                        # nothing: it would find room == 0, add nothing, and the
+                        # viewer would be handed a focus_node for a node that is
+                        # not in the payload — the silent no-op this arrangement
+                        # exists to prevent (PR #428 review, PR #144 review P2).
+                        # So the walk is run again one node short, and the pin
+                        # spends what that leaves. The assembly reserves for the
+                        # same pin the same way, one node over the cap (see
+                        # _pinned_ids); here it comes out of the focus instead,
+                        # so the browser is never handed more than the cap.
+                        #
+                        # Re-walked rather than reserved up front, because the
+                        # reservation is only owed when the focus would drop the
+                        # target: charging it always left a capped focus one node
+                        # short of what it can draw for a pick already on the
+                        # canvas (PR #428 review).
+                        if len(keep) >= GRAPH_MAX_NODES:
+                            keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES - 1)
+                        keep, _find_cut = _grow({_find_id}, keep, GRAPH_MAX_NODES)
+                        focus_find_kept = _find_id in keep
+                        _cut_short = _cut_short or _find_cut
+                    if _cut_short:
+                        graph_notice = _cap_line
+                        _notice_is_the_cap_line = False
                     net.nodes = [n for n in net.nodes if n["id"] in keep]
                     net.edges = [
                         e for e in net.edges if e["from"] in keep and e["to"] in keep
@@ -2844,6 +2898,9 @@ def render_visualization():
                     # produced so the caption below survives the reruns that
                     # reuse it (issue #222 follow-up).
                     "focus_hidden": focus_hidden,
+                    # Same reasoning: the note that names the Find target has to
+                    # survive the reruns that reuse this payload.
+                    "focus_find_kept": focus_find_kept,
                 }
                 # NB: don't bump viz_render_seq here. The component re-renders on
                 # its own whenever nodes/edges change, and seq is the layout-cache
@@ -2902,6 +2959,8 @@ def render_visualization():
             (len(filters["class"]["uris"]) - len(filters["class"]["selected_uris"]))
             + (len(filters["ind"]["uris"]) - len(filters["ind"]["selected_uris"])),
             focusable_drawn=bool(focus_targets),
+            # Only when the focus is not already explaining it.
+            find_kept=(_find_label if (gdata or {}).get("focus_find_kept") else None),
         )
         if _note_now != st.session_state.get("_viz_hidden_note", ""):
             st.session_state["_viz_hidden_note"] = _note_now
