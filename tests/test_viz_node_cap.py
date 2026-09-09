@@ -504,6 +504,34 @@ def test_the_note_names_only_a_target_the_focus_does_not_reach():
     assert "C0007 kept by Find" in at.session_state["_viz_hidden_note"]
 
 
+def test_a_full_focus_still_leaves_room_for_the_find_target(monkeypatch, patch_ui):
+    """A focus that fills the cap on its own must not spend the pick's room.
+
+    The seeds used to take the whole allowance, leaving the pin nothing, so the
+    viewer was handed a focus_node for a node that is not in the payload: the
+    silent no-op the pin exists to prevent (PR #428 review).
+    """
+    patch_ui("GRAPH_MAX_NODES", 10)
+    nodes, edges, notice = _graph(
+        40, seed="Class: Hub", shape="star", find="Class: C0039"
+    )
+
+    labels = {n.get("label") for n in nodes}
+    assert "C0039" in labels, "the entity the user asked to see was cut by the cap"
+    assert len(nodes) == 10, "and the cap still holds"
+    kept = {n["id"] for n in nodes}
+    assert all(e["from"] in kept and e["to"] in kept for e in edges)
+    assert "more than the 10 nodes the graph can draw" in notice
+
+
+def test_a_capped_focus_says_the_find_target_is_why_it_is_there(monkeypatch, patch_ui):
+    """It is on the canvas for no reason the seeds explain, so the note says so."""
+    patch_ui("GRAPH_MAX_NODES", 10)
+    at = _render(40, seed="Class: Hub", shape="star", find="Class: C0039")
+
+    assert "C0039 kept by Find" in _hidden_note(at)
+
+
 def test_the_find_target_does_not_join_the_saved_seeds():
     """What the issue is about: a pick is an act of looking, not a setting.
 

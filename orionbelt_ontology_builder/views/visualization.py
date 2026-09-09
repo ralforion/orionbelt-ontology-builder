@@ -2629,21 +2629,21 @@ def render_visualization():
                         adj.setdefault(edge["from"], set()).add(edge["to"])
                         adj.setdefault(edge["to"], set()).add(edge["from"])
 
-                    def _grow(from_ids, keep, _adj=adj, _depth=focus_depth):
+                    def _grow(from_ids, keep, budget, _adj=adj, _depth=focus_depth):
                         """Ring by ring from *from_ids*, into *keep*.
 
-                        Never past what can be drawn — the assembly was allowed
-                        over that only because this holds the line. The seeds
-                        alone can already overflow it: they default to every
-                        selected class. Truncating mid-ring keeps the nearer
-                        hops, which are the ones that were asked for. Returns
-                        the keep set and whether it had to stop short.
+                        Never past *budget* nodes — the assembly was allowed over
+                        the render cap only because this holds the line. The
+                        seeds alone can already overflow it: they default to
+                        every selected class. Truncating mid-ring keeps the
+                        nearer hops, which are the ones that were asked for.
+                        Returns the keep set and whether it had to stop short.
                         """
                         ring = set(from_ids) - keep
                         for _ in range(_depth + 1):
                             if not ring:
                                 break
-                            room = GRAPH_MAX_NODES - len(keep)
+                            room = budget - len(keep)
                             if len(ring) > room:
                                 keep |= set(sorted(ring)[:room])
                                 return keep, True
@@ -2660,7 +2660,21 @@ def render_visualization():
                         f"shown. Pick fewer focus nodes, or a lower depth, to "
                         f"see it in full."
                     )
-                    keep, _cut_short = _grow(seeds, set())
+                    # One node of the budget is held back for the Find target,
+                    # so a focus that fills the cap on its own cannot spend the
+                    # room the pick needs. Without the reservation the seeds ate
+                    # the whole allowance, the pin below found room == 0, and the
+                    # viewer was handed a focus_node for a node that is not in
+                    # the payload — the silent no-op this whole arrangement
+                    # exists to prevent (PR #428 review, PR #144 review P2). The
+                    # assembly reserves for the same pin the same way, one node
+                    # over the cap (see _pinned_ids); here it comes out of the
+                    # focus instead, so the browser is never handed more than the
+                    # cap allows.
+                    _pin_find = bool(_find_id and _find_id in present_ids)
+                    keep, _cut_short = _grow(
+                        seeds, set(), GRAPH_MAX_NODES - (1 if _pin_find else 0)
+                    )
 
                     # The Find target, but only when the focus does not already
                     # hold it. It is the last gate that used to drop the entity
@@ -2680,8 +2694,11 @@ def render_visualization():
                     # the prune does not run at all, and a Find pick is not a
                     # reason to start narrowing a graph that was not narrowed.
                     focus_find_kept = False
-                    if _find_id and _find_id in present_ids and _find_id not in keep:
-                        keep, _find_cut = _grow({_find_id}, keep)
+                    if _pin_find and _find_id not in keep:
+                        # The full cap here: the slot held back above is what it
+                        # spends, so the target lands even when the focus filled
+                        # everything else.
+                        keep, _find_cut = _grow({_find_id}, keep, GRAPH_MAX_NODES)
                         focus_find_kept = _find_id in keep
                         _cut_short = _cut_short or _find_cut
                     if _cut_short:
