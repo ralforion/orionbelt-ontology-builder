@@ -2660,21 +2660,8 @@ def render_visualization():
                         f"shown. Pick fewer focus nodes, or a lower depth, to "
                         f"see it in full."
                     )
-                    # One node of the budget is held back for the Find target,
-                    # so a focus that fills the cap on its own cannot spend the
-                    # room the pick needs. Without the reservation the seeds ate
-                    # the whole allowance, the pin below found room == 0, and the
-                    # viewer was handed a focus_node for a node that is not in
-                    # the payload — the silent no-op this whole arrangement
-                    # exists to prevent (PR #428 review, PR #144 review P2). The
-                    # assembly reserves for the same pin the same way, one node
-                    # over the cap (see _pinned_ids); here it comes out of the
-                    # focus instead, so the browser is never handed more than the
-                    # cap allows.
                     _pin_find = bool(_find_id and _find_id in present_ids)
-                    keep, _cut_short = _grow(
-                        seeds, set(), GRAPH_MAX_NODES - (1 if _pin_find else 0)
-                    )
+                    keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES)
 
                     # The Find target, but only when the focus does not already
                     # hold it. It is the last gate that used to drop the entity
@@ -2695,9 +2682,24 @@ def render_visualization():
                     # reason to start narrowing a graph that was not narrowed.
                     focus_find_kept = False
                     if _pin_find and _find_id not in keep:
-                        # The full cap here: the slot held back above is what it
-                        # spends, so the target lands even when the focus filled
-                        # everything else.
+                        # A focus that fills the cap on its own leaves the pin
+                        # nothing: it would find room == 0, add nothing, and the
+                        # viewer would be handed a focus_node for a node that is
+                        # not in the payload — the silent no-op this arrangement
+                        # exists to prevent (PR #428 review, PR #144 review P2).
+                        # So the walk is run again one node short, and the pin
+                        # spends what that leaves. The assembly reserves for the
+                        # same pin the same way, one node over the cap (see
+                        # _pinned_ids); here it comes out of the focus instead,
+                        # so the browser is never handed more than the cap.
+                        #
+                        # Re-walked rather than reserved up front, because the
+                        # reservation is only owed when the focus would drop the
+                        # target: charging it always left a capped focus one node
+                        # short of what it can draw for a pick already on the
+                        # canvas (PR #428 review).
+                        if len(keep) >= GRAPH_MAX_NODES:
+                            keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES - 1)
                         keep, _find_cut = _grow({_find_id}, keep, GRAPH_MAX_NODES)
                         focus_find_kept = _find_id in keep
                         _cut_short = _cut_short or _find_cut

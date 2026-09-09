@@ -524,6 +524,34 @@ def test_a_full_focus_still_leaves_room_for_the_find_target(monkeypatch, patch_u
     assert "more than the 10 nodes the graph can draw" in notice
 
 
+def test_a_capped_focus_draws_its_full_cap_when_the_target_is_a_seed(
+    monkeypatch, patch_ui
+):
+    """The room for the pin is only owed when the focus would drop the target.
+
+    Holding it back for every pick cost a capped focus one of the nodes it can
+    draw, for an entity that was already on the canvas (PR #428 review).
+    """
+    patch_ui("GRAPH_MAX_NODES", 10)
+    nodes, _, _ = _graph(40, seed="Class: Hub", shape="star", find="Class: Hub")
+
+    assert len(nodes) == 10
+
+
+def test_a_capped_focus_draws_its_full_cap_for_a_target_it_already_keeps(
+    monkeypatch, patch_ui
+):
+    """Same, for a target the focus reaches rather than one that is a seed."""
+    patch_ui("GRAPH_MAX_NODES", 10)
+    kept, _, _ = _graph(40, seed="Class: Hub", shape="star")
+    already = min(n.get("label") for n in kept if n.get("label") != "Hub")
+
+    nodes, _, _ = _graph(40, seed="Class: Hub", shape="star", find=f"Class: {already}")
+
+    assert len(nodes) == 10
+    assert {n.get("label") for n in nodes} == {n.get("label") for n in kept}
+
+
 def test_a_capped_focus_says_the_find_target_is_why_it_is_there(monkeypatch, patch_ui):
     """It is on the canvas for no reason the seeds explain, so the note says so."""
     patch_ui("GRAPH_MAX_NODES", 10)
