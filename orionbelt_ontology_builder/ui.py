@@ -58,11 +58,37 @@ _VIZ_PERSIST_KEYS = (
     "options_open",
     "path_panel",
     "find_row_open",
+    "edge_curves",
 )
 _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
     "focus_depth": (1, 5),
 }
+#: Settings whose value is one of a fixed set of strings, and what that set is.
+#: Anything else saved under the key is ignored, the same way an out-of-range
+#: int is clamped: config.json is a file on disk that anything could have
+#: written.
+_VIZ_CHOICES = {
+    "edge_curves": ("auto", "curved", "straight"),
+}
+
+#: Above this many drawn edges, ``edge_curves="auto"`` draws straight ones.
+#:
+#: The curve is decoration on an edge that is the only link between its two
+#: nodes, and it is redrawn on every frame. Counted in edges rather than nodes
+#: because that is what it costs: measured against a vendored vis-network under
+#: a 6x CPU throttle, holding the graph at 200 nodes and varying the edges, the
+#: curve added 1.0ms per redraw at 100 edges, 1.7ms at 200, 4.7ms at 400 and
+#: 7.4ms at 800; holding the edges at 300 and varying the nodes from 100 to 800,
+#: it stayed between 1.6 and 3.9ms with no trend (issue #425).
+#:
+#: 300 is where the penalty starts to be felt rather than measured: a few
+#: milliseconds of every frame, on every pan, drag and physics tick. Below it
+#: the curve is worth having.
+#:
+#: Parallel edges keep their curves at any size: that is what tells them apart,
+#: and they are set per edge (see the fan-out in the graph builder).
+CURVED_EDGE_MAX_EDGES = 300
 #: Which display switch each focus-seed kind rides on. A seed label carries its
 #: kind (``Class: Person``, see ``_focus_target``), which is what lets a seed
 #: whose entity is gone be told from one whose type is merely switched off
@@ -278,6 +304,18 @@ _BRAND_CSS = f"""
        silence (issue #368). Re-check them in the browser whenever the Streamlit
        pin moves — the check is to inspect a rendered widget and confirm the
        element carrying the accent is still the one named here. */
+
+    /* A help icon belongs to the label it follows. Streamlit lays a widget
+       label out as a flex row and gives the icon's wrapper `flex-grow: 1`, so
+       the icon is pushed to the far right of the widget: a slider's help sat
+       hundreds of pixels from its own label, next to whatever the following
+       column happened to start with, and read as belonging to that instead.
+       Shrinking the wrapper to its content puts it back beside the words it
+       explains. The label text keeps its own width, so nothing else moves. */
+    [data-testid="stWidgetLabel"] > div:has([data-testid="stTooltipIcon"]) {{
+        flex-grow: 0;
+        margin-left: 0.25rem;
+    }}
 
     /* Primary buttons */
     [data-testid="stBaseButton-primary"] {{
@@ -1145,6 +1183,8 @@ def _apply_viz_settings(data, defaults) -> None:
         ):
             lo, hi = _VIZ_INT_RANGES.get(k, (v, v))
             st.session_state[f"_viz_cfg_{k}"] = max(lo, min(hi, v))
+        elif isinstance(default, str) and v in _VIZ_CHOICES.get(k, ()):
+            st.session_state[f"_viz_cfg_{k}"] = v
 
 
 def _viz_settings_payload() -> str:
@@ -6553,6 +6593,26 @@ _FILTER_KINDS = (
         "plural": "individuals",
     },
 )
+
+
+def edges_are_curved(setting: str, edge_count: int) -> bool:
+    """Whether the graph's single edges are drawn with a curve.
+
+    ``"curved"`` and ``"straight"`` are the user saying so and are obeyed at any
+    size. ``"auto"``, the default, curves a graph up to
+    :data:`CURVED_EDGE_MAX_EDGES` edges and straightens anything larger, which is
+    where the curve stops being cheap (issue #425).
+
+    The count is of edges, not nodes: drawing them is what the curve costs, and
+    the measurements behind that are with :data:`CURVED_EDGE_MAX_EDGES`.
+
+    Anything else reads as ``"auto"``: the value comes from config.json.
+    """
+    if setting == "curved":
+        return True
+    if setting == "straight":
+        return False
+    return edge_count <= CURVED_EDGE_MAX_EDGES
 
 
 def viz_hidden_caption(

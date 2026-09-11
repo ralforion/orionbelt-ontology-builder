@@ -86,3 +86,21 @@ def test_text_accents_and_filled_controls_take_their_own_blue():
         '[data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid])',
     ]:
         assert app._DARK_FILL in rule_for(selector), f"{selector} is not filled"
+
+
+def test_a_help_icon_stays_beside_the_label_it_explains():
+    """Streamlit pushes it to the far right of the widget instead.
+
+    A widget label is a flex row and the tooltip's wrapper is given
+    `flex-grow: 1`, so on a wide widget the icon ends up hundreds of pixels from
+    its own label. In a row of columns it then sits next to whatever the next
+    column starts with and reads as belonging to that: measured on the
+    Visualization controls, Node Spacing's help was 460px from its label and 6px
+    from the Edge curves one. Shrinking the wrapper to its content puts it back.
+    """
+    css = app._BRAND_CSS
+    rule = css[css.index('[data-testid="stWidgetLabel"]') :]
+    rule = rule[: rule.index("}") + 1]
+
+    assert "stTooltipIcon" in rule, "the rule no longer names the icon it moves"
+    assert "flex-grow: 0" in rule

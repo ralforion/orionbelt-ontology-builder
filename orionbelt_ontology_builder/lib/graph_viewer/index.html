@@ -343,6 +343,7 @@ var webDownload = true;  // browser download works on the web; on desktop we sav
 var lastSeq = null;
 var lastNodes = null;
 var lastEdges = null;
+var lastSmooth = null;   // the edge curve setting the network was built with
 var currentTheme = {bg: '#ffffff', panel: 'rgba(255,255,255,0.92)', text: '#333333'};
 var currentHeight = 600;  // last non-fullscreen graph height, restored on exit
 var fsRestoreView = null;  // viewport captured just before a fullscreen toggle
@@ -991,6 +992,17 @@ document.addEventListener('keydown', onEscape);
     });
 })();
 
+// The edge curve setting out of the options payload, as a JSON string so two
+// renders can be compared without walking the object.
+function smoothOf(optionsJson) {
+    try {
+        var o = JSON.parse(optionsJson || '{}');
+        return JSON.stringify((o.edges || {}).smooth === undefined ? false : o.edges.smooth);
+    } catch (e) {
+        return 'false';
+    }
+}
+
 function renderGraph(args) {
     if (!visLoaded) { pendingArgs = args; return; }
     autofitOn = !!args.autofit;
@@ -1005,6 +1017,17 @@ function renderGraph(args) {
     // selection exactly as the user left them.
     if (network && args.seq === lastSeq && args.nodes === lastNodes && args.edges === lastEdges) {
         applyTheme(args.theme);
+        // Curved or straight is the one graph *option* that changes without the
+        // data changing (issue #425): the same nodes and edges, drawn
+        // differently. Applied in place rather than by falling through to a
+        // rebuild, which would throw away the viewport the user is working in.
+        // The per-edge curves that keep parallel edges apart live in the edge
+        // payload, so those arrive as a data change and rebuild as before.
+        var _smoothNow = smoothOf(args.options);
+        if (_smoothNow !== lastSmooth) {
+            lastSmooth = _smoothNow;
+            try { network.setOptions({edges: {smooth: JSON.parse(_smoothNow)}}); } catch (e) {}
+        }
         var hh = autofitOn ? autofitHeight() : (args.height || 600);
         if (hh) { currentHeight = hh; applyHeight(hh); }
         // A fresh "Find entity" pick is a same-data re-render (only focus_seq
@@ -1032,6 +1055,7 @@ function renderGraph(args) {
     lastSeq = args.seq;
     lastNodes = args.nodes;
     lastEdges = args.edges;
+    lastSmooth = smoothOf(args.options);
 
     var height = args.height || 600;
     if (autofitOn) {

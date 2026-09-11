@@ -11,6 +11,7 @@ from ..ui import (
     _FILTER_KINDS,
     _PAGE_BY_TYPE,
     _PRECISE_NAV_TYPES,
+    CURVED_EDGE_MAX_EDGES,
     DEFAULT_NODE_FONT,
     GRAPH_MAX_NODES,
     PATH_HIGHLIGHT_BORDER,
@@ -47,6 +48,7 @@ from ..ui import (
     build_class_options,
     build_filter_entries,
     build_focus_seed_entries,
+    edges_are_curved,
     filter_entry_token,
     focus_seeds_from_selection,
     follow_filter_renames,
@@ -602,6 +604,10 @@ def render_visualization():
             # is how you get around a large graph; off, the row costs the canvas
             # nothing (issue #381).
             "find_row_open": True,
+            # Auto: curved on a graph small enough for the curve to be free,
+            # straight past that (see edges_are_curved). "curved" and "straight"
+            # are the user overriding it (issue #425).
+            "edge_curves": "auto",
         }
         # Bring back settings saved in a previous session before applying
         # defaults, so a returning user opens with their own preferences (#142).
@@ -762,7 +768,7 @@ def render_visualization():
 
             # Row 2: spacing + highlight issues. There is no graph height here:
             # the canvas always fills the window (see _GRAPH_FALLBACK_HEIGHT).
-            col1, col2 = st.columns([2, 2])
+            col1, col2, col3 = st.columns([2, 1.2, 0.8])
             with col1:
                 st.slider(
                     "Node Spacing",
@@ -774,6 +780,24 @@ def render_visualization():
                     args=("_viz_cfg_node_spacing", "viz_node_spacing"),
                 )
             with col2:
+                st.radio(
+                    "Edge curves",
+                    ["auto", "curved", "straight"],
+                    format_func=str.capitalize,
+                    horizontal=True,
+                    key="viz_edge_curves",
+                    on_change=viz_sync,
+                    args=("_viz_cfg_edge_curves", "viz_edge_curves"),
+                    help=(
+                        "Whether an edge that is the only link between two nodes "
+                        "is drawn with a curve. The curve is redrawn every frame, "
+                        "so a large graph pans and settles faster without it: "
+                        f"Auto keeps it up to {CURVED_EDGE_MAX_EDGES} edges and "
+                        "drops it above. Edges that run in parallel keep their "
+                        "curves either way, since that is what tells them apart."
+                    ),
+                )
+            with col3:
                 st.checkbox(
                     "Highlight Issues",
                     key="viz_highlight_issues",
@@ -797,6 +821,7 @@ def render_visualization():
         show_triples = _cfg["_viz_cfg_show_triples"]
         node_spacing = _cfg["_viz_cfg_node_spacing"]
         highlight_issues = _cfg["_viz_cfg_highlight_issues"]
+        edge_curves = _cfg["_viz_cfg_edge_curves"]
         auto_show_new = _cfg["_viz_cfg_auto_show_new"]
 
         # Two sets, because an issue names its subject two ways. Most carry a
@@ -1833,7 +1858,7 @@ def render_visualization():
         # thing — the page builds and caches a graph with no target, then picking
         # one changes nothing the key can see, so no rebuild happens and the
         # cached payload still lacks the entity that was asked for.
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}"
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -1928,7 +1953,10 @@ def render_visualization():
                         "strokeWidth": 2,
                         "strokeColor": "#ffffff",
                     },
-                    "smooth": {"enabled": True, "type": "curvedCW", "roundness": 0.2},
+                    # Placeholder: the real value is set once the drawn node
+                    # count is known, since "auto" depends on it (issue #425,
+                    # see the `edges_are_curved` call below).
+                    "smooth": False,
                 },
             }
 
@@ -2866,6 +2894,26 @@ def render_visualization():
                         "type": "curvedCW" if _clockwise else "curvedCCW",
                         "roundness": 0.2 * (i // 2 + 1),
                     }
+
+            # Curved or straight, now that the edge count is final. The curve
+            # is decoration on an edge that is the only link between its two
+            # nodes, and it is redrawn on every frame: on the reporter's
+            # ontology, 543 of the 549 edges drawn were single links paying for
+            # it (issue #425; CURVED_EDGE_MAX_EDGES carries the measurements,
+            # including why the threshold counts edges and not nodes).
+            #
+            # Set here rather than with the rest of the options because "auto"
+            # is a question about the graph that was drawn, not the one that was
+            # asked for: the cap, the node filter and the focus prune all decide
+            # what survives, and the annotation pass adds an edge per annotation
+            # after them. The per-edge `smooth` above is untouched,
+            # and vis honours it over this, so parallel edges keep the curves
+            # that tell them apart at any size.
+            net.options["edges"]["smooth"] = (
+                {"enabled": True, "type": "curvedCW", "roundness": 0.2}
+                if edges_are_curved(edge_curves, len(net.edges))
+                else False
+            )
 
             # Generate and display the graph using custom component
             try:
