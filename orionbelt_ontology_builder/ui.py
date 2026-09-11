@@ -305,6 +305,18 @@ _BRAND_CSS = f"""
        pin moves — the check is to inspect a rendered widget and confirm the
        element carrying the accent is still the one named here. */
 
+    /* A help icon belongs to the label it follows. Streamlit lays a widget
+       label out as a flex row and gives the icon's wrapper `flex-grow: 1`, so
+       the icon is pushed to the far right of the widget: a slider's help sat
+       hundreds of pixels from its own label, next to whatever the following
+       column happened to start with, and read as belonging to that instead.
+       Shrinking the wrapper to its content puts it back beside the words it
+       explains. The label text keeps its own width, so nothing else moves. */
+    [data-testid="stWidgetLabel"] > div:has([data-testid="stTooltipIcon"]) {{
+        flex-grow: 0;
+        margin-left: 0.25rem;
+    }}
+
     /* Primary buttons */
     [data-testid="stBaseButton-primary"] {{
         background-color: {_BRAND} !important;
