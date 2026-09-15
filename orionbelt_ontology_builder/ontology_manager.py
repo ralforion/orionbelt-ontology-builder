@@ -12,6 +12,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -182,8 +183,25 @@ def bfs_path(
     return None
 
 
-#: One undo-history change: ``(added, triple)``.
-_Change = tuple[bool, _Triple]
+#: A store's prefix bindings: ``(prefix, namespace, explicit)`` in prefix
+#: order. ``explicit`` marks a binding the user made through add_prefix.
+_Bindings = tuple[tuple[str, URIRef, bool], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TripleChange:
+    added: bool
+    triple: _Triple
+
+
+@dataclass(frozen=True, slots=True)
+class _BindingChange:
+    before: _Bindings
+    after: _Bindings
+
+
+#: One undo-history change.
+_Change = _TripleChange | _BindingChange
 
 
 class _GraphJournal:
@@ -192,10 +210,10 @@ class _GraphJournal:
     ``revision`` moves on every real change to the triples or the prefix
     bindings. The memoised listings and the Turtle export key on it, so a
     rerun that changed nothing reads them back instead of walking the graph
-    again. ``entries`` holds the ``(added, triple)`` changes since the undo
-    history last drained them; it is kept only while an :class:`UndoManager`
-    is alive to consume it, so a manager used without one (scripts, tests)
-    never accumulates a log.
+    again. ``entries`` holds the changes since the undo history last drained
+    them; it is kept only while an :class:`UndoManager` is alive to consume
+    it, so a manager used without one (scripts, tests) never accumulates a
+    log.
     """
 
     def __init__(self) -> None:
@@ -221,18 +239,18 @@ class _GraphJournal:
         entries, self.entries = self.entries, []
         return entries
 
-    def record(self, added: bool, triple: _Triple) -> None:
+    def record(self, change: _Change) -> None:
         self.revision += 1
         if self._paused:
             return
         if self._consumer is not None and self._consumer() is not None:
-            self.entries.append((added, triple))
+            self.entries.append(change)
         else:
             # Nothing will drain a log whose consumer is gone.
             self.entries.clear()
 
     def touch(self) -> None:
-        """Move the revision for a change that is not a triple (a binding)."""
+        """Move the revision for a change the store did not report itself."""
         self.revision += 1
 
     @contextmanager
@@ -254,27 +272,117 @@ class _JournalledMemory(Memory):
     therefore covers the engine's mutation sites and the parsers alike, with
     no bump to remember at each one. A no-op add (a triple already present) is
     not a change, and a pattern remove is reported once per triple it matched.
+
+    Only the managed graph's own context is reported. A parser can wrap this
+    store in a ConjunctiveGraph and put a named graph's triples under another
+    context; those are invisible to the managed graph and stay out of its
+    history, or a redo would add them to it.
+
+    The prefix bindings live here rather than in the base class, whose maps
+    are private and offer no unbind: ``remove_prefix`` used to rebuild the
+    whole graph for lack of one, and the undo history needs to put a whole
+    binding state back. ``bind`` keeps the base class's rules.
     """
 
-    def __init__(self, journal: _GraphJournal) -> None:
-        super().__init__()
+    def __init__(self, journal: _GraphJournal, identifier: BNode) -> None:
+        super().__init__(identifier=identifier)
         self._journal = journal
+        self._ns_by_prefix: dict[str, URIRef] = {}
+        self._prefix_by_ns: dict[URIRef, str] = {}
+        self._explicit: set[str] = set()
+
+    # -- triples ------------------------------------------------------------
+
+    def _is_own_context(self, context) -> bool:
+        return getattr(context, "identifier", context) == self.identifier
+
+    def _own_triples(self, triple_pattern) -> Iterator[_Triple]:
+        """Matches of ``triple_pattern`` in the managed graph's own context."""
+        # Memory.triples takes a context identifier as well as a Graph; its
+        # annotation only names the latter.
+        matches = self.triples(triple_pattern, self.identifier)  # type: ignore[arg-type]
+        return (triple for triple, _ in matches)
 
     def add(self, triple, context, quoted=False) -> None:
-        is_new = next(self.triples(triple, context), None) is None
+        is_new = (
+            self._is_own_context(context)
+            and next(self._own_triples(triple), None) is None
+        )
         super().add(triple, context, quoted=quoted)
         if is_new:
-            self._journal.record(True, triple)
+            self._journal.record(_TripleChange(True, triple))
 
     def remove(self, triple_pattern, context=None) -> None:
-        removed = [triple for triple, _ in self.triples(triple_pattern, context)]
+        removed: list[_Triple] = []
+        if context is None or self._is_own_context(context):
+            removed = list(self._own_triples(triple_pattern))
         super().remove(triple_pattern, context)
         for triple in removed:
-            self._journal.record(False, triple)
+            self._journal.record(_TripleChange(False, triple))
+
+    # -- prefix bindings ----------------------------------------------------
+
+    def bindings(self) -> _Bindings:
+        return tuple(
+            (prefix, namespace, prefix in self._explicit)
+            for prefix, namespace in sorted(self._ns_by_prefix.items())
+        )
+
+    def set_bindings(self, bindings: _Bindings) -> None:
+        before = self.bindings()
+        self._ns_by_prefix = {prefix: ns for prefix, ns, _ in bindings}
+        self._prefix_by_ns = {ns: prefix for prefix, ns, _ in bindings}
+        self._explicit = {prefix for prefix, _, explicit in bindings if explicit}
+        self._note_bindings(before)
+
+    def _note_bindings(self, before: _Bindings) -> None:
+        after = self.bindings()
+        if after != before:
+            self._journal.record(_BindingChange(before, after))
 
     def bind(self, prefix, namespace, override=True) -> None:
-        super().bind(prefix, namespace, override)
-        self._journal.touch()
+        before = self.bindings()
+        bound_namespace = self._ns_by_prefix.get(prefix)
+        bound_prefix = self._prefix_by_ns.get(namespace)
+        if bound_prefix is None and bound_namespace is not None:
+            bound_prefix = self._prefix_by_ns.get(bound_namespace)
+        if override:
+            if bound_prefix is not None:
+                del self._ns_by_prefix[bound_prefix]
+            if bound_namespace is not None:
+                del self._prefix_by_ns[bound_namespace]
+            self._prefix_by_ns[namespace] = prefix
+            self._ns_by_prefix[prefix] = namespace
+        else:
+            kept_namespace = namespace if bound_namespace is None else bound_namespace
+            kept_prefix = prefix if bound_prefix is None else bound_prefix
+            self._prefix_by_ns[kept_namespace] = kept_prefix
+            self._ns_by_prefix[kept_prefix] = kept_namespace
+        self._note_bindings(before)
+
+    def unbind(self, prefix: str) -> None:
+        before = self.bindings()
+        namespace = self._ns_by_prefix.pop(prefix, None)
+        if namespace is not None:
+            self._prefix_by_ns.pop(namespace, None)
+        self._explicit.discard(prefix)
+        self._note_bindings(before)
+
+    def mark_explicit(self, prefix: str) -> None:
+        """Flag a bound prefix as one the user asked for."""
+        before = self.bindings()
+        if prefix in self._ns_by_prefix:
+            self._explicit.add(prefix)
+        self._note_bindings(before)
+
+    def namespace(self, prefix: str) -> URIRef | None:
+        return self._ns_by_prefix.get(prefix)
+
+    def prefix(self, namespace: URIRef) -> str | None:
+        return self._prefix_by_ns.get(namespace)
+
+    def namespaces(self) -> Iterator[tuple[str, URIRef]]:
+        yield from self._ns_by_prefix.items()
 
 
 def _cached_on_revision[**P, R](method: Callable[P, R]) -> Callable[P, R]:
@@ -343,12 +451,6 @@ class OntologyManager:
 
         self._bind_standard_prefixes()
 
-        # Prefixes the user explicitly bound via add_prefix (prefix -> namespace).
-        # Tracked so the creation picker offers them even when the name collides
-        # with one of rdflib's auto-bound defaults (e.g. an explicit 'foaf').
-        # Reset on load/restore so it can never go stale against the graph.
-        self._user_added_prefixes: dict[str, str] = {}
-
         # Create ontology declaration
         self.ontology_uri = URIRef(base_uri.rstrip("#").rstrip("/"))
         self.graph.add((self.ontology_uri, RDF.type, OWL.Ontology))
@@ -365,19 +467,43 @@ class OntologyManager:
         return self._journal.revision
 
     def _new_graph(self) -> Graph:
-        return Graph(store=_JournalledMemory(self._journal))
+        identifier = BNode()
+        store = _JournalledMemory(self._journal, identifier)
+        return Graph(store=store, identifier=identifier)
+
+    @property
+    def _store(self) -> _JournalledMemory:
+        return cast(_JournalledMemory, self.graph.store)
+
+    @property
+    def _user_added_prefixes(self) -> dict[str, str]:
+        """Prefixes the user bound via add_prefix (prefix -> namespace).
+
+        Read off the store's explicit flag rather than kept as a record that
+        could go stale against the graph: a load starts a new store, and an
+        undo puts the flags back with the bindings. The creation picker
+        offers these even when the name collides with one of rdflib's
+        auto-bound defaults (e.g. an explicit 'foaf').
+        """
+        return {
+            prefix: str(ns)
+            for prefix, ns, explicit in self._store.bindings()
+            if explicit
+        }
 
     def _install_graph(self) -> None:
         """Replace the graph with an empty one on a journalled store.
 
-        Every triple of the outgoing graph is recorded as removed first, so an
-        undo history that spans a load or a replacing import puts the old
-        content back the same way it reverts an edit. Prefix bindings start
-        from rdflib's defaults, as they always did on a load.
+        Every triple of the outgoing graph is recorded as removed first, and
+        its bindings as cleared, so an undo history that spans a load or a
+        replacing import puts the old content back the same way it reverts
+        an edit. Prefix bindings start from rdflib's defaults, as they always
+        did on a load.
         """
         if self._journal.recording:
             for triple in self.graph:
-                self._journal.record(False, triple)
+                self._journal.record(_TripleChange(False, triple))
+            self._journal.record(_BindingChange(self._store.bindings(), ()))
         self.graph = self._new_graph()
         self._journal.touch()
 
@@ -514,25 +640,20 @@ class OntologyManager:
         ):
             namespace = namespace + "#"
         self.graph.bind(prefix, Namespace(namespace), override=True)
-        self._user_added_prefixes[prefix] = namespace
+        # The name actually bound: the namespace manager picks a numbered
+        # variant when ``prefix`` is already taken by another namespace.
+        bound = self._store.prefix(URIRef(namespace))
+        if bound is not None:
+            self._store.mark_explicit(bound)
         return namespace
 
     def remove_prefix(self, prefix: str):
         """Remove a custom prefix binding. Standard prefixes cannot be removed."""
         if prefix in self.STANDARD_PREFIXES:
             raise ValueError(f"Cannot remove standard prefix '{prefix}'")
-        self._user_added_prefixes.pop(prefix, None)
-        # rdflib NamespaceManager doesn't support unbinding directly.
-        # Rebuild the namespace manager by creating a new graph with the same triples.
-        keep = [(p, ns) for p, ns in self.graph.namespaces() if p != prefix]
-        new_graph = self._new_graph()
-        # The triples are the same before and after, so the undo history has
-        # nothing to record; the revision still moves for the binding.
-        with self._journal.paused():
-            new_graph += self.graph
-        for p, ns in keep:
-            new_graph.bind(p, ns, override=True)
-        self.graph = new_graph
+        self._store.unbind(prefix)
+        # The namespace manager caches qnames against the bindings.
+        self.graph.namespace_manager.reset()
 
     def _extract_prefixes_from_ttl(self, data: str) -> list[dict[str, str]]:
         """Extract @prefix declarations from TTL content."""
@@ -5804,7 +5925,6 @@ class OntologyManager:
             self._loaded_prefixes = self._extract_prefixes_from_jsonld(data)
         else:
             self._loaded_prefixes = []
-        self._user_added_prefixes = {}
         self._install_graph()
         self.graph.parse(data=data, format=format)
         self._update_namespace_from_graph()
@@ -6325,10 +6445,8 @@ class OntologyManager:
         """Replace the current graph with a previously captured snapshot.
 
         Snapshots are N-Triples (no prefix bindings), so custom prefixes do not
-        survive a restore; reset the explicit-prefix record to match rather
-        than leave it pointing at prefixes the restored graph no longer has.
+        survive a restore.
         """
-        self._user_added_prefixes = {}
         self._install_graph()
         self.graph.parse(data=snapshot.decode("utf-8"), format="nt")
         self._update_namespace_from_graph()
@@ -7255,14 +7373,19 @@ class UndoManager:
         if not changes:
             return
         graph = self.manager.graph
+        store = cast(_JournalledMemory, graph.store)
         with self._journal.paused():
-            for added, triple in changes if forward else reversed(changes):
-                if added == forward:
-                    graph.add(triple)
+            for change in changes if forward else reversed(changes):
+                if isinstance(change, _BindingChange):
+                    store.set_bindings(change.after if forward else change.before)
+                elif change.added == forward:
+                    graph.add(change.triple)
                 else:
-                    graph.remove(triple)
-        # The base URI follows the ontology declaration, so an undone
+                    graph.remove(change.triple)
+        # The namespace manager caches qnames against the bindings, and the
+        # base URI follows the ontology declaration, so an undone
         # set_base_uri or load moves it back too, as the snapshot restore did.
+        graph.namespace_manager.reset()
         self.manager._update_namespace_from_graph()
 
     @property
