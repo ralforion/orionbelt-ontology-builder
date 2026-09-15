@@ -1202,6 +1202,44 @@ def render_visualization():
         # string: Streamlit's expander snaps back to `expanded` whenever its
         # label changes, so a note that moves with the filter closed the panel
         # under the user on every edit (issue #267).
+        # A modifier-click in the graph requests focusing on a node: add it to
+        # the "Focus on one node" seeds and enable focus mode (issue #56), or
+        # replace them with it when the click was an Alt-click (#276). It
+        # arrives as the component's value, which Streamlit keeps under the
+        # component's key, so it is read here, ahead of the focus controls, and
+        # applied in this same run. It used to be read off the component's
+        # return value below the canvas and applied with a st.rerun(), which
+        # cost a whole second pass of the page: about a third of the time from
+        # the click to the new nodes on a 1,100-class ontology (issue #437).
+        # The reqId guard applies each click once, since the value persists
+        # across reruns. The widget key is mirrored by hand because the loop
+        # that seeds it from the setting has already run for this pass.
+        _request = st.session_state.get("graph_viewer")
+        if isinstance(_request, dict) and _request.get("focusRequest"):
+            _req_id = _request.get("reqId")
+            if _req_id and _req_id != st.session_state.get("_viz_last_focus_req"):
+                st.session_state["_viz_last_focus_req"] = _req_id
+                _id_to_label = {v: k for k, v in focus_targets.items()}
+                _focus_label = _id_to_label.get(_request.get("nodeId"))
+                if _focus_label:
+                    # Applied without a word about it. A toast confirming a
+                    # click the user just made is a second telling: the canvas
+                    # redraws to the focus, and the standing note on the Node
+                    # options label names the seeds, the depth and what is
+                    # held back, and stays there instead of fading (issues
+                    # #389, #222 follow-up). What is still said here is the
+                    # case below, where the click did nothing.
+                    _, _focus_now = viz_apply_focus_click(
+                        _focus_label, replace=bool(_request.get("replace"))
+                    )
+                    st.session_state["viz_focus_mode"] = _focus_now
+                else:
+                    st.toast(
+                        "Focus is available for classes, individuals, and "
+                        "SKOS concepts.",
+                        icon="ℹ️",
+                    )
+
         with _mode_col:
             focus_mode = st.checkbox(
                 "Focus on one node",
@@ -3193,35 +3231,8 @@ def render_visualization():
                     except (OSError, ValueError) as e:
                         st.toast(f"Could not save image: {e}", icon="⚠️")
 
-            # A modifier-click in the graph requests focusing on a node: add it
-            # to the "Focus on one node" seeds and enable focus mode (issue #56),
-            # or replace them with it when the click was an Alt-click (#276). The
-            # reqId guard ensures each click is applied once (the component value
-            # persists across reruns).
-            if isinstance(selection, dict) and selection.get("focusRequest"):
-                _req_id = selection.get("reqId")
-                if _req_id and _req_id != st.session_state.get("_viz_last_focus_req"):
-                    st.session_state["_viz_last_focus_req"] = _req_id
-                    _id_to_label = {v: k for k, v in focus_targets.items()}
-                    _focus_label = _id_to_label.get(selection.get("nodeId"))
-                    if _focus_label:
-                        # Applied without a word about it. A toast confirming a
-                        # click the user just made is a second telling: the
-                        # canvas redraws to the focus, and the standing note on
-                        # the Node options label names the seeds, the depth and
-                        # what is held back — and stays there instead of fading
-                        # (issues #389, #222 follow-up). What is still said here
-                        # is the case below, where the click did nothing.
-                        viz_apply_focus_click(
-                            _focus_label, replace=bool(selection.get("replace"))
-                        )
-                        st.rerun()
-                    else:
-                        st.toast(
-                            "Focus is available for classes, individuals, and "
-                            "SKOS concepts.",
-                            icon="ℹ️",
-                        )
+            # A modifier-click's focus request is applied above the focus
+            # controls, from the value Streamlit keeps for the component.
 
             # Status bar outside iframe — dark styled
             # The selection was already captured (from the component's current
