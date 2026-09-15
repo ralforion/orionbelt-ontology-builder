@@ -787,6 +787,12 @@ if (doc) {
 #: Enter, and is left alone. Only where Enter does nothing today, too — with the
 #: list open, something typed, and no option highlighted — so nothing that works
 #: is taken over, form submission included.
+#:
+#: The arrow keys follow the same rule. With a query typed, the first Down
+#: stop is the first match, the row Enter takes, and the bulk row sits above
+#: it, one Up away. Without that, Down landed on "Select N matches" first,
+#: which read as the row that had been current all along, and Enter from
+#: there selected every match (issue #438).
 # SELECT_ALL_NOTE
 # Why a few multiselects are drawn without their "Select N matches" row.
 #
@@ -834,22 +840,57 @@ if (doc) {
     return null;
   }
 
+  // The multiselect input the shim speaks for, when ``event`` is a key in
+  // one with the list open, something typed, and no option highlighted by
+  // the arrow keys. Every other case react-aria answers itself.
+  function openMultiselectInput(event) {
+    var input = event.target;
+    if (!input || !input.getAttribute) return null;
+    if (input.getAttribute('role') !== 'combobox') return null;
+    if (!input.closest('[data-testid="stMultiSelect"]')) return null;
+    if (!input.value) return null;
+    if (input.getAttribute('aria-expanded') !== 'true') return null;
+    if (input.getAttribute('aria-activedescendant')) return null;
+    return input;
+  }
+
   function onEnter(event) {
     if (event.key !== 'Enter' || event.defaultPrevented) return;
-    var input = event.target;
-    if (!input || !input.getAttribute) return;
-    if (input.getAttribute('role') !== 'combobox') return;
-    if (!input.closest('[data-testid="stMultiSelect"]')) return;
-    // Nothing typed, list closed, or an option already highlighted by the arrow
-    // keys: all cases react-aria answers itself.
-    if (!input.value) return;
-    if (input.getAttribute('aria-expanded') !== 'true') return;
-    if (input.getAttribute('aria-activedescendant')) return;
+    var input = openMultiselectInput(event);
+    if (!input) return;
     var option = firstMatch();
     if (!option) return;
     event.preventDefault();
     event.stopPropagation();
     option.click();
+  }
+
+  // The first Down with a query typed lands on the first match, not on the
+  // bulk row above it (issue #438). react-aria takes the press to the bulk
+  // row as usual; once it has, one more press moves on. The bulk row stays
+  // one Up away. Only a press from the keyboard is followed up, so the
+  // press this sends is not followed up again.
+  function onArrowDown(event) {
+    if (event.key !== 'ArrowDown' || event.defaultPrevented || !event.isTrusted) return;
+    var input = openMultiselectInput(event);
+    if (!input) return;
+    var options = doc.querySelectorAll('[role="option"]');
+    if (!options.length) return;
+    var head = options[0].getAttribute('data-key');
+    if (head === null || !SENTINEL.test(head)) return;
+    if (!firstMatch()) return;
+    setTimeout(function () {
+      var active = input.getAttribute('aria-activedescendant') || '';
+      if (!SENTINEL.test(active.replace(/^.*-option-/, ''))) return;
+      input.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowDown', code: 'ArrowDown', bubbles: true, cancelable: true
+      }));
+    }, 0);
+  }
+
+  function onKeyDown(event) {
+    onEnter(event);
+    onArrowDown(event);
   }
 
   // Replaced rather than stacked: this frame is re-created whenever its
@@ -858,9 +899,9 @@ if (doc) {
   if (doc.__orionbeltEnterShim) {
     try { doc.removeEventListener('keydown', doc.__orionbeltEnterShim, true); } catch (e) {}
   }
-  doc.__orionbeltEnterShim = onEnter;
+  doc.__orionbeltEnterShim = onKeyDown;
   // Capture, so it runs before react-aria's own handler closes the list.
-  doc.addEventListener('keydown', onEnter, true);
+  doc.addEventListener('keydown', onKeyDown, true);
 }
 """
 

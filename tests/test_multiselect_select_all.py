@@ -69,3 +69,24 @@ def test_the_shim_is_what_makes_the_row_safe_to_keep():
     ui = (VIEWS.parent / "ui.py").read_text(encoding="utf-8")
     assert "SELECT_ALL_NOTE" in ui
     assert re.search(r"var SENTINEL = /\^__\.\*__\$/", ui), "the bulk rows are skipped"
+
+
+def test_the_first_arrow_stop_is_the_first_match():
+    """With a query typed, Down lands where Enter goes, not on the bulk row.
+
+    The bulk row is drawn first and tinted, so it reads as the current row;
+    a Down meant to reach the first match landed on it instead, and Enter from
+    there selected every match (issue #438). The shim follows react-aria's own
+    press with one more, and only for a press from the keyboard, so the press
+    it sends is not followed up again.
+    """
+    ui = (VIEWS.parent / "ui.py").read_text(encoding="utf-8")
+    shim = ui[
+        ui.index('_ENTER_INSERTS_JS = r"""') : ui.index(
+            '"""', ui.index('_ENTER_INSERTS_JS = r"""') + 24
+        )
+    ]
+    assert "function onArrowDown(event)" in shim
+    assert "!event.isTrusted" in shim, "a synthetic press must not be followed up"
+    assert "SENTINEL.test(head)" in shim, "only a bulk row at the head is skipped"
+    assert "doc.addEventListener('keydown', onKeyDown, true)" in shim

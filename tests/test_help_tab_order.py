@@ -242,7 +242,7 @@ def test_enter_is_left_alone_wherever_it_already_does_something():
     answers all three itself, and a form's Enter must still submit."""
     js = ui._ENTER_INSERTS_JS
     for guard in (
-        "if (!input.value) return;",
+        "if (!input.value) return null;",
         "aria-expanded",
         "aria-activedescendant",
         "event.defaultPrevented",
@@ -260,7 +260,7 @@ def test_the_handler_replaces_itself_rather_than_stacking():
 
 def test_the_handler_runs_before_react_aria_closes_the_list():
     js = ui._ENTER_INSERTS_JS
-    assert "addEventListener('keydown', onEnter, true)" in js, "capture phase"
+    assert "addEventListener('keydown', onKeyDown, true)" in js, "capture phase"
 
 
 def test_both_shims_ride_in_one_frame():
