@@ -1106,6 +1106,30 @@ function renderGraph(args) {
     }
     var nodeHash = _hash(nodeArr.map(function(n) { return n.id; }).sort().join('|'));
 
+    // Start a node that has no cached position beside a neighbour that has one,
+    // so physics settles it in a few iterations instead of dragging it in from
+    // a random corner. New nodes take successive points of a sunflower spiral
+    // (golden angle, radius growing with the square root of the count), so a
+    // hub that reveals hundreds of subclasses spreads them evenly around it
+    // rather than stacking them on one ring. The offsets are deterministic, so
+    // a re-render of the same reveal lands the same way.
+    function _seedBesidePlaced(nodeArr, pos) {
+        var neighbour = {};
+        edges.get().forEach(function(e) {
+            if (pos[e.from] && !pos[e.to] && !neighbour[e.to]) { neighbour[e.to] = pos[e.from]; }
+            if (pos[e.to] && !pos[e.from] && !neighbour[e.from]) { neighbour[e.from] = pos[e.to]; }
+        });
+        var k = 0;
+        nodeArr.forEach(function(n) {
+            var at = neighbour[n.id];
+            if (!at || pos[n.id]) { return; }
+            var angle = k * 2.399963;
+            var radius = 40 * Math.sqrt(++k);
+            n.x = at.x + radius * Math.cos(angle);
+            n.y = at.y + radius * Math.sin(angle);
+        });
+    }
+
     // --- Find & centre pin (issues #144, #195) ----------------------------
     // Resolve the pin *before* the physics options are built: when a pick is
     // active the camera belongs to that node, so vis's post-stabilization
@@ -1198,8 +1222,16 @@ function renderGraph(args) {
         // their pinned subject.
         var _keptAll = Object.keys(_raw.pos).length === pinnedIds.length;
         var _hold = !!savedView && (_keptAll || _carried);
-        var iters2 = Math.min(Math.max(nCount * 3, 150), 500);
-        options.physics.stabilization = { enabled: true, iterations: Math.max(iters2 - 40, 80), updateInterval: 50, fit: !_pin && !_hold };
+        // Physics only has the new nodes to place, so the pass is sized by them
+        // rather than by the whole graph. It used to run up to 460 iterations
+        // over every node: a Ctrl-click that revealed five classes in a
+        // 150-node view ran 410, and in the desktop webview that was the
+        // half-second freeze of issue #437. The pinned nodes still take part in
+        // the forces, which is what keeps the new ones from overlapping them.
+        _seedBesidePlaced(nodeArr, _raw.pos);
+        var newCount = nCount - pinnedIds.length;
+        var iters2 = Math.min(Math.max(newCount * 3, 60), 200);
+        options.physics.stabilization = { enabled: true, iterations: iters2, updateInterval: 50, fit: !_pin && !_hold };
     } else {
         // Fresh layout (Render, or nothing cached): deterministic thanks to the
         // pinned randomSeed set in Python (issue #141).
