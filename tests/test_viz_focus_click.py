@@ -208,8 +208,8 @@ def test_a_focus_click_is_not_announced():
     which does not render under AppTest.
     """
     src = sources.viz_text()
-    branch = src[src.index('selection.get("focusRequest")') :]
-    branch = branch[: branch.index("# Status bar outside iframe")]
+    branch = src[src.index('_request.get("focusRequest")') :]
+    branch = branch[: branch.index("with _mode_col:")]
 
     assert "viz_apply_focus_click(" in branch, "the click must still be applied"
     assert 'icon="🎯"' not in branch

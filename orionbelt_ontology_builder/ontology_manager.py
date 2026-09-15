@@ -3120,10 +3120,19 @@ class OntologyManager:
 
         return True
 
+    @_cached_on_revision
+    def namespace_bindings(self) -> list[tuple[str, str]]:
+        """The graph's prefix bindings as ``(prefix, namespace)`` strings.
+
+        Memoised on the revision, which moves on every bind, so a lookup that
+        runs once per entity (the graph's filters do it for every class on
+        every rerun) reads a list instead of asking the store each time.
+        """
+        return [(prefix, str(ns)) for prefix, ns in self.graph.namespaces()]
+
     def _get_prefix_for_uri(self, uri: str) -> str:
         """Get the prefix for a URI if bound in the graph."""
-        for prefix, namespace in self.graph.namespaces():
-            ns_str = str(namespace)
+        for prefix, ns_str in self.namespace_bindings():
             if uri.startswith(ns_str):
                 return prefix if prefix else "(default)"
         return ""

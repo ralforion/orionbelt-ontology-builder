@@ -3281,8 +3281,7 @@ def _prefix_for_uri(uri: str) -> str:
     # Find the longest namespace whose URI is a prefix of the resource URI
     best_prefix = ""
     best_ns_len = 0
-    for prefix, ns in ont.graph.namespaces():
-        ns_str = str(ns)
+    for prefix, ns_str in ont.namespace_bindings():
         if uri.startswith(ns_str) and len(ns_str) > best_ns_len:
             best_prefix = prefix
             best_ns_len = len(ns_str)
