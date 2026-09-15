@@ -20,7 +20,7 @@ from typing import Any, ClassVar, cast
 import owlrl
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
-from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD
+from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD, NamespaceManager
 from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
@@ -652,8 +652,19 @@ class OntologyManager:
         if prefix in self.STANDARD_PREFIXES:
             raise ValueError(f"Cannot remove standard prefix '{prefix}'")
         self._store.unbind(prefix)
-        # The namespace manager caches qnames against the bindings.
-        self.graph.namespace_manager.reset()
+        self._forget_qnames()
+
+    def _forget_qnames(self) -> None:
+        """Drop the namespace manager's qname caches after a binding went away.
+
+        A fresh manager over the same store is the only complete reset:
+        ``NamespaceManager.reset`` clears the general cache but not the strict
+        one the RDF/XML serializer uses, which would keep splitting a URI at a
+        boundary that belonged to the removed binding.
+        """
+        self.graph.namespace_manager = NamespaceManager(
+            self.graph, bind_namespaces="none"
+        )
 
     def _extract_prefixes_from_ttl(self, data: str) -> list[dict[str, str]]:
         """Extract @prefix declarations from TTL content."""
@@ -7382,10 +7393,9 @@ class UndoManager:
                     graph.add(change.triple)
                 else:
                     graph.remove(change.triple)
-        # The namespace manager caches qnames against the bindings, and the
-        # base URI follows the ontology declaration, so an undone
+        # The base URI follows the ontology declaration, so an undone
         # set_base_uri or load moves it back too, as the snapshot restore did.
-        graph.namespace_manager.reset()
+        self.manager._forget_qnames()
         self.manager._update_namespace_from_graph()
 
     @property
