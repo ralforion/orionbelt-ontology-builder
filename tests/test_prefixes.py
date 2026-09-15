@@ -185,3 +185,28 @@ class TestDefaultPrefix:
         om.set_base_uri("http://acme.example/onto#")
         result = sparql.run_query(om.graph, "SELECT ?p WHERE { :Event ?p ?o }")
         assert result.rows
+
+
+def test_removed_prefix_does_not_linger_in_xml_export():
+    """The RDF/XML serializer keeps its own qname cache. After a generated
+    prefix is removed and its name reused for another namespace, a predicate
+    that was split against the old binding must keep its URI."""
+    from rdflib import Graph, Literal, URIRef
+
+    om = OntologyManager("http://example.org/ont#")
+    predicate = URIRef("http://example.org/p#123label")
+    om.graph.add((URIRef("http://example.org/ont#Thing"), predicate, Literal("x")))
+    first = om.export_to_string("xml")
+    # The strict split lands the boundary after the digits.
+    generated = next(
+        p for p, ns in om.graph.namespaces() if str(ns) == "http://example.org/p#123"
+    )
+    om.remove_prefix(generated)
+    om.add_prefix(generated, "http://other.example/")
+    other = URIRef("http://other.example/name")
+    om.graph.add((URIRef("http://example.org/ont#Thing"), other, Literal("y")))
+    second = om.export_to_string("xml")
+    assert predicate in {p for _, p, _ in Graph().parse(data=first, format="xml")}
+    assert {predicate, other} <= {
+        p for _, p, _ in Graph().parse(data=second, format="xml")
+    }
