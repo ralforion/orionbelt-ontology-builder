@@ -1331,6 +1331,19 @@ function renderGraph(args) {
     }
     network.on('dragStart', _releaseFindPin);
     network.on('click', _releaseFindPin);
+    // A drag or a zoom while physics is still settling is the user taking the
+    // camera. vis fits the whole graph when the pass ends, which snatched it
+    // back: a pan made in that window was undone a moment later and read as
+    // "dragging zooms the graph in". Released the way the Find pin is, so the
+    // fit only happens when nobody has moved the view yet.
+    var settling = !usedSaved;
+    function _cancelSettleFit() {
+        if (!settling) return;
+        settling = false;
+        try { network.setOptions({ physics: { stabilization: { fit: false } } }); } catch (e) {}
+    }
+    network.on('dragStart', _cancelSettleFit);
+    network.on('zoom', _cancelSettleFit);
     // Is this render's pin still the live one? Deferred centring (below) runs a
     // second or more after the render, by which time the user may have taken
     // control or picked something else, so it has to re-read the shared state
@@ -1361,6 +1374,7 @@ function renderGraph(args) {
     network.on('zoom', scheduleSave);
     if (!usedSaved) {
         network.once('stabilizationIterationsDone', function() {
+            settling = false;
             setTimeout(function() {
                 network.setOptions({ physics: { enabled: false } });
                 // Release the frozen-existing pins now that physics is off (so
