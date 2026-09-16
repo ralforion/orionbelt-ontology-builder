@@ -179,9 +179,33 @@ def test_the_text_is_put_where_a_screen_reader_meets_it():
 
 
 def test_the_wiring_is_redone_when_the_page_under_it_changes():
-    """Streamlit rebuilds its DOM on every rerun while this frame is mounted
-    once, so without the observer the fix survives exactly one render."""
+    """Streamlit rebuilds its DOM on every rerun, so without the observer the
+    fix survives exactly one render."""
     assert "MutationObserver" in ui._HELP_WIRING_JS
+
+
+def test_the_observer_replaces_itself_and_lets_go_on_unload():
+    """The frame is re-created whenever its arguments change, and an observer
+    left on the parent by a frame that is gone never delivers again: it keeps
+    that frame's document alive and queues a record for every node Streamlit
+    removes on every later rerun, which nothing drains (issue #437). So the
+    new frame disconnects the last one's observer, and each frame disconnects
+    its own when it is unloaded."""
+    js = ui._HELP_WIRING_JS
+    assert "doc.__orionbeltHelpObserver" in js
+    assert "previous.disconnect()" in js
+    assert "addEventListener('pagehide'" in js
+    assert "observer.disconnect()" in js
+
+
+def test_a_page_cached_for_back_forward_keeps_both_shims():
+    """pagehide also fires on the way into the back/forward cache, and a page
+    restored from it comes back with its frames intact but does not run their
+    scripts again. Releasing there would leave the restored page with no help
+    wiring and no Enter override. Both handlers stand down on ``persisted``."""
+    for js in (ui._HELP_WIRING_JS, ui._ENTER_INSERTS_JS):
+        assert "'pagehide', function (event)" in js
+        assert "if (event.persisted) return;" in js
 
 
 def test_the_selectors_are_not_built_from_label_text():
@@ -256,6 +280,9 @@ def test_the_handler_replaces_itself_rather_than_stacking():
     js = ui._ENTER_INSERTS_JS
     assert "removeEventListener('keydown'" in js
     assert "__orionbeltEnterShim" in js
+    # And a frame that is never replaced still takes its handler with it.
+    assert "addEventListener('pagehide'" in js
+    assert "removeEventListener('keydown', onKeyDown, true)" in js
 
 
 def test_the_handler_runs_before_react_aria_closes_the_list():

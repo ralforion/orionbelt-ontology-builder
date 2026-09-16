@@ -763,11 +763,32 @@ if (doc) {
   }
 
   apply();
-  // Streamlit rebuilds its DOM on every rerun and this frame is mounted once,
-  // so the work is redone whenever the page under it changes. Batched, because
-  // a rerun lands as a burst of mutations.
+  // Streamlit rebuilds its DOM on every rerun, so the work is redone whenever
+  // the page under it changes. Batched, because a rerun lands as a burst of
+  // mutations.
+  //
+  // The observer is replaced rather than stacked, and let go of when this
+  // frame is unloaded. The frame is re-created whenever its arguments change,
+  // which on a busy page is most reruns, and an observer left on the parent
+  // by a frame that is gone never delivers again: it keeps that frame's whole
+  // document alive, and it queues a record for every node Streamlit removes
+  // on every later rerun, which nothing drains. Measured on the Visualization
+  // page as one retained frame and a few hundred retained nodes per rerun,
+  // for as long as the tab lived (issue #437).
   try {
-    new MutationObserver(schedule).observe(doc.body, {childList: true, subtree: true});
+    var previous = doc.__orionbeltHelpObserver;
+    if (previous) { try { previous.disconnect(); } catch (e) {} }
+    var observer = new MutationObserver(schedule);
+    observer.observe(doc.body, {childList: true, subtree: true});
+    doc.__orionbeltHelpObserver = observer;
+    // Not on the way into the back/forward cache: a cached page comes back
+    // with its whole tree, this frame and its registrations included, and
+    // its scripts do not run again to put anything back.
+    window.addEventListener('pagehide', function (event) {
+      if (event.persisted) return;
+      try { observer.disconnect(); } catch (e) {}
+      if (doc.__orionbeltHelpObserver === observer) doc.__orionbeltHelpObserver = null;
+    });
   } catch (e) {}
 }
 """
@@ -902,6 +923,14 @@ if (doc) {
   doc.__orionbeltEnterShim = onKeyDown;
   // Capture, so it runs before react-aria's own handler closes the list.
   doc.addEventListener('keydown', onKeyDown, true);
+  // And let go on the way out, so a frame that is not replaced (the last
+  // one before the tab closes, or a page that mounts none) leaves nothing
+  // behind either.
+  window.addEventListener('pagehide', function (event) {
+    if (event.persisted) return;  // cached for back/forward, see the help wiring
+    try { doc.removeEventListener('keydown', onKeyDown, true); } catch (e) {}
+    if (doc.__orionbeltEnterShim === onKeyDown) doc.__orionbeltEnterShim = null;
+  });
 }
 """
 
