@@ -198,6 +198,16 @@ def test_the_observer_replaces_itself_and_lets_go_on_unload():
     assert "observer.disconnect()" in js
 
 
+def test_a_page_cached_for_back_forward_keeps_both_shims():
+    """pagehide also fires on the way into the back/forward cache, and a page
+    restored from it comes back with its frames intact but does not run their
+    scripts again. Releasing there would leave the restored page with no help
+    wiring and no Enter override. Both handlers stand down on ``persisted``."""
+    for js in (ui._HELP_WIRING_JS, ui._ENTER_INSERTS_JS):
+        assert "'pagehide', function (event)" in js
+        assert "if (event.persisted) return;" in js
+
+
 def test_the_selectors_are_not_built_from_label_text():
     """A label carrying a quote would have to be escaped into a selector, and
     the escaping is the part that breaks silently."""

@@ -781,7 +781,11 @@ if (doc) {
     var observer = new MutationObserver(schedule);
     observer.observe(doc.body, {childList: true, subtree: true});
     doc.__orionbeltHelpObserver = observer;
-    window.addEventListener('pagehide', function () {
+    // Not on the way into the back/forward cache: a cached page comes back
+    // with its whole tree, this frame and its registrations included, and
+    // its scripts do not run again to put anything back.
+    window.addEventListener('pagehide', function (event) {
+      if (event.persisted) return;
       try { observer.disconnect(); } catch (e) {}
       if (doc.__orionbeltHelpObserver === observer) doc.__orionbeltHelpObserver = null;
     });
@@ -922,7 +926,8 @@ if (doc) {
   // And let go on the way out, so a frame that is not replaced (the last
   // one before the tab closes, or a page that mounts none) leaves nothing
   // behind either.
-  window.addEventListener('pagehide', function () {
+  window.addEventListener('pagehide', function (event) {
+    if (event.persisted) return;  // cached for back/forward, see the help wiring
     try { doc.removeEventListener('keydown', onKeyDown, true); } catch (e) {}
     if (doc.__orionbeltEnterShim === onKeyDown) doc.__orionbeltEnterShim = null;
   });
