@@ -228,12 +228,27 @@ def test_the_field_is_found_from_the_icon_not_from_the_label():
 # --- Enter takes the first match again (issue #384) --------------------------
 
 
-def test_enter_is_only_taken_over_in_a_multiselect():
-    """The single selectbox still commits its first match on Enter in 1.62, so
-    it is left alone; the multiselect is the one that stopped."""
+def test_enter_is_taken_over_in_a_multiselect_and_a_creatable_selectbox():
+    """The plain selectbox still commits its first match on Enter, so it is
+    left alone. The multiselect stopped in 1.62, and a selectbox that accepts
+    new options commits the typed text as a new option in 1.63 (issue #447):
+    ``com`` and Enter in "Annotation Type" made a type called ``com`` rather
+    than picking ``rdfs:comment``. The "Add: …" row is what tells the two
+    selectboxes apart, so a selectbox is only taken over when the list holds
+    a sentinel row."""
     js = ui._ENTER_INSERTS_JS
-    assert '[data-testid="stMultiSelect"]' in js
-    assert "stSelectbox" not in js
+    assert '[data-testid="stMultiSelect"], [data-testid="stSelectbox"]' in js
+    assert "function hasSentinelRow()" in js
+    assert "if (!isMultiselect(input) && !hasSentinelRow()) return;" in js
+
+
+def test_the_down_rule_stays_with_the_multiselect():
+    """A creatable selectbox lists its "Add: …" row last, so its first Down
+    already lands on the first match; only the multiselect puts a bulk row at
+    the head."""
+    js = ui._ENTER_INSERTS_JS
+    down = js[js.index("function onArrowDown(event)") :]
+    assert "if (!input || !isMultiselect(input)) return;" in down
 
 
 def test_the_bulk_row_is_not_what_enter_takes():
