@@ -21,9 +21,13 @@ This reuses the same in-package Streamlit entry script as the console launcher
 
 import importlib.util
 import logging
+import multiprocessing
 import os
+import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from .app import APP_NAME
@@ -243,6 +247,97 @@ def _install_window_bridges(app_name: str):
     return original_create
 
 
+#: How long the server child waits for Streamlit's own SIGTERM handling before
+#: it exits outright. A daemon thread, so a normal shutdown never waits on it.
+_EXIT_GRACE_SECONDS = 5.0
+
+# The original ``streamlit_desktop_app.core.run_streamlit``, kept while
+# :func:`_run_streamlit_watched` stands in for it. Under ``fork`` the child
+# inherits this binding; under ``spawn`` (macOS, Windows) the child imports this
+# module afresh, finds ``None``, and takes the library's own, unpatched function.
+_original_run_streamlit = None
+
+
+def _exit_with_launcher() -> None:
+    """Block until the launcher process is gone, then stop this server.
+
+    Runs on a daemon thread inside the Streamlit server child. The library
+    stops the server from a ``finally`` once the window closes, which covers a
+    normal close, Sway's ``kill`` binding included. It does not cover the
+    launcher dying before it gets there: the compositor going away at logout
+    (Qt and GTK exit hard when the Wayland connection breaks), a webview crash
+    on a heavy render, or a SIGKILL. The server then lived on with the whole
+    app and ontology in memory, one idle process per incident, and survived
+    logout because logind does not kill user processes by default (issue #437).
+
+    The parent sentinel is a pipe the launcher holds, so waiting on it works
+    under ``fork``, under ``forkserver`` (the Python 3.14 default on Linux,
+    where the child's OS parent is the forkserver rather than the launcher),
+    and under ``spawn``. The stop is the same SIGTERM the library sends on a
+    normal close, so Streamlit shuts down through its own handler; if that has
+    not ended the process after a grace period, exit outright.
+    """
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+    parent.join()
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except OSError:
+        logger.debug("SIGTERM to self failed; exiting outright", exc_info=True)
+        os._exit(1)
+    time.sleep(_EXIT_GRACE_SECONDS)
+    os._exit(1)
+
+
+def _run_streamlit_watched(script_path: str, options: dict) -> None:
+    """The server child's target: the library's ``run_streamlit`` plus a watchdog.
+
+    Module level, and looked up by name, so ``multiprocessing`` can pickle it
+    for a ``spawn`` start. The thread is a daemon: it never keeps the process
+    alive once the server has stopped on its own.
+    """
+    threading.Thread(
+        target=_exit_with_launcher, name="orionbelt-exit-with-launcher", daemon=True
+    ).start()
+    original = _original_run_streamlit
+    if original is None:
+        from streamlit_desktop_app import core
+
+        original = core.run_streamlit
+    original(script_path, options)
+
+
+def _install_server_watchdog():
+    """Point the library's server target at :func:`_run_streamlit_watched`.
+
+    ``start_desktop_app`` looks the target up on its module at call time, so
+    rebinding it there is enough. Returns the original for restoration, or
+    ``None`` when there is nothing to hook (an older library, or the stub in
+    tests), in which case the launch proceeds without the watchdog.
+    """
+    global _original_run_streamlit
+    try:
+        from streamlit_desktop_app import core
+    except ImportError:
+        logger.debug("streamlit_desktop_app.core not importable; no watchdog")
+        return None
+    original = getattr(core, "run_streamlit", None)
+    if original is None:
+        return None
+    _original_run_streamlit = original
+    core.run_streamlit = _run_streamlit_watched
+    return original
+
+
+def _restore_server_target(original) -> None:
+    global _original_run_streamlit
+    from streamlit_desktop_app import core
+
+    core.run_streamlit = original
+    _original_run_streamlit = None
+
+
 def run() -> None:
     """Launch the app in a native desktop window.
 
@@ -302,6 +397,9 @@ def run() -> None:
     # Wire the native bridges: mirror the page title onto the window (issue #90)
     # and route the page's clipboard writes to the OS clipboard (issue #120).
     original_create_window = _install_window_bridges(APP_NAME)
+    # Have the server child stop itself when this process dies without reaching
+    # the library's own cleanup (issue #437).
+    original_run_streamlit = _install_server_watchdog()
     try:
         start_desktop_app(
             script_path=str(entry),
@@ -314,6 +412,8 @@ def run() -> None:
         webview.start = original_start
         if original_create_window is not None:
             webview.create_window = original_create_window
+        if original_run_streamlit is not None:
+            _restore_server_target(original_run_streamlit)
 
 
 if __name__ == "__main__":
