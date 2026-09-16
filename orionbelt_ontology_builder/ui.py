@@ -804,10 +804,16 @@ if (doc) {
 #: N matches" row, so the obvious recovery selects *every* match instead of the
 #: one that was wanted.
 #:
-#: Only the multiselect: the single selectbox still commits its first match on
-#: Enter, and is left alone. Only where Enter does nothing today, too — with the
-#: list open, something typed, and no option highlighted — so nothing that works
-#: is taken over, form submission included.
+#: The multiselect, and the selectbox that accepts new options. A plain
+#: selectbox still commits its first match on Enter and is left alone; one
+#: with ``accept_new_options`` commits the typed text as a new option instead,
+#: so ``com`` and Enter in "Annotation Type" made a type called ``com`` rather
+#: than picking ``rdfs:comment``, and ``engl`` in a Language field made a tag
+#: ``engl`` (issue #447). Only where Enter does the wrong thing or nothing
+#: today, too — with the list open, something typed, and no option
+#: highlighted — so nothing that works is taken over, form submission
+#: included. The "Add: …" row stays one Down away for a name that is meant
+#: to be new.
 #:
 #: The arrow keys follow the same rule. With a query typed, the first Down
 #: stop is the first match, the row Enter takes, and the bulk row sits above
@@ -861,24 +867,48 @@ if (doc) {
     return null;
   }
 
-  // The multiselect input the shim speaks for, when ``event`` is a key in
-  // one with the list open, something typed, and no option highlighted by
-  // the arrow keys. Every other case react-aria answers itself.
-  function openMultiselectInput(event) {
+  // Whether any row in the open list is a sentinel: a bulk row in a
+  // multiselect, or the "Add: …" row a selectbox that accepts new options
+  // shows for text that is not already an option. A plain selectbox has no
+  // such row, and its Enter already takes the first match, so the shape of
+  // the list is what tells the two selectboxes apart.
+  function hasSentinelRow() {
+    var options = doc.querySelectorAll('[role="option"]');
+    for (var i = 0; i < options.length; i++) {
+      var key = options[i].getAttribute('data-key');
+      if (key !== null && SENTINEL.test(key)) return true;
+    }
+    return false;
+  }
+
+  // The picker input the shim speaks for, when ``event`` is a key in a
+  // multiselect or a selectbox with the list open, something typed, and no
+  // option highlighted by the arrow keys. Every other case react-aria
+  // answers itself.
+  function openPickerInput(event) {
     var input = event.target;
     if (!input || !input.getAttribute) return null;
     if (input.getAttribute('role') !== 'combobox') return null;
-    if (!input.closest('[data-testid="stMultiSelect"]')) return null;
+    if (!input.closest('[data-testid="stMultiSelect"], [data-testid="stSelectbox"]')) return null;
     if (!input.value) return null;
     if (input.getAttribute('aria-expanded') !== 'true') return null;
     if (input.getAttribute('aria-activedescendant')) return null;
     return input;
   }
 
+  function isMultiselect(input) {
+    return !!input.closest('[data-testid="stMultiSelect"]');
+  }
+
   function onEnter(event) {
     if (event.key !== 'Enter' || event.defaultPrevented) return;
-    var input = openMultiselectInput(event);
+    var input = openPickerInput(event);
     if (!input) return;
+    // A selectbox is only taken over where its own Enter goes wrong: with
+    // an "Add: …" row in the list, Streamlit 1.63 commits the typed text as
+    // a new option over the first match (issue #447). Without that row it
+    // takes the first match itself and is left alone.
+    if (!isMultiselect(input) && !hasSentinelRow()) return;
     var option = firstMatch();
     if (!option) return;
     event.preventDefault();
@@ -893,8 +923,8 @@ if (doc) {
   // press this sends is not followed up again.
   function onArrowDown(event) {
     if (event.key !== 'ArrowDown' || event.defaultPrevented || !event.isTrusted) return;
-    var input = openMultiselectInput(event);
-    if (!input) return;
+    var input = openPickerInput(event);
+    if (!input || !isMultiselect(input)) return;
     var options = doc.querySelectorAll('[role="option"]');
     if (!options.length) return;
     var head = options[0].getAttribute('data-key');
