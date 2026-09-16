@@ -2,7 +2,9 @@
 
 import importlib.util
 import os
+import signal
 import sys
+import threading
 import types
 from importlib.metadata import entry_points
 
@@ -405,3 +407,151 @@ def test_run_without_dependency_exits_cleanly(monkeypatch):
         desktop.run()
 
     assert excinfo.value.code == 1
+
+
+def _stub_desktop_library(monkeypatch, start_desktop_app):
+    """Install a fake ``streamlit_desktop_app`` with a ``core.run_streamlit``."""
+    fake_core = types.ModuleType("streamlit_desktop_app.core")
+    fake_core.run_streamlit = lambda script_path, options: None
+    fake_sda = types.ModuleType("streamlit_desktop_app")
+    fake_sda.core = fake_core
+    fake_sda.start_desktop_app = start_desktop_app
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_sda)
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app.core", fake_core)
+    fake_webview = types.ModuleType("webview")
+    fake_webview.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+    return fake_core
+
+
+def test_run_installs_the_server_watchdog_for_the_launch(monkeypatch, tmp_path):
+    """The library's server target is the watched one during the launch only.
+
+    The launcher's ``finally`` stops the server on a normal close, but not when
+    the launcher dies first (logout, a webview crash, SIGKILL), which left an
+    idle server behind each time (issue #437). ``start_desktop_app`` looks the
+    target up on its module at call time, so it is rebound there for the call
+    and restored afterwards, even when the launch raises.
+    """
+    seen = {}
+
+    def _start_desktop_app(**kwargs):
+        from streamlit_desktop_app import core
+
+        seen["target"] = core.run_streamlit
+        seen["kept"] = desktop._original_run_streamlit
+        raise RuntimeError("window backend failed")
+
+    fake_core = _stub_desktop_library(monkeypatch, _start_desktop_app)
+    original = fake_core.run_streamlit
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
+    with pytest.raises(RuntimeError):
+        desktop.run()
+
+    assert seen["target"] is desktop._run_streamlit_watched
+    assert seen["kept"] is original
+    assert fake_core.run_streamlit is original
+    assert desktop._original_run_streamlit is None
+
+
+def test_run_tolerates_a_library_without_the_server_target(monkeypatch, tmp_path):
+    """No ``core.run_streamlit`` (an older library, a stub): launch without it."""
+    called = {}
+    fake_module = types.ModuleType("streamlit_desktop_app")
+    fake_module.start_desktop_app = lambda **kwargs: called.setdefault("ok", True)
+    monkeypatch.setitem(sys.modules, "streamlit_desktop_app", fake_module)
+    fake_webview = types.ModuleType("webview")
+    fake_webview.start = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+    monkeypatch.setattr(desktop, "data_dir", lambda: tmp_path)
+    monkeypatch.delenv(ENV_FLAG, raising=False)
+
+    desktop.run()
+
+    assert called["ok"] is True
+    assert desktop._original_run_streamlit is None
+
+
+class _FakeParent:
+    """Stands in for ``multiprocessing.parent_process()``: gone once ``ended`` is set."""
+
+    def __init__(self):
+        self.ended = threading.Event()
+
+    def join(self, timeout=None):
+        self.ended.wait(timeout)
+
+
+def test_watched_server_runs_the_original_and_stops_when_the_launcher_dies(
+    monkeypatch,
+):
+    """The child runs the library's server, and its watchdog waits on the parent.
+
+    Nothing happens while the launcher lives; once its sentinel closes the
+    child sends itself the SIGTERM the library uses on a normal close, so
+    Streamlit shuts down through its own handler.
+    """
+    ran = {}
+    stopped = threading.Event()
+    sent = {}
+    parent = _FakeParent()
+
+    def _run_streamlit(script_path, options):
+        ran["args"] = (script_path, options)
+
+    def _kill(pid, sig):
+        sent["pid"], sent["sig"] = pid, sig
+        stopped.set()
+
+    monkeypatch.setattr(desktop, "_original_run_streamlit", _run_streamlit)
+    monkeypatch.setattr(desktop.multiprocessing, "parent_process", lambda: parent)
+    monkeypatch.setattr(desktop.os, "kill", _kill)
+    monkeypatch.setattr(desktop.os, "_exit", lambda code: None)
+    monkeypatch.setattr(desktop, "_EXIT_GRACE_SECONDS", 0)
+
+    desktop._run_streamlit_watched("entry.py", {"server.port": "1"})
+
+    assert ran["args"] == ("entry.py", {"server.port": "1"})
+    watchdogs = [
+        t for t in threading.enumerate() if t.name == "orionbelt-exit-with-launcher"
+    ]
+    assert len(watchdogs) == 1 and watchdogs[0].daemon
+    assert not stopped.wait(0.2)
+
+    parent.ended.set()
+
+    assert stopped.wait(5)
+    assert sent == {"pid": os.getpid(), "sig": signal.SIGTERM}
+    watchdogs[0].join(5)
+
+
+def test_watched_server_takes_the_library_target_in_a_spawned_child(monkeypatch):
+    """Under ``spawn`` the child imports this module afresh, with nothing kept.
+
+    It must then fall back to the library's own ``run_streamlit`` rather than
+    call itself.
+    """
+    ran = {}
+    fake_core = _stub_desktop_library(monkeypatch, lambda **kwargs: None)
+    fake_core.run_streamlit = lambda script_path, options: ran.setdefault(
+        "args", (script_path, options)
+    )
+    monkeypatch.setattr(desktop, "_original_run_streamlit", None)
+    monkeypatch.setattr(desktop.multiprocessing, "parent_process", lambda: None)
+
+    desktop._run_streamlit_watched("entry.py", {})
+
+    assert ran["args"] == ("entry.py", {})
+
+
+def test_watchdog_is_inert_without_a_parent_process(monkeypatch):
+    """Run directly (no parent sentinel) the watchdog returns at once."""
+    monkeypatch.setattr(desktop.multiprocessing, "parent_process", lambda: None)
+    killed = []
+    monkeypatch.setattr(desktop.os, "kill", lambda *a: killed.append(a))
+
+    desktop._exit_with_launcher()
+
+    assert killed == []
