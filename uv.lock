@@ -882,7 +882,7 @@ wheels = [
 
 [[package]]
 name = "orionbelt-ontology-builder"
-version = "1.27.5"
+version = "1.27.6"
 source = { editable = "." }
 dependencies = [
     { name = "networkx" },
