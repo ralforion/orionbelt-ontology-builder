@@ -3347,6 +3347,11 @@ def _prefix_for_uri(uri: str) -> str:
     return best_prefix
 
 
+#: How much of a matching annotation a search tooltip shows. Long enough for a
+#: definition's first sentence, short enough not to become the annotation.
+_SEARCH_HINT_CHARS = 160
+
+
 def _build_name_collision_set(items: list) -> set:
     """Return the set of local names that appear under more than one URI.
 
@@ -3390,6 +3395,24 @@ def _disambiguated_name(item: dict, collisions: set) -> str:
         if ns:
             return f"{name} ({ns})"
     return name
+
+
+def _search_match_hint(item: dict) -> str | None:
+    """Why a search result is in the list, for the button's tooltip.
+
+    A name, label or comment match explains itself: the words are on the button
+    or a click away. An annotation match does not — the entity can be called
+    something else entirely, and without this the result reads as noise (issue
+    #453). ``None`` for every other kind of match, which is what ``st.button``
+    wants when there is no tooltip to show.
+    """
+    predicate = item.get("match_predicate")
+    if not predicate:
+        return None
+    value = " ".join((item.get("match_value") or "").split())
+    if len(value) > _SEARCH_HINT_CHARS:
+        value = value[: _SEARCH_HINT_CHARS - 1].rstrip() + "…"
+    return f"Matched **{predicate}**: {value}" if value else f"Matched {predicate}"
 
 
 def _cb_toggle_view(prefix, uid):

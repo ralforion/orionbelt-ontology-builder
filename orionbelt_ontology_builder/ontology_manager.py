@@ -6318,17 +6318,53 @@ class OntologyManager:
 
     # ==================== SEARCH ====================
 
+    def _annotation_hit(self, subj: URIRef, q: str) -> tuple[str, str] | None:
+        """The first annotation on ``subj`` whose text contains ``q``.
+
+        Returns the annotation's prefixed predicate and its value, or ``None``.
+        The caller has already tried the fields it ranks above this one, so
+        reaching here means the query is not in the name, the label, the SKOS
+        labels or the comment.
+
+        Only literals are searched. A URI-valued annotation — rdfs:isDefinedBy,
+        owl:sameAs, a seeAlso — is a link rather than something written about
+        the entity, and searching those would answer "foaf" with most of an
+        imported vocabulary. Structural predicates are skipped for the same
+        reason :meth:`get_annotations` skips them: they are the ontology's
+        shape, not its prose.
+        """
+        for pred, obj in self.graph.predicate_objects(subj):
+            if (
+                not isinstance(obj, Literal)
+                or pred in self._STRUCTURAL_PREDICATES
+                or q not in str(obj).lower()
+            ):
+                continue
+            prefix = self._get_prefix_for_uri(str(pred))
+            local_name = self._local_name(pred)
+            return (
+                f"{prefix}:{local_name}" if prefix else local_name,
+                str(obj),
+            )
+        return None
+
     def search(self, query: str) -> list[dict[str, str]]:
-        """Search across resource names, labels, comments and SKOS labels.
+        """Search across resource names, labels, comments and annotations.
 
         Matches (case-insensitive, partial) against the local name, rdfs:label,
         skos:prefLabel, skos:altLabel and rdfs:comment of every class, property,
-        individual and SKOS concept. altLabel matching in particular improves
-        discoverability for vocabularies with synonyms.
+        individual and SKOS concept, and then against every other annotation the
+        resource carries (issue #453) — a skos:definition, a scope note, a
+        dcterms:description, anything an ontology puts on a resource. altLabel
+        matching in particular improves discoverability for vocabularies with
+        synonyms, and the annotation sweep finds what people wrote about an
+        entity rather than only what they named it.
 
-        Returns a list of dicts with keys: name, uri, type, label, match_field.
-        The full URI is included so callers can distinguish duplicate local
-        names from different namespaces.
+        Returns a list of dicts with keys: name, uri, type, label, match_field,
+        match_predicate, match_value. The last two name the annotation a
+        ``match_field`` of ``"annotation"`` was found in, and are empty for
+        every other kind of match. The full URI is included so callers can
+        distinguish duplicate local names from different namespaces.
         """
         if not query or not query.strip():
             return []
@@ -6352,6 +6388,7 @@ class OntologyManager:
             "prefLabel": 2,
             "altLabel": 3,
             "comment": 4,
+            "annotation": 5,
         }
 
         for rdf_type, type_label in type_map:
@@ -6366,6 +6403,8 @@ class OntologyManager:
                 alt_labels = [str(o) for o in self.graph.objects(subj, SKOS.altLabel)]
 
                 match_field = None
+                match_predicate = ""
+                match_value = ""
                 if q in name.lower():
                     match_field = "name"
                 elif label and q in label.lower():
@@ -6376,6 +6415,11 @@ class OntologyManager:
                     match_field = "altLabel"
                 elif comment and q in comment.lower():
                     match_field = "comment"
+                else:
+                    hit = self._annotation_hit(subj, q)
+                    if hit:
+                        match_field = "annotation"
+                        match_predicate, match_value = hit
 
                 if match_field:
                     results.append(
@@ -6387,6 +6431,11 @@ class OntologyManager:
                             "type": type_label,
                             "label": label or pref_label,
                             "match_field": match_field,
+                            # Which annotation the query was found in, so a
+                            # caller can say why an entity whose name and label
+                            # say nothing about the query is in the results.
+                            "match_predicate": match_predicate,
+                            "match_value": match_value,
                         }
                     )
 

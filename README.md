@@ -56,7 +56,7 @@ It's not trying to be Protégé. It's meant for people who want something lighte
 
 **Keeping your ontology clean.** Validation catches orphan classes, duplicate labels, domain/range mismatches, missing annotations, and SKOS-specific issues like broader/narrower cycles. Not just "you have warnings" but "here's what's wrong and where."
 
-**Moving fast in large ontologies.** Global search across everything. Usage/backlink views for any resource. Click a node in the graph and jump straight to the editor. Bulk add/edit/delete so you're not filling out forms one entity at a time.
+**Moving fast in large ontologies.** Global search across everything, including what an entity's annotations say about it, so a definition or a scope note finds it when the name does not. Usage/backlink views for any resource. Click a node in the graph and jump straight to the editor. Bulk add/edit/delete so you're not filling out forms one entity at a time.
 
 **Working with others.** Merge-aware imports with three strategies (replace, merge, merge-overwrite). Conflict detection. Prefix reconciliation. Change reports you can download. You can actually review what an import would do before committing it.
 
