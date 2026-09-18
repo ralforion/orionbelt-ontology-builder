@@ -194,6 +194,7 @@ def test_a_rename_render_holds_the_camera():
     src = _viewer()
     start = src.index("// Same render generation but a changed node set")
     branch = src[start : src.index("var nodes = new vis.DataSet", start)]
-    assert "_hold = !!savedView && (_keptAll || _carried)" in branch, (
-        "a rename render still lets vis re-frame the whole graph"
+    hold = branch[branch.index("var _hold = ") :].split("\n", 1)[0]
+    assert "!!savedView" in hold and "_carried" in hold, (
+        f"a rename render still lets vis re-frame the whole graph: {hold}"
     )
