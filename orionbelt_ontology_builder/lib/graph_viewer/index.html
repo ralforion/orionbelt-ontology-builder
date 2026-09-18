@@ -971,12 +971,26 @@ function settleFullscreen(entering) {
     setTimeout(function () { scheduleFullscreenView(entering); }, 250);
 }
 
+// Controls with their own use for Esc: a text field reverts, a dropdown closes,
+// and the Find picker clears its pick. Those keystrokes belong to the focused
+// control, not to the stage — clearing Find used to drop the page out of
+// fullscreen in the same press (issue #454). Named one by one rather than
+// "anything focusable": a checkbox, a radio and the depth slider make no claim
+// on the key, and focus resting on one is still a way out.
+var ESC_OWNERS = 'input[type=text], input[type=search], input[type=number],'
+    + ' textarea, [contenteditable=true], [role=combobox], [role=listbox]';
+
+function ownsEscape(el) {
+    return !!(el && el.closest && el.closest(ESC_OWNERS));
+}
+
 // Esc leaves fullscreen. The browser used to do this for us, back when the page
 // was the fullscreen element; expanding inside the window means wiring it up
 // (issue #390). Both documents are listened to: the key lands in this one while
 // the canvas has focus and in the parent while any of the controls do.
 function onEscape(e) {
     if ((e.key !== 'Escape' && e.keyCode !== 27) || !stageOn()) return;
+    if (ownsEscape(e.target)) return;
     leaveFullscreen();
 }
 
