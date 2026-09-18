@@ -177,6 +177,27 @@ def test_escape_leaves_fullscreen():
     assert "d.addEventListener('keydown', onEscape)" in src
 
 
+def test_escape_is_left_to_the_control_that_has_a_use_for_it():
+    """Esc in the Find picker clears the pick — and used to drop the page out of
+    fullscreen in the same press (issue #454). A control that takes the key for
+    itself keeps it; a checkbox or a button, which does not, is still a way out.
+    """
+    src = _VIEWER.read_text(encoding="utf-8")
+    fn = src[src.index("function onEscape(") :].split("\n}", 1)[0]
+    assert "ownsEscape(e.target)" in fn, fn
+    assert fn.index("ownsEscape(") < fn.index("leaveFullscreen()"), fn
+    owners = src[src.index("var ESC_OWNERS") :].split(";", 1)[0]
+    for selector in (
+        "input[type=text]",
+        "textarea",
+        "[role=combobox]",
+        "[role=listbox]",
+    ):
+        assert selector in owners, owners
+    for passive in ("checkbox", "radio", "range"):
+        assert passive not in owners, owners
+
+
 def test_leaving_captures_the_view_it_is_leaving():
     """Restore has to keep where the user is, not rewind to where they were.
 
