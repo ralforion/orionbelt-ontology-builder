@@ -145,6 +145,7 @@ from .ui import (  # noqa: F401
     _restore_viz_file_state,
     _restore_viz_settings,
     _restriction_matches_edge,
+    _search_match_hint,
     _slot_options,
     _sort_relations,
     _sort_restrictions,
@@ -612,6 +613,7 @@ def main():
                         f"{disp_name}{label_str}",
                         key=f"search_{type_label}_{r_uid}",
                         use_container_width=True,
+                        help=_search_match_hint(r),
                     ):
                         st.session_state.search_navigate_to = page
                         # Open the view pane keyed by URI hash so we navigate

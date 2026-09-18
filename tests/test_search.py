@@ -110,3 +110,92 @@ def test_search_disambiguates_same_name_across_namespaces(monkeypatch, patch_ui)
     displayed = {app._disambiguated_name(r, collisions) for r in results}
     assert len(displayed) == 2  # no two identical entries
     assert "Dog (other)" in displayed
+
+
+def test_search_finds_a_resource_by_an_annotation(populated_om):
+    """What people write about an entity is searchable too (issue #453).
+
+    The name, the label and the comment were already covered; a definition, a
+    scope note or a dcterms:description was not, so the only way to find an
+    entity by what it means was to know what it is called.
+    """
+    populated_om.add_annotation(
+        "Organization", "skos:definition", "A legal entity that employs people"
+    )
+    results = populated_om.search("employs people")
+    match = next((r for r in results if r["name"] == "Organization"), None)
+    assert match is not None
+    assert match["match_field"] == "annotation"
+    assert match["match_predicate"] == "skos:definition"
+    assert match["match_value"] == "A legal entity that employs people"
+
+
+def test_search_annotation_matches_rank_last(populated_om):
+    """The entity called what you typed comes before the one that mentions it."""
+    populated_om.add_class("Vehicle")
+    populated_om.add_annotation("Vehicle", "skos:definition", "Unlike a Person.")
+    results = populated_om.search("Person")
+    names = [r["name"] for r in results]
+    assert names.index("Person") < names.index("Vehicle")
+
+
+def test_search_leaves_the_other_fields_unmarked(populated_om):
+    """A name match explains itself, so it carries no annotation to point at."""
+    match = next(r for r in populated_om.search("Person") if r["name"] == "Person")
+    assert match["match_field"] == "name"
+    assert match["match_predicate"] == ""
+    assert match["match_value"] == ""
+
+
+def test_search_ignores_uri_valued_annotations(populated_om):
+    """A link is not something written about the entity.
+
+    Searching those would answer a query like "foaf" with most of an imported
+    vocabulary, since rdfs:isDefinedBy carries the namespace on every term.
+    """
+    populated_om.add_annotation(
+        "Person", "rdfs:isDefinedBy", "http://example.org/vocab#", value_is_uri=True
+    )
+    hits = [
+        r for r in populated_om.search("example.org/vocab") if r["name"] == "Person"
+    ]
+    assert not hits
+
+
+def test_search_ignores_structural_predicates(populated_om):
+    """Cardinalities and the like are the ontology's shape, not its prose."""
+    from rdflib import OWL, Literal, URIRef
+
+    populated_om.graph.add(
+        (URIRef("http://test.org/ont#Employee"), OWL.cardinality, Literal(7))
+    )
+    assert not [r for r in populated_om.search("7") if r["name"] == "Employee"]
+
+
+def test_search_hint_names_the_annotation_that_matched(patch_ui):
+    """The tooltip is what keeps an annotation hit from reading as noise."""
+    from orionbelt_ontology_builder import ui
+
+    hint = ui._search_match_hint(
+        {"match_predicate": "skos:definition", "match_value": "A legal  entity\n"}
+    )
+    assert hint == "Matched **skos:definition**: A legal entity"
+
+
+def test_search_hint_is_absent_for_a_self_explaining_match(patch_ui):
+    from orionbelt_ontology_builder import ui
+
+    assert ui._search_match_hint({"match_field": "name"}) is None
+    assert ui._search_match_hint({"match_predicate": "", "match_value": ""}) is None
+
+
+def test_search_hint_does_not_become_the_annotation(patch_ui):
+    """A definition runs long; the tooltip takes its opening and stops."""
+    from orionbelt_ontology_builder import ui
+
+    hint = ui._search_match_hint(
+        {"match_predicate": "dcterms:description", "match_value": "word " * 200}
+    )
+    body = hint.split(": ", 1)[1]
+    assert len(body) <= ui._SEARCH_HINT_CHARS
+    assert body.endswith("…")
