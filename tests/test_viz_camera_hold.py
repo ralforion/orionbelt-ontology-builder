@@ -9,8 +9,13 @@ thing you stop being able to see.
 None of it is observable outside a browser, so the invariant is pinned at the
 source level the way test_viz_fullscreen.py pins the fullscreen ones. Verified
 by hand in the running app: at scale 1.016 on FOAF, adding a subclass used to
-leave the graph at 0.484 and now leaves it at 1.016, with the new node in view;
-turning a node type off (nodes go away) still re-frames.
+leave the graph at 0.484 and now leaves it at 1.016, with the new node in view.
+
+Losing a node used to re-frame whatever the loss was. Deleting an annotation
+took the view off the entity it hung from (issue #455), so the question the
+rebuild asks is now whether the old frame still holds one of the nodes that
+stayed put: a delete keeps the camera, and a filter swapped for a set that
+leaves the frame empty re-frames as before.
 """
 
 from pathlib import Path
@@ -39,14 +44,39 @@ def test_a_grown_graph_keeps_the_view_it_had():
     assert "_hold = !!savedView" in branch, "the hold is not tied to a saved view"
 
 
-def test_the_hold_needs_every_node_that_was_placed():
-    """A view is only worth keeping while what it framed is still on screen. A
-    filter swapped for another set places every node afresh, and the old frame
-    would hold nothing at all — so that case still re-frames."""
+def test_the_hold_needs_a_frame_with_something_left_in_it():
+    """A view is only worth keeping while what it framed is still on screen.
+
+    Nothing dropped from the graph is one way to know that, and it is the one
+    the grown-graph case above relies on. A node going away is not by itself the
+    other way round: a deleted annotation leaves the graph exactly where it was
+    (issue #455), while a filter swapped for another set places every node
+    afresh and leaves the old frame holding nothing. So the second question is
+    asked of the frame itself.
+    """
     branch = _rebuild_branch(_viewer())
     assert "Object.keys(_raw.pos).length === pinnedIds.length" in branch, (
-        "the hold no longer checks that nothing was dropped from the graph"
+        "the hold no longer knows whether anything was dropped from the graph"
     )
+    assert "viewHoldsAny(savedView, pinnedIds, _raw.pos, el)" in branch, (
+        "a render that lost a node re-frames without asking what is still framed"
+    )
+    hold = branch[branch.index("var _hold = ") :].split("\n", 1)[0]
+    assert "_keptAll" in hold and "_framesKept" in hold, hold
+
+
+def test_the_frame_test_measures_the_viewport_it_saved():
+    """``getViewPosition()`` is the canvas point the view is centred on and
+    ``getScale()`` is canvas units to pixels, so the reach either way is half the
+    element's size over the scale. A view with no scale, or an element with no
+    size yet, answers "no" rather than dividing by zero."""
+    src = _viewer()
+    fn = src[src.index("function viewHoldsAny(") :].split("\n}", 1)[0]
+    assert "el.clientWidth" in fn and "el.clientHeight" in fn, fn
+    assert "2 * view.scale" in fn, fn
+    assert "view.position.x" in fn and "view.position.y" in fn, fn
+    assert "if (!reachX || !reachY) return false;" in fn, fn
+    assert "!view.scale" in fn, fn
 
 
 def test_a_fresh_layout_still_frames_the_graph():

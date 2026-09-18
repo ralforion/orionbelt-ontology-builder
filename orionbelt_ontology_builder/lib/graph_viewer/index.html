@@ -1006,6 +1006,23 @@ document.addEventListener('keydown', onEscape);
     });
 })();
 
+// Does a saved camera still frame any of the nodes that stayed where they were?
+// The viewport is a rectangle in canvas coordinates: `scale` is canvas units to
+// pixels and `position` is the point the canvas is centred on, so half the
+// element's size in pixels, divided by the scale, is the reach either way.
+function viewHoldsAny(view, ids, pos, el) {
+    if (!view || !view.scale || !view.position || !el || !ids.length) return false;
+    var reachX = (el.clientWidth || 0) / (2 * view.scale);
+    var reachY = (el.clientHeight || 0) / (2 * view.scale);
+    if (!reachX || !reachY) return false;
+    for (var i = 0; i < ids.length; i++) {
+        var at = pos[ids[i]];
+        if (at && Math.abs(at.x - view.position.x) <= reachX
+               && Math.abs(at.y - view.position.y) <= reachY) return true;
+    }
+    return false;
+}
+
 // The edge curve setting out of the options payload, as a JSON string so two
 // renders can be compared without walking the object.
 function smoothOf(optionsJson) {
@@ -1223,9 +1240,9 @@ function renderGraph(args) {
         // re-frame the whole graph once physics settles. Adding a subclass to
         // the class you are looking at otherwise zoomed out to the whole
         // ontology every time, which is the one thing you were not looking at
-        // (issue #314). When nodes *did* go away the old frame can hold nothing
+        // (issue #314). When nodes *did* go away the old frame may hold nothing
         // at all — a filter swapped for another set places every node afresh —
-        // so there vis still re-frames.
+        // so that case is decided on the frame itself, below.
         // A rename is a substitution, not a change of subject: this is the graph
         // you were already looking at, with one entity under a new name. The
         // renamed node's own position was carried across above, but everything
@@ -1234,8 +1251,16 @@ function renderGraph(args) {
         // (issue #329). So a render that carried a rename holds the camera on
         // what it was framing and lets physics settle the re-keyed nodes around
         // their pinned subject.
+        // Losing a node is not the same as changing the subject, though. Deleting
+        // an annotation takes one node out of a graph that is otherwise exactly
+        // where it was, and re-framing zoomed the view out of the very entity the
+        // annotation hung off (issue #455). "Nothing went away" was only ever a
+        // proxy for "the old frame still holds something", so ask that directly
+        // too: a frame with a node still in it is worth keeping, while the
+        // swapped filter leaves one holding nothing and re-frames as it did.
         var _keptAll = Object.keys(_raw.pos).length === pinnedIds.length;
-        var _hold = !!savedView && (_keptAll || _carried);
+        var _framesKept = viewHoldsAny(savedView, pinnedIds, _raw.pos, el);
+        var _hold = !!savedView && (_keptAll || _carried || _framesKept);
         // Physics only has the new nodes to place, so the pass is sized by them
         // rather than by the whole graph. It used to run up to 460 iterations
         // over every node: a Ctrl-click that revealed five classes in a
