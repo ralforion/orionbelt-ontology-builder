@@ -1313,7 +1313,18 @@ function renderGraph(args) {
         // #460). The camera from the last settled render carries across
         // instead, and the button on the canvas is what fits the graph now.
         // A first visit has no camera to carry, so that still fits.
-        savedView = (_raw && _raw.view) || null;
+        //
+        // Only a camera taken of *this* picture, though. The cache is keyed by
+        // the node set as well as the render generation, and this branch is the
+        // one both of those can miss: a reload keeps sessionStorage while the
+        // render seq restarts at 0, so the first render after one lands here
+        // holding the last session's frame. Matching the node hash is what says
+        // the saved view was taken of the same nodes — which, laid out again
+        // from the same pinned seed, land in the same places, so the frame still
+        // means what it meant. A different graph gets framed from scratch, the
+        // way it did before, rather than inheriting a zoom from whatever was on
+        // screen last (PR #464 review P2).
+        savedView = (_raw && _raw.hash === nodeHash && _raw.view) || null;
         heldAcrossLayout = !!savedView;
         var iters = Math.min(Math.max(nCount * 3, 150), 500);
         var batchIters = Math.max(iters - 40, 80);

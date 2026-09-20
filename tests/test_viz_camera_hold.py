@@ -89,7 +89,26 @@ def test_a_first_visit_still_frames_the_graph():
     """With no camera to carry, the fit is what puts the graph on screen at all."""
     fresh = _fresh_branch(_viewer())
     assert "fit: !_pin && !savedView" in fresh, fresh
-    assert "savedView = (_raw && _raw.view) || null;" in fresh, fresh
+    assert (
+        "savedView = (_raw && _raw.hash === nodeHash && _raw.view) || null;" in fresh
+    ), fresh
+
+
+def test_a_carried_camera_has_to_be_one_of_this_graph():
+    """The cache outlives the generation counter, so the carry needs its own
+    identity check (PR #464 review P2).
+
+    sessionStorage survives a reload while ``viz_render_seq`` restarts at 0, so
+    the first render after one lands in this branch holding the previous
+    session's frame — and the rescue below only fires when *nothing* is framed,
+    which an overlapping stale view would pass. Matching the node hash is what
+    says the saved view was taken of the same nodes.
+    """
+    fresh = _fresh_branch(_viewer())
+    assert "_raw.hash === nodeHash && _raw.view" in fresh, fresh
+    # The same key the cache is written under, so the two cannot drift apart.
+    src = _viewer()
+    assert "hash: nodeHash" in src, "the cache no longer records the node set"
 
 
 def test_a_re_layout_keeps_the_camera_it_had():
