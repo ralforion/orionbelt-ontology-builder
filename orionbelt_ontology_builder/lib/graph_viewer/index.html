@@ -45,7 +45,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #legend .line { display: inline-block; width: 20px; height: 2px; vertical-align: middle; margin-right: 2px; }
 #legend .line.dashed { border-top: 2px dashed; height: 0; }
 #legend .line.solid { border-top: 2px solid; height: 0; }
-#fullscreen-btn, #download-btn, #copy-btn {
+#fullscreen-btn, #download-btn, #copy-btn, #fit-btn {
     position: absolute; top: 8px; z-index: 10;
     width: 32px; height: 32px; border: none; border-radius: 6px;
     background: rgba(255,255,255,0.92); cursor: pointer;
@@ -55,14 +55,15 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
 #fullscreen-btn { right: 8px; }
 #download-btn { right: 48px; }
 #copy-btn { right: 88px; }
-#fullscreen-btn:hover, #download-btn:hover, #copy-btn:hover {
+#fit-btn { right: 128px; }
+#fullscreen-btn:hover, #download-btn:hover, #copy-btn:hover, #fit-btn:hover {
     opacity: 1;
     /* Over its neighbours while its tooltip is out: the three buttons share a
        z-index and the tip reaches back across the ones to its left, so the
        later button in the markup painted over the words. */
     z-index: 11;
 }
-#fullscreen-btn svg, #download-btn svg, #copy-btn svg {
+#fullscreen-btn svg, #download-btn svg, #copy-btn svg, #fit-btn svg {
     width: 18px; height: 18px; fill: #555;
     /* The button is the hover target, not the icon: a tooltip is not looked up
        from inside an <svg>, which is why the native `title` on these three
@@ -74,7 +75,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
    over a busy graph. The colours are the theme's own, swapped — the text
    colour as the chip and the background as the type — which is maximum
    contrast in both themes by construction (see themeToolbarButtons). */
-#fullscreen-btn::after, #download-btn::after, #copy-btn::after {
+#fullscreen-btn::after, #download-btn::after, #copy-btn::after, #fit-btn::after {
     content: attr(data-tip);
     position: absolute;
     /* Under the button, shifted left of the right-hand strip: the panel's
@@ -95,7 +96,8 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
     pointer-events: none;
     transition: opacity 0.12s ease;
 }
-#fullscreen-btn:hover::after, #download-btn:hover::after, #copy-btn:hover::after {
+#fullscreen-btn:hover::after, #download-btn:hover::after, #copy-btn:hover::after,
+#fit-btn:hover::after {
     opacity: 1;
 }
 /* ...and beside the button when the space under it is taken. The details panel
@@ -104,7 +106,8 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
    clipped — it is simply not there. See placeTip(). */
 #fullscreen-btn.tip-left::after,
 #download-btn.tip-left::after,
-#copy-btn.tip-left::after {
+#copy-btn.tip-left::after,
+#fit-btn.tip-left::after {
     top: 50%;
     right: calc(100% + 8px);
     transform: translateY(-50%);
@@ -154,6 +157,9 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
     <button id="copy-btn" data-tip="Copy what is selected" aria-label="Copy what is selected" style="display:none;" onclick="copySelection()">
         <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
     </button>
+    <button id="fit-btn" data-tip="Fit the whole graph" aria-label="Fit the whole graph" style="display:none;" onclick="fitGraph()">
+        <svg viewBox="0 0 24 24"><path d="M15 3l2.3 2.3-2.89 2.87 1.42 1.42L18.7 6.7 21 9V3h-6zM3 9l2.3-2.3 2.87 2.89 1.42-1.42L6.7 5.3 9 3H3v6zm6 12l-2.3-2.3 2.89-2.87-1.42-1.42L5.3 17.3 3 15v6h6zm12-6l-2.3 2.3-2.87-2.89-1.42 1.42 2.89 2.87L15 21h6v-6z"/></svg>
+    </button>
 </div>
 <script>
 // Streamlit component communication
@@ -164,7 +170,7 @@ function sendToStreamlit(type, data) {
 // The canvas buttons all sit on the theme's panel colour with its text colour,
 // and both render paths have to paint them — a re-theme and a rebuild.
 function themeToolbarButtons(theme) {
-    ['fullscreen-btn', 'download-btn', 'copy-btn'].forEach(function (id) {
+    ['fullscreen-btn', 'download-btn', 'copy-btn', 'fit-btn'].forEach(function (id) {
         var btn = document.getElementById(id);
         if (!btn) return;
         btn.style.background = theme.panel;
@@ -211,7 +217,7 @@ function placeTip(btn) {
     btn.classList.toggle('tip-left', flip);
 }
 
-['fullscreen-btn', 'download-btn', 'copy-btn'].forEach(function (id) {
+['fullscreen-btn', 'download-btn', 'copy-btn', 'fit-btn'].forEach(function (id) {
     var btn = document.getElementById(id);
     if (btn) btn.addEventListener('mouseenter', function () { placeTip(btn); });
 });
@@ -776,6 +782,26 @@ function downloadGraph() {
     }
 }
 
+// The current render's viewport cache writer, so a control outside renderGraph
+// can keep the cache honest after it moves the camera. Reassigned by every
+// render; null before the first one.
+var saveViewportNow = null;
+
+// Zoom out to the whole graph, on demand (issue #460). A re-layout used to do
+// this for you whether you wanted it or not; now that it keeps the view you
+// were working in, this is the way back out to the whole ontology.
+function fitGraph() {
+    if (!network) return;
+    try {
+        network.fit({animation: {duration: 500, easingFunction: 'easeInOutQuad'}});
+    } catch (e) {
+        return;
+    }
+    // The cache is what a re-mount restores, so it has to learn the new frame
+    // — after the animation, or it stores a mid-flight one.
+    setTimeout(function () { if (saveViewportNow) saveViewportNow(); }, 600);
+}
+
 // --- Fullscreen (issues #177, #189, #381, #390) ------------------------------
 //
 // Fullscreen here means the graph page filling the browser window, not the
@@ -1181,6 +1207,11 @@ function renderGraph(args) {
         ? args.focus_node : null;
 
     var savedPos = null, savedView = null, pinnedIds = [];
+    // Whether this render suppressed vis's fit in order to keep a camera across
+    // a fresh layout, which is the one case that has to be checked afterwards:
+    // the nodes are placed from scratch, so the view may end up pointing at
+    // nothing (issue #460).
+    var heldAcrossLayout = false;
     var _raw = null;
     try { _raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null'); } catch (e) {}
 
@@ -1274,9 +1305,19 @@ function renderGraph(args) {
     } else {
         // Fresh layout (Render, or nothing cached): deterministic thanks to the
         // pinned randomSeed set in Python (issue #141).
+        //
+        // Render means "lay this out again", not "and take me back to the whole
+        // ontology". It used to end on a fit, so the way back to the node you
+        // were working on was to zoom in again, every time — with the selection
+        // still highlighted somewhere off in the distance to aim at (issue
+        // #460). The camera from the last settled render carries across
+        // instead, and the button on the canvas is what fits the graph now.
+        // A first visit has no camera to carry, so that still fits.
+        savedView = (_raw && _raw.view) || null;
+        heldAcrossLayout = !!savedView;
         var iters = Math.min(Math.max(nCount * 3, 150), 500);
         var batchIters = Math.max(iters - 40, 80);
-        options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50, fit: !_pin };
+        options.physics.stabilization = { enabled: true, iterations: batchIters, updateInterval: 50, fit: !_pin && !savedView };
     }
     var nodes = new vis.DataSet(nodeArr);
     network = new vis.Network(el, {nodes: nodes, edges: edges}, options);
@@ -1300,6 +1341,7 @@ function renderGraph(args) {
         network.on('beforeDrawing', function(ctx) { drawPathRings(ctx, pathRings); });
     }
     document.getElementById('download-btn').style.display = 'flex';
+    document.getElementById('fit-btn').style.display = 'flex';
     // Only offer fullscreen where there is a page whose chrome we can hide.
     if (fullscreenSupported()) {
         document.getElementById('fullscreen-btn').style.display = 'flex';
@@ -1404,6 +1446,7 @@ function renderGraph(args) {
             }));
         } catch (e) {}
     }
+    saveViewportNow = savePositions;
     var saveTimer = null;
     function scheduleSave() {
         if (saveTimer) clearTimeout(saveTimer);
@@ -1413,6 +1456,10 @@ function renderGraph(args) {
     network.on('zoom', scheduleSave);
     if (!usedSaved) {
         network.once('stabilizationIterationsDone', function() {
+            // Whether the user grabbed the camera while the pass ran: _cancelSettleFit
+            // is the only thing that clears this before now, and a camera they
+            // moved themselves is not one to second-guess below.
+            var tookTheCamera = !settling;
             settling = false;
             setTimeout(function() {
                 network.setOptions({ physics: { enabled: false } });
@@ -1441,6 +1488,20 @@ function renderGraph(args) {
                         });
                     } catch (e) {}
                     setTimeout(savePositions, 700);
+                } else if (heldAcrossLayout && !tookTheCamera && !viewHoldsAny(
+                        {scale: network.getScale(), position: network.getViewPosition()},
+                        nodes.getIds(), network.getPositions(), el)) {
+                    // The camera was carried across a layout that placed every
+                    // node afresh, and this one landed on empty canvas — a wide
+                    // spacing change can move the whole graph out from under it.
+                    // Nothing to keep, so fit after all (issue #460). This is
+                    // the same question the node-set rebuild asks, put to the
+                    // positions physics actually produced rather than to the
+                    // cached ones (issue #455).
+                    try {
+                        network.fit({animation: {duration: 500, easingFunction: 'easeInOutQuad'}});
+                    } catch (e) {}
+                    setTimeout(savePositions, 600);
                 } else {
                     savePositions();
                 }

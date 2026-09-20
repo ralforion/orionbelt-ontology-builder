@@ -269,12 +269,17 @@ def test_the_canvas_measures_the_page_not_its_own_iframe():
 
 
 def test_the_toolbar_says_what_its_buttons_do():
-    """The three canvas buttons carried a native `title`, which never appeared:
-    the hover target is the <svg> inside the button, and a tooltip is not looked
-    up from there. The page draws them instead."""
+    """The canvas buttons carried a native `title`, which never appeared: the
+    hover target is the <svg> inside the button, and a tooltip is not looked up
+    from there. The page draws them instead."""
     src = _VIEWER.read_text(encoding="utf-8")
 
-    for tip in ("Maximize", "Download as PNG", "Copy what is selected"):
+    for tip in (
+        "Maximize",
+        "Download as PNG",
+        "Copy what is selected",
+        "Fit the whole graph",
+    ):
         assert f'data-tip="{tip}"' in src
         assert f'aria-label="{tip}"' in src
     assert "title=" not in src.split("<body>", 1)[1].split("</button>", 1)[0]
@@ -316,3 +321,11 @@ def test_a_tooltip_steps_aside_for_whatever_is_under_the_button():
     assert "classList.toggle('tip-left'" in fn
     assert ".tip-left::after" in src
     assert "addEventListener('mouseenter'" in src
+    # Every button that has a tip has to be wired to the placement, or its own
+    # tip is the one that ends up behind a panel.
+    tipped = set(re.findall(r'<button id="([\w-]+)"[^>]*data-tip=', src))
+    assert tipped, "the toolbar buttons are read from the page"
+    wired = re.search(r"\[([^\]]*)\]\.forEach\(function \(id\) \{[^}]*mouseenter", src)
+    assert wired, "the tip placement no longer walks a list of button ids"
+    for button in tipped:
+        assert f"'{button}'" in wired.group(1), f"{button} never has its tip placed"
