@@ -148,7 +148,7 @@ def _button_rules(viewer: str, button: str) -> list[str]:
 def _toolbar_bottom_px(viewer: str) -> int:
     """How far down the canvas its own toolbar reaches, from the buttons' CSS."""
     bottoms = []
-    for button in ("#download-btn", "#fullscreen-btn", "#copy-btn"):
+    for button in ("#download-btn", "#fullscreen-btn", "#copy-btn", "#fit-btn"):
         rules = _button_rules(viewer, button)
         assert rules, f"{button} has no CSS of its own"
 

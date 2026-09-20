@@ -673,8 +673,10 @@ def render_visualization():
                 "Render",
                 key="viz_render_btn",
                 type="primary",
-                help="Redraw the graph and re-run the layout. Also re-centres on "
-                "the current Find selection.",
+                help="Redraw the graph and re-run the layout, keeping the zoom "
+                "and pan you are working in. Also re-centres on the current "
+                'Find selection. To zoom out to the whole graph, use "Fit the '
+                'whole graph" on the canvas.',
             )
 
         if options_open:

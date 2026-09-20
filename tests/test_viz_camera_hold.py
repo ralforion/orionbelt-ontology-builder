@@ -79,9 +79,63 @@ def test_the_frame_test_measures_the_viewport_it_saved():
     assert "!view.scale" in fn, fn
 
 
-def test_a_fresh_layout_still_frames_the_graph():
-    """Nothing to hold on a Render click or a first visit: the fit is what puts
-    the graph on screen at all."""
+def _fresh_branch(src: str) -> str:
+    """The branch that runs when the layout is computed from scratch."""
+    start = src.index("// Fresh layout (Render, or nothing cached)")
+    return src[start : src.index("var nodes = new vis.DataSet", start)]
+
+
+def test_a_first_visit_still_frames_the_graph():
+    """With no camera to carry, the fit is what puts the graph on screen at all."""
+    fresh = _fresh_branch(_viewer())
+    assert "fit: !_pin && !savedView" in fresh, fresh
+    assert (
+        "savedView = (_raw && _raw.hash === nodeHash && _raw.view) || null;" in fresh
+    ), fresh
+
+
+def test_a_carried_camera_has_to_be_one_of_this_graph():
+    """The cache outlives the generation counter, so the carry needs its own
+    identity check (PR #464 review P2).
+
+    sessionStorage survives a reload while ``viz_render_seq`` restarts at 0, so
+    the first render after one lands in this branch holding the previous
+    session's frame — and the rescue below only fires when *nothing* is framed,
+    which an overlapping stale view would pass. Matching the node hash is what
+    says the saved view was taken of the same nodes.
+    """
+    fresh = _fresh_branch(_viewer())
+    assert "_raw.hash === nodeHash && _raw.view" in fresh, fresh
+    # The same key the cache is written under, so the two cannot drift apart.
     src = _viewer()
-    fresh = src[src.index("// Fresh layout (Render, or nothing cached)") :]
-    assert "fit: !_pin" in fresh[: fresh.index("var nodes = new vis.DataSet")]
+    assert "hash: nodeHash" in src, "the cache no longer records the node set"
+
+
+def test_a_re_layout_keeps_the_camera_it_had():
+    """Render means "lay this out again", not "and take me back to the whole
+    ontology" (issue #460).
+
+    The layout is deterministic, so a Render on the same nodes puts them back
+    where they were; ending it on a fit meant zooming in again every time, with
+    the selection still highlighted somewhere off in the distance to aim at.
+    """
+    fresh = _fresh_branch(_viewer())
+    assert "heldAcrossLayout = !!savedView" in fresh, fresh
+    # ...and the fit that used to be unconditional is now the button's job.
+    src = _viewer()
+    assert "function fitGraph(" in src
+    assert 'id="fit-btn"' in src
+
+
+def test_a_carried_camera_that_lands_on_nothing_fits_after_all():
+    """A fresh layout places every node again, so a wide spacing change can move
+    the graph out from under the camera. The check is the one the node-set
+    rebuild makes, put to the positions physics actually produced."""
+    src = _viewer()
+    settle = src[src.index("stabilizationIterationsDone") :]
+    settle = settle[: settle.index("// Build dynamic legend")]
+    assert "heldAcrossLayout && !tookTheCamera && !viewHoldsAny(" in settle, settle
+    assert "network.getPositions()" in settle, settle
+    assert "network.fit(" in settle, settle
+    # A camera the user moved themselves is not one to second-guess.
+    assert "var tookTheCamera = !settling;" in settle, settle
