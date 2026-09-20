@@ -25,6 +25,7 @@ from ..ui import (
     _edge_id_parts,
     _fmt_unknown,
     _nav_open_entity,
+    _pad_option,
     _panel_add_kind,
     _Path,
     _persist_viz_file_state,
@@ -1051,8 +1052,19 @@ def render_visualization():
                 )
 
         def _picker_caption(option):
-            """What a picker shows for one of its options."""
-            return focus_captions.get(option, option)
+            """What a picker shows for one of its options.
+
+            Padded, because Streamlit's scorer docks an option 0.005 per
+            character after its last match, so the longer of two equally good
+            matches loses on length alone: searching ``va`` ranked
+            ``Class: vl · value`` above ``Class: va · variable``
+            (issue #461). Padding every caption to one width makes that penalty
+            identical for all of them, as it already does for the entity
+            dropdowns of issue #214 (see :func:`app._pad_option`). The padding
+            is invisible and stays out of the widget's value, which remains the
+            label the rest of the page is keyed by.
+            """
+            return _pad_option(focus_captions.get(option, option))
 
         # A seed whose entity was renamed is held under a label that no longer
         # exists; re-point it at the new one first, or the prune below reads the

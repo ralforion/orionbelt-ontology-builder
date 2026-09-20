@@ -1,4 +1,4 @@
-"""Dropdown search ranks the entity you typed first (issues #210 and #214).
+"""Dropdown search ranks the entity you typed first (issues #210, #214, #461).
 
 Streamlit filters a selectbox client-side: it keeps every option whose label
 contains the typed text as a *subsequence*, then sorts by an fzy score. That
@@ -212,6 +212,49 @@ def test_short_labelled_name_outranks_longer_bare_name():
     options = _options(("n", "number"), ("node", "node"))
     assert _rank("n", options)[0] == short
     assert _score("n", "node") > _score("n", short)  # what padding cancels out
+
+
+def test_graph_picker_caption_ranks_the_typed_name_first():
+    """The scenario from issue #461.
+
+    The Visualization pickers render ``Class: <name> · <label>``, so a
+    label match and a name match earn the same bonuses and only length
+    separated them: ``vl · value`` came out above ``va · variable``
+    for the query that names the second one.
+    """
+    wanted = app.picker_option_caption("Class: va", "va", "variable")
+    shorter = app.picker_option_caption("Class: vl", "vl", "value")
+    assert _rank("va", sorted([wanted, shorter], key=str.lower))[0] == wanted
+    assert _score("va", shorter) > _score("va", wanted)  # what padding cancels out
+
+
+def test_graph_pickers_pad_their_captions():
+    """Every Visualization picker renders through a caption that pads.
+
+    The page builds its own ``format_func`` rather than passing ``_pad_option``
+    straight in, so the guard below (which follows the option builders) cannot
+    see these call sites: follow the format_func instead.
+    """
+    tree = ast.parse((sources.PKG / "views" / "visualization.py").read_text("utf-8"))
+    locals_by_name = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    captions = {
+        keyword.value.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        if node.func.attr in ("selectbox", "multiselect")
+        for keyword in node.keywords
+        if keyword.arg == "format_func" and isinstance(keyword.value, ast.Name)
+    }
+    assert captions, "the page draws no picker at all"
+    for name in sorted(captions & set(locals_by_name)):
+        called = {
+            call.func.id
+            for call in ast.walk(locals_by_name[name])
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        }
+        assert "_pad_option" in called, f"{name} renders unpadded labels"
 
 
 def test_short_name_outranks_longer_one_sharing_its_prefix():
