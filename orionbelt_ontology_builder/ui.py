@@ -3317,6 +3317,18 @@ def _pad_option(display: object) -> str:
     return str(display).ljust(SEARCH_PAD_WIDTH)
 
 
+def option_sort_key(display: str) -> tuple[str, str]:
+    """Sort key for dropdown options: alphabetical, then lowercase first.
+
+    Streamlit ranks a search case-insensitively, so options that differ only
+    in case (``fn`` / ``FN``) always score the same and keep the order the app
+    supplied. Sorting on ``lower()`` alone left that order to however the graph
+    happened to list them (issue #466); ``swapcase()`` settles it, lowercase
+    first, the same way every time.
+    """
+    return display.lower(), display.swapcase()
+
+
 def _uid(uri: str) -> str:
     """Stable short identifier for a URI — used as Streamlit key suffix.
 
@@ -3602,7 +3614,7 @@ def build_uri_options(items: list, include_none: bool = False) -> tuple:
         rows.append(display)
         lookup[display] = it["uri"]
 
-    rows.sort(key=lambda x: x.lower())
+    rows.sort(key=option_sort_key)
 
     if include_none:
         options.append("None")
@@ -3630,8 +3642,8 @@ def build_class_options(classes: list, include_none: bool = False) -> tuple:
         items.append(display)
         lookup[display] = c["uri"]
 
-    # Sort alphabetically by display text (case-insensitive)
-    items.sort(key=lambda x: x.lower())
+    # Sort alphabetically by display text (case-insensitive, lowercase first)
+    items.sort(key=option_sort_key)
 
     if include_none:
         options.append("None")
@@ -4167,7 +4179,7 @@ def annotation_subject_options(classes, object_props, data_props, individuals):
             tagged = f"{display} [{kind}]"
             options.append(tagged)
             lookup[tagged] = kind_lookup[display]
-    options.sort(key=str.lower)
+    options.sort(key=option_sort_key)
     return options, lookup
 
 
@@ -6431,7 +6443,7 @@ def annotation_predicate_options(ont):
         if p["local_name"] not in seen_names and display not in seen_names:
             predicate_options.append(display)
             predicate_lookup[display] = p["uri"]  # Use short name for standard ones
-    predicate_options.sort(key=lambda x: x.lower())
+    predicate_options.sort(key=option_sort_key)
     return predicate_options, predicate_lookup
 
 

@@ -138,7 +138,7 @@ def _options(*items: tuple[str, str]) -> list[str]:
     """Dropdown options for (name, label) pairs, ordered as the app orders them."""
     return sorted(
         (app.format_label_name(name, label) for name, label in items),
-        key=str.lower,
+        key=app.option_sort_key,
     )
 
 
@@ -207,6 +207,37 @@ def test_query_case_does_not_change_the_ranking():
     assert options[0] != wanted  # alphabetical order alone gets it wrong
     for query in ("py-trip", "Py-trip", "PY-TRIP", "pytrip"):
         assert _rank(query, options)[0] == wanted, query
+
+
+def test_names_differing_only_in_case_list_lowercase_first():
+    """The scenario from issue #466.
+
+    Case-insensitive scoring gives ``fn`` and ``FN`` the same score for any
+    query, so the order the app supplies decides. It must be the same every
+    time, whichever order the graph listed them in.
+    """
+    for supplied in (["FN", "fn"], ["fn", "FN"]):
+        items = [{"name": n, "uri": f"http://ex.org/{n}"} for n in supplied]
+        options, _lookup = app.build_uri_options(items)
+        assert options == ["fn", "FN"]
+        for query in ("fn", "FN", "Fn"):
+            assert _score(query, app._pad_option("fn")) == _score(
+                query, app._pad_option("FN")
+            )
+            assert _rank(query, options) == ["fn", "FN"]
+
+
+def test_option_sort_key_orders_case_variants_lowercase_first():
+    names = ["FN", "Fn", "fn", "fN", "Apple", "apple", "b"]
+    assert sorted(names, key=app.option_sort_key) == [
+        "apple",
+        "Apple",
+        "b",
+        "fn",
+        "fN",
+        "Fn",
+        "FN",
+    ]
 
 
 def test_separator_gives_the_local_name_a_word_boundary_bonus():
