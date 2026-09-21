@@ -880,7 +880,12 @@ def render_visualization():
         )
         for _kind in _FILTER_KINDS:
             _key = _kind["key"]
-            _entries = build_filter_entries(_kind_items.get(_key) or [])
+            # Sorted here, not at the widget: the selection is rebuilt in entry
+            # order every run, so its chips follow this order too (issue #469).
+            _entries = sorted(
+                build_filter_entries(_kind_items.get(_key) or []),
+                key=lambda e: option_sort_key(e["display"]),
+            )
             _all_uris = [e["uri"] for e in _entries]
             _prev_sel, _prev_known = seed_filter_from_saved(
                 _all_uris,
@@ -1277,7 +1282,7 @@ def render_visualization():
         ):
             st.html(viz_hidden_note_style(_hidden_note))
             if focus_mode and focus_targets:
-                focus_labels = list(focus_targets.keys())
+                focus_labels = sorted(focus_targets, key=option_sort_key)
                 label_set = set(focus_labels)
                 # Default the focus seeds to the classes selected in the
                 # multiselect, so the neighbourhood grows from exactly what the
