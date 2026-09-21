@@ -2,8 +2,7 @@
 
 Streamlit filters a selectbox client-side: it keeps every option whose label
 contains the typed text as a *subsequence*, then sorts by an fzy score. That
-scorer is not configurable from Python (it is bundled JS, and it is byte-for-byte
-identical in every Streamlit release from 1.49 through 1.60), so the only levers
+scorer is not configurable from Python (it is bundled JS), so the only levers
 the app has are the option string it emits and the label ``format_func`` renders.
 
 Two properties of the scorer drive the format:
@@ -20,12 +19,13 @@ Two properties of the scorer drive the format:
   one width through ``format_func``, which makes that penalty identical for all
   of them; equal scores then keep the order the app supplied.
 
-``_score`` / ``_has_match`` below are a direct port of the bundled scorer, so
-these tests fail if either lever stops ranking the typed entity first. Note that
-Streamlit calls it as ``score(query, label, /*caseSensitive=*/true)``: options
-are *filtered* case-insensitively but *scored* case-sensitively, and the port
-mirrors that. It also means the ``haystack.length === needle.length`` shortcut to
-SCORE_MAX is disabled, so only a byte-identical option scores as a certainty.
+``_score`` / ``_has_match`` below are a direct port of the scorer bundled with
+the pinned Streamlit (1.63), so these tests fail if either lever stops ranking
+the typed entity first. Both filtering and scoring ignore case; only the bonuses
+read the label's own capitalisation. Streamlit before 1.51 scored with
+``caseSensitive=true``, so a lowercase query for a capitalised name got no
+ranking at all and fell back to alphabetical order (issue #244, fixed upstream
+in streamlit/streamlit#12849).
 """
 
 import ast
@@ -69,7 +69,7 @@ def _precompute_bonus(haystack: str) -> list[float]:
 def _has_match(needle: str, haystack: str) -> bool:
     """Whether ``needle`` appears in ``haystack`` as a subsequence.
 
-    Case-insensitive, unlike :func:`_score` — that asymmetry is Streamlit's.
+    Case-insensitive, like :func:`_score`.
     """
     needle, haystack = needle.lower(), haystack.lower()
     at = 0
@@ -84,14 +84,16 @@ def _score(needle: str, haystack: str) -> float:
     n, m = len(needle), len(haystack)
     if not n or not m:
         return _SCORE_MIN
-    # An option equal to the query wins outright. Streamlit passes
-    # caseSensitive=true, which disables fzy's same-length shortcut.
-    if needle == haystack:
+    # Only filtered options are scored, so one as long as the query is the
+    # query up to case, and fzy scores it as a certainty.
+    if n == m:
         return _SCORE_MAX
     if m > 1024:
         return _SCORE_MIN
 
+    # Bonuses read the original case (camelCase humps); matching ignores it.
     bonus = _precompute_bonus(haystack)
+    needle, haystack = needle.lower(), haystack.lower()
     # best[i][j]: score of a match ending exactly at j; running[i][j]: best so far.
     best = [[_SCORE_MIN] * m for _ in range(n)]
     running = [[_SCORE_MIN] * m for _ in range(n)]
@@ -189,6 +191,22 @@ def test_unlabelled_name_is_an_exact_option_match():
     options = _options(("Person", ""), ("PersonAddress", ""), ("LegalPerson", ""))
     assert _rank("Person", options)[0] == "Person"
     assert _score("Person", "Person") == _SCORE_MAX
+
+
+def test_query_case_does_not_change_the_ranking():
+    """The scenario from issue #244.
+
+    ``py-trip`` ranked ``Py-trig-id`` first: the scorer was case-sensitive, so
+    both options scored negative infinity and alphabetical order decided.
+    """
+    wanted = app.format_label_name("Py-trip", "Pythagorean triple")
+    options = _options(
+        ("Py-trig-id", "Pythagorean trigonometric identity"),
+        ("Py-trip", "Pythagorean triple"),
+    )
+    assert options[0] != wanted  # alphabetical order alone gets it wrong
+    for query in ("py-trip", "Py-trip", "PY-TRIP", "pytrip"):
+        assert _rank(query, options)[0] == wanted, query
 
 
 def test_separator_gives_the_local_name_a_word_boundary_bonus():
