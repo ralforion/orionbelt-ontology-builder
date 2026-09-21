@@ -306,6 +306,78 @@ def test_graph_pickers_pad_their_captions():
         assert "_pad_option" in called, f"{name} renders unpadded labels"
 
 
+def _sorts_by_option_key(node: ast.expr) -> bool:
+    """Whether ``node`` is ``sorted(...)`` keyed through ``option_sort_key``.
+
+    The key may be the function itself or a lambda that calls it on a field.
+    """
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "sorted"
+    ):
+        return False
+    key = next((k.value for k in node.keywords if k.arg == "key"), None)
+    return key is not None and any(
+        isinstance(n, ast.Name) and n.id == "option_sort_key" for n in ast.walk(key)
+    )
+
+
+def test_graph_pickers_order_case_variants_lowercase_first():
+    """Every Visualization picker lists its options through option_sort_key.
+
+    Issue #469: #467 sorted the Find and path pickers but not Node options,
+    whose entities kept the engine's codepoint order (``FN`` before ``fn``).
+    Options are sorted inline, held in a local that was, or (the node filter)
+    drawn from filter entries that are sorted where they are built, which is
+    also the order the filter's selected chips are rebuilt in.
+    """
+    tree = ast.parse((sources.PKG / "views" / "visualization.py").read_text("utf-8"))
+    sorted_names = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and _sorts_by_option_key(node.value)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    entry_builds = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_filter_entries"
+    ]
+    assert entry_builds, "the node filter no longer builds its entries here"
+    wrapped = {
+        id(arg)
+        for node in ast.walk(tree)
+        if _sorts_by_option_key(node)
+        for arg in node.args
+    }
+    for build in entry_builds:
+        assert id(build) in wrapped, f"line {build.lineno}: filter entries unsorted"
+
+    pickers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        if node.func.attr in ("selectbox", "multiselect")
+    ]
+    assert pickers, "the page draws no picker at all"
+    for picker in pickers:
+        options = next(k.value for k in picker.keywords if k.arg == "options")
+        from_entries = (
+            isinstance(options, ast.Subscript)
+            and isinstance(options.slice, ast.Constant)
+            and options.slice.value == "displays"
+        )
+        assert (
+            _sorts_by_option_key(options)
+            or from_entries
+            or (isinstance(options, ast.Name) and options.id in sorted_names)
+        ), f"picker on line {picker.lineno} skips option_sort_key"
+
+
 def test_short_name_outranks_longer_one_sharing_its_prefix():
     """The wine.owl case #210 had to leave mis-ranked, now that length is neutral."""
     options = _options(("Wine", ""), ("Winery", "Wine estate"))
