@@ -17,6 +17,7 @@ from ..ui import (
     format_label_name,
     language_pack_entries,
     language_pack_names,
+    option_sort_key,
     render_add_annotation,
     render_annotation_form,
     save_checkpoint,
@@ -611,7 +612,7 @@ def render_annotations():
         )
 
     # Sort all resources by display text
-    all_resources.sort(key=lambda r: r["display"].lower())
+    all_resources.sort(key=lambda r: option_sort_key(r["display"]))
 
     _ann_tab = st.segmented_control(
         "Section",

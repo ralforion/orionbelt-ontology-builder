@@ -59,6 +59,7 @@ from ..ui import (
     local_store,
     log_error,
     newly_hidden_uris,
+    option_sort_key,
     panel_heading_html,
     panel_subject_uri,
     parse_filter_text,
@@ -1176,7 +1177,7 @@ def render_visualization():
             if focus_targets:
                 _find_choice = st.selectbox(
                     "Find entity in graph",
-                    options=sorted(focus_targets),
+                    options=sorted(focus_targets, key=option_sort_key),
                     format_func=_picker_caption,
                     index=None,
                     placeholder="🔍 Find and centre on an entity…",
@@ -1686,7 +1687,7 @@ def render_visualization():
                 with _psrc_col:
                     _path_source = st.selectbox(
                         "From",
-                        options=sorted(path_choices),
+                        options=sorted(path_choices, key=option_sort_key),
                         format_func=_picker_caption,
                         index=None,
                         placeholder="Start entity…",
@@ -1700,7 +1701,7 @@ def render_visualization():
                 with _ptgt_col:
                     _path_target = st.selectbox(
                         "To",
-                        options=sorted(path_choices),
+                        options=sorted(path_choices, key=option_sort_key),
                         format_func=_picker_caption,
                         index=None,
                         placeholder="End entity…",

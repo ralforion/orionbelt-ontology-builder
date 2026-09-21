@@ -199,6 +199,7 @@ from .ui import (  # noqa: F401
     missing_required,
     newly_hidden_uris,
     note_undo_redo,
+    option_sort_key,
     panel_heading_html,
     panel_subject_uri,
     parent_option_index,
