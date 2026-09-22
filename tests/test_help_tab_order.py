@@ -365,9 +365,9 @@ def test_the_frame_claims_no_page_height(session, monkeypatch):
     monkeypatch.setattr(ui.st, "container", _container)
     monkeypatch.setattr(ui.st, "markdown", lambda body, **kw: styles.append(body))
     monkeypatch.setattr(
-        ui.st.components.v1,
-        "html",
-        lambda html, height=None, **kw: mounted.update(height=height),
+        ui.st,
+        "iframe",
+        lambda src, height=None, **kw: mounted.update(height=height),
     )
 
     ui.render_page_shims()

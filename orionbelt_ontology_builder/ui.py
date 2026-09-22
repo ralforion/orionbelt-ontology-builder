@@ -1044,7 +1044,7 @@ def render_page_shims() -> None:
     try:
         st.markdown(PAGE_SHIM_CSS, unsafe_allow_html=True)
         with st.container(key=PAGE_SHIM_KEY):
-            st.components.v1.html(page_shim_html(texts or {}), height=1)
+            st.iframe(page_shim_html(texts or {}), height=1)
     except Exception:  # cosmetic: a page must not fail over its keyboard wiring
         logger.debug("Page shims not mounted", exc_info=True)
 

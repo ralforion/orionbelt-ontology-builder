@@ -3514,9 +3514,7 @@ def render_visualization():
                     # and Streamlit strips the script a copy button needs.
                     if _bar_title:
                         with cell:
-                            st.components.v1.html(
-                                status_bar_copy_html(_bar_title), height=36
-                            )
+                            st.iframe(status_bar_copy_html(_bar_title), height=36)
 
                 if show_view:
                     col_info, col_btn = st.columns([7, 2])
