@@ -192,10 +192,10 @@ def test_panel_edits_the_restriction_the_edge_stands_for(graph):
     at = _run("panel", "Restriction", ename)
 
     # someValuesFrom points at a class, so the value is a picker now (#250).
-    assert picker(at, _panel_key(ename, "er_valcls")).value.strip() == "Wheel"
+    assert picker(at, _panel_key(ename, "er_valcls")).value == "Wheel"
     _box = picker(at, _panel_key(ename, "er_valcls"))
     # Options are padded for search ranking, so match on the stripped label.
-    _box.set_value(next(o for o in _box.options if o.strip() == "Vehicle"))
+    _box.set_value(next(o for o in _box.options if o == "Vehicle"))
     _click(at, "💾 Save")
 
     assert not at.exception, at.exception

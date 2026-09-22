@@ -450,9 +450,9 @@ def _panel(at, shown):
 
 
 def test_the_pair_survives_the_panel_being_switched_off_and_on():
-    """The pickers are widgets inside the panel, and Streamlit drops a widget's
-    state as soon as it stops being rendered — so the pair used to have to be
-    chosen again every time the panel was reopened (issue #360)."""
+    """The pair used to have to be chosen again every time the panel was
+    reopened, when the pickers were Streamlit widgets whose state was dropped
+    while they were not drawn (issue #360)."""
     at = _render("Class: A", "Class: C")
     assert at.session_state["viz_path_source"] == "Class: A"
 
@@ -463,12 +463,12 @@ def test_the_pair_survives_the_panel_being_switched_off_and_on():
     assert rendered_picker(at, "viz_path_target")["value"] == "Class: C"
 
 
-def test_a_remembered_pick_whose_entity_is_gone_is_forgotten():
-    """The remembered copy outlives the widget, so it has to be pruned with it:
-    an entity that has since been deleted must not come back when the panel is
+def test_a_pick_whose_entity_is_gone_is_forgotten_while_the_panel_is_off():
+    """The pair outlives the panel, so it has to be pruned without it: an
+    entity deleted while the panel was off must not come back when it is
     reopened."""
     at = _render("Class: A", "Class: C")
-    assert at.session_state["_viz_cfg_path_source"] == "Class: A"
+    _panel(at, False)
 
     at.session_state.ontology.delete_class(
         next(
@@ -479,12 +479,13 @@ def test_a_remembered_pick_whose_entity_is_gone_is_forgotten():
     )
     at.run(timeout=300)
     assert not at.exception, at.exception
+    assert "viz_path_source" not in at.session_state
 
-    assert "_viz_cfg_path_source" not in at.session_state
-    # The picker itself comes back empty rather than naming a class that is gone.
+    _panel(at, True)
+    # The picker comes back empty rather than naming a class that is gone.
     assert rendered_picker(at, "viz_path_source")["value"] is None
-    # The other half of the pair is untouched — only the gone one is dropped.
-    assert at.session_state["_viz_cfg_path_target"] == "Class: C"
+    # The other half of the pair is untouched; only the gone one is dropped.
+    assert rendered_picker(at, "viz_path_target")["value"] == "Class: C"
 
 
 def test_the_switch_is_offered_in_the_band_switch_row():

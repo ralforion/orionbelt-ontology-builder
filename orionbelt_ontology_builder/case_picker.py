@@ -27,6 +27,7 @@ _ASSET_DIR = PKG_DIR / "lib" / "case_picker"
 _HTML = (
     '<div class="cp-root">'
     '<label><span></span><span class="cp-help" hidden>?</span></label>'
+    '<span id="cp-desc" hidden></span>'
     '<div class="cp-field"><span class="cp-chips"></span>'
     '<input type="text" role="combobox" autocomplete="off" spellcheck="false"'
     ' aria-autocomplete="list" aria-expanded="false">'
@@ -54,6 +55,22 @@ def _component() -> Callable[..., Any]:
 def _component_key(key: str) -> str:
     return f"{key}_case_picker"
 
+
+# SELECT_ALL_NOTE
+# Why a few multi-pickers are drawn without their "Select all" row.
+#
+# The row takes every option, or with a query typed every match. It is kept
+# where selecting everything is a coherent thing to want: the three bulk
+# delete pages, and the graph's entity filters, whose own help text points at
+# it by name. It is never the row Enter takes: the first real match is
+# highlighted, the bulk row one Up above it, so type-and-Enter picks one
+# option (streamlit/streamlit#16841 and issue #438 were that going wrong in
+# Streamlit's multiselect).
+#
+# `select_all=False` is passed at the pickers where it is not coherent - a
+# focus on every node, a property chain of every property, a key of every
+# property, a concept under every parent - since there the row is only
+# something to hit by accident.
 
 _RUN = "_case_picker_run"
 _DRAWN = "_case_picker_drawn"
@@ -108,7 +125,7 @@ def _mount(
         data={
             **data,
             "options": options,
-            "captions": [str(format_func(o)).rstrip() for o in options],
+            "captions": [str(format_func(o)) for o in options],
             "value": value,
         },
         on_value_change=lambda: _picked(key, on_change, args),
@@ -132,9 +149,8 @@ def case_selectbox(
 
     ``options`` should already be in display order (see ``ui.option_sort_key``):
     the search keeps that order among equally good matches. ``format_func`` is
-    what is drawn and searched, as with ``st.selectbox``; trailing padding
-    meant for Streamlit's scorer is stripped, since this search has no use for
-    it. With ``accept_new_options``, text typed in is a value too, as with
+    what is drawn and searched, as with ``st.selectbox``. With
+    ``accept_new_options``, text typed in is a value too, as with
     ``st.selectbox``; it is offered as an option from then on.
     """
     options = list(options)
@@ -187,8 +203,8 @@ def case_multiselect(
     unsaved picks shows what it holds when it comes back. Without ``default``
     the value is only ever the page's or the user's, which is what lets a page
     restore it from saved settings before drawing it. ``select_all`` offers
-    the row that takes every option, or every match (see SELECT_ALL_NOTE in
-    ui.py).
+    the row that takes every option, or every match (see SELECT_ALL_NOTE
+    above).
     """
     options = list(options)
     if key not in st.session_state or (default is not None and not drawn_last_run(key)):

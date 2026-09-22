@@ -83,12 +83,8 @@ def _run(script, **session):
 
 
 def _options(at, key):
-    """The dropdown's options, unpadded.
-
-    Every entity dropdown is padded to a fixed width for search ranking
-    (``_pad_option``), and AppTest reports options as the widget formats them.
-    """
-    return [o.strip() for o in picker(at, key).options]
+    """The dropdown's options."""
+    return picker(at, key).options
 
 
 def test_the_language_field_offers_the_active_packs_codes_with_their_names():

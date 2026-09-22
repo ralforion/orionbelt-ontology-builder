@@ -14,7 +14,6 @@ from ..ui import (
     _disambiguated_name,
     _is_open,
     _namespace_option_index,
-    _pad_option,
     _rename_or_move,
     _resolve_list_view,
     _uid,
@@ -25,6 +24,7 @@ from ..ui import (
     confirm_delete,
     get_ontology_manager_class,
     missing_required,
+    option_sort_key,
     required_selectbox,
     save_checkpoint,
     set_flash_message,
@@ -65,17 +65,19 @@ def render_properties():
         if not object_props:
             st.info("No object properties defined yet.")
         else:
-            # Filter by domain class
-            filter_class_obj = st.selectbox(
+            # Filter by domain class. Empty means every property, so the
+            # clear cross is the way back.
+            filter_class_obj = clearable_selectbox(
                 "Filter by Domain Class",
-                options=["All"] + class_names + ["(No domain)"],
+                sorted(class_names, key=option_sort_key) + ["(No domain)"],
                 key="filter_obj_prop_class",
+                placeholder="All classes",
             )
 
             filtered_obj_props = object_props
             if filter_class_obj == "(No domain)":
                 filtered_obj_props = [p for p in object_props if not p["domain"]]
-            elif filter_class_obj != "All":
+            elif filter_class_obj:
                 filtered_obj_props = [
                     p for p in object_props if p["domain"] == filter_class_obj
                 ]
@@ -224,7 +226,6 @@ def render_properties():
                                     current_display=cur_dom_disp
                                     if cur_dom_disp in cls_opts
                                     else None,
-                                    format_func=_pad_option,
                                 )
                             with col2:
                                 rng_disp = clearable_selectbox(
@@ -234,7 +235,6 @@ def render_properties():
                                     current_display=cur_rng_disp
                                     if cur_rng_disp in cls_opts
                                     else None,
-                                    format_func=_pad_option,
                                 )
 
                             if st.form_submit_button("Save Changes"):
@@ -289,17 +289,19 @@ def render_properties():
         if not data_props:
             st.info("No data properties defined yet.")
         else:
-            # Filter by domain class
-            filter_class_data = st.selectbox(
+            # Filter by domain class. Empty means every property, so the
+            # clear cross is the way back.
+            filter_class_data = clearable_selectbox(
                 "Filter by Domain Class",
-                options=["All"] + class_names + ["(No domain)"],
+                sorted(class_names, key=option_sort_key) + ["(No domain)"],
                 key="filter_data_prop_class",
+                placeholder="All classes",
             )
 
             filtered_data_props = data_props
             if filter_class_data == "(No domain)":
                 filtered_data_props = [p for p in data_props if not p["domain"]]
-            elif filter_class_data != "All":
+            elif filter_class_data:
                 filtered_data_props = [
                     p for p in data_props if p["domain"] == filter_class_data
                 ]
@@ -441,7 +443,6 @@ def render_properties():
                                     current_display=cur_dom_disp
                                     if cur_dom_disp in cls_opts
                                     else None,
-                                    format_func=_pad_option,
                                 )
                             with col2:
                                 current_range = (
@@ -547,7 +548,6 @@ def render_properties():
                         reuse_opts,
                         key="reuse_prop_existing",
                         current_display=reuse_opts[0] if reuse_opts else None,
-                        format_func=_pad_option,
                     )
 
                     cls_opts, cls_lookup = build_class_options(classes)
@@ -558,7 +558,6 @@ def render_properties():
                             cls_opts,
                             key="reuse_prop_source",
                             current_display=cls_opts[0] if cls_opts else None,
-                            format_func=_pad_option,
                         )
                     with col2:
                         target_disp = required_selectbox(
@@ -566,7 +565,6 @@ def render_properties():
                             cls_opts,
                             key="reuse_prop_target",
                             current_display=cls_opts[0] if cls_opts else None,
-                            format_func=_pad_option,
                         )
 
                     link_disp = st.radio(
@@ -636,7 +634,6 @@ def render_properties():
                         cls_opts,
                         key="add_objprop_domain",
                         current_display=cls_opts[0] if cls_opts else None,
-                        format_func=_pad_option,
                     )
                 with col2:
                     range_disp = clearable_selectbox(
@@ -644,7 +641,6 @@ def render_properties():
                         cls_opts,
                         key="add_objprop_range",
                         current_display=cls_opts[0] if cls_opts else None,
-                        format_func=_pad_option,
                     )
 
                 st.write("**Property Characteristics:**")
@@ -666,7 +662,6 @@ def render_properties():
                     obj_prop_opts,
                     key="add_objprop_inverse",
                     current_display=obj_prop_opts[0] if obj_prop_opts else None,
-                    format_func=_pad_option,
                 )
                 ns_options, ns_lookup = build_namespace_options(ont)
                 ns_display = clearable_selectbox(
@@ -723,7 +718,6 @@ def render_properties():
                     cls_opts,
                     key="data_prop_domain",
                     current_display=cls_opts[0] if cls_opts else None,
-                    format_func=_pad_option,
                 )
             with col2:
                 datatypes = list(get_ontology_manager_class().XSD_DATATYPES.keys())

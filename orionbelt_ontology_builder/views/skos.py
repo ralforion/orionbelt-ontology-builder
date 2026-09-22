@@ -11,7 +11,6 @@ from ..ui import (
     _custom_uri_field,
     _is_open,
     _open_entity,
-    _pad_option,
     _renamed_ref,
     _resolve_list_view,
     build_uri_options,
@@ -250,7 +249,6 @@ def render_skos_vocabulary():
                 ["None"] + scheme_opts,
                 key="concept_scheme_select",
                 current_display="None",
-                format_func=_pad_option,
             )
             _add_broader_opts, _add_broader_lookup = build_uri_options(concepts)
             c_broader = clearable_selectbox(
@@ -258,7 +256,6 @@ def render_skos_vocabulary():
                 ["None"] + _add_broader_opts,
                 key="concept_broader_select",
                 current_display="None",
-                format_func=_pad_option,
             )
             c_lang = language_selectbox("Language Tag", key="concept_lang")
             if st.form_submit_button("Add Concept"):
@@ -294,7 +291,6 @@ def render_skos_vocabulary():
                 "Filter by Scheme",
                 scheme_opts,
                 key="concept_filter_scheme",
-                format_func=_pad_option,
                 placeholder="All schemes",
             )
             filtered = (
@@ -451,7 +447,6 @@ def render_skos_vocabulary():
                                     _rel_opts,
                                     key=f"rel_target_{_ck}",
                                     current_display=_rel_opts[0] if _rel_opts else None,
-                                    format_func=_pad_option,
                                 )
                                 _resolved = _rel_lookup.get(rel_target)
                                 _required_label = "Target Concept"
@@ -548,9 +543,8 @@ def render_skos_vocabulary():
                                 default=_cur_broader_disp,
                                 key=f"broader_{_ck}",
                                 # Every concept as this one's parent is never
-                                # the intent (see SELECT_ALL_NOTE in ui.py).
+                                # the intent (see SELECT_ALL_NOTE in case_picker.py).
                                 select_all=False,
-                                format_func=_pad_option,
                                 help="A concept may have several parents. An "
                                 "edge that would make this concept its own "
                                 "ancestor is refused.",
@@ -578,7 +572,6 @@ def render_skos_vocabulary():
                                 current_display=_cur_scheme_disp
                                 if _cur_scheme_disp in scheme_options
                                 else "None",
-                                format_func=_pad_option,
                             )
 
                             # Top concepts: checked writes skos:topConceptOf and
@@ -708,7 +701,6 @@ def render_skos_vocabulary():
                 "Scheme",
                 scheme_opts,
                 key="hierarchy_scheme_select",
-                format_func=_pad_option,
                 placeholder="All schemes",
             )
             hierarchy = ont.get_concept_hierarchy(

@@ -47,6 +47,9 @@ class El {
   getAttribute(name) {
     return this.attrs[name] ?? null;
   }
+  removeAttribute(name) {
+    delete this.attrs[name];
+  }
   addEventListener(type, fn) {
     this.listeners[type] = fn;
   }
@@ -91,6 +94,7 @@ const parts = {
   ".cp-clear": Object.assign(new El("button"), { hidden: true }),
   label,
   ".cp-help": new El("span"),
+  "#cp-desc": new El("span"),
 };
 root.querySelector = (selector) => parts[selector];
 const parentElement = { querySelector: (selector) => parts[selector] };
@@ -118,6 +122,11 @@ for (const step of JSON.parse(scenarioJson)) {
     input.oninput();
   } else if (op === "key") {
     input.onkeydown({ key: arg, preventDefault() {} });
+  } else if (op === "press") {
+    // A printable key as the browser delivers it: keydown, then the input.
+    input.onkeydown({ key: arg, preventDefault() {} });
+    input.value += arg;
+    input.oninput();
   } else if (op === "look") {
     out.push({
       value: input.value,

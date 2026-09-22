@@ -59,3 +59,37 @@ def picker(at, key):
 def pickers(at):
     """Every picker drawn, in page order, like ``at.selectbox``."""
     return [Picker(at, key) for key in rendered_picker_keys(at)]
+
+
+def rank_in_component(captions, query):
+    """``captions`` in the order the component's search lists them for
+    ``query``, run under Node; the test is skipped where Node is missing."""
+    import pathlib
+    import shutil
+    import subprocess
+    import tempfile
+
+    import pytest
+    import sources
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    js = sources.PKG / "lib" / "case_picker" / "case_picker.js"
+    with tempfile.TemporaryDirectory() as tmp:
+        # As .mjs, so Node reads it as the ES module it is.
+        module = pathlib.Path(tmp) / "case_picker.mjs"
+        module.write_text(js.read_text("utf-8"), "utf-8")
+        script = (
+            f"import {{ rankOptions }} from {json.dumps(module.as_uri())};"
+            f"const captions = {json.dumps(list(captions))};"
+            f"console.log(JSON.stringify("
+            f"rankOptions(captions, {json.dumps(query)}).map((i) => captions[i])));"
+        )
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    return json.loads(result.stdout)

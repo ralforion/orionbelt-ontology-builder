@@ -31,25 +31,36 @@ function bestPlace(text, q) {
   return best;
 }
 
-function isSubsequence(q, text) {
-  let from = 0;
-  for (const ch of q) {
-    from = text.indexOf(ch, from) + 1;
-    if (from === 0) return false;
+// How many characters the letters of `q`, in order, span in `text`, taking
+// the tightest run that starts at an occurrence of its first letter; -1 when
+// they are not all there.
+function subsequenceSpan(q, text) {
+  let best = -1;
+  for (let start = text.indexOf(q[0]); start !== -1; start = text.indexOf(q[0], start + 1)) {
+    let at = start;
+    for (const ch of q.slice(1)) {
+      at = text.indexOf(ch, at + 1);
+      if (at === -1) return best;
+    }
+    const span = at - start + 1;
+    if (best === -1 || span < best) best = span;
   }
-  return true;
+  return best;
 }
 
 // Rank of `caption` for query `q`, or -1 when it does not match. Each place
 // tier comes in two cases, exact first, so typing `FN` lists `FN` above `fn`
 // and typing `fn` lists `fn` above `FN`. A caption that only holds the letters
-// in order still matches, last, as it did with Streamlit's fuzzy search.
+// in order still matches, last, as it did with Streamlit's fuzzy search, the
+// tighter the run of letters the better (`pytrip` finds `Py-trip` before
+// `Py-trig-id`, issue #244).
 export function rankCaption(caption, q) {
   if (!q) return 0;
   const exact = bestPlace(caption, q);
   const folded = bestPlace(caption.toLowerCase(), q.toLowerCase());
   if (exact === -1 && folded === -1) {
-    return isSubsequence(q.toLowerCase(), caption.toLowerCase()) ? 6 : -1;
+    const span = subsequenceSpan(q.toLowerCase(), caption.toLowerCase());
+    return span === -1 ? -1 : 6 + span / (span + 1);
   }
   if (exact !== -1 && exact <= folded) return exact * 2;
   return folded * 2 + 1;
@@ -105,6 +116,12 @@ export default function ({ data, parentElement, setStateValue }) {
   root.classList.toggle("cp-multi", !!multi);
   help.hidden = !data.help;
   help.title = data.help || "";
+  // The help as the field's description, so a screen reader reads it on focus
+  // rather than only on hover, as the page shim arranges for Streamlit's own
+  // widgets (issue #383).
+  root.querySelector("#cp-desc").textContent = data.help || "";
+  if (data.help) input.setAttribute("aria-describedby", "cp-desc");
+  else input.removeAttribute("aria-describedby");
   input.setAttribute("aria-label", data.label);
   input.placeholder = data.placeholder;
   input.disabled = !!data.disabled;
@@ -251,7 +268,7 @@ export default function ({ data, parentElement, setStateValue }) {
     const items = [];
     // The bulk row is offered but never taken by default: it is highlighted
     // only by the arrow keys, so type-and-Enter picks one option, not every
-    // match (see SELECT_ALL_NOTE in ui.py).
+    // match (see SELECT_ALL_NOTE in case_picker.py).
     let firstReal = 0;
     if (multi && data.selectAll && shown.length >= 2) {
       const all = [...shown];
@@ -337,6 +354,17 @@ export default function ({ data, parentElement, setStateValue }) {
       input.blur();
     } else if (event.key === "Backspace" && multi && !input.value && chosen().length) {
       unchoose(chosen().length - 1);
+    } else if (
+      !multi &&
+      list.hidden &&
+      event.key.length === 1 &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      // Typing into a field still showing its pick starts a new search, as it
+      // does on focus; otherwise `FN` picked and `fn` typed searched `FNfn`.
+      input.value = "";
     }
   };
   clear.onmousedown = (event) => {

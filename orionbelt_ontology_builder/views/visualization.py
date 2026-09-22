@@ -26,7 +26,6 @@ from ..ui import (
     _edge_id_parts,
     _fmt_unknown,
     _nav_open_entity,
-    _pad_option,
     _panel_add_kind,
     _Path,
     _persist_viz_file_state,
@@ -1061,19 +1060,10 @@ def render_visualization():
                 )
 
         def _picker_caption(option):
-            """What a picker shows for one of its options.
-
-            Padded, because Streamlit's scorer docks an option 0.005 per
-            character after its last match, so the longer of two equally good
-            matches loses on length alone: searching ``va`` ranked
-            ``Class: vl · value`` above ``Class: va · variable``
-            (issue #461). Padding every caption to one width makes that penalty
-            identical for all of them, as it already does for the entity
-            dropdowns of issue #214 (see :func:`app._pad_option`). The padding
-            is invisible and stays out of the widget's value, which remains the
-            label the rest of the page is keyed by.
-            """
-            return _pad_option(focus_captions.get(option, option))
+            """What a picker shows for one of its options: the label the
+            rest of the page is keyed by, with the entity's own label added
+            (see :func:`picker_option_caption`)."""
+            return focus_captions.get(option, option)
 
         # A seed whose entity was renamed is held under a label that no longer
         # exists; re-point it at the new one first, or the prune below reads the
@@ -1331,7 +1321,7 @@ def render_visualization():
                         format_func=_picker_caption,
                         key="viz_focus_seeds",
                         # A focus on everything is not a focus, so the row that
-                        # would offer it is not drawn (see SELECT_ALL_NOTE in ui.py).
+                        # would offer it is not drawn (see SELECT_ALL_NOTE in case_picker.py).
                         select_all=False,
                         on_change=viz_focus_seeds_changed,
                         help="Classes, individuals or SKOS concepts to centre on. "
@@ -1642,20 +1632,12 @@ def render_visualization():
             if r["node_kind"] != "property"
         }
         path_labels = {key: label for label, key in path_choices.items()}
-        # What the pickers hold has to outlive them. They are widgets inside the
-        # panel, and Streamlit drops a widget's state as soon as it stops being
-        # rendered, so switching the panel off and on again came back empty and
-        # the pair had to be picked from scratch (issue #360). These two keys are
-        # written after each render and seed the widgets on the next one.
-        _PATH_PICK_KEYS = (
-            ("viz_path_source", "_viz_cfg_path_source"),
-            ("viz_path_target", "_viz_cfg_path_target"),
-        )
-        # A pick whose entity is gone — deleted, or its type toggled off — is no
-        # longer an option, and Streamlit would otherwise carry the stale label
-        # into a widget that cannot show it. The remembered copy goes with it,
-        # or the entity would come back the next time the panel is opened.
-        for _pkey in (key for pair in _PATH_PICK_KEYS for key in pair):
+        # The pair outlives the panel being switched off and on (issue #360):
+        # the pickers keep their value in session state (see case_picker). A
+        # pick whose entity is gone, deleted or its type toggled off, is dropped
+        # here, while the panel may be hidden and nothing else would, or the
+        # entity would come back the next time the panel is opened.
+        for _pkey in ("viz_path_source", "viz_path_target"):
             if st.session_state.get(_pkey) not in path_choices:
                 st.session_state.pop(_pkey, None)
 
@@ -1673,21 +1655,6 @@ def render_visualization():
         # goes on its own.
         if path_panel:
             with st.expander("Shortest path between two entities", expanded=False):
-                # Put the last pair back into the pickers. Written to the
-                # widgets' own keys, and only where they have none: Streamlit
-                # prefers a widget's stored state over anything passed in, so
-                # this seeds a picker that has just been rebuilt without ever
-                # overriding one the user is holding. Seeding by session state
-                # rather than by an ``index`` keeps ``index=None`` below, which
-                # is what makes these two clearable (tests/
-                # test_clearable_required_dropdowns.py).
-                for _widget_key, _remember_key in _PATH_PICK_KEYS:
-                    if _widget_key in st.session_state:
-                        continue
-                    _remembered = st.session_state.get(_remember_key)
-                    if _remembered in path_choices:
-                        st.session_state[_widget_key] = _remembered
-
                 _psrc_col, _ptgt_col = st.columns(2)
                 with _psrc_col:
                     _path_source = case_selectbox(
@@ -1712,21 +1679,6 @@ def render_visualization():
                         help="The path is undirected — it answers 'how are these "
                         "two related', so it reads a link either way round.",
                     )
-
-                # Remembered for the next time the panel is opened. Written
-                # every render rather than on change: the widgets' own state is
-                # the live value while the panel is up, and this only has to be
-                # right at the moment the panel goes away. A picker that has been
-                # cleared drops its key rather than remembering a None, so
-                # "nothing remembered" is one state and not two.
-                for _remember_key, _picked in (
-                    ("_viz_cfg_path_source", _path_source),
-                    ("_viz_cfg_path_target", _path_target),
-                ):
-                    if _picked:
-                        st.session_state[_remember_key] = _picked
-                    else:
-                        st.session_state.pop(_remember_key, None)
 
                 _src_key = path_choices.get(_path_source)
                 _tgt_key = path_choices.get(_path_target)

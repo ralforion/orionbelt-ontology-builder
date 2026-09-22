@@ -1,18 +1,13 @@
-"""Which multiselects keep their "Select N matches" row (streamlit/streamlit#16841).
+"""Which multi-pickers keep their "Select all" row (SELECT_ALL_NOTE).
 
-Streamlit 1.63 made Enter commit the first visible row of a multiselect, and
-with two or more matches that row is the bulk one. ``_ENTER_INSERTS_JS`` takes
-the first real option instead, on every multiselect, so the row itself stays
-harmless and is kept wherever selecting everything is a coherent thing to want:
-the three bulk delete pages, and the graph's entity filters, whose help text
-points at it by name.
-
-``select_all=False`` is passed only where selecting everything is not coherent.
-These are source-level checks: the parameter is a rendering detail Streamlit's
-test API does not report, and what is worth pinning is the decision per picker.
+The row is never what Enter takes (``test_case_picker.py`` drives that), so it
+is kept wherever selecting everything is a coherent thing to want: the three
+bulk delete pages, and the graph's entity filters, whose help text points at it
+by name. ``select_all=False`` is passed only where selecting everything is not
+coherent. These are source-level checks: what is worth pinning is the decision
+per picker.
 """
 
-import re
 from pathlib import Path
 
 VIEWS = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder" / "views"
@@ -64,29 +59,6 @@ def test_the_graph_filter_keeps_the_row_its_help_names():
     assert "'Select all'" in call, "the help text points at the row by name"
 
 
-def test_the_shim_is_what_makes_the_row_safe_to_keep():
-    """Every kept row is only harmless while Enter skips it."""
-    ui = (VIEWS.parent / "ui.py").read_text(encoding="utf-8")
-    assert "SELECT_ALL_NOTE" in ui
-    assert re.search(r"var SENTINEL = /\^__\.\*__\$/", ui), "the bulk rows are skipped"
-
-
-def test_the_first_arrow_stop_is_the_first_match():
-    """With a query typed, Down lands where Enter goes, not on the bulk row.
-
-    The bulk row is drawn first and tinted, so it reads as the current row;
-    a Down meant to reach the first match landed on it instead, and Enter from
-    there selected every match (issue #438). The shim follows react-aria's own
-    press with one more, and only for a press from the keyboard, so the press
-    it sends is not followed up again.
-    """
-    ui = (VIEWS.parent / "ui.py").read_text(encoding="utf-8")
-    shim = ui[
-        ui.index('_ENTER_INSERTS_JS = r"""') : ui.index(
-            '"""', ui.index('_ENTER_INSERTS_JS = r"""') + 24
-        )
-    ]
-    assert "function onArrowDown(event)" in shim
-    assert "!event.isTrusted" in shim, "a synthetic press must not be followed up"
-    assert "SENTINEL.test(head)" in shim, "only a bulk row at the head is skipped"
-    assert "doc.addEventListener('keydown', onKeyDown, true)" in shim
+def test_the_note_the_pickers_point_at_is_there():
+    note = (VIEWS.parent / "case_picker.py").read_text(encoding="utf-8")
+    assert "# SELECT_ALL_NOTE" in note
