@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 import sources
-from case_pickers import rendered_picker
+from case_pickers import rank_in_component, rendered_picker
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import case_picker
@@ -22,24 +22,7 @@ JS = sources.PKG / "lib" / "case_picker" / "case_picker.js"
 
 def _rank(captions, query, tmp_path):
     """``rankOptions`` from the component, applied to ``captions``."""
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is not installed")
-    module = tmp_path / "case_picker.mjs"
-    module.write_text(JS.read_text("utf-8"), "utf-8")
-    script = (
-        f"import {{ rankOptions }} from {json.dumps(module.as_uri())};"
-        f"const captions = {json.dumps(captions)};"
-        f"console.log(JSON.stringify("
-        f"rankOptions(captions, {json.dumps(query)}).map((i) => captions[i])));"
-    )
-    result = subprocess.run(
-        [node, "--input-type=module", "-e", script],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
+    return rank_in_component(captions, query)
 
 
 # In option_sort_key order, as every picker supplies them.
@@ -93,21 +76,21 @@ def _picker_script():
         "Pick",
         ["Class: fn", "Class: FN"],
         key="pick",
-        format_func=lambda o: o.ljust(40),
+        format_func=lambda o: f"{o} · label",
     )
     st.session_state["returned"] = chosen
 
 
-def test_the_page_sends_unpadded_captions_and_the_seeded_value():
-    """Seeding ``st.session_state[key]`` is how the page preselects, and the
-    padding meant for Streamlit's scorer is no use to this search."""
+def test_the_page_sends_captions_and_the_seeded_value():
+    """Seeding ``st.session_state[key]`` is how the page preselects; the
+    captions are what ``format_func`` makes of the options."""
     at = AppTest.from_function(_picker_script)
     at.session_state["pick"] = "Class: FN"
     at.run()
     assert not at.exception, at.exception
     data = rendered_picker(at, "pick")
     assert data["options"] == ["Class: fn", "Class: FN"]
-    assert data["captions"] == ["Class: fn", "Class: FN"]
+    assert data["captions"] == ["Class: fn · label", "Class: FN · label"]
     assert data["value"] == "Class: FN"
     assert at.session_state["returned"] == "Class: FN"
 
@@ -318,3 +301,90 @@ def test_a_pick_in_a_form_survives_an_unrelated_rerun(tmp_path):
     )
     assert seen["value"] == "c"
     assert seen["reports"] == ["c"]
+
+
+def test_enter_picks_the_match_not_the_typed_text(tmp_path):
+    """Issue #447: ``com`` and Enter in "Annotation Type" made a type called
+    ``com`` rather than picking ``rdfs:comment``. A new value is still one row
+    away, last."""
+    creatable = _data(
+        acceptNewOptions=True,
+        options=["rdfs:comment", "rdfs:label"],
+        captions=["rdfs:comment", "rdfs:label"],
+    )
+    listed, picked = _drive(
+        [
+            ["render", creatable],
+            ["focus"],
+            ["type", "com"],
+            ["look"],
+            ["key", "Enter"],
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert listed["rows"] == ["rdfs:comment", "Add: com"]
+    assert picked["reports"] == ["rdfs:comment"]
+
+
+def test_select_all_is_only_taken_on_purpose(tmp_path):
+    """Issue #438 and streamlit/streamlit#16841: type-and-Enter picks the first
+    match, never every match; the bulk row is one Up away."""
+    multi = _data(
+        multi=True,
+        selectAll=True,
+        value=[],
+        options=["apple", "Apple", "zebra"],
+        captions=["apple", "Apple", "zebra"],
+    )
+    one, every = _drive(
+        [
+            ["render", multi],
+            ["focus"],
+            ["type", "app"],
+            ["key", "Enter"],
+            ["look"],
+            ["type", "app"],
+            ["key", "ArrowUp"],
+            ["key", "Enter"],
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert one["reports"] == [["apple"]]
+    assert every["reports"][-1] == ["apple", "Apple"]
+
+
+def test_no_results_is_not_a_row_enter_can_take(tmp_path):
+    """Clicking the empty state took a whole filter down to one class once."""
+    (seen,) = _drive(
+        [
+            ["render", _data()],
+            ["focus"],
+            ["type", "zzz"],
+            ["key", "Enter"],
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert seen["rows"] == ["No results"]
+    assert seen["reports"] == []
+
+
+def test_typing_after_a_pick_starts_a_new_search(tmp_path):
+    """The field keeps focus after Enter picks, showing the pick; what is typed
+    next is a new search, not an addition to the pick's text."""
+    (seen,) = _drive(
+        [
+            ["render", _data(options=["fn", "FN"], captions=["fn", "FN"])],
+            ["focus"],
+            ["type", "FN"],
+            ["key", "Enter"],
+            ["press", "f"],
+            ["press", "n"],
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert seen["value"] == "fn"
+    assert seen["rows"] == ["fn", "FN"]

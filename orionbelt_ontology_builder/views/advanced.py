@@ -154,7 +154,7 @@ def render_advanced():
                     key="adv_chain_props",
                     help="Select properties in the order they should be followed",
                     # The order is the point, and a row that inserts every
-                    # property at once has none (see SELECT_ALL_NOTE in ui.py).
+                    # property at once has none (see SELECT_ALL_NOTE in case_picker.py).
                     select_all=False,
                 )
 
@@ -296,7 +296,7 @@ def render_advanced():
                     key="adv_haskey_props",
                     help="Properties that together uniquely identify instances",
                     # A key is a handful of properties, never all of them
-                    # (see SELECT_ALL_NOTE in ui.py).
+                    # (see SELECT_ALL_NOTE in case_picker.py).
                     select_all=False,
                 )
 

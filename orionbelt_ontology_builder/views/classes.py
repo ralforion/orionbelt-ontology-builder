@@ -15,7 +15,6 @@ from ..ui import (
     _disambiguated_name,
     _is_open,
     _namespace_option_index,
-    _pad_option,
     _renamed_ref,
     _resolve_list_view,
     _uid,
@@ -256,7 +255,6 @@ def render_classes():
                 class_options,
                 key="edit_class_select",
                 current_display=class_options[0] if class_options else None,
-                format_func=_pad_option,
             )
             selected_uri = class_lookup.get(selected_display)
             class_info = (

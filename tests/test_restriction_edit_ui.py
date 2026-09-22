@@ -42,12 +42,9 @@ def _click(at, label):
 
 
 def _pick_class(at, key, name):
-    """Choose a class in a value selectbox. Options are padded for search
-    ranking (see app.SEARCH_PAD_WIDTH), so match on the stripped label."""
+    """Choose a class in a value picker, by name or by a label following it."""
     box = picker(at, key)
-    option = next(
-        o for o in box.options if o.strip() == name or o.strip().startswith(name + " ")
-    )
+    option = next(o for o in box.options if o == name or o.startswith(name + " "))
     box.set_value(option)
 
 
@@ -67,7 +64,7 @@ def test_editor_opens_with_the_rows_own_values():
 
     assert not at.exception, at.exception
     assert at.selectbox(key="er_type_0").value == "someValuesFrom"
-    assert picker(at, "er_valcls_0").value.strip() == "Engine"
+    assert picker(at, "er_valcls_0").value == "Engine"
 
 
 def test_saving_edits_the_row_it_was_opened_for():
@@ -196,7 +193,7 @@ def test_an_imported_restriction_keeps_its_namespace_through_an_edit():
     # The imported class is a proper option now rather than a raw URI, and it
     # maps back to its own URI, so saving round-trips it (issue #250). The
     # assertions after the save are what prove that.
-    assert picker(at, "er_valcls_0").value.strip() == "Bar"
+    assert picker(at, "er_valcls_0").value == "Bar"
 
     at.selectbox(key="er_type_0").set_value("allValuesFrom")
     _click(at, "💾 Save")
@@ -235,7 +232,7 @@ def test_a_class_valued_restriction_cannot_be_emptied():
     _open_row(at, 0)
 
     options = picker(at, "er_valcls_0").options
-    assert options and all(o.strip() for o in options)
+    assert options and all(options)
 
 
 def _has_value_script():
@@ -312,7 +309,7 @@ def test_switching_a_hasvalue_row_to_a_class_type_offers_only_classes():
 
     at.selectbox(key="er_type_0").set_value("someValuesFrom").run(timeout=120)
 
-    options = [o.strip() for o in picker(at, "er_valcls_0").options]
+    options = picker(at, "er_valcls_0").options
     assert options == ["Person"], options
     assert "alice" not in " ".join(options)
 
@@ -328,7 +325,7 @@ def test_a_required_dropdown_can_be_cleared():
     _open_row(at, 0)
 
     box = picker(at, "er_cls_0")
-    assert box.value is not None and box.value.strip() == "Bicycle"
+    assert box.value is not None and box.value == "Bicycle"
     box.set_value(None).run(timeout=120)
     assert picker(at, "er_cls_0").value is None
 

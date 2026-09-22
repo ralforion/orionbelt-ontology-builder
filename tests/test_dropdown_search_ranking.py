@@ -1,137 +1,23 @@
-"""Dropdown search ranks the entity you typed first (issues #210, #214, #461).
+"""Dropdown search ranks the entity you typed first.
 
-Streamlit filters a selectbox client-side: it keeps every option whose label
-contains the typed text as a *subsequence*, then sorts by an fzy score. That
-scorer is not configurable from Python (it is bundled JS), so the only levers
-the app has are the option string it emits and the label ``format_func`` renders.
+The entity pickers are ``case_picker`` components, whose search runs in the
+browser (``lib/case_picker/case_picker.js``); these are the scenarios that went
+wrong over the years in Streamlit's own dropdowns, run against that search:
+a longer fuzzy match or a camelCase compound ranked above the exact name
+(issue #210), a longer label cost an option its place (#214, #461), a query in
+another case found nothing useful (#244), and ``fn`` / ``FN`` could not be told
+apart at all (#466, #468). ``test_case_picker.py`` covers the search itself.
 
-Two properties of the scorer drive the format:
-
-* It scores a match partly by the character *preceding* it: 0.9 after ``/``, 0.8
-  after a space / ``-`` / ``_``, 0.7 for a camelCase hump, and 0.0 after ``(``.
-  The old ``'Label (name)'`` format gave the local name no boundary bonus at all,
-  and an unrelated camelCase compound could outscore an exact match: searching
-  ``HamTopping`` in pizza.owl ranked ``ParmaHamTopping`` first (issue #210). The
-  name now leads, behind a separator that ends in a space.
-* It subtracts 0.005 for every character *after* the last match, so a longer
-  option scores lower purely for being longer. Searching ``n`` ranked ``node``
-  above ``n · number`` (issue #214). :func:`app._pad_option` pads every option to
-  one width through ``format_func``, which makes that penalty identical for all
-  of them; equal scores then keep the order the app supplied.
-
-``_score`` / ``_has_match`` below are a direct port of the scorer bundled with
-the pinned Streamlit (1.63), so these tests fail if either lever stops ranking
-the typed entity first. Both filtering and scoring ignore case; only the bonuses
-read the label's own capitalisation. Streamlit before 1.51 scored with
-``caseSensitive=true``, so a lowercase query for a capitalised name got no
-ranking at all and fell back to alphabetical order (issue #244, fixed upstream
-in streamlit/streamlit#12849).
+What the app still decides is the order it supplies, which settles every tie
+the search leaves: ``option_sort_key``, guarded below.
 """
 
 import ast
 
 import sources
+from case_pickers import rank_in_component
 
 from orionbelt_ontology_builder import app
-
-# fzy constants, as bundled by Streamlit.
-_SCORE_MIN = float("-inf")
-_SCORE_MAX = float("inf")
-_GAP_LEADING = -0.005
-_GAP_TRAILING = -0.005
-_GAP_INNER = -0.01
-_MATCH_CONSECUTIVE = 1.0
-_MATCH_SLASH = 0.9
-_MATCH_WORD = 0.8
-_MATCH_CAPITAL = 0.7
-_MATCH_DOT = 0.6
-
-
-def _precompute_bonus(haystack: str) -> list[float]:
-    """Per-character bonus, derived from the preceding character."""
-    bonuses = []
-    prev = "/"
-    for ch in haystack:
-        if prev == "/":
-            bonuses.append(_MATCH_SLASH)
-        elif prev in "-_ ":
-            bonuses.append(_MATCH_WORD)
-        elif prev == ".":
-            bonuses.append(_MATCH_DOT)
-        elif prev.islower() and ch.isupper():
-            bonuses.append(_MATCH_CAPITAL)
-        else:
-            bonuses.append(0.0)
-        prev = ch
-    return bonuses
-
-
-def _has_match(needle: str, haystack: str) -> bool:
-    """Whether ``needle`` appears in ``haystack`` as a subsequence.
-
-    Case-insensitive, like :func:`_score`.
-    """
-    needle, haystack = needle.lower(), haystack.lower()
-    at = 0
-    for ch in needle:
-        at = haystack.find(ch, at) + 1
-        if at == 0:
-            return False
-    return True
-
-
-def _score(needle: str, haystack: str) -> float:
-    n, m = len(needle), len(haystack)
-    if not n or not m:
-        return _SCORE_MIN
-    # Only filtered options are scored, so one as long as the query is the
-    # query up to case, and fzy scores it as a certainty.
-    if n == m:
-        return _SCORE_MAX
-    if m > 1024:
-        return _SCORE_MIN
-
-    # Bonuses read the original case (camelCase humps); matching ignores it.
-    bonus = _precompute_bonus(haystack)
-    needle, haystack = needle.lower(), haystack.lower()
-    # best[i][j]: score of a match ending exactly at j; running[i][j]: best so far.
-    best = [[_SCORE_MIN] * m for _ in range(n)]
-    running = [[_SCORE_MIN] * m for _ in range(n)]
-
-    for i in range(n):
-        prev_running = _SCORE_MIN
-        gap = _GAP_TRAILING if i == n - 1 else _GAP_INNER
-        for j in range(m):
-            if needle[i] == haystack[j]:
-                if i == 0:
-                    score = j * _GAP_LEADING + bonus[j]
-                elif j:
-                    score = max(
-                        running[i - 1][j - 1] + bonus[j],
-                        best[i - 1][j - 1] + _MATCH_CONSECUTIVE,
-                    )
-                else:
-                    score = _SCORE_MIN
-                best[i][j] = score
-                prev_running = max(score, prev_running + gap)
-            else:
-                best[i][j] = _SCORE_MIN
-                prev_running = prev_running + gap
-            running[i][j] = prev_running
-
-    return running[n - 1][m - 1]
-
-
-def _rank(query: str, options: list[str]) -> list[str]:
-    """The order Streamlit's selectbox shows for ``query``.
-
-    Scores the rendered label, which is what the widget filters on, so the
-    ``format_func`` every entity dropdown passes is part of what is measured.
-    ``sorted`` is stable, like the lodash ``sortBy`` Streamlit ranks with, so
-    equal scores keep the order the app supplied.
-    """
-    matches = [o for o in options if _has_match(query, o)]
-    return sorted(matches, key=lambda o: -_score(query, app._pad_option(o)))
 
 
 def _options(*items: tuple[str, str]) -> list[str]:
@@ -149,21 +35,17 @@ def test_exact_name_outranks_longer_fuzzy_match():
         ("trans-fn", "transcendental function"),
         ("transfer-fn", "transfer function"),
     )
-    assert _rank("trans-fn", options)[0] == exact
+    assert rank_in_component(options, "trans-fn")[0] == exact
 
 
 def test_exact_name_outranks_camelcase_compound():
-    """A camelCase hump earns 0.7; the exact match must still win.
-
-    Regression for the pizza.owl case, where 'HamTopping' used to rank
-    'ParmaHamTopping' first.
-    """
+    """The pizza.owl case, where 'HamTopping' ranked 'ParmaHamTopping' first."""
     exact = app.format_label_name("HamTopping", "CoberturaDePresunto")
     options = _options(
         ("HamTopping", "CoberturaDePresunto"),
         ("ParmaHamTopping", "CoberturaDePrezuntoParma"),
     )
-    assert _rank("HamTopping", options)[0] == exact
+    assert rank_in_component(options, "HamTopping")[0] == exact
 
 
 def test_exact_name_outranks_longer_name_sharing_a_prefix():
@@ -173,58 +55,49 @@ def test_exact_name_outranks_longer_name_sharing_a_prefix():
         ("RedOnionTopping", "CoberturaDeCebolaVermelha"),
         ("SlicedOnionTopping", "CoberturaDeCebolaFatiada"),
     )
-    assert _rank("OnionTopping", options)[0] == exact
+    assert rank_in_component(options, "OnionTopping")[0] == exact
 
 
-def test_label_search_still_ranks_its_own_entity_first():
-    """Moving the name out of parentheses must not cost label searches."""
+def test_label_search_ranks_its_own_entity_first():
     wanted = app.format_label_name("PriceSpecification", "Price specification")
     options = _options(
         ("PriceSpecification", "Price specification"),
         ("UnitPriceSpecification", "Unit price specification"),
     )
-    assert _rank("Price specification", options)[0] == wanted
+    assert rank_in_component(options, "Price specification")[0] == wanted
 
 
-def test_unlabelled_name_is_an_exact_option_match():
-    """Without a label the option *is* the name, which fzy scores as a certainty."""
+def test_unlabelled_name_outranks_names_containing_it():
     options = _options(("Person", ""), ("PersonAddress", ""), ("LegalPerson", ""))
-    assert _rank("Person", options)[0] == "Person"
-    assert _score("Person", "Person") == _SCORE_MAX
+    assert rank_in_component(options, "Person") == [
+        "Person",
+        "PersonAddress",
+        "LegalPerson",
+    ]
 
 
-def test_query_case_does_not_change_the_ranking():
-    """The scenario from issue #244.
-
-    ``py-trip`` ranked ``Py-trig-id`` first: the scorer was case-sensitive, so
-    both options scored negative infinity and alphabetical order decided.
-    """
+def test_a_query_in_another_case_still_finds_its_entity():
+    """The scenario from issue #244: ``py-trip`` ranked ``Py-trig-id`` first."""
     wanted = app.format_label_name("Py-trip", "Pythagorean triple")
     options = _options(
         ("Py-trig-id", "Pythagorean trigonometric identity"),
         ("Py-trip", "Pythagorean triple"),
     )
-    assert options[0] != wanted  # alphabetical order alone gets it wrong
+    assert options[0] != wanted  # the supplied order alone gets it wrong
     for query in ("py-trip", "Py-trip", "PY-TRIP", "pytrip"):
-        assert _rank(query, options)[0] == wanted, query
+        assert rank_in_component(options, query)[0] == wanted, query
 
 
-def test_names_differing_only_in_case_list_lowercase_first():
-    """The scenario from issue #466.
-
-    Case-insensitive scoring gives ``fn`` and ``FN`` the same score for any
-    query, so the order the app supplies decides. It must be the same every
-    time, whichever order the graph listed them in.
-    """
+def test_names_differing_only_in_case_rank_by_the_case_typed():
+    """Issues #466 and #468: the order is fixed whichever order the graph
+    listed them in, and the case typed decides which comes first."""
     for supplied in (["FN", "fn"], ["fn", "FN"]):
         items = [{"name": n, "uri": f"http://ex.org/{n}"} for n in supplied]
         options, _lookup = app.build_uri_options(items)
         assert options == ["fn", "FN"]
-        for query in ("fn", "FN", "Fn"):
-            assert _score(query, app._pad_option("fn")) == _score(
-                query, app._pad_option("FN")
-            )
-            assert _rank(query, options) == ["fn", "FN"]
+        assert rank_in_component(options, "fn") == ["fn", "FN"]
+        assert rank_in_component(options, "FN") == ["FN", "fn"]
+        assert rank_in_component(options, "Fn") == ["fn", "FN"]
 
 
 def test_option_sort_key_orders_case_variants_lowercase_first():
@@ -240,70 +113,25 @@ def test_option_sort_key_orders_case_variants_lowercase_first():
     ]
 
 
-def test_separator_gives_the_local_name_a_word_boundary_bonus():
-    """Guards the reason for the separator, not just its appearance.
-
-    A separator ending in '(' (the old format) would silently reintroduce
-    issue #210, so assert the bonus fzy actually awards.
-    """
-    display = app.format_label_name("HamTopping", "CoberturaDePresunto")
-    name_starts_at = display.index("HamTopping")
-    assert _precompute_bonus(display)[name_starts_at] >= _MATCH_WORD
-
-
 def test_short_labelled_name_outranks_longer_bare_name():
-    """The scenario from issue #214.
-
-    Both match at position 0 and earn the same 0.9 bonus; unpadded, 'node' won
-    only because 'n · number' is six characters longer.
-    """
+    """The scenario from issue #214: ``node`` ranked above ``n · number``."""
     short = app.format_label_name("n", "number")
     options = _options(("n", "number"), ("node", "node"))
-    assert _rank("n", options)[0] == short
-    assert _score("n", "node") > _score("n", short)  # what padding cancels out
+    assert rank_in_component(options, "n")[0] == short
 
 
 def test_graph_picker_caption_ranks_the_typed_name_first():
-    """The scenario from issue #461.
-
-    The Visualization pickers render ``Class: <name> · <label>``, so a
-    label match and a name match earn the same bonuses and only length
-    separated them: ``vl · value`` came out above ``va · variable``
-    for the query that names the second one.
-    """
+    """The scenario from issue #461: ``vl · value`` above ``va · variable``."""
     wanted = app.picker_option_caption("Class: va", "va", "variable")
     shorter = app.picker_option_caption("Class: vl", "vl", "value")
-    assert _rank("va", sorted([wanted, shorter], key=str.lower))[0] == wanted
-    assert _score("va", shorter) > _score("va", wanted)  # what padding cancels out
+    options = sorted([wanted, shorter], key=app.option_sort_key)
+    assert rank_in_component(options, "va")[0] == wanted
 
 
-def test_graph_pickers_pad_their_captions():
-    """Every Visualization picker renders through a caption that pads.
-
-    The page builds its own ``format_func`` rather than passing ``_pad_option``
-    straight in, so the guard below (which follows the option builders) cannot
-    see these call sites: follow the format_func instead.
-    """
-    tree = ast.parse((sources.PKG / "views" / "visualization.py").read_text("utf-8"))
-    locals_by_name = {
-        node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-    }
-    captions = {
-        keyword.value.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        if node.func.id in ("case_selectbox", "case_multiselect")
-        for keyword in node.keywords
-        if keyword.arg == "format_func" and isinstance(keyword.value, ast.Name)
-    }
-    assert captions, "the page draws no picker at all"
-    for name in sorted(captions & set(locals_by_name)):
-        called = {
-            call.func.id
-            for call in ast.walk(locals_by_name[name])
-            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-        }
-        assert "_pad_option" in called, f"{name} renders unpadded labels"
+def test_short_name_outranks_longer_one_sharing_its_prefix():
+    """The wine.owl case #210 had to leave mis-ranked."""
+    options = _options(("Wine", ""), ("Winery", "Wine estate"))
+    assert rank_in_component(options, "Wine")[0] == "Wine"
 
 
 def _sorts_by_option_key(node: ast.expr) -> bool:
@@ -391,34 +219,12 @@ def test_graph_pickers_order_case_variants_lowercase_first():
         ), f"picker on line {picker.lineno} skips option_sort_key"
 
 
-def test_short_name_outranks_longer_one_sharing_its_prefix():
-    """The wine.owl case #210 had to leave mis-ranked, now that length is neutral."""
-    options = _options(("Wine", ""), ("Winery", "Wine estate"))
-    assert _rank("Wine", options)[0] == "Wine"
+def _entity_dropdowns_left_to_streamlit() -> list[tuple[int, str]]:
+    """Streamlit selectboxes and multiselects fed by the option builders.
 
-
-def test_padding_is_invisible_and_leaves_the_option_value_alone():
-    """The value the widget returns is the key every lookup is built from."""
-    display = app.format_label_name("Person", "A person")
-    padded = app._pad_option(display)
-    assert padded.strip() == display
-    assert padded != display  # it really did pad
-    assert len(padded) == app.SEARCH_PAD_WIDTH
-
-
-def test_option_longer_than_the_pad_width_still_ranks_below_an_exact_match():
-    """Padding is a no-op past SEARCH_PAD_WIDTH; that must not invert a match."""
-    long_label = "x" * app.SEARCH_PAD_WIDTH
-    options = _options(("Order", ""), ("OrderLine", long_label))
-    assert len(app._pad_option(options[1])) > app.SEARCH_PAD_WIDTH
-    assert _rank("Order", options)[0] == "Order"
-
-
-def _entity_dropdowns_missing_format_func() -> list[tuple[int, str]]:
-    """Selectboxes fed by the option builders that do not pad their labels.
-
-    Every one of them filters on the rendered label, so a missed call site keeps
-    the issue #214 ranking with nothing to show for it.
+    Streamlit ranks a search without regard to the case typed, so an entity
+    listed through one of them keeps issue #468 however its options are
+    ordered; entity pickers go through ``case_picker``.
     """
     builders = {"build_uri_options", "build_class_options", "_slot_options"}
     missing = []
@@ -484,12 +290,11 @@ def _entity_dropdowns_missing_format_func() -> list[tuple[int, str]]:
             }
             if not referenced & option_vars:
                 continue
-            if not any(k.arg == "format_func" for k in node.keywords):
-                first = node.args[0] if node.args else None
-                label = first.value if isinstance(first, ast.Constant) else "?"
-                missing.append((node.lineno, str(label)))
+            first = node.args[0] if node.args else None
+            label = first.value if isinstance(first, ast.Constant) else "?"
+            missing.append((node.lineno, str(label)))
     return sorted(missing)
 
 
-def test_every_entity_dropdown_pads_its_labels():
-    assert _entity_dropdowns_missing_format_func() == []
+def test_no_entity_dropdown_is_left_to_streamlit():
+    assert _entity_dropdowns_left_to_streamlit() == []

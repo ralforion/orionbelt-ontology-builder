@@ -8,7 +8,6 @@ from ..ui import (
     _external_uri_target,
     _filter_relations,
     _open_entity,
-    _pad_option,
     _paginate_rows,
     _relation_spec,
     _sort_relations,
@@ -158,7 +157,6 @@ def render_relations():
                         cls_opts,
                         key="crel_class1",
                         current_display=cls_opts[0] if cls_opts else None,
-                        format_func=_pad_option,
                     )
                 with col2:
                     relation_type = st.selectbox(
@@ -172,7 +170,6 @@ def render_relations():
                         cls_opts,
                         key="crel_class2",
                         current_display=cls_opts[0] if cls_opts else None,
-                        format_func=_pad_option,
                     )
 
                 st.caption("""
@@ -232,7 +229,6 @@ def render_relations():
                         prop_opts,
                         key="prel_prop1",
                         current_display=prop_opts[0] if prop_opts else None,
-                        format_func=_pad_option,
                     )
                 with col2:
                     relation_type = st.selectbox(
@@ -246,7 +242,6 @@ def render_relations():
                         prop_opts,
                         key="prel_prop2",
                         current_display=prop_opts[0] if prop_opts else None,
-                        format_func=_pad_option,
                     )
 
                 st.caption("""
@@ -305,7 +300,6 @@ def render_relations():
                         ind_opts,
                         key="irel_ind1",
                         current_display=ind_opts[0] if ind_opts else None,
-                        format_func=_pad_option,
                     )
                 with col2:
                     relation_type = st.selectbox(
@@ -319,7 +313,6 @@ def render_relations():
                         ind_opts,
                         key="irel_ind2",
                         current_display=ind_opts[0] if ind_opts else None,
-                        format_func=_pad_option,
                     )
 
                 st.caption("""

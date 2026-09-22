@@ -794,183 +794,12 @@ if (doc) {
 """
 
 
-#: Enter takes the first match in a multiselect, the way it used to.
-#:
-#: Streamlit 1.62 rebuilt the widgets on react-aria, and the multiselect stopped
-#: marking the first filtered option as selected: 1.49 gave it
-#: ``aria-selected="true"`` and a tinted row, so Enter after typing a few
-#: letters inserted it (issue #384). Now nothing is marked, and Enter closes the
-#: list having done nothing — while the first arrow-key stop is the new "Select
-#: N matches" row, so the obvious recovery selects *every* match instead of the
-#: one that was wanted.
-#:
-#: The multiselect, and the selectbox that accepts new options. A plain
-#: selectbox still commits its first match on Enter and is left alone; one
-#: with ``accept_new_options`` commits the typed text as a new option instead,
-#: so ``com`` and Enter in "Annotation Type" made a type called ``com`` rather
-#: than picking ``rdfs:comment``, and ``engl`` in a Language field made a tag
-#: ``engl`` (issue #447). Only where Enter does the wrong thing or nothing
-#: today, too — with the list open, something typed, and no option
-#: highlighted — so nothing that works is taken over, form submission
-#: included. The "Add: …" row stays one Down away for a name that is meant
-#: to be new.
-#:
-#: The arrow keys follow the same rule. With a query typed, the first Down
-#: stop is the first match, the row Enter takes, and the bulk row sits above
-#: it, one Up away. Without that, Down landed on "Select N matches" first,
-#: which read as the row that had been current all along, and Enter from
-#: there selected every match (issue #438).
-# SELECT_ALL_NOTE
-# Why a few multiselects are drawn without their "Select N matches" row.
-#
-# Streamlit 1.63 made Enter commit the first visible row, and with two or more
-# matches that row is the bulk one, so type-and-Enter selects every match
-# (streamlit/streamlit#16841). The shim below takes the first real option
-# instead, on every multiselect, which leaves the row safe to keep wherever
-# selecting everything is a coherent thing to want: the three bulk delete pages,
-# and the graph's entity filters, whose own help text points at it by name.
-#
-# `select_all=False` is passed at the pickers where it is not coherent - a focus
-# on every node, a property chain of every property, a key of every property, a
-# concept under every parent - since there the row is only something to hit by
-# accident. It is a 1.63 parameter, which is part of why the pin moved.
-_ENTER_INSERTS_JS = r"""
-var doc = window.parent && window.parent.document;
-if (doc) {
-  // The bulk rows, which select every option or every match at once. One of
-  // them is always first, so it is what an unqualified "first option" would
-  // take, and inserting five classes when one was asked for is worse than doing
-  // nothing. Since 1.63 that is also what Streamlit's own Enter does, so this
-  // is a deliberate override of an upstream default and not only a fix for a
-  // gap: keeping it is what lets the bulk pages keep their row (SELECT_ALL_NOTE
-  // above, and streamlit/streamlit#16841). They are matched by the shape of the key they carry, not by the
-  // words they show and not by either key literally: with the box empty it is
-  // "__select_all__" and with a query typed it is "__select_matches__", and
-  // taking one for the other is exactly the bug this comment exists to stop
-  // (Codex review of PR #412). Any option keyed like a sentinel is skipped;
-  // real options are keyed by their index in the list.
-  var SENTINEL = /^__.*__$/;
-
-  // The first row that is a real, selectable option. The empty state ("No
-  // results") is a row too, and clicking it is not harmless: it took the whole
-  // filter down to one class in testing. Real options carry aria-selected; it
-  // does not.
-  function firstMatch() {
-    var options = doc.querySelectorAll('[role="option"]');
-    for (var i = 0; i < options.length; i++) {
-      var option = options[i];
-      if (option.getAttribute('aria-selected') === null) continue;
-      var key = option.getAttribute('data-key');
-      if (key === null || SENTINEL.test(key)) continue;
-      return option;
-    }
-    return null;
-  }
-
-  // Whether any row in the open list is a sentinel: a bulk row in a
-  // multiselect, or the "Add: …" row a selectbox that accepts new options
-  // shows for text that is not already an option. A plain selectbox has no
-  // such row, and its Enter already takes the first match, so the shape of
-  // the list is what tells the two selectboxes apart.
-  function hasSentinelRow() {
-    var options = doc.querySelectorAll('[role="option"]');
-    for (var i = 0; i < options.length; i++) {
-      var key = options[i].getAttribute('data-key');
-      if (key !== null && SENTINEL.test(key)) return true;
-    }
-    return false;
-  }
-
-  // The picker input the shim speaks for, when ``event`` is a key in a
-  // multiselect or a selectbox with the list open, something typed, and no
-  // option highlighted by the arrow keys. Every other case react-aria
-  // answers itself.
-  function openPickerInput(event) {
-    var input = event.target;
-    if (!input || !input.getAttribute) return null;
-    if (input.getAttribute('role') !== 'combobox') return null;
-    if (!input.closest('[data-testid="stMultiSelect"], [data-testid="stSelectbox"]')) return null;
-    if (!input.value) return null;
-    if (input.getAttribute('aria-expanded') !== 'true') return null;
-    if (input.getAttribute('aria-activedescendant')) return null;
-    return input;
-  }
-
-  function isMultiselect(input) {
-    return !!input.closest('[data-testid="stMultiSelect"]');
-  }
-
-  function onEnter(event) {
-    if (event.key !== 'Enter' || event.defaultPrevented) return;
-    var input = openPickerInput(event);
-    if (!input) return;
-    // A selectbox is only taken over where its own Enter goes wrong: with
-    // an "Add: …" row in the list, Streamlit 1.63 commits the typed text as
-    // a new option over the first match (issue #447). Without that row it
-    // takes the first match itself and is left alone.
-    if (!isMultiselect(input) && !hasSentinelRow()) return;
-    var option = firstMatch();
-    if (!option) return;
-    event.preventDefault();
-    event.stopPropagation();
-    option.click();
-  }
-
-  // The first Down with a query typed lands on the first match, not on the
-  // bulk row above it (issue #438). react-aria takes the press to the bulk
-  // row as usual; once it has, one more press moves on. The bulk row stays
-  // one Up away. Only a press from the keyboard is followed up, so the
-  // press this sends is not followed up again.
-  function onArrowDown(event) {
-    if (event.key !== 'ArrowDown' || event.defaultPrevented || !event.isTrusted) return;
-    var input = openPickerInput(event);
-    if (!input || !isMultiselect(input)) return;
-    var options = doc.querySelectorAll('[role="option"]');
-    if (!options.length) return;
-    var head = options[0].getAttribute('data-key');
-    if (head === null || !SENTINEL.test(head)) return;
-    if (!firstMatch()) return;
-    setTimeout(function () {
-      var active = input.getAttribute('aria-activedescendant') || '';
-      if (!SENTINEL.test(active.replace(/^.*-option-/, ''))) return;
-      input.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'ArrowDown', code: 'ArrowDown', bubbles: true, cancelable: true
-      }));
-    }, 0);
-  }
-
-  function onKeyDown(event) {
-    onEnter(event);
-    onArrowDown(event);
-  }
-
-  // Replaced rather than stacked: this frame is re-created whenever its
-  // arguments change, and each new document would otherwise leave the last
-  // one's handler registered on a parent that outlives it.
-  if (doc.__orionbeltEnterShim) {
-    try { doc.removeEventListener('keydown', doc.__orionbeltEnterShim, true); } catch (e) {}
-  }
-  doc.__orionbeltEnterShim = onKeyDown;
-  // Capture, so it runs before react-aria's own handler closes the list.
-  doc.addEventListener('keydown', onKeyDown, true);
-  // And let go on the way out, so a frame that is not replaced (the last
-  // one before the tab closes, or a page that mounts none) leaves nothing
-  // behind either.
-  window.addEventListener('pagehide', function (event) {
-    if (event.persisted) return;  // cached for back/forward, see the help wiring
-    try { doc.removeEventListener('keydown', onKeyDown, true); } catch (e) {}
-    if (doc.__orionbeltEnterShim === onKeyDown) doc.__orionbeltEnterShim = null;
-  });
-}
-"""
-
-
 def page_shim_html(texts: dict) -> str:
     """The page's keyboard and help wiring, as a component document.
 
-    Three things, all in the parent document because that is where the widgets
-    are. The first two are re-applied by a MutationObserver, because Streamlit
-    rebuilds that DOM on every rerun while this frame is mounted once:
+    Two things, both in the parent document because that is where the widgets
+    are, re-applied by a MutationObserver, because Streamlit rebuilds that DOM
+    on every rerun while this frame is mounted once:
 
     * the help buttons and the selectboxes' clear crosses leave the tab order,
       so Tab walks field to field (issue #383). The crosses are the same case
@@ -982,10 +811,9 @@ def page_shim_html(texts: dict) -> str:
       reads it when the field is focused rather than at a separate button that
       is no longer reachable. This is the half that makes the first half honest.
 
-    The third is a keydown handler, and needs no observer: it is registered on
-    the parent document, which outlives every rerun. Enter in a multiselect
-    takes the first match again (issue #384), which is what it did before
-    Streamlit 1.62 rebuilt the widgets.
+    Enter in the entity pickers used to need a handler here too (issues #384,
+    #438, #447); they are ``case_picker`` components now and handle it
+    themselves.
     """
     by_key = texts.get("by_key") or {}
     # A label two widgets disagreed over is not sent at all: an icon whose text
@@ -1000,8 +828,6 @@ def page_shim_html(texts: dict) -> str:
         + json.dumps(by_label, ensure_ascii=False)
         + ";\n"
         + _HELP_WIRING_JS
-        + "</script><script>"
-        + _ENTER_INSERTS_JS
         + "</script>"
     )
 
@@ -1987,7 +1813,6 @@ def language_selectbox(label, key, value="", help=None, label_visibility="visibl
         key=key,
         current_display=display,
         accept_new_options=True,
-        format_func=_pad_option,
         label_visibility=label_visibility,
         help=help
         or (
@@ -3303,20 +3128,6 @@ def format_label_name(name: str, label: str) -> str:
     return name
 
 
-SEARCH_PAD_WIDTH = 120
-
-
-def _pad_option(display: object) -> str:
-    """Pad a dropdown option to :data:`SEARCH_PAD_WIDTH` for search ranking.
-
-    Pass as ``format_func`` to any selectbox fed by :func:`build_uri_options` or
-    :func:`build_class_options`. The padding is invisible (HTML collapses the
-    trailing spaces) and stays out of the widget's value, which remains the
-    unpadded display string every lookup is keyed by.
-    """
-    return str(display).ljust(SEARCH_PAD_WIDTH)
-
-
 def option_sort_key(display: str) -> tuple[str, str]:
     """Sort key for dropdown options: alphabetical, then lowercase first.
 
@@ -4049,7 +3860,6 @@ def render_add_class_form(
             key=f"add_cls_parent_{form_key}",
             current_display=parent_options[parent_index],
             help="Select a parent class for hierarchy",
-            format_func=_pad_option,
         )
         ns_options, ns_lookup = build_namespace_options(ont)
         ns_display = clearable_selectbox(
@@ -4269,7 +4079,6 @@ def render_annotation_form(
             current_display=subject_options[
                 _uri_option_index(subject_options, subject_lookup, subject_uri)
             ],
-            format_func=_pad_option,
             help="Move the annotation by choosing a different resource.",
         )
         new_pred = st.text_input(
@@ -4851,7 +4660,6 @@ def _render_panel_add_relation_form(ont, classes, ntype, ename):
             options,
             key=f"panel_rel_subj_{_uid(ename or '')}",
             current_display=display_by_uri[subject["uri"]],
-            format_func=_pad_option,
         )
         rel_type = st.selectbox("Relation Type", options=list(ont.CLASS_RELATIONS))
         obj_disp = required_selectbox(
@@ -4859,7 +4667,6 @@ def _render_panel_add_relation_form(ont, classes, ntype, ename):
             options,
             key=f"panel_rel_obj_{_uid(ename or '')}",
             current_display=display_by_uri[obj["uri"]],
-            format_func=_pad_option,
         )
         st.caption(f"Reads as: {subject['name']} → {obj['name']}")
         add_col, cancel_col = st.columns(2)
@@ -4958,14 +4765,12 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
             cls_options,
             key=f"panel_rest_target_{_uid(ename or '')}",
             current_display=display_by_uri[subject["uri"]],
-            format_func=_pad_option,
         )
         prop_disp = required_selectbox(
             "On Property",
             prop_options,
             key=f"panel_rest_prop_{_uid(ename or '')}",
             current_display=prop_options[0] if prop_options else None,
-            format_func=_pad_option,
         )
         # The picked class is the value for someValuesFrom / allValuesFrom, and
         # the owl:onClass for the qualified cardinalities. Same click, different
@@ -4975,7 +4780,6 @@ def _render_panel_add_restriction_form(ont, classes, object_props, ntype, ename)
             cls_options,
             key=f"panel_rest_cls_{_uid(ename or '')}",
             current_display=display_by_uri[other["uri"]],
-            format_func=_pad_option,
         )
         cardinality = None
         if qualified:
@@ -5263,7 +5067,6 @@ def _render_panel_entity_editor(
                 cls_opts,
                 key=f"panel_edit_prop_dom_{_uid(entity['uri'])}",
                 current_display=cur_dom if cur_dom in cls_opts else None,
-                format_func=_pad_option,
             )
             if ntype == "Object Property":
                 cur_rng = next(
@@ -5279,7 +5082,6 @@ def _render_panel_entity_editor(
                     cls_opts,
                     key=f"panel_edit_prop_rng_{_uid(entity['uri'])}",
                     current_display=cur_rng if cur_rng in cls_opts else None,
-                    format_func=_pad_option,
                 )
                 # Only apply when changed, so a range/domain that can't be shown
                 # in the dropdown (e.g. a class outside this ontology) isn't
@@ -5888,7 +5690,6 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
             current_display=cls_options[
                 _uri_option_index(cls_options, cls_lookup, applied_uris[0])
             ],
-            format_func=_pad_option,
         )
         new_property = required_selectbox(
             "Property",
@@ -5901,7 +5702,6 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
                     rest.get("property_uri") or rest["property"],
                 )
             ],
-            format_func=_pad_option,
         )
         if restriction_value_is_class(new_type):
             # someValuesFrom / allValuesFrom point at a class, so offer the
@@ -5917,7 +5717,6 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
                         value_options, value_lookup, rest.get("value_uri")
                     )
                 ],
-                format_func=_pad_option,
             )
             new_value = value_lookup.get(_picked_value) if _picked_value else None
         else:
@@ -5944,7 +5743,6 @@ def render_restriction_form(ont, rest, form_key, classes, properties, on_close=N
                 ]
                 if on_options
                 else None,
-                format_func=_pad_option,
             )
 
         cancelled = False
@@ -6055,14 +5853,12 @@ def render_add_restriction(ont, classes, properties):
             cls_opts,
             key="add_rest_target",
             current_display=cls_opts[0] if cls_opts else None,
-            format_func=_pad_option,
         )
         property_disp = required_selectbox(
             "On Property",
             prop_opts,
             key="add_rest_property",
             current_display=prop_opts[0] if prop_opts else None,
-            format_func=_pad_option,
         )
 
         # Straight from the engine, so a type can never be offered here
@@ -6082,7 +5878,6 @@ def render_add_restriction(ont, classes, properties):
                 cls_opts,
                 key="rest_class_value",
                 current_display=cls_opts[0] if cls_opts else None,
-                format_func=_pad_option,
             )
             value = cls_lookup.get(value_disp)
         elif restriction_type == "hasValue":
@@ -6097,7 +5892,6 @@ def render_add_restriction(ont, classes, properties):
                     ind_opts,
                     key="rest_individual_value",
                     current_display=ind_opts[0],
-                    format_func=_pad_option,
                 )
                 value = ind_lookup.get(value_disp)
             else:
@@ -6115,7 +5909,6 @@ def render_add_restriction(ont, classes, properties):
                 cls_opts,
                 key="qualified_class",
                 current_display=cls_opts[0] if cls_opts else None,
-                format_func=_pad_option,
             )
             on_class = cls_lookup.get(on_class_disp)
 
@@ -6283,7 +6076,6 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
             row_options,
             key=f"es_{form_key}",
             current_display=row_options[subj_default],
-            format_func=_pad_option,
         )
         new_type = st.selectbox(
             "Relation",
@@ -6296,7 +6088,6 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
             row_options,
             key=f"eo_{form_key}",
             current_display=row_options[obj_default],
-            format_func=_pad_option,
         )
         # The add forms can point an object at an entity in an ontology that
         # was never imported; without this the editor could keep such a
@@ -6527,7 +6318,6 @@ def render_add_annotation(ont, all_resources):
                 resource_options,
                 key="ann_resource",
                 current_display=resource_options[0] if resource_options else None,
-                format_func=_pad_option,
             )
 
             # Typing a type that isn't listed creates it, so an ID with no
@@ -6550,7 +6340,6 @@ def render_add_annotation(ont, all_resources):
                     "URI. A new name of your own is declared as an "
                     "annotation property in the ontology."
                 ),
-                format_func=_pad_option,
             )
 
             value = st.text_area("Value", key="ann_value")

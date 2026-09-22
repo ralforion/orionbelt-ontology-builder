@@ -198,14 +198,14 @@ def test_the_observer_replaces_itself_and_lets_go_on_unload():
     assert "observer.disconnect()" in js
 
 
-def test_a_page_cached_for_back_forward_keeps_both_shims():
+def test_a_page_cached_for_back_forward_keeps_the_help_wiring():
     """pagehide also fires on the way into the back/forward cache, and a page
     restored from it comes back with its frames intact but does not run their
     scripts again. Releasing there would leave the restored page with no help
-    wiring and no Enter override. Both handlers stand down on ``persisted``."""
-    for js in (ui._HELP_WIRING_JS, ui._ENTER_INSERTS_JS):
-        assert "'pagehide', function (event)" in js
-        assert "if (event.persisted) return;" in js
+    wiring, so the handler stands down on ``persisted``."""
+    js = ui._HELP_WIRING_JS
+    assert "'pagehide', function (event)" in js
+    assert "if (event.persisted) return;" in js
 
 
 def test_the_selectors_are_not_built_from_label_text():
@@ -225,91 +225,11 @@ def test_the_field_is_found_from_the_icon_not_from_the_label():
     assert 'button:not([aria-label^="Help for "])' in js, "never the icon itself"
 
 
-# --- Enter takes the first match again (issue #384) --------------------------
-
-
-def test_enter_is_taken_over_in_a_multiselect_and_a_creatable_selectbox():
-    """The plain selectbox still commits its first match on Enter, so it is
-    left alone. The multiselect stopped in 1.62, and a selectbox that accepts
-    new options commits the typed text as a new option in 1.63 (issue #447):
-    ``com`` and Enter in "Annotation Type" made a type called ``com`` rather
-    than picking ``rdfs:comment``. The "Add: …" row is what tells the two
-    selectboxes apart, so a selectbox is only taken over when the list holds
-    a sentinel row."""
-    js = ui._ENTER_INSERTS_JS
-    assert '[data-testid="stMultiSelect"], [data-testid="stSelectbox"]' in js
-    assert "function hasSentinelRow()" in js
-    assert "if (!isMultiselect(input) && !hasSentinelRow()) return;" in js
-
-
-def test_the_down_rule_stays_with_the_multiselect():
-    """A creatable selectbox lists its "Add: …" row last, so its first Down
-    already lands on the first match; only the multiselect puts a bulk row at
-    the head."""
-    js = ui._ENTER_INSERTS_JS
-    down = js[js.index("function onArrowDown(event)") :]
-    assert "if (!input || !isMultiselect(input)) return;" in down
-
-
-def test_the_bulk_row_is_not_what_enter_takes():
-    """A bulk row is always first, so an unqualified "first option" would insert
-    every match when one was asked for.
-
-    Matched by the shape of its key rather than either key literally: Streamlit
-    uses "__select_all__" with the box empty and "__select_matches__" once a
-    query is typed, and skipping only the first let the second through — which
-    is the case that matters, since it is the one a typed query produces (Codex
-    review of PR #412).
-    """
-    js = ui._ENTER_INSERTS_JS
-    assert "/^__.*__$/" in js, js
-    assert "SENTINEL.test(key)" in js
-    assert "'__select_all__'" not in js, "not one literal key"
-
-
-def test_the_empty_state_row_is_not_clicked():
-    """ "No results" is a row like any other in the DOM, and clicking it is not
-    harmless: it took the whole filter down to one class in testing. Real
-    options carry aria-selected; it does not."""
-    js = ui._ENTER_INSERTS_JS
-    assert "aria-selected" in js
-    assert "=== null) continue" in js
-
-
-def test_enter_is_left_alone_wherever_it_already_does_something():
-    """Nothing typed, list closed, or an option already highlighted: react-aria
-    answers all three itself, and a form's Enter must still submit."""
-    js = ui._ENTER_INSERTS_JS
-    for guard in (
-        "if (!input.value) return null;",
-        "aria-expanded",
-        "aria-activedescendant",
-        "event.defaultPrevented",
-    ):
-        assert guard in js, guard
-
-
-def test_the_handler_replaces_itself_rather_than_stacking():
-    """The frame is re-created whenever its arguments change, and each new
-    document would otherwise leave the last one's handler on the parent."""
-    js = ui._ENTER_INSERTS_JS
-    assert "removeEventListener('keydown'" in js
-    assert "__orionbeltEnterShim" in js
-    # And a frame that is never replaced still takes its handler with it.
-    assert "addEventListener('pagehide'" in js
-    assert "removeEventListener('keydown', onKeyDown, true)" in js
-
-
-def test_the_handler_runs_before_react_aria_closes_the_list():
-    js = ui._ENTER_INSERTS_JS
-    assert "addEventListener('keydown', onKeyDown, true)" in js, "capture phase"
-
-
-def test_both_shims_ride_in_one_frame():
-    """A component is an iframe, and these are mounted on every rerun."""
+def test_the_shims_ride_in_one_frame():
+    """A frame is an iframe, and this one is mounted on every rerun."""
     html = ui.page_shim_html({"by_key": {}, "by_label": {}})
-    assert html.count("<script>") == 2
-    assert "MutationObserver" in html and "__orionbeltEnterShim" in html
+    assert html.count("<script>") == 1
+    assert "MutationObserver" in html
 
 
 # --- and on a real page -----------------------------------------------------
