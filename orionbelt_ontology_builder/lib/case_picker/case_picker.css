@@ -1,0 +1,180 @@
+/* Tinted from the inherited text colour so it follows any theme; the dropdown
+   background is the app's own, set by case_picker.js as --cp-background.
+   0.875rem throughout: the size of Streamlit's own dropdown text and labels. */
+.cp-root {
+  position: relative;
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: inherit;
+  --cp-fill: color-mix(in srgb, currentColor 6%, transparent);
+  --cp-hover: color-mix(in srgb, currentColor 10%, transparent);
+  --cp-border: color-mix(in srgb, currentColor 20%, transparent);
+  --cp-muted: color-mix(in srgb, currentColor 60%, transparent);
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.cp-label-hidden label {
+  visibility: hidden;
+}
+
+.cp-label-collapsed label {
+  display: none;
+}
+
+/* A circled "?", the shape of Streamlit's own help icon beside a label. */
+.cp-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 1.5px solid var(--cp-muted);
+  border-radius: 50%;
+  color: var(--cp-muted);
+  cursor: help;
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.cp-help[hidden] {
+  display: none;
+}
+
+.cp-field {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  box-sizing: border-box;
+  min-height: 2.5rem;
+  padding: 0.25rem 2rem 0.25rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: var(--cp-fill);
+}
+
+.cp-field:focus-within {
+  border-color: var(--cp-border);
+}
+
+.cp-chips {
+  display: contents;
+}
+
+.cp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  max-width: 100%;
+  padding: 0.125rem 0.25rem 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  background: var(--cp-hover);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-chip button {
+  border: 0;
+  background: none;
+  color: var(--cp-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 0 0.125rem;
+}
+
+.cp-chip button:hover {
+  color: inherit;
+}
+
+input {
+  flex: 1 1 6rem;
+  min-width: 6rem;
+  height: 1.875rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+input::placeholder {
+  color: var(--cp-muted);
+}
+
+input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cp-clear {
+  position: absolute;
+  top: 50%;
+  right: 0.5rem;
+  transform: translateY(-50%);
+  border: 0;
+  background: none;
+  color: var(--cp-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.25rem;
+}
+
+.cp-clear:hover {
+  color: inherit;
+}
+
+ul {
+  position: absolute;
+  z-index: 1000;
+  left: 0;
+  right: 0;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 18rem;
+  overflow-y: auto;
+  background: var(--cp-background, Canvas);
+  border: 1px solid var(--cp-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.16);
+}
+
+li {
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+li.cp-active {
+  background: var(--cp-hover);
+}
+
+li.cp-selected {
+  font-weight: 600;
+}
+
+li.cp-bulk {
+  color: var(--cp-muted);
+}
+
+li.cp-note {
+  cursor: default;
+  color: var(--cp-muted);
+}

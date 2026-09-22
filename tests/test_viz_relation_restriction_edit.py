@@ -16,6 +16,7 @@ import json
 import os
 
 import pytest
+from case_pickers import picker, pickers
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -155,9 +156,9 @@ def test_panel_opens_the_clicked_relation_with_its_own_values(graph):
     ename = app._edge_id(uris["Bicycle"], "disjointWith", uris["Engine"])
     at = _run("panel", "Class Relation", ename)
 
-    assert at.selectbox(key=_panel_key(ename, "es")).value == "Bicycle"
+    assert picker(at, _panel_key(ename, "es")).value == "Bicycle"
     assert at.selectbox(key=_panel_key(ename, "et")).value == "disjointWith"
-    assert at.selectbox(key=_panel_key(ename, "eo")).value == "Engine"
+    assert picker(at, _panel_key(ename, "eo")).value == "Engine"
 
 
 def test_panel_saves_an_edited_relation(graph):
@@ -191,8 +192,8 @@ def test_panel_edits_the_restriction_the_edge_stands_for(graph):
     at = _run("panel", "Restriction", ename)
 
     # someValuesFrom points at a class, so the value is a picker now (#250).
-    assert at.selectbox(key=_panel_key(ename, "er_valcls")).value.strip() == "Wheel"
-    _box = at.selectbox(key=_panel_key(ename, "er_valcls"))
+    assert picker(at, _panel_key(ename, "er_valcls")).value.strip() == "Wheel"
+    _box = picker(at, _panel_key(ename, "er_valcls"))
     # Options are padded for search ranking, so match on the stripped label.
     _box.set_value(next(o for o in _box.options if o.strip() == "Vehicle"))
     _click(at, "💾 Save")
@@ -270,11 +271,7 @@ def test_open_full_editor_opens_the_restrictions_row(graph):
     at = _run("restrictions", ename=ename)
 
     # One editor, on the Wheel restriction rather than its Engine sibling.
-    values = [
-        s.value.strip()
-        for s in at.selectbox
-        if s.key and s.key.startswith("er_valcls_")
-    ]
+    values = [p.value for p in pickers(at) if p.key.startswith("er_valcls_")]
     assert values == ["Wheel"]
     assert "_rest_open_edge" not in at.session_state
 

@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from ..case_picker import case_multiselect
 from ..ui import (
     _apply_class_edit,
     _build_name_collision_set,
@@ -481,7 +482,7 @@ def render_classes():
             if not classes:
                 st.info("No classes to delete.")
             else:
-                selected = st.multiselect(
+                selected = case_multiselect(
                     "Select classes to delete",
                     class_names,
                     key="bulk_delete_classes_select",

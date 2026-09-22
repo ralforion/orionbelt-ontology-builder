@@ -214,19 +214,20 @@ def test_no_dropdown_worth_clearing_is_left_plain():
 
 
 def _seed(monkeypatch, key, options, current_display):
-    """Run the helper's seeding with a stubbed selectbox, returning what it
+    """Run the helper's seeding with a stubbed picker, returning what it
     would have rendered with."""
     import streamlit as st
 
-    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder import app, case_picker
 
     seen = {}
 
-    def fake_selectbox(label, opts, index=None, key=None, **kwargs):
+    def fake_selectbox(label, opts, key=None, **kwargs):
+        case_picker.mark_drawn(key)
         seen["value"] = st.session_state.get(key)
         return seen["value"]
 
-    monkeypatch.setattr(app.st, "selectbox", fake_selectbox)
+    monkeypatch.setattr(case_picker, "case_selectbox", fake_selectbox)
     app.clearable_selectbox("L", options, key=key, current_display=current_display)
     return seen["value"]
 
@@ -242,13 +243,31 @@ def test_a_clear_survives_the_next_render(monkeypatch):
 
 
 def test_the_value_comes_back_after_the_widget_is_dropped(monkeypatch):
-    """Streamlit discards the state of a widget that wasn't rendered on a run,
-    so leaving the page and returning must re-seed rather than show empty."""
+    """Leaving the page and returning must re-seed rather than show empty."""
     import streamlit as st
 
     st.session_state.clear()
     assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
-    del st.session_state["k"]  # what Streamlit does while the page is away
+    del st.session_state["k"]
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
+
+
+def test_an_unsaved_pick_is_forgotten_once_the_picker_goes_away(monkeypatch):
+    """The picker keeps its value in session state, which Streamlit never
+    drops, so a run that does not draw it has to count as a reset: leaving an
+    editor and coming back shows what the row holds, as a selectbox did."""
+    import streamlit as st
+
+    from orionbelt_ontology_builder import case_picker
+
+    st.session_state.clear()
+    case_picker.new_run()
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
+    st.session_state["k"] = "b"  # picked, not saved
+    case_picker.new_run()
+    assert _seed(monkeypatch, "k", ["a", "b"], "a") == "b"  # drawn again: kept
+    case_picker.new_run()  # a run elsewhere
+    case_picker.new_run()
     assert _seed(monkeypatch, "k", ["a", "b"], "a") == "a"
 
 

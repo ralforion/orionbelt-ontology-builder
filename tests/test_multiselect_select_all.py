@@ -19,9 +19,9 @@ VIEWS = Path(__file__).resolve().parent.parent / "orionbelt_ontology_builder" / 
 
 
 def _call(path: str, label: str) -> str:
-    """The ``st.multiselect(...)`` call whose first argument is ``label``."""
+    """The ``case_multiselect(...)`` call whose first argument is ``label``."""
     src = (VIEWS / path).read_text(encoding="utf-8")
-    start = src.find("st.multiselect(")
+    start = src.find("case_multiselect(")
     while start != -1:
         depth, i = 0, src.index("(", start)
         for j in range(i, len(src)):
@@ -34,7 +34,7 @@ def _call(path: str, label: str) -> str:
                     if label in call.split("\n")[1 if "\n" in call else 0]:
                         return call
                     break
-        start = src.find("st.multiselect(", start + 1)
+        start = src.find("case_multiselect(", start + 1)
     raise AssertionError(f"no multiselect labelled {label!r} in {path}")
 
 

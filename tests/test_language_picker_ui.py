@@ -11,6 +11,7 @@ be simulated here. Assertions about a typed tag therefore belong on
 ``test_language_packs.py``).
 """
 
+from case_pickers import picker
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import languages
@@ -87,7 +88,7 @@ def _options(at, key):
     Every entity dropdown is padded to a fixed width for search ranking
     (``_pad_option``), and AppTest reports options as the widget formats them.
     """
-    return [o.strip() for o in at.selectbox(key=key).options]
+    return [o.strip() for o in picker(at, key).options]
 
 
 def test_the_language_field_offers_the_active_packs_codes_with_their_names():
@@ -111,9 +112,9 @@ def test_switching_the_pack_switches_the_codes_on_offer():
 
 def test_adding_writes_the_bare_code_not_the_option_text():
     at = _run(_add_script)
-    at.selectbox(key="ann_predicate").set_value("rdfs:label")
+    picker(at, "ann_predicate").set_value("rdfs:label")
     at.text_area(key="ann_value").set_value("Tier")
-    at.selectbox(key="ann_lang").set_value("deu · German")
+    picker(at, "ann_lang").set_value("deu · German")
     at.button[0].click().run(timeout=120)
     assert not at.exception, at.exception
 
@@ -125,21 +126,21 @@ def test_the_language_stays_put_for_the_next_annotation():
     """The value is what changes from one annotation to the next; a run of
     labels in one language should not mean picking it again each time."""
     at = _run(_add_script)
-    at.selectbox(key="ann_predicate").set_value("rdfs:label")
+    picker(at, "ann_predicate").set_value("rdfs:label")
     at.text_area(key="ann_value").set_value("Tier")
-    at.selectbox(key="ann_lang").set_value("deu · German")
+    picker(at, "ann_lang").set_value("deu · German")
     at.button[0].click().run(timeout=120)
     assert not at.exception, at.exception
 
     assert at.text_area(key="ann_value").value == ""
-    assert at.selectbox(key="ann_lang").value == "deu · German"
+    assert picker(at, "ann_lang").value == "deu · German"
 
 
 def test_a_tag_outside_the_pack_is_offered_and_survives_a_save():
     """Switching packs must not quietly rewrite the tag of an annotation you
     open to edit for another reason."""
     at = _run(_edit_script)
-    assert at.selectbox(key="ann_lang_row0").value == "pt-BR"
+    assert picker(at, "ann_lang_row0").value == "pt-BR"
 
     at.text_input[1].set_value("a large beast")
     at.button(key="FormSubmitter:edit_ann_row0-Save").click().run(timeout=120)

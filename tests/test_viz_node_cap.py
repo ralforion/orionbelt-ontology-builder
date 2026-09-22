@@ -18,6 +18,7 @@ import os
 
 import pytest
 import sources
+from case_pickers import rendered_picker
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import app
@@ -625,7 +626,7 @@ class TestPickerCaptions:
         at.run(timeout=300)
         assert not at.exception, at.exception
 
-        options = at.selectbox(key="viz_find_entity").options
+        options = rendered_picker(at, "viz_find_entity")["options"]
         assert options
         assert all(" · " not in o for o in options)
         assert all(

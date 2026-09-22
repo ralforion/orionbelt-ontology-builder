@@ -6,6 +6,7 @@ imported class landed on a base-namespace twin) and the relation forms carrying
 hand-written type lists that had drifted from the engine.
 """
 
+from case_pickers import picker
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
@@ -46,10 +47,10 @@ def test_add_restriction_keeps_an_imported_class_and_property():
     assert not at.exception, at.exception
 
     # The pickers offer the imported entities; select them and submit.
-    at.selectbox[0].set_value("Foo")  # Apply to Class
-    at.selectbox[1].set_value("relatedTo")  # On Property
-    at.selectbox[2].set_value("someValuesFrom")
-    at.selectbox[3].set_value("Bar")  # Value (Class)
+    picker(at, "add_rest_target").set_value("Foo")
+    picker(at, "add_rest_property").set_value("relatedTo")
+    at.selectbox[0].set_value("someValuesFrom")  # Restriction Type
+    picker(at, "rest_class_value").set_value("Bar")
     at.button[0].click().run(timeout=120)
 
     assert not at.exception, at.exception

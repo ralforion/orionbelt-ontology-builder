@@ -12,6 +12,7 @@ pencil cannot be clicked from a page run (the same reason the restriction tests
 call the form directly).
 """
 
+from case_pickers import picker
 from streamlit.testing.v1 import AppTest
 
 
@@ -70,7 +71,7 @@ def test_the_form_opens_on_the_annotation_it_was_given():
     at = _run()
     assert at.text_input[0].value == "http://www.w3.org/2000/01/rdf-schema#comment"
     assert at.text_input[1].value == "a beast"
-    assert at.selectbox(key="ann_on_row0").value == "Animal [Class]"
+    assert picker(at, "ann_on_row0").value == "Animal [Class]"
 
 
 def test_editing_the_value_rewrites_it_in_place():
@@ -87,7 +88,7 @@ def test_editing_the_value_rewrites_it_in_place():
 
 def test_the_editor_moves_an_annotation_like_the_panel_does():
     at = _run()
-    at.selectbox(key="ann_on_row0").set_value("Plant [Class]")
+    picker(at, "ann_on_row0").set_value("Plant [Class]")
     _save(at)
 
     ont = at.session_state["ontology"]

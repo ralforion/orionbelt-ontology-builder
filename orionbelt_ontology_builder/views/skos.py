@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from ..case_picker import case_multiselect
 from ..ui import (
     _cb_confirm_delete,
     _cb_toggle_edit,
@@ -49,7 +50,7 @@ def render_skos_vocabulary():
     # a scheme or concept moved to a custom URI can share a local name with
     # another, so pass the picked URI to the engine instead of a bare local name
     # that would resolve through the base namespace. ``.get(sentinel)`` returns
-    # None for the "All"/"None" entries, which is what the engine expects.
+    # None for the "None" entries, which is what the engine expects.
     scheme_opts, scheme_lookup = build_uri_options(schemes)
 
     # Clean up unused navigation flag
@@ -288,16 +289,18 @@ def render_skos_vocabulary():
             st.info("No concepts defined yet.")
         else:
             # Filter by scheme
-            filter_scheme = st.selectbox(
+            # Empty means every scheme, so the clear cross is the way back.
+            filter_scheme = clearable_selectbox(
                 "Filter by Scheme",
-                ["All"] + scheme_opts,
+                scheme_opts,
                 key="concept_filter_scheme",
                 format_func=_pad_option,
+                placeholder="All schemes",
             )
             filtered = (
-                concepts
-                if filter_scheme == "All"
-                else ont.get_concepts(scheme=scheme_lookup.get(filter_scheme))
+                ont.get_concepts(scheme=scheme_lookup.get(filter_scheme))
+                if filter_scheme
+                else concepts
             )
 
             def _concept_key(c):
@@ -539,7 +542,7 @@ def render_skos_vocabulary():
                                 for d, u in _broader_lookup.items()
                                 if u in set(concept["broader_uris"])
                             ]
-                            new_broader = st.multiselect(
+                            new_broader = case_multiselect(
                                 "Broader Concepts",
                                 _broader_opts,
                                 default=_cur_broader_disp,
@@ -701,14 +704,15 @@ def render_skos_vocabulary():
         if not concepts:
             st.info("No concepts to display.")
         else:
-            h_scheme = st.selectbox(
+            h_scheme = clearable_selectbox(
                 "Scheme",
-                ["All"] + scheme_opts,
+                scheme_opts,
                 key="hierarchy_scheme_select",
                 format_func=_pad_option,
+                placeholder="All schemes",
             )
             hierarchy = ont.get_concept_hierarchy(
-                scheme=scheme_lookup.get(h_scheme) if h_scheme != "All" else None
+                scheme=scheme_lookup.get(h_scheme) if h_scheme else None
             )
 
             # Find root concepts (those that are not narrower of any other)

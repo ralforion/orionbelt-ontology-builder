@@ -12,6 +12,7 @@ therefore belong on ``annotation_option_for_predicate`` (see
 ``test_annotations_custom.py``), not on an AppTest run.
 """
 
+from case_pickers import picker
 from streamlit.testing.v1 import AppTest
 
 
@@ -43,7 +44,7 @@ def _script():
 
 
 def _add_annotation(at, predicate, value):
-    at.selectbox(key="ann_predicate").set_value(predicate)
+    picker(at, "ann_predicate").set_value(predicate)
     at.text_area(key="ann_value").set_value(value)
     at.button[0].click().run(timeout=120)
 
@@ -88,7 +89,7 @@ def test_missing_value_reports_error_and_adds_nothing():
     at = AppTest.from_function(_script)
     at.run(timeout=120)
 
-    at.selectbox(key="ann_predicate").set_value("skos:example")
+    picker(at, "ann_predicate").set_value("skos:example")
     at.button[0].click().run(timeout=120)
 
     assert not at.exception, at.exception

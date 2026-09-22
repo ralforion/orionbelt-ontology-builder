@@ -14,6 +14,7 @@ which AppTest mis-serializes.
 
 import pandas as pd
 import pytest
+from case_pickers import picker
 from rdflib import OWL, RDF, BNode, Graph, Literal, URIRef
 from streamlit.testing.v1 import AppTest
 
@@ -90,8 +91,8 @@ def _run(script, om):
 
 
 def _add(at, resource, value):
-    at.selectbox(key="ann_resource").set_value(resource)
-    at.selectbox(key="ann_predicate").set_value("rdfs:comment")
+    picker(at, "ann_resource").set_value(resource)
+    picker(at, "ann_predicate").set_value("rdfs:comment")
     at.text_area(key="ann_value").set_value(value)
     at.button[0].click().run(timeout=120)
     assert not at.exception, at.exception
@@ -225,7 +226,7 @@ def test_the_view_tab_offers_to_move_a_stray_onto_the_resource():
     """Reading by URI means those annotations are no longer listed, so the tab
     has to say where they went or they are invisible as well as unreachable."""
     at = _run(_view_script, _om_with_stray())
-    assert at.selectbox(key="view_annotations_select").value == "Account [Class]"
+    assert picker(at, "view_annotations_select").value == "Account [Class]"
     assert BASE + "Account" in at.warning[0].value
 
     at.button(key=f"adopt_ann_{app._uid(ACCOUNT)}").click().run(timeout=120)
@@ -410,7 +411,7 @@ def test_the_add_form_annotates_the_namesake_that_was_chosen():
     at = _run(_add_script, _om_with_namesakes())
     option = next(
         o
-        for o in at.selectbox(key="ann_resource").options
+        for o in picker(at, "ann_resource").options
         if o.strip().startswith("Account (gist)")
     )
     _add(at, option.strip(), "the imported one")
@@ -426,11 +427,11 @@ def test_the_view_tab_lists_the_namesake_that_was_chosen():
     om.add_annotation(BASE + "Account", "comment", "the local one")
     at = _run(_view_script, om)
 
-    picker = at.selectbox(key="view_annotations_select")
+    box = picker(at, "view_annotations_select")
     option = next(
-        o for o in picker.options if o.strip().startswith("Account (gist)")
+        o for o in box.options if o.strip().startswith("Account (gist)")
     ).strip()
-    picker.set_value(option).run(timeout=120)
+    box.set_value(option).run(timeout=120)
     assert not at.exception, at.exception
 
     shown = " ".join(m.value for m in at.markdown)
@@ -485,7 +486,7 @@ def test_a_urn_resources_annotation_survives_a_round_trip_through_turtle():
 def test_the_add_form_annotates_a_urn_resource_as_itself():
     at = _run(_add_script, _om_with_urn_class())
     option = next(
-        o for o in at.selectbox(key="ann_resource").options if URN_ACCOUNT in o
+        o for o in picker(at, "ann_resource").options if URN_ACCOUNT in o
     ).strip()
     _add(at, option, "an account")
 

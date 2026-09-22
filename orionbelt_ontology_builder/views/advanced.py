@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from ..case_picker import case_multiselect
 from ..ui import (
     missing_required,
     required_selectbox,
@@ -84,12 +85,16 @@ def render_advanced():
                     selected_classes = [complement_class] if complement_class else []
                     selected_individuals = []
                 elif expr_type == "oneOf":
-                    selected_individuals = st.multiselect(
-                        "Individuals (enumeration)", options=ind_names
+                    selected_individuals = case_multiselect(
+                        "Individuals (enumeration)",
+                        ind_names,
+                        key="adv_expr_individuals",
                     )
                     selected_classes = []
                 else:
-                    selected_classes = st.multiselect("Classes", options=class_names)
+                    selected_classes = case_multiselect(
+                        "Classes", class_names, key="adv_expr_classes"
+                    )
                     selected_individuals = []
 
                 submitted = st.form_submit_button("Add Expression")
@@ -143,9 +148,10 @@ def render_advanced():
                     help="The property that results from following the chain",
                 )
 
-                chain_props = st.multiselect(
+                chain_props = case_multiselect(
                     "Chain Properties (in order)",
-                    options=obj_prop_names,
+                    obj_prop_names,
+                    key="adv_chain_props",
                     help="Select properties in the order they should be followed",
                     # The order is the point, and a row that inserts every
                     # property at once has none (see SELECT_ALL_NOTE in ui.py).
@@ -197,9 +203,10 @@ def render_advanced():
                     help="The class that is the disjoint union",
                 )
 
-                member_classes = st.multiselect(
+                member_classes = case_multiselect(
                     "Member Classes",
-                    options=class_names,
+                    class_names,
+                    key="adv_union_members",
                     help="Classes that make up the disjoint union",
                 )
 
@@ -238,9 +245,10 @@ def render_advanced():
             st.warning("Need at least 2 individuals for AllDifferent.")
         else:
             with st.form("add_all_different_form"):
-                selected_inds = st.multiselect(
+                selected_inds = case_multiselect(
                     "Select Individuals",
-                    options=ind_names,
+                    ind_names,
+                    key="adv_alldiff_individuals",
                     help="All selected individuals will be declared mutually different",
                 )
 
@@ -282,9 +290,10 @@ def render_advanced():
                     current_display=class_names[0] if class_names else None,
                 )
 
-                key_props = st.multiselect(
+                key_props = case_multiselect(
                     "Key Properties",
-                    options=all_prop_names,
+                    all_prop_names,
+                    key="adv_haskey_props",
                     help="Properties that together uniquely identify instances",
                     # A key is a handful of properties, never all of them
                     # (see SELECT_ALL_NOTE in ui.py).

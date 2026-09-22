@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from ..case_picker import case_multiselect
 from ..ui import (
     _build_name_collision_set,
     _bulk_result_message,
@@ -862,7 +863,7 @@ def render_properties():
             if not all_prop_names:
                 st.info("No properties to delete.")
             else:
-                selected = st.multiselect(
+                selected = case_multiselect(
                     "Select properties to delete",
                     all_prop_names,
                     key="bulk_delete_props_select",
