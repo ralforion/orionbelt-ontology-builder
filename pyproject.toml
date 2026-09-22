@@ -126,10 +126,10 @@ include-package-data = true
 orionbelt_ontology_builder = [
     "favicon.png",
     "assets/*",
-    # The graph component only. A "lib/**/*" glob swept in whatever else was in
-    # the working tree, including a macOS .DS_Store, and nothing else under lib/
-    # is loaded any more.
+    # The two components, named one by one. A "lib/**/*" glob swept in whatever
+    # else was in the working tree, including a macOS .DS_Store.
     "lib/graph_viewer/*",
+    "lib/case_picker/*",
     # Third-party licence texts for what this wheel redistributes; the map from
     # file to licence is THIRD_PARTY_NOTICES.md at the repo root.
     "licenses/*",

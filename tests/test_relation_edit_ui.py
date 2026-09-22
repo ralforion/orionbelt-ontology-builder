@@ -6,6 +6,7 @@ single-select one, so any interaction after the first run fails before reaching
 the row.
 """
 
+from case_pickers import picker, pickers
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder.app import _uid
@@ -73,7 +74,7 @@ def test_editor_opens_with_the_rows_own_values():
     _open_editor(at)
 
     assert not at.exception, at.exception
-    labels = {s.label for s in at.selectbox}
+    labels = {s.label for s in at.selectbox} | {p.label for p in pickers(at)}
     assert {"Subject", "Relation", "Object"} <= labels
     assert at.selectbox(
         key=f"et_{_rel_uid(at.session_state['ontology'], 'Capacitor', 'disjointWith', 'Inductor')}"
@@ -85,7 +86,7 @@ def test_saving_a_changed_object_rewrites_the_relation():
     at.run(timeout=120)
     uid = _open_editor(at)
 
-    at.selectbox(key=f"eo_{uid}").set_value("Resistor")
+    picker(at, f"eo_{uid}").set_value("Resistor")
     _click(at, "💾 Save")
 
     assert not at.exception, at.exception
@@ -118,7 +119,7 @@ def test_cancel_leaves_the_relation_alone():
     at.run(timeout=120)
     uid = _open_editor(at)
 
-    at.selectbox(key=f"eo_{uid}").set_value("Resistor")
+    picker(at, f"eo_{uid}").set_value("Resistor")
     _click(at, "Cancel")
 
     om = at.session_state["ontology"]
@@ -184,7 +185,7 @@ def test_an_external_target_is_offered_as_its_own_option():
     uid = _open_external_editor(at)
 
     assert not at.exception, at.exception
-    assert at.selectbox(key=f"eo_{uid}").value == "http://external.example/Thing"
+    assert picker(at, f"eo_{uid}").value == "http://external.example/Thing"
 
 
 def test_editing_only_the_type_keeps_an_external_target():
@@ -211,7 +212,7 @@ def test_pointing_a_relation_at_itself_is_refused():
     at.run(timeout=120)
     uid = _open_editor(at)
 
-    at.selectbox(key=f"eo_{uid}").set_value("Capacitor")  # same as the subject
+    picker(at, f"eo_{uid}").set_value("Capacitor")  # same as the subject
     _click(at, "💾 Save")
 
     assert not at.exception, at.exception

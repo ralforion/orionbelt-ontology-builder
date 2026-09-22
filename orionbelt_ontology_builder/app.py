@@ -7,7 +7,7 @@ import logging
 
 import streamlit as st
 
-from . import local_store
+from . import case_picker, local_store
 
 # Re-exported so the top-level compatibility shims and the tests keep
 # addressing these by ``app.<name>``, which is how they were written when
@@ -411,6 +411,8 @@ def render_autosave_sidebar():
 def main():
     """Main application entry point."""
     _configure_page()
+    # Counted before any picker draws, so each can tell a return from a rerun.
+    case_picker.new_run()
     # Before anything renders: the widgets are wrapped so their help text is
     # collected on the way past, and this render starts with none of it
     # (issue #383). render_page_shims() at the end puts it where a keyboard

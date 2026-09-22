@@ -6,6 +6,7 @@ import logging
 
 import streamlit as st
 
+from ..case_picker import case_multiselect, case_selectbox
 from ..ontology_manager import PATH_MAX_VISITED, PathSearchLimitError
 from ..ui import (
     _FILTER_KINDS,
@@ -1180,11 +1181,10 @@ def render_visualization():
         _find_col, _mode_col, _filter_col = _find_row.columns([1, 0.5, 2.5])
         with _find_col:
             if focus_targets:
-                _find_choice = st.selectbox(
+                _find_choice = case_selectbox(
                     "Find entity in graph",
-                    options=sorted(focus_targets, key=option_sort_key),
+                    sorted(focus_targets, key=option_sort_key),
                     format_func=_picker_caption,
-                    index=None,
                     placeholder="🔍 Find and centre on an entity…",
                     label_visibility="collapsed",
                     key="viz_find_entity",
@@ -1325,9 +1325,9 @@ def render_visualization():
                 }
                 fcol1, fcol2 = st.columns([3, 1])
                 with fcol1:
-                    focus_seeds = st.multiselect(
+                    focus_seeds = case_multiselect(
                         "Focus node(s)",
-                        options=focus_labels,
+                        focus_labels,
                         format_func=_picker_caption,
                         key="viz_focus_seeds",
                         # A focus on everything is not a focus, so the row that
@@ -1472,9 +1472,9 @@ def render_visualization():
                     _noun = active["kind"]["noun"]
                     _plural = active["kind"]["plural"]
                     _entries = active["entries"]
-                    st.multiselect(
+                    case_multiselect(
                         f"Select {_plural} to display",
-                        options=active["displays"],
+                        active["displays"],
                         help=f"Choose which {_plural} to show in the graph. Empty "
                         f"shows none; use 'Select all' to bring them back.",
                         key=f"viz_selected_{_key}",
@@ -1690,11 +1690,10 @@ def render_visualization():
 
                 _psrc_col, _ptgt_col = st.columns(2)
                 with _psrc_col:
-                    _path_source = st.selectbox(
+                    _path_source = case_selectbox(
                         "From",
-                        options=sorted(path_choices, key=option_sort_key),
+                        sorted(path_choices, key=option_sort_key),
                         format_func=_picker_caption,
-                        index=None,
                         placeholder="Start entity…",
                         key="viz_path_source",
                         help="Classes, individuals or SKOS concepts. Toggle the "
@@ -1704,11 +1703,10 @@ def render_visualization():
                         "in a path.",
                     )
                 with _ptgt_col:
-                    _path_target = st.selectbox(
+                    _path_target = case_selectbox(
                         "To",
-                        options=sorted(path_choices, key=option_sort_key),
+                        sorted(path_choices, key=option_sort_key),
                         format_func=_picker_caption,
-                        index=None,
                         placeholder="End entity…",
                         key="viz_path_target",
                         help="The path is undirected — it answers 'how are these "

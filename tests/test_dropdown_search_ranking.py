@@ -291,8 +291,8 @@ def test_graph_pickers_pad_their_captions():
     captions = {
         keyword.value.id
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-        if node.func.attr in ("selectbox", "multiselect")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        if node.func.id in ("case_selectbox", "case_multiselect")
         for keyword in node.keywords
         if keyword.arg == "format_func" and isinstance(keyword.value, ast.Name)
     }
@@ -363,9 +363,22 @@ def test_graph_pickers_order_case_variants_lowercase_first():
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         if node.func.attr in ("selectbox", "multiselect")
     ]
-    assert pickers, "the page draws no picker at all"
-    for picker in pickers:
-        options = next(k.value for k in picker.keywords if k.arg == "options")
+    # The case-aware pickers (issue #468) keep the supplied order among equal
+    # matches, so they need the same sort; their options are the second
+    # argument.
+    case_pickers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        if node.func.id in ("case_selectbox", "case_multiselect")
+    ]
+    assert pickers or case_pickers, "the page draws no picker at all"
+    for picker in pickers + case_pickers:
+        options = (
+            picker.args[1]
+            if picker in case_pickers
+            else next(k.value for k in picker.keywords if k.arg == "options")
+        )
         from_entries = (
             isinstance(options, ast.Subscript)
             and isinstance(options.slice, ast.Constant)

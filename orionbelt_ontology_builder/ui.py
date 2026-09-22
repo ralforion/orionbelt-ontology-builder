@@ -5683,29 +5683,32 @@ def _sort_restrictions(restrictions: list) -> list:
 def clearable_selectbox(label, options, key, current_display=None, **kwargs):
     """A dropdown carrying the clear cross, returning None once cleared.
 
-    Streamlit only draws that cross when a selectbox may hold nothing, which
-    means ``index=None`` and therefore no preselection — so the current value is
-    seeded into the widget's own state instead. That is done once per value
-    rather than once per render: re-seeding every run would undo a clear the
-    moment it happened, and seeding only on first sight would show a stale value
-    when the row underneath changes.
+    Drawn by :func:`case_picker.case_selectbox`, whose search ranks by the case
+    typed (issue #468) and which holds its value in ``st.session_state[key]``.
+    The current value is seeded there once per value rather than once per
+    render: re-seeding every run would undo a clear the moment it happened, and
+    seeding only on first sight would show a stale value when the row
+    underneath changes.
 
     Use this where empty is a legitimate answer: a picker that chooses what to
     show, or a field whose absence simply means "not set".
     """
+    # Imported here: case_picker anchors its assets on PKG_DIR, from this module.
+    from .case_picker import case_selectbox, drawn_last_run
+
     seeded_for = f"{key}__seeded_for"
-    # ``key not in session_state`` is the second half of the condition, not a
-    # redundancy: Streamlit drops the state of a widget that wasn't rendered on
-    # a run, so leaving the page and coming back loses the value — while the
-    # marker below, not being a widget key, survives and would suppress the
-    # re-seed. The field then came back empty instead of showing what it holds.
+    # A picker that was not drawn on the last run is seeded afresh, as a
+    # ``st.selectbox`` was when Streamlit dropped its state: leaving an editor
+    # and coming back shows what the row holds, not an unsaved pick. The marker
+    # below outlives that, so it cannot be the only test.
     if (
         key not in st.session_state
+        or not drawn_last_run(key)
         or st.session_state.get(seeded_for) != current_display
     ):
         st.session_state[seeded_for] = current_display
         st.session_state[key] = current_display if current_display in options else None
-    return st.selectbox(label, options, index=None, key=key, **kwargs)
+    return case_selectbox(label, options, key=key, **kwargs)
 
 
 def required_selectbox(label, options, key, current_display=None, **kwargs):

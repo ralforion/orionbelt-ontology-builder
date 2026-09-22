@@ -17,6 +17,7 @@ import json
 import os
 
 import pytest
+from case_pickers import rendered_picker
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder import ui
@@ -458,8 +459,8 @@ def test_the_pair_survives_the_panel_being_switched_off_and_on():
     _panel(at, False)
     _panel(at, True)
 
-    assert at.selectbox(key="viz_path_source").value == "Class: A"
-    assert at.selectbox(key="viz_path_target").value == "Class: C"
+    assert rendered_picker(at, "viz_path_source")["value"] == "Class: A"
+    assert rendered_picker(at, "viz_path_target")["value"] == "Class: C"
 
 
 def test_a_remembered_pick_whose_entity_is_gone_is_forgotten():
@@ -481,7 +482,7 @@ def test_a_remembered_pick_whose_entity_is_gone_is_forgotten():
 
     assert "_viz_cfg_path_source" not in at.session_state
     # The picker itself comes back empty rather than naming a class that is gone.
-    assert at.selectbox(key="viz_path_source").value is None
+    assert rendered_picker(at, "viz_path_source")["value"] is None
     # The other half of the pair is untouched — only the gone one is dropped.
     assert at.session_state["_viz_cfg_path_target"] == "Class: C"
 

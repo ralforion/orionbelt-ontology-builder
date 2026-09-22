@@ -16,6 +16,8 @@ from orionbelt_ontology_builder import ui
 ASSETS = [
     pathlib.Path("lib/graph_viewer/index.html"),
     pathlib.Path("lib/graph_viewer/vis-network.min.js"),
+    pathlib.Path("lib/case_picker/case_picker.js"),
+    pathlib.Path("lib/case_picker/case_picker.css"),
     pathlib.Path("favicon.png"),
     pathlib.Path("assets/ORIONBELT_Logo.png"),
     pathlib.Path("assets/ORIONBELT Logo w.png"),
