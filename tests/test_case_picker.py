@@ -222,3 +222,99 @@ def test_without_a_default_the_page_owns_the_value(monkeypatch):
     case_picker.new_run()
     st.session_state["m"] = ["b"]  # restored by the page
     assert case_picker.case_multiselect("P", ["a", "b"], key="m") == ["b"]
+
+
+HARNESS = sources.PKG.parent / "tests" / "case_picker_dom.mjs"
+
+
+def _drive(steps, tmp_path):
+    """Run the component through ``steps`` on a stand-in DOM; one dict per
+    ``look`` step with what the field, list and reports showed."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    module = tmp_path / "case_picker.mjs"
+    module.write_text(JS.read_text("utf-8"), "utf-8")
+    result = subprocess.run(
+        [node, str(HARNESS), module.as_uri(), json.dumps(steps)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def _data(**overrides):
+    data = {
+        "label": "Pick",
+        "labelVisibility": "visible",
+        "help": None,
+        "placeholder": "Choose",
+        "disabled": False,
+        "options": ["a", "b", "c"],
+        "captions": ["a", "b", "c"],
+        "value": None,
+    }
+    return {**data, **overrides}
+
+
+def test_the_keys_still_pick_after_a_rerun_lands_on_an_open_list(tmp_path):
+    """A pick reruns the page while the list stays open; the rows drawn before
+    that rerun must not be what Enter works on (Codex review of PR #474)."""
+    multi = _data(multi=True, selectAll=True, value=[])
+    (seen,) = _drive(
+        [
+            ["render", multi],
+            ["focus"],
+            ["key", "Enter"],  # the first real option, not "Select all"
+            ["render", {**multi, "value": ["a"]}],  # the pick's rerun
+            ["key", "Enter"],
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert seen["reports"] == [["a"], ["a", "b"]]
+    assert seen["chips"] == ["a", "b"]
+    assert seen["open"]
+
+
+def test_a_typed_value_stays_shown_until_the_form_is_submitted(tmp_path):
+    """Inside a form the pick only reaches the server on submit, so leaving the
+    field, or an unrelated rerun, must not blank what will be submitted."""
+    single = _data(acceptNewOptions=True)
+    left, rerun, taken_over = _drive(
+        [
+            ["render", single],
+            ["focus"],
+            ["type", "pt-BR"],
+            ["key", "Enter"],
+            ["blur"],
+            ["look"],
+            ["render", {**single, "label": "Pick again"}],  # the server still has None
+            ["look"],
+            ["render", {**single, "value": "b"}],  # the server moved on
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert left["value"] == "pt-BR" and left["clear"]
+    assert rerun["value"] == "pt-BR" and rerun["clear"]
+    assert taken_over["value"] == "b"
+
+
+def test_a_pick_in_a_form_survives_an_unrelated_rerun(tmp_path):
+    single = _data()
+    (seen,) = _drive(
+        [
+            ["render", single],
+            ["focus"],
+            ["type", "c"],
+            ["key", "Enter"],
+            ["blur"],
+            ["render", {**single, "help": "rerun"}],  # the server still has None
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert seen["value"] == "c"
+    assert seen["reports"] == ["c"]

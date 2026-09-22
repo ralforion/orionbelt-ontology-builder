@@ -113,12 +113,23 @@ export default function ({ data, parentElement, setStateValue }) {
   const focused = () =>
     document.activeElement === input || root.getRootNode().activeElement === input;
 
+  // A pick not yet back from the server. Inside a form it only arrives on
+  // submit, and until then any rerun redraws with the value the server held
+  // when the pick was made: that pick is still what goes in, so it is still
+  // what is shown. Once the server reports anything else it has taken over.
+  const serverValue = JSON.stringify(data.value ?? null);
+  if (root.cpPending && root.cpPending.base !== serverValue) root.cpPending = null;
+  const value = root.cpPending ? root.cpPending.value : data.value;
+
   // What is chosen: one index (single) or indices in the order picked (multi).
   // A rerun that lands while the field is in use keeps the local choice, which
   // may be a pick ahead of the one the rerun was for.
-  let current = options.indexOf(data.value);
+  let current = multi ? -1 : options.indexOf(value);
+  // A value typed in where the page accepts new ones, before the rerun that
+  // makes it an option; inside a form, that is until the submit.
+  let typedValue = !multi && current === -1 && typeof value === "string" ? value : "";
   if (multi) {
-    const incoming = (data.value || [])
+    const incoming = (value || [])
       .map((option) => options.indexOf(option))
       .filter((index) => index !== -1);
     root.cpIncoming = incoming;
@@ -136,6 +147,7 @@ export default function ({ data, parentElement, setStateValue }) {
     // reported. A list, not an object: Streamlit reads a state holding only a
     // dict-valued `value` as that dict's keys, and the change callback for
     // `value` would never fire.
+    root.cpPending = { base: serverValue, value };
     setStateValue("value", [value, Date.now()]);
   };
 
@@ -175,8 +187,8 @@ export default function ({ data, parentElement, setStateValue }) {
       drawChips();
       return;
     }
-    input.value = current === -1 ? "" : captions[current];
-    clear.hidden = current === -1 || input.disabled;
+    input.value = current === -1 ? typedValue : captions[current];
+    clear.hidden = (current === -1 && !typedValue) || input.disabled;
   };
 
   const close = () => {
@@ -189,23 +201,23 @@ export default function ({ data, parentElement, setStateValue }) {
     const items = list.querySelectorAll("li[data-row]");
     if (!items.length) return;
     active = Math.max(0, Math.min(next, items.length - 1));
+    root.cpActive = active;
     items.forEach((li, i) => li.classList.toggle("cp-active", i === active));
     items[active].scrollIntoView({ block: "nearest" });
   };
 
   const pick = (index) => {
     current = index;
+    typedValue = "";
     close();
     report(index === -1 ? null : options[index]);
   };
 
   // A value typed in rather than picked, where the page accepts new ones.
-  // Shown as typed until the rerun brings it back as an option.
   const pickTyped = (text) => {
     current = -1;
+    typedValue = text;
     close();
-    input.value = text;
-    clear.hidden = input.disabled;
     report(text);
   };
 
@@ -231,7 +243,8 @@ export default function ({ data, parentElement, setStateValue }) {
     return li;
   };
 
-  const render = () => {
+  // `keep` is the row to stay on when a rerun redraws an open list.
+  const render = (keep) => {
     const q = input.value;
     shown = rankOptions(captions, q, new Set(multi ? chosen() : []));
     rows = [];
@@ -258,7 +271,8 @@ export default function ({ data, parentElement, setStateValue }) {
     }
     list.replaceChildren(...items);
     const selectedAt = !multi && !q ? shown.indexOf(current) : -1;
-    highlight(selectedAt === -1 ? Math.min(firstReal, rows.length - 1) : selectedAt);
+    if (keep !== undefined) highlight(keep);
+    else highlight(selectedAt === -1 ? Math.min(firstReal, rows.length - 1) : selectedAt);
   };
 
   const choose = (indices) => {
@@ -288,7 +302,8 @@ export default function ({ data, parentElement, setStateValue }) {
   input.onfocus = () => {
     input.value = "";
     if (!multi) {
-      input.placeholder = current === -1 ? data.placeholder : captions[current];
+      const shownValue = current === -1 ? typedValue : captions[current];
+      input.placeholder = shownValue || data.placeholder;
     }
     open();
   };
@@ -336,7 +351,13 @@ export default function ({ data, parentElement, setStateValue }) {
     }
   };
 
-  // Leave what the user is typing alone when a rerun lands mid-search.
-  if (focused()) drawChips();
-  else close();
+  // Leave what the user is typing alone when a rerun lands mid-search, but
+  // rebuild an open list: its rows belong to the run before, and the keys
+  // work through this run's handlers.
+  if (!focused()) close();
+  else if (list.hidden) drawChips();
+  else {
+    drawChips();
+    render(root.cpActive);
+  }
 }
