@@ -55,6 +55,20 @@ def test_a_whole_word_outranks_a_longer_word_it_starts(tmp_path):
     assert _rank(captions, "va", tmp_path)[0] == "Class: va · variable"
 
 
+def test_a_whole_name_outranks_a_word_inside_one(tmp_path):
+    """Issue #479: ``add`` is a whole word of ``1-cpl-add`` too, and the
+    supplied order put the digit first. A name ends at a space, ``:`` or
+    ``·``, not at ``-`` or ``_``; a word inside one still beats a prefix."""
+    captions = ["Class: 1-cpl-add", "Class: add", "Class: adder", "Class: my_add"]
+    assert _rank(captions, "add", tmp_path) == [
+        "Class: add",
+        "Class: 1-cpl-add",
+        "Class: my_add",
+        "Class: adder",
+    ]
+    assert _rank(["ex:1-cpl-add", "ex:add"], "add", tmp_path)[0] == "ex:add"
+
+
 def test_letters_in_order_still_match(tmp_path):
     """Streamlit's fuzzy search found ``prsn`` in ``Person``; this one still
     does, below every real substring match."""
