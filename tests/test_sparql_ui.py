@@ -212,6 +212,29 @@ def test_every_example_query_runs():
         assert result.form in sparql.READ_ONLY_FORMS, name
 
 
+def test_the_property_path_examples_reach_past_one_step():
+    """Discussion #386: `+` follows the step at any depth, so a grandparent
+    is an ancestor and a restriction on a restriction's filler is reached."""
+    from orionbelt_ontology_builder import sparql
+
+    om = OntologyManager()
+    om.add_class("C")
+    om.add_class("B", parent="C")
+    om.add_class("A", parent="B")
+    om.add_object_property("nextItem")
+    om.add_restriction("A", "nextItem", "someValuesFrom", "B")
+    om.add_restriction("B", "nextItem", "someValuesFrom", "C")
+
+    def pairs(name):
+        result = sparql.run_query(om.graph, EXAMPLE_QUERIES[name])
+        return {tuple(cell.split(":")[-1] for cell in row) for row in result.rows}
+
+    ancestors = pairs("Ancestors at any depth (property path)")
+    assert {("A", "B"), ("A", "C"), ("B", "C")} <= ancestors
+    reachable = pairs("Classes reachable through restrictions (property path)")
+    assert reachable == {("A", "B"), ("A", "C"), ("B", "C")}
+
+
 def test_a_timed_out_query_does_not_claim_it_matched_nothing(monkeypatch):
     """A query stopped by the deadline produced no rows *yet*. Reporting that
     as an empty answer states the opposite of what happened."""

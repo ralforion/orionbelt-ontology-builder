@@ -40,6 +40,19 @@ ORDER BY ?label""",
   FILTER(isIRI(?parent))
 }
 ORDER BY ?parent ?child""",
+    # Two property paths (discussion #386): `+` follows a step any number of
+    # times, so these reach past the direct parent or the first restriction.
+    "Ancestors at any depth (property path)": """SELECT ?class ?ancestor WHERE {
+  ?class rdfs:subClassOf+ ?ancestor .
+  FILTER(isIRI(?class) && isIRI(?ancestor))
+}
+ORDER BY ?class ?ancestor""",
+    "Classes reachable through restrictions (property path)": """SELECT ?class ?reachable WHERE {
+  ?class a owl:Class .
+  ?class (rdfs:subClassOf/owl:someValuesFrom)+ ?reachable .
+  FILTER(isIRI(?class) && isIRI(?reachable))
+}
+ORDER BY ?class ?reachable""",
     "Properties with domain and range": """SELECT ?property ?domain ?range WHERE {
   VALUES ?kind { owl:ObjectProperty owl:DatatypeProperty }
   ?property a ?kind .
