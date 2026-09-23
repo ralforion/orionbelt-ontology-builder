@@ -12,13 +12,23 @@ const MAX_SHOWN = 200;
 
 const isWordChar = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
 
-// Tier of one match of `q` at `at` in `text`: a whole word beats the start of a
-// word, which beats anywhere inside one. Lower is better.
+// What separates one name from the next in a caption (`Class: add · label`,
+// `ex:add`, a URI's path), as against the `-` and `_` inside a name such as
+// `1-cpl-add`, which only separate words.
+const isNameEdge = (ch) => ch === undefined || /[\s:·/#(),]/u.test(ch);
+
+// Tier of one match of `q` at `at` in `text`: a whole name beats a whole word,
+// which beats the start of a word, which beats anywhere inside one. Lower is
+// better. So `add` lists `add` above `1-cpl-add` (issue #479), where both were
+// whole words and the supplied order put the digit first.
 function placeTier(text, q, at) {
-  const starts = !isWordChar(text[at - 1]);
-  const ends = !isWordChar(text[at + q.length]);
-  if (starts && ends) return 0;
-  return starts ? 1 : 2;
+  const before = text[at - 1];
+  const after = text[at + q.length];
+  if (isNameEdge(before) && isNameEdge(after)) return 0;
+  const starts = !isWordChar(before);
+  const ends = !isWordChar(after);
+  if (starts && ends) return 1;
+  return starts ? 2 : 3;
 }
 
 function bestPlace(text, q) {
@@ -60,7 +70,7 @@ export function rankCaption(caption, q) {
   const folded = bestPlace(caption.toLowerCase(), q.toLowerCase());
   if (exact === -1 && folded === -1) {
     const span = subsequenceSpan(q.toLowerCase(), caption.toLowerCase());
-    return span === -1 ? -1 : 6 + span / (span + 1);
+    return span === -1 ? -1 : 8 + span / (span + 1);
   }
   if (exact !== -1 && exact <= folded) return exact * 2;
   return folded * 2 + 1;
