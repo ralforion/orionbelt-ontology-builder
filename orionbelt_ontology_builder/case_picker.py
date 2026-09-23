@@ -24,6 +24,11 @@ from .ui import PKG_DIR
 
 _ASSET_DIR = PKG_DIR / "lib" / "case_picker"
 
+# The listbox is kept out of the Tab order (issue #480). It scrolls when the
+# options outrun its height, and Chrome makes a scroller a Tab stop, so Tab
+# from the field moved focus onto the list, whose blur handler had just hidden
+# it: focus fell to the page, and the next Tab came back to the field. Its rows
+# are reached with the arrow keys, as in a native listbox.
 _HTML = (
     '<div class="cp-root">'
     '<label><span></span><span class="cp-help" hidden>?</span></label>'
@@ -32,7 +37,7 @@ _HTML = (
     '<input type="text" role="combobox" autocomplete="off" spellcheck="false"'
     ' aria-autocomplete="list" aria-expanded="false">'
     '<button type="button" class="cp-clear" aria-label="Clear" hidden>×</button>'
-    '</div><ul role="listbox" hidden></ul></div>'
+    '</div><ul role="listbox" tabindex="-1" hidden></ul></div>'
 )
 
 

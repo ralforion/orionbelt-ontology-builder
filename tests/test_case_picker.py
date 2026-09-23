@@ -388,3 +388,12 @@ def test_typing_after_a_pick_starts_a_new_search(tmp_path):
     )
     assert seen["value"] == "fn"
     assert seen["rows"] == ["fn", "FN"]
+
+
+def test_tab_skips_the_open_list():
+    """Tab from the field goes on to the next control (issue #480).
+
+    A list long enough to scroll was a Tab stop in Chrome: Tab moved focus
+    onto it, the field's blur hid it, and focus fell to the page, so each Tab
+    only toggled the field instead of reaching "Add annotation"."""
+    assert '<ul role="listbox" tabindex="-1" hidden>' in case_picker._HTML
