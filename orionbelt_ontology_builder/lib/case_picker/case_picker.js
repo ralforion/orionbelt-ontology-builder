@@ -17,6 +17,9 @@ const isWordChar = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
 // `1-cpl-add`, which only separate words.
 const isNameEdge = (ch) => ch === undefined || /[\s:·/#(),]/u.test(ch);
 
+// Between a name and its label in a caption (LABEL_NAME_SEPARATOR in ui.py).
+const LABEL_SEPARATOR = " · ";
+
 // Tier of one match of `q` at `at` in `text`: a whole name beats a whole word,
 // which beats the start of a word, which beats anywhere inside one. Lower is
 // better. So `add` lists `add` above `1-cpl-add` (issue #479), where both were
@@ -66,12 +69,26 @@ function subsequenceSpan(q, text) {
 // `Py-trig-id`, issue #244).
 export function rankCaption(caption, q) {
   if (!q) return 0;
-  const exact = bestPlace(caption, q);
-  const folded = bestPlace(caption.toLowerCase(), q.toLowerCase());
-  if (exact === -1 && folded === -1) {
+  const whole = placeRank(caption, q);
+  if (whole === -1) {
     const span = subsequenceSpan(q.toLowerCase(), caption.toLowerCase());
     return span === -1 ? -1 : 8 + span / (span + 1);
   }
+  // A caption reads `name · label`. The same match in the label comes after
+  // the one in a name, or `sum` listed `dg-sum · Digital sum` above `sum`: in
+  // the label, `sum` is a whole name as well, and the supplied order put `dg`
+  // first (issue #486).
+  const cut = caption.indexOf(LABEL_SEPARATOR);
+  if (cut === -1 || placeRank(caption.slice(0, cut), q) === whole) return whole;
+  return whole + 0.5;
+}
+
+// The place tier of `q`'s best match in `text`, doubled, plus one when only
+// another case matches; -1 when it does not occur at all.
+function placeRank(text, q) {
+  const exact = bestPlace(text, q);
+  const folded = bestPlace(text.toLowerCase(), q.toLowerCase());
+  if (folded === -1) return -1;
   if (exact !== -1 && exact <= folded) return exact * 2;
   return folded * 2 + 1;
 }

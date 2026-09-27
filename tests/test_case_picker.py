@@ -69,6 +69,23 @@ def test_a_whole_name_outranks_a_word_inside_one(tmp_path):
     assert _rank(["ex:1-cpl-add", "ex:add"], "add", tmp_path)[0] == "ex:add"
 
 
+def test_a_match_in_the_name_outranks_the_same_match_in_a_label(tmp_path):
+    """Issue #486: the graph pickers show the label after the name, and ``sum``
+    in ``Digital sum`` is a whole name too, so the supplied order put
+    ``dg-sum`` first. A better match in the label still wins, and a label is
+    still searchable on its own."""
+    captions = ["Class: dg-sum · Digital sum", "Class: sum"]
+    assert _rank(captions, "sum", tmp_path) == [
+        "Class: sum",
+        "Class: dg-sum · Digital sum",
+    ]
+    captions = ["Class: summary", "Class: x1 · sum"]
+    assert _rank(captions, "sum", tmp_path)[0] == "Class: x1 · sum"
+    assert _rank(["Class: 0-I · zero current"], "zero", tmp_path) == [
+        "Class: 0-I · zero current"
+    ]
+
+
 def test_letters_in_order_still_match(tmp_path):
     """Streamlit's fuzzy search found ``prsn`` in ``Person``; this one still
     does, below every real substring match."""
