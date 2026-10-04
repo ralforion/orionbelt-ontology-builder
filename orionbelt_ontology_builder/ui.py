@@ -103,6 +103,11 @@ VIZ_FOCUS_SEED_KINDS = {
 #: ``{kind: {"seeds": [...], "focus_mode": bool}}``. Session-only: a focus does
 #: not outlive a reload either.
 VIZ_PARKED_SEEDS_KEY = "_viz_parked_focus_seeds"
+#: Earlier states of the Node options panel to step back to, most recent last
+#: (issue #491). Session-only, and dropped with the rest of an ontology's
+#: per-file state: every entry names entities of the ontology it was taken in.
+VIZ_NODE_UNDO_KEY = "_viz_node_undo"
+VIZ_NODE_UNDO_MAX = 20
 VIZ_FILE_STATE_KEY = "viz_file_state"
 VIZ_FILE_STATE_MAX_FILES = 20
 #: Where the chosen language pack and any custom ones are stored (issue #252) —
@@ -1902,6 +1907,7 @@ def viz_filter_changed(kind_key, uri_by_display):
         # picked" would store an empty filter, hiding every node of this kind
         # and persisting that (issue #219).
         return
+    viz_node_undo_checkpoint()
     picked = st.session_state[wid_key] or []
     st.session_state[f"_viz_cfg_selected_{kind_key}_uris"] = [
         uri_by_display[d] for d in picked if d in uri_by_display
@@ -1925,6 +1931,9 @@ def viz_auto_show_new_toggled():
     viz_sync("_viz_cfg_auto_show_new", "viz_auto_show_new")
     if not st.session_state.get("_viz_cfg_auto_show_new"):
         return
+    # The setting itself is a display option and not undone; letting the queue
+    # in is a change to the filters, so it is.
+    viz_node_undo_checkpoint()
     for kind in _FILTER_KINDS:
         key = kind["key"]
         pending = st.session_state.get(f"_viz_new_hidden_{key}") or []
@@ -2030,6 +2039,7 @@ def viz_apply_focus_click(label, replace=False):
     no seeds backfills an arbitrary first label, so a pass through that state
     would jump the graph to a class nobody picked (issue #328).
     """
+    viz_node_undo_checkpoint()
     seeds = list(st.session_state.get("_viz_cfg_focus_seeds") or [])
     mode_before = bool(st.session_state.get("_viz_cfg_focus_mode"))
     seeds, focus_on = focus_seeds_after_request(
@@ -2129,6 +2139,7 @@ def viz_focus_toggle():
     """
     if _viz_widget_missing("viz_focus_mode"):
         return
+    viz_node_undo_checkpoint()
     on = st.session_state["viz_focus_mode"]
     st.session_state["_viz_cfg_focus_mode"] = on
     st.session_state["_viz_settings_dirty"] = True
@@ -2196,6 +2207,7 @@ def viz_focus_on_path(labels) -> None:
     labels = [str(label) for label in labels or []]
     if not labels:
         return
+    viz_node_undo_checkpoint()
     if not st.session_state.get("_viz_cfg_focus_mode"):
         st.session_state["_viz_cfg_focus_mode"] = True
         # focus_mode is a persisted display setting (#142), saved only when the
@@ -2252,9 +2264,135 @@ def viz_focus_seeds_changed():
     """
     if _viz_widget_missing("viz_focus_seeds"):
         return
+    viz_node_undo_checkpoint()
     viz_set_focus_seeds(st.session_state["viz_focus_seeds"])
     if not st.session_state["_viz_cfg_focus_seeds"]:
         viz_leave_empty_focus()
+
+
+def _viz_node_options_state() -> dict:
+    """What the Node options panel currently shows, as one comparable value.
+
+    The node filters, the focus seeds and whether focus mode is on: the mode
+    decides which of the other two the panel is editing, and a canvas click
+    changes it together with the seeds.
+
+    ``known`` rides along so an undo can tell an entity the snapshot had an
+    opinion about from one created since (see :func:`viz_node_undo`). It is
+    left out of :func:`_viz_node_options_view`, since an entity being created
+    is not a change the user made in this panel.
+    """
+    return {
+        "selected": {
+            k["key"]: _copy_or_none(
+                st.session_state.get(f"_viz_cfg_selected_{k['key']}_uris")
+            )
+            for k in _FILTER_KINDS
+        },
+        "known": {
+            k["key"]: _copy_or_none(
+                st.session_state.get(f"_viz_cfg_known_{k['key']}_uris")
+            )
+            for k in _FILTER_KINDS
+        },
+        # What "Show new" was offering (issue #194), so undoing that click
+        # offers them again rather than leaving them hidden with no button.
+        "new_hidden": {
+            k["key"]: list(st.session_state.get(f"_viz_new_hidden_{k['key']}") or [])
+            for k in _FILTER_KINDS
+        },
+        "focus_seeds": _copy_or_none(st.session_state.get("_viz_cfg_focus_seeds")),
+        "focus_mode": bool(st.session_state.get("_viz_cfg_focus_mode")),
+    }
+
+
+def _copy_or_none(value):
+    """A list copy of ``value``, keeping ``None`` (never set) distinct from []."""
+    return None if value is None else list(value)
+
+
+def _viz_node_options_view(state: dict) -> tuple:
+    """The part of a snapshot the user sees, for telling two of them apart."""
+    return (state["selected"], state["focus_seeds"], state["focus_mode"])
+
+
+def viz_node_undo_checkpoint() -> None:
+    """Remember the Node options state, just before the user changes it (#491).
+
+    Called by every control that edits the node filters, the focus seeds or the
+    focus mode, ahead of its write. Not by the render's own reconciling (an
+    entity created or deleted), which is the ontology changing rather than the
+    user changing the view, and which an undo should not walk back.
+
+    A snapshot that looks the same as the one on top is not stacked again, so a
+    control that ends up changing nothing does not cost an undo step.
+    """
+    state = _viz_node_options_state()
+    history = list(st.session_state.get(VIZ_NODE_UNDO_KEY) or [])
+    if history and _viz_node_options_view(history[-1]) == _viz_node_options_view(state):
+        return
+    history.append(state)
+    st.session_state[VIZ_NODE_UNDO_KEY] = history[-VIZ_NODE_UNDO_MAX:]
+
+
+def viz_node_undo_available() -> bool:
+    """Whether Undo has a change to take back.
+
+    Drops entries that look like what is on screen now first: a control that
+    checkpointed and then changed nothing, or a change the render reverted by
+    itself, would otherwise make Undo a click that does nothing.
+    """
+    history = list(st.session_state.get(VIZ_NODE_UNDO_KEY) or [])
+    now = _viz_node_options_view(_viz_node_options_state())
+    while history and _viz_node_options_view(history[-1]) == now:
+        history.pop()
+    st.session_state[VIZ_NODE_UNDO_KEY] = history
+    return bool(history)
+
+
+def viz_node_undo() -> None:
+    """Put the Node options panel back the way it was before the last change.
+
+    An ``on_click`` callback, so it runs before the page does and every widget
+    it affects is re-seeded from the ``_viz_cfg_`` keys it writes.
+
+    A filter is restored for the entities the snapshot knew about only. One
+    created since was not part of the choice being undone, so it keeps
+    whatever membership it has now; restoring the old list wholesale would hide
+    a class the user has just made because of an unrelated filter change taken
+    back after it. A renamed entity is that case too, since a rename mints a
+    new URI. Entities deleted since drop out on the next render's reconcile.
+    """
+    if not viz_node_undo_available():
+        return
+    history = st.session_state[VIZ_NODE_UNDO_KEY]
+    snap = history.pop()
+    for kind in _FILTER_KINDS:
+        key = kind["key"]
+        cfg_key = f"_viz_cfg_selected_{key}_uris"
+        old = snap["selected"][key]
+        if old is None:
+            continue
+        old_known = set(snap["known"][key] or [])
+        since = [u for u in st.session_state.get(cfg_key) or [] if u not in old_known]
+        st.session_state[cfg_key] = [*old, *(u for u in since if u not in old)]
+        # Unioned, not assigned: the render keeps only those still unselected.
+        pending_key = f"_viz_new_hidden_{key}"
+        pending = list(st.session_state.get(pending_key) or [])
+        st.session_state[pending_key] = [
+            *pending,
+            *(u for u in snap["new_hidden"][key] if u not in pending),
+        ]
+    if snap["focus_seeds"] is None:
+        st.session_state.pop("_viz_cfg_focus_seeds", None)
+        st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
+    else:
+        viz_set_focus_seeds(snap["focus_seeds"])
+    if snap["focus_mode"] != bool(st.session_state.get("_viz_cfg_focus_mode")):
+        # The config key only, as the canvas click does: the page copies it into
+        # the checkbox's widget key. focus_mode is a persisted setting (#142).
+        st.session_state["_viz_cfg_focus_mode"] = snap["focus_mode"]
+        st.session_state["_viz_settings_dirty"] = True
 
 
 def viz_find_changed():
@@ -2656,6 +2794,8 @@ def _clear_viz_file_session_state() -> None:
         st.session_state.pop(f"_viz_new_hidden_{kind['key']}", None)
     # Likewise the toast still queued for entities of the file we are leaving.
     st.session_state.pop("_viz_new_hidden_announce", None)
+    # Every step names that file's entities, the way its selection does.
+    st.session_state.pop(VIZ_NODE_UNDO_KEY, None)
     viz_drop_focus_seeds()
     st.session_state.pop("_viz_pending_focus_seed_ids", None)
     # The mutation counters seen on the last render belong to the file we just
