@@ -5697,6 +5697,318 @@ class OntologyManager:
                         )
         return relations
 
+    # ==================== CUSTOM RELATIONS ====================
+    #
+    # A custom relation is a direct link between two named resources through a
+    # property the user names, such as ``:step1 :nextItem :step2`` (issue
+    # #484). The property is declared as an ``owl:AnnotationProperty``: an
+    # object property between two classes would make each class an individual
+    # too (punning), which is legal OWL but confuses reasoners. The price is
+    # that a reasoner gives the link no meaning; it is there to be navigated
+    # and queried, which is what a sequence of steps needs. A restriction is
+    # still the tool when inference is wanted, and the two can live side by
+    # side.
+    #
+    # Nothing marks a triple as a custom relation beyond its shape, so a file
+    # written by hand or by another tool is read the same way: the predicate is
+    # declared as an annotation property and nothing else, it is not a term of
+    # a standard vocabulary (rdfs:seeAlso links resources too, but is not one),
+    # and both ends are resources declared in this ontology.
+
+    #: What makes a resource a declared entity rather than the ontology header.
+    _NON_ENTITY_TYPES: ClassVar[frozenset] = frozenset({OWL.Ontology})
+
+    def _is_declared_entity(self, node: Node) -> bool:
+        """True if ``node`` is a named resource this ontology gives a type."""
+        if not isinstance(node, URIRef):
+            return False
+        types = set(self.graph.objects(node, RDF.type))
+        return bool(types - self._NON_ENTITY_TYPES)
+
+    def _is_custom_relation_type(self, pred: Node) -> bool:
+        """True if ``pred`` is declared as an annotation property and nothing
+        else, outside the standard vocabularies."""
+        if not isinstance(pred, URIRef):
+            return False
+        if self._namespace_of(pred) in self._EXTERNAL_ANNOTATION_NAMESPACES:
+            return False
+        return set(self.graph.objects(pred, RDF.type)) == {OWL.AnnotationProperty}
+
+    def _custom_relation_display(self, pred: URIRef) -> str:
+        """How a relation is named in lists: the bare name in this ontology's
+        own namespace, ``prefix:name`` elsewhere when the prefix is bound."""
+        local = self._local_name(pred)
+        if str(pred).startswith(str(self.namespace)):
+            return local
+        prefix = self._get_prefix_for_uri(str(pred))
+        return f"{prefix}:{local}" if prefix and prefix != "(default)" else local
+
+    def _restrictions_on(self, pred: URIRef) -> set:
+        """The restriction nodes that use ``pred`` as their property."""
+        return set(self.graph.subjects(OWL.onProperty, pred))
+
+    def _custom_relation_conflict(
+        self, pred: URIRef, ignoring: frozenset = frozenset()
+    ) -> str | None:
+        """Why ``pred`` cannot carry custom relations, or None.
+
+        It must not belong to a standard vocabulary, must not be declared as any
+        other kind of entity, and must not be in use as the property of a
+        restriction: that use makes it an object property, and a property that
+        is both is not OWL 2 DL. ``ignoring`` names restrictions about to be
+        removed, so a conversion that moves them can reuse the name.
+        """
+        name = self._local_name(pred)
+        if self._namespace_of(pred) in self._EXTERNAL_ANNOTATION_NAMESPACES:
+            return (
+                f"'{name}' is a term of a standard vocabulary ({pred}), not a "
+                "relation of this ontology. Pick a name of your own."
+            )
+        other = set(self.graph.objects(pred, RDF.type)) - {OWL.AnnotationProperty}
+        if other:
+            kinds = ", ".join(sorted(self._local_name(t) for t in other))
+            return (
+                f"'{name}' is already declared here as {kinds}. A custom "
+                "relation needs a name of its own."
+            )
+        if self._restrictions_on(pred) - ignoring:
+            return (
+                f"'{name}' is used as the property of a restriction, which makes "
+                "it an object property. A custom relation of the same name would "
+                "make it both, which OWL 2 DL does not allow. Pick another name "
+                "for the relation."
+            )
+        return None
+
+    def custom_relation_reason(self, relation: str) -> str | None:
+        """Why ``relation`` cannot be used as a custom relation, or None.
+
+        Accepts what :meth:`add_custom_relation` accepts: a known name, a new
+        local name, a ``prefix:local`` CURIE or a full URI.
+        """
+        if reason := self.invalid_annotation_predicate_reason(relation):
+            return reason.replace("Annotation type", "Relation name").replace(
+                "annotation type", "relation name"
+            )
+        return self._custom_relation_conflict(self._resolve_predicate_uri(relation))
+
+    def _custom_relation_uri(self, relation: str) -> URIRef:
+        """Resolve ``relation`` and check it, raising ``ValueError`` if unusable."""
+        if reason := self.custom_relation_reason(relation):
+            raise ValueError(reason)
+        return self._resolve_predicate_uri(relation)
+
+    def _custom_relation_endpoint(self, ref: str, side: str) -> URIRef:
+        """Resolve one end of a custom relation, which must be declared here."""
+        uri = self._uri(ref)
+        if not self._is_declared_entity(uri):
+            raise ValueError(
+                f"The {side} '{self._local_name(uri)}' is not a class, property "
+                "or individual of this ontology."
+            )
+        return uri
+
+    @_cached_on_revision
+    def get_custom_relation_types(self) -> list[dict[str, Any]]:
+        """The relations available to link resources with, by name.
+
+        Every annotation property that qualifies (see the section comment),
+        used or not, so a relation whose last link was deleted can still be
+        picked. Each entry carries ``uri``, ``display`` and ``usage``.
+        """
+        types: list[dict[str, Any]] = []
+        for pred in set(self.graph.subjects(RDF.type, OWL.AnnotationProperty)):
+            if not isinstance(pred, URIRef) or not self._is_custom_relation_type(pred):
+                continue
+            # A declared type nothing uses yet is listed, so a name whose last
+            # link was deleted is still offered. One in use, but never between
+            # two declared resources, is an annotation type (a note, a link to
+            # a web page) and belongs on the Annotations page instead.
+            usage = len(self._custom_relation_triples(pred))
+            if not usage and (None, pred, None) in self.graph:
+                continue
+            types.append(
+                {
+                    "uri": str(pred),
+                    "display": self._custom_relation_display(pred),
+                    "usage": usage,
+                }
+            )
+        types.sort(key=lambda t: t["display"].lower())
+        return types
+
+    def _custom_relation_triples(self, pred: URIRef) -> list[tuple]:
+        """The ``(subject, object)`` pairs ``pred`` links as a custom relation."""
+        return [
+            (s, o)
+            for s, o in self.graph.subject_objects(pred)
+            if self._is_declared_entity(s) and self._is_declared_entity(o)
+        ]
+
+    @_cached_on_revision
+    def get_custom_relations(self, name: str | None = None) -> list[dict[str, str]]:
+        """Every custom relation, optionally only those touching ``name``.
+
+        Shaped like the other relation lists (``subject``, ``relation``,
+        ``object`` and their ``_uri`` forms), so the Relations page can list,
+        search and edit them the same way.
+        """
+        relations = []
+        for pred in self.graph.subjects(RDF.type, OWL.AnnotationProperty):
+            if not isinstance(pred, URIRef) or not self._is_custom_relation_type(pred):
+                continue
+            display = self._custom_relation_display(pred)
+            for subj, obj in self._custom_relation_triples(pred):
+                subj_name = self._local_name(subj)
+                obj_name = self._local_name(obj)
+                if name is not None and name not in (subj_name, obj_name):
+                    continue
+                relations.append(
+                    {
+                        "subject": subj_name,
+                        "subject_uri": str(subj),
+                        "relation": display,
+                        "relation_uri": str(pred),
+                        "object": obj_name,
+                        "object_uri": str(obj),
+                    }
+                )
+        relations.sort(key=lambda r: (r["relation"].lower(), r["subject"].lower()))
+        return relations
+
+    def add_custom_relation(self, subject: str, relation: str, obj: str) -> None:
+        """Link two declared resources by a custom relation.
+
+        A relation name not seen before is declared as an annotation property
+        here, the way a new annotation type is (issue #161). Raises
+        ``ValueError`` before writing anything if the name is unusable (see
+        :meth:`custom_relation_reason`) or either end is not declared here.
+        """
+        pred = self._custom_relation_uri(relation)
+        subj_uri = self._custom_relation_endpoint(subject, "subject")
+        obj_uri = self._custom_relation_endpoint(obj, "object")
+        self.graph.add((pred, RDF.type, OWL.AnnotationProperty))
+        self.graph.add((subj_uri, pred, obj_uri))
+
+    def remove_custom_relation(self, subject: str, relation: str, obj: str) -> None:
+        """Remove one custom relation link. The relation's declaration stays,
+        so the name is still offered for the next link."""
+        pred = self._resolve_predicate_uri(relation)
+        self.graph.remove((self._uri(subject), pred, self._uri(obj)))
+
+    def update_custom_relation(self, old: tuple, new: tuple) -> bool:
+        """Replace a custom relation with an edited one.
+
+        ``old`` and ``new`` are ``(subject, relation, object)``. The new one is
+        checked before the old one is removed, so a refused edit leaves the
+        ontology as it was. Returns False when ``old`` is not asserted, like the
+        other relation updates (see :meth:`_update_relation`).
+        """
+        old_subj, old_rel, old_obj = old
+        new_subj, new_rel, new_obj = new
+        old_triple = (
+            self._uri(old_subj),
+            self._resolve_predicate_uri(old_rel),
+            self._uri(old_obj),
+        )
+        if old_triple not in self.graph:
+            return False
+        pred = self._custom_relation_uri(new_rel)
+        subj_uri = self._custom_relation_endpoint(new_subj, "subject")
+        obj_uri = self._custom_relation_endpoint(new_obj, "object")
+        self.graph.remove(old_triple)
+        self.graph.add((pred, RDF.type, OWL.AnnotationProperty))
+        self.graph.add((subj_uri, pred, obj_uri))
+        return True
+
+    def _convertible_restrictions(self, prop: URIRef) -> list[tuple]:
+        """``(node, subject, object)`` for each link a conversion would make.
+
+        A someValuesFrom restriction on ``prop`` whose filler is a declared
+        resource, once for every declared class it is a superclass of. Any
+        other restriction on the property, or one whose ends are not declared
+        here, would not become a visible relation, and is left alone.
+        """
+        found = []
+        for node in self._restrictions_on(prop):
+            filler = self.graph.value(node, OWL.someValuesFrom)
+            if not self._is_declared_entity(filler):
+                continue
+            for subj in self.graph.subjects(RDFS.subClassOf, node):
+                if self._is_declared_entity(subj):
+                    found.append((node, subj, filler))
+        return found
+
+    def get_convertible_restriction_properties(self) -> list[dict[str, Any]]:
+        """The properties with restrictions a conversion can turn into links.
+
+        Each entry carries ``uri``, ``display`` and ``count`` (how many links
+        converting it would make), for the Relations page's conversion form.
+        """
+        props: list[dict[str, Any]] = []
+        for pred in set(self.graph.objects(None, OWL.onProperty)):
+            if not isinstance(pred, URIRef):
+                continue
+            count = len(self._convertible_restrictions(pred))
+            if count:
+                props.append(
+                    {
+                        "uri": str(pred),
+                        "display": self._custom_relation_display(pred),
+                        "count": count,
+                    }
+                )
+        props.sort(key=lambda p: p["display"].lower())
+        return props
+
+    def convert_restrictions_to_relations(
+        self, prop: str, relation: str | None = None, keep_restrictions: bool = False
+    ) -> int:
+        """Turn the someValuesFrom restrictions on ``prop`` into direct links.
+
+        ``:A rdfs:subClassOf [ owl:onProperty :p ; owl:someValuesFrom :B ]``
+        becomes ``:A :relation :B``, named ``prop`` itself unless ``relation``
+        says otherwise. With ``keep_restrictions`` the restrictions stay, which
+        needs a relation name different from ``prop`` (see
+        :meth:`_custom_relation_conflict`). Returns how many links were made.
+
+        Checked in full before anything is written, so a refusal raises
+        ``ValueError`` and leaves the ontology as it was.
+        """
+        prop_uri = self._resolve_predicate_uri(prop)
+        found = self._convertible_restrictions(prop_uri)
+        if not found:
+            return 0
+        pred = self._resolve_predicate_uri(relation) if relation else prop_uri
+        if relation and (reason := self.invalid_annotation_predicate_reason(relation)):
+            raise ValueError(reason)
+        # Only restrictions that go away entirely: one also hanging off a
+        # resource that is not declared here stays attached to it, and so
+        # stays a use of the property.
+        converted = {(node, subj) for node, subj, _obj in found}
+        ignoring = (
+            frozenset()
+            if keep_restrictions
+            else frozenset(
+                node
+                for node, _s, _o in found
+                if all(
+                    (node, s) in converted
+                    for s in self.graph.subjects(RDFS.subClassOf, node)
+                )
+            )
+        )
+        if reason := self._custom_relation_conflict(pred, ignoring):
+            raise ValueError(reason)
+        if not keep_restrictions:
+            for node, subj, _obj in found:
+                self._detach_restriction(node, str(subj))
+        self.graph.add((pred, RDF.type, OWL.AnnotationProperty))
+        made = {(subj, obj) for _node, subj, obj in found}
+        for subj, obj in made:
+            self.graph.add((subj, pred, obj))
+        return len(made)
+
     # ==================== ADVANCED OWL FEATURES ====================
 
     def add_property_chain(self, property_name: str, chain_properties: list[str]):

@@ -13,11 +13,13 @@ from ..ui import (
     _sort_relations,
     _uid,
     build_class_options,
+    build_entity_options,
     build_uri_options,
     missing_required,
     render_relation_rows,
     required_selectbox,
     save_checkpoint,
+    set_flash_message,
     show_message,
 )
 
@@ -43,6 +45,7 @@ def render_relations():
             "Class Relations",
             "Property Relations",
             "Individual Relations",
+            "Custom Relations",
         ],
         key="rel_active_tab",
         label_visibility="collapsed",
@@ -137,6 +140,47 @@ def render_relations():
             )
         else:
             st.info("No individual relations defined.")
+
+        st.divider()
+
+        # Custom relations (issue #484)
+        _raw_custom_relations = ont.get_custom_relations()
+        custom_relations = _prep_rels(_raw_custom_relations)
+        # A custom relation edge in the graph asks for its row the way a class
+        # relation edge does above.
+        _open_custom = st.session_state.pop("_rel_open_custom_edge", None)
+        if _open_custom:
+            _hit = next(
+                (
+                    i
+                    for i, r in enumerate(custom_relations)
+                    if (r["subject_uri"], r["relation_uri"], r["object_uri"])
+                    == tuple(_open_custom)
+                ),
+                None,
+            )
+            if _hit is not None:
+                if len(custom_relations) > LIST_PAGE_SIZE:
+                    st.session_state["rel_custom_page"] = _hit // LIST_PAGE_SIZE + 1
+                _row = custom_relations[_hit]
+                _open_entity(
+                    "cusrel",
+                    _uid(
+                        f"{_row['subject_uri']}|{_row['relation']}|{_row['object_uri']}"
+                    ),
+                    "edit",
+                )
+        if _raw_custom_relations:
+            st.write("**Custom Relations:**")
+            if not custom_relations:
+                st.caption("No custom relations match your search.")
+            render_relation_rows(
+                ont,
+                _paginate_rows(custom_relations, "rel_custom_page", "custom relations"),
+                _relation_spec("cusrel", ont, []),
+            )
+        else:
+            st.info("No custom relations defined.")
 
     if _rel_tab == "Class Relations":
         st.subheader("Add Class Relation")
@@ -350,3 +394,131 @@ def render_relations():
                             "success",
                         )
                         st.rerun()
+
+    if _rel_tab == "Custom Relations":
+        _render_custom_relations_tab(ont)
+
+
+def _render_custom_relations_tab(ont):
+    """Add a custom relation, or convert restrictions into them (issue #484)."""
+    st.subheader("Add Custom Relation")
+    st.caption(
+        "A direct link between two resources through a relation you name, such "
+        "as `step1 nextItem step2`. The relation is declared as an annotation "
+        "property, so the ontology stays OWL 2 DL and a sequence can be followed "
+        "in SPARQL with a plain property path (`:nextItem*`). Reasoners give it "
+        "no meaning: use a restriction when you need inference."
+    )
+    ent_opts, ent_lookup = build_entity_options(ont)
+    if len(ent_opts) < 2:
+        st.warning("Add at least two classes, properties or individuals to link.")
+    else:
+        types = {t["display"]: t["uri"] for t in ont.get_custom_relation_types()}
+        with st.form("add_custom_relation_form"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                subj_disp = required_selectbox(
+                    "Subject",
+                    ent_opts,
+                    key="cusrel_subject",
+                    current_display=ent_opts[0],
+                )
+            with col2:
+                type_disp = st.selectbox(
+                    "Relation",
+                    list(types),
+                    index=None,
+                    key="cusrel_type",
+                    placeholder="Pick one, or name a new one below",
+                )
+                new_name = st.text_input(
+                    "…or a new relation",
+                    key="cusrel_new",
+                    placeholder="nextItem",
+                    help="A name like 'nextItem', a bound prefix like 'ex:next', "
+                    "or a full URI. Overrides the pick above.",
+                ).strip()
+            with col3:
+                obj_disp = required_selectbox(
+                    "Object",
+                    ent_opts,
+                    key="cusrel_object",
+                    current_display=ent_opts[0],
+                )
+            if st.form_submit_button("Add Custom Relation"):
+                relation = new_name or types.get(type_disp or "")
+                subj_uri = ent_lookup.get(subj_disp)
+                obj_uri = ent_lookup.get(obj_disp)
+                if _missing := missing_required(
+                    Subject=subj_uri, Relation=relation, Object=obj_uri
+                ):
+                    show_message(_missing, "error")
+                elif subj_uri == obj_uri:
+                    show_message("Please select two different resources!", "error")
+                else:
+                    try:
+                        ont.add_custom_relation(subj_uri, relation, obj_uri)
+                    except ValueError as e:
+                        show_message(str(e), "error")
+                    else:
+                        save_checkpoint("Add custom relation")
+                        set_flash_message(
+                            f"Relation added: {subj_disp} "
+                            f"{new_name or type_disp} {obj_disp}",
+                            "success",
+                            toast=True,
+                        )
+                        st.rerun()
+
+    st.divider()
+    st.subheader("Convert Restrictions")
+    st.caption(
+        "Turn every `someValuesFrom` restriction on a property into a direct "
+        "link: `A subClassOf (p some B)` becomes `A p B`. Other restrictions on "
+        "the property are left as they are. Undo takes back the whole "
+        "conversion."
+    )
+    props = ont.get_convertible_restriction_properties()
+    if not props:
+        st.info("No someValuesFrom restrictions between declared classes to convert.")
+        return
+    labels = {
+        f"{p['display']} ({p['count']} link{'s' if p['count'] != 1 else ''})": p
+        for p in props
+    }
+    with st.form("convert_restrictions_form"):
+        picked = st.selectbox("Property", list(labels), key="cusrel_conv_prop")
+        relation = st.text_input(
+            "Relation name",
+            key="cusrel_conv_name",
+            placeholder="Same as the property",
+            help="Leave empty to keep the property's name. Keeping the "
+            "restrictions needs a different name: a property used in a "
+            "restriction is an object property, and OWL 2 DL does not allow it "
+            "to be an annotation property as well.",
+        ).strip()
+        mode = st.radio(
+            "Restrictions",
+            ["Remove them (move)", "Keep them (copy)"],
+            key="cusrel_conv_mode",
+            horizontal=True,
+        )
+        if st.form_submit_button("Convert"):
+            prop = labels[picked]
+            try:
+                made = ont.convert_restrictions_to_relations(
+                    prop["uri"],
+                    relation=relation or None,
+                    keep_restrictions=mode.startswith("Keep"),
+                )
+            except ValueError as e:
+                show_message(str(e), "error")
+            else:
+                save_checkpoint("Convert restrictions to custom relations")
+                set_flash_message(
+                    f"Converted {made} restriction link{'s' if made != 1 else ''} "
+                    f"on {prop['display']} into custom relations.",
+                    "success",
+                    toast=True,
+                )
+                st.rerun()

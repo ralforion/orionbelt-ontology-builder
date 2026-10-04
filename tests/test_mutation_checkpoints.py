@@ -59,6 +59,13 @@ CHECKPOINTED_BY_CALLER = {
     # and the shared helper confirms, deletes and checkpoints (issue #222).
     "_render_panel_relation_editor",
     "_render_panel_restriction_editor",
+    "_render_panel_custom_relation_editor",
+    # Builds the remove/update callables of the custom relation rows. The built
+    # in kinds hand over the engine methods themselves; these wrap them to map
+    # a relation's display name to its URI first (issue #484). Either way they
+    # are called by render_relation_rows and render_relation_form, which
+    # checkpoint after the call.
+    "_custom_relation_spec",
 }
 
 # Either of these moves the revision: the checkpoint helper, or a direct bump

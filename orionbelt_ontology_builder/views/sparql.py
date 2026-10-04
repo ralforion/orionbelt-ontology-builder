@@ -53,6 +53,25 @@ ORDER BY ?class ?ancestor""",
   FILTER(isIRI(?class) && isIRI(?reachable))
 }
 ORDER BY ?class ?reachable""",
+    # Custom relations (issue #484) are direct links, so following one is a
+    # plain path with no restriction nodes to step through. The first lists
+    # every one, whatever it is called; the second follows one by name.
+    "Custom relations": """SELECT ?from ?relation ?to WHERE {
+  ?relation a owl:AnnotationProperty .
+  ?from ?relation ?to .
+  ?from a ?fromType .
+  ?to a ?toType .
+  FILTER(isIRI(?from) && isIRI(?to))
+}
+GROUP BY ?from ?relation ?to
+ORDER BY ?relation ?from""",
+    "Follow a custom relation (property path)": """# Replace :nextItem with the relation to follow.
+SELECT ?from ?to WHERE {
+  ?start :nextItem ?any .
+  FILTER NOT EXISTS { ?before :nextItem ?start }
+  ?start :nextItem* ?from .
+  ?from :nextItem ?to .
+}""",
     "Properties with domain and range": """SELECT ?property ?domain ?range WHERE {
   VALUES ?kind { owl:ObjectProperty owl:DatatypeProperty }
   ?property a ?kind .

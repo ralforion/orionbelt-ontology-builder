@@ -13,6 +13,7 @@ from ..ui import (
     _PAGE_BY_TYPE,
     _PRECISE_NAV_TYPES,
     CURVED_EDGE_MAX_EDGES,
+    CUSTOM_RELATION_COLOR,
     DEFAULT_NODE_FONT,
     GRAPH_MAX_NODES,
     PATH_HIGHLIGHT_BORDER,
@@ -528,8 +529,17 @@ def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
     """
     added = 0
     left_out = 0
+    # A custom relation is stored as an annotation, but it is drawn as an edge
+    # to the resource it links (issue #484), not as a box holding its URI.
+    relations = {
+        (r["relation_uri"], r["object_uri"])
+        for r in ont.get_custom_relations()
+        if r["subject_uri"] == subject_uri
+    }
     for ann in ont.get_annotations(subject_uri):
         if ann["predicate"] in ("label", "comment"):
+            continue
+        if (ann["predicate_uri"], ann["value"]) in relations:
             continue
         if added >= room:
             left_out += 1
@@ -2070,6 +2080,7 @@ def render_visualization():
             # max_nodes cap cut the loop short.
             displayed_class_uris: set = set()
             displayed_ind_ids: set = set()
+            displayed_dprop_ids: set = set()
             skos_node_ids: set = set()
             # Node id -> the resource it stands for, for everything annotations
             # can hang off. Focus mode adds them after its prune, so it needs a
@@ -2282,6 +2293,7 @@ def render_visualization():
                         ntype="Data Property",
                         ename=_uid(prop["uri"]),
                     )
+                    displayed_dprop_ids.add(prop_node_id)
                     node_count += 1
 
                     # Connect to domain class
@@ -2437,6 +2449,45 @@ def render_visualization():
                                 ntype="Class Relation",
                                 ename=rel_ename,
                             )
+
+            # Custom relations (issue #484): one colour of their own, solid so
+            # they read apart from the dashed restriction edges, and labelled
+            # with the relation's name so two of them stay apart. Drawn between
+            # whatever kinds of node are on screen at both ends; an object
+            # property is an edge here, so a relation on one has nowhere to go.
+            _drawn = (
+                {_uid(u) for u in displayed_class_uris}
+                | displayed_ind_ids
+                | displayed_dprop_ids
+            )
+
+            def _drawn_node(uri, _drawn=_drawn):
+                """The node standing for ``uri``, whichever kind it is drawn as."""
+                uid = _uid(uri)
+                return next(
+                    (n for n in (uid, f"ind_{uid}", f"dprop_{uid}") if n in _drawn),
+                    None,
+                )
+
+            for rel in ont.get_custom_relations():
+                ends = [_drawn_node(rel["subject_uri"]), _drawn_node(rel["object_uri"])]
+                if None in ends:
+                    continue
+                net.add_edge(
+                    ends[0],
+                    ends[1],
+                    label=rel["relation"],
+                    title=(
+                        f"Custom relation: {rel['relation']}"
+                        f"\n{rel['subject']} → {rel['object']}"
+                    ),
+                    color=CUSTOM_RELATION_COLOR,
+                    arrows="to",
+                    ntype="Custom Relation",
+                    ename=_edge_id(
+                        rel["subject_uri"], rel["relation_uri"], rel["object_uri"]
+                    ),
+                )
 
             # Add annotations for classes and individuals.
             #
@@ -3286,6 +3337,13 @@ def render_visualization():
                     # The search is cleared so the row is in the list the page
                     # searches for it in — a leftover filter would hide it.
                     st.session_state["_rel_open_edge"] = _edge_id_parts(_ename, 3)
+                    st.session_state["rel_search"] = ""
+                    st.session_state["rel_active_tab"] = "View Relations"
+                    st.rerun()
+                if _ntype == "Custom Relation":
+                    st.session_state["_rel_open_custom_edge"] = _edge_id_parts(
+                        _ename, 3
+                    )
                     st.session_state["rel_search"] = ""
                     st.session_state["rel_active_tab"] = "View Relations"
                     st.rerun()

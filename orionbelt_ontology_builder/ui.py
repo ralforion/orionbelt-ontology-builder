@@ -2538,6 +2538,10 @@ def viz_node_id(kind: str, ref: str) -> str:
 #: properties, orange for individuals, teal for SKOS, red for disjoint — so the
 #: ring reads as "on the path" rather than as one more kind of link (issue #176).
 PATH_HIGHLIGHT_COLOR = "#FFEB3B"
+#: The colour every custom relation edge is drawn in (issue #484). Nothing else
+#: in the graph uses it: properties and restrictions are blue, annotations
+#: brown, classes green and individuals orange. The viewer's legend names it.
+CUSTOM_RELATION_COLOR = "#E91E63"
 #: How wide the ring around everything on the path is drawn — a border on its
 #: nodes, and a casing under its links, which the viewer draws because
 #: vis-network has no edge equivalent of a border. One width for both, so the
@@ -3529,9 +3533,10 @@ _PAGE_BY_TYPE = {
     "Individual": "Individuals",
     "SKOS Concept": "SKOS Vocabulary",
     "Class Relation": "Relations",
+    "Custom Relation": "Relations",
     "Restriction": "Restrictions",
 }
-_PRECISE_NAV_TYPES = {"Class", "Class Relation", "Restriction"}
+_PRECISE_NAV_TYPES = {"Class", "Class Relation", "Custom Relation", "Restriction"}
 _EDGE_ID_SEP = "\x1f"
 
 
@@ -3663,6 +3668,36 @@ def build_uri_options(items: list, include_none: bool = False) -> tuple:
         lookup["None"] = None
 
     options.extend(rows)
+    return options, lookup
+
+
+#: The kinds a custom relation can link, as (word shown, how to list them).
+#: Named in the option itself because one list holds all of them, and a class
+#: and an individual can share a local name (issue #484).
+_CUSTOM_RELATION_KINDS = (
+    ("Class", "get_classes"),
+    ("Individual", "get_individuals"),
+    ("Object Property", "get_object_properties"),
+    ("Data Property", "get_data_properties"),
+)
+
+
+def build_entity_options(ont) -> tuple:
+    """Dropdown options for any declared resource, as ``Kind: name``.
+
+    For the ends of a custom relation, which may be a class, an individual or
+    a property (issue #484). Each kind is built by :func:`build_uri_options`,
+    so a name shared across namespaces is still told apart, and then tagged
+    with its kind. Returns ``(options, lookup)`` like that function.
+    """
+    options: list = []
+    lookup: dict = {}
+    for word, getter in _CUSTOM_RELATION_KINDS:
+        kind_options, kind_lookup = build_uri_options(getattr(ont, getter)())
+        for display in kind_options:
+            option = f"{word}: {display}"
+            options.append(option)
+            lookup[option] = kind_lookup[display]
     return options, lookup
 
 
@@ -4433,6 +4468,40 @@ def _render_panel_relation_editor(ont, ename, classes):
             rel.get("subject_uri") or rel["subject"],
             rel["relation"],
             rel.get("object_uri") or rel["object"],
+        ),
+    )
+
+
+def _render_panel_custom_relation_editor(ont, ename):
+    """Edit the custom relation behind a graph edge (issue #484).
+
+    The class relation editor above, for the other kind of relation edge: the
+    edge names the whole triple by URI and is looked up in the live ontology,
+    so one edited or deleted since says so.
+    """
+    parts = _edge_id_parts(ename, 3)
+    rel = None
+    if parts is not None:
+        rel = next(
+            (
+                r
+                for r in ont.get_custom_relations()
+                if (r["subject_uri"], r["relation_uri"], r["object_uri"]) == parts
+            ),
+            None,
+        )
+    if rel is None:
+        st.caption("This relation was edited or removed. Click an edge to pick one up.")
+        return
+    render_relation_form(
+        ont, rel, f"panel_{_uid(ename)}", _relation_spec("cusrel", ont, [])
+    )
+    _panel_delete_edge(
+        ont,
+        "relation",
+        f"viz_cusrel_{_uid(ename)}",
+        lambda: ont.remove_custom_relation(
+            rel["subject_uri"], rel["relation_uri"], rel["object_uri"]
         ),
     )
 
@@ -5232,6 +5301,9 @@ def _render_panel_entity_editor(
     """
     if ntype == "Class Relation":
         _render_panel_relation_editor(ont, ename, classes)
+        return None
+    if ntype == "Custom Relation":
+        _render_panel_custom_relation_editor(ont, ename)
         return None
     if ntype == "Restriction":
         _render_panel_restriction_editor(ont, ename, classes, object_props + data_props)
@@ -6192,8 +6264,11 @@ def _relation_spec(kind: str, ont, entities: list) -> dict:
     Keyed by the active-card kind — ``crel`` for class relations, ``prel`` for
     property ones, ``irel`` for individual ones. Built here rather than at each
     call site so the Visualization panel edits a class relation through exactly
-    the settings the Relations page uses (issue #152).
+    the settings the Relations page uses (issue #152). ``cusrel`` is the
+    custom relations (issue #484), whose settings come from the ontology.
     """
+    if kind == "cusrel":
+        return _custom_relation_spec(ont)
     return {
         "crel": {
             "icon": "📦",
@@ -6226,6 +6301,35 @@ def _relation_spec(kind: str, ont, entities: list) -> dict:
             "update": ont.update_individual_relation,
         },
     }[kind]
+
+
+def _custom_relation_spec(ont) -> dict:
+    """The relation-row settings for custom relations (issue #484).
+
+    Unlike the built-in kinds, the relation types are the ontology's own, so
+    rows name them by their display form and the engine is called with the URI
+    behind it. Both ends must be resources declared here, so the editor offers
+    every kind of entity and no external URI.
+    """
+    types = {t["display"]: t["uri"] for t in ont.get_custom_relation_types()}
+
+    def _pred(display):
+        return types.get(display, display)
+
+    return {
+        "icon": "🔀",
+        "kind": "cusrel",
+        "noun": "resources",
+        "label": "custom relation",
+        "entities": [],
+        "options": build_entity_options(ont),
+        "external": False,
+        "relation_types": types,
+        "remove": lambda s, r, o: ont.remove_custom_relation(s, _pred(r), o),
+        "update": lambda old, new: ont.update_custom_relation(
+            (old[0], _pred(old[1]), old[2]), (new[0], _pred(new[1]), new[2])
+        ),
+    }
 
 
 def render_relation_rows(ont, rows, spec):
@@ -6290,7 +6394,11 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
     # forms accept an external URI. Offer it as its own option, or the
     # editor would silently rewrite it to the first local entity when the
     # user only meant to change the relation type (review P2).
-    row_options, row_lookup = build_uri_options(spec["entities"])
+    if "options" in spec:
+        # Copied: the endpoints below are added to them.
+        row_options, row_lookup = list(spec["options"][0]), dict(spec["options"][1])
+    else:
+        row_options, row_lookup = build_uri_options(spec["entities"])
     for endpoint in (subj_uri, obj_uri):
         if endpoint not in row_lookup.values():
             row_options.append(endpoint)
@@ -6326,12 +6434,15 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
         # ``.get``, not ``[]``: a cleared object has no URI to default to, and
         # the field is still offered because typing an external URI is how the
         # object is set when no local entity holds it.
-        ext_obj_uri, ext_err = _external_uri_target(
-            ont,
-            row_lookup.get(new_object),
-            key=f"eo_ext_{form_key}",
-            label="the object",
-        )
+        if spec.get("external", True):
+            ext_obj_uri, ext_err = _external_uri_target(
+                ont,
+                row_lookup.get(new_object),
+                key=f"eo_ext_{form_key}",
+                label="the object",
+            )
+        else:
+            ext_obj_uri, ext_err = row_lookup.get(new_object), None
         cancelled = False
         if on_close is None:
             saved = st.form_submit_button("💾 Save", use_container_width=True)
@@ -6368,10 +6479,16 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
                 # (review P2).
                 show_message(f"Please select two different {spec['noun']}!", "error")
                 return
-            changed = spec["update"](
-                (subj_uri, rel["relation"], obj_uri),
-                (new_subj_uri, new_type, new_obj_uri),
-            )
+            try:
+                changed = spec["update"](
+                    (subj_uri, rel["relation"], obj_uri),
+                    (new_subj_uri, new_type, new_obj_uri),
+                )
+            except ValueError as e:
+                # A custom relation checks its ends and its name, and refuses
+                # before touching the original (issue #484).
+                show_message(str(e), "error")
+                return
             if changed:
                 save_checkpoint(f"Edit {spec['label']}")
                 if on_close is not None:

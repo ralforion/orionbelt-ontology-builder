@@ -482,3 +482,29 @@ def test_the_page_still_works_without_the_editor_component(monkeypatch):
     )
     page._render_editor()
     assert shown.get("fell_back") is True
+
+
+def test_the_custom_relation_examples_follow_the_links():
+    """Issue #484: the links are direct, so a plain path walks the sequence
+    from its first step, and the listing finds them whatever they are called."""
+    from orionbelt_ontology_builder import sparql
+
+    om = OntologyManager()
+    for name in ("Pnt", "Step1", "Step2"):
+        om.add_class(name)
+    om.add_custom_relation("Pnt", "nextItem", "Step1")
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    om.add_annotation("Pnt", "wikidataId", "Q5")
+
+    def pairs(name):
+        result = sparql.run_query(om.graph, EXAMPLE_QUERIES[name])
+        return {tuple(cell.split(":")[-1] for cell in row) for row in result.rows}
+
+    assert pairs("Custom relations") == {
+        ("Pnt", "nextItem", "Step1"),
+        ("Step1", "nextItem", "Step2"),
+    }
+    assert pairs("Follow a custom relation (property path)") == {
+        ("Pnt", "Step1"),
+        ("Step1", "Step2"),
+    }
