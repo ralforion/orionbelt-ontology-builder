@@ -19,6 +19,7 @@ from ..ui import (
     PATH_HIGHLIGHT_COLOR,
     PKG_DIR,
     VIZ_NODE_PANEL,
+    VIZ_NODE_REDO_KEY,
     VIZ_NODE_UNDO_KEY,
     VIZ_PARKED_SEEDS_KEY,
     _build_name_collision_set,
@@ -88,6 +89,8 @@ from ..ui import (
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_id,
+    viz_node_redo,
+    viz_node_redo_available,
     viz_node_undo,
     viz_node_undo_available,
     viz_node_undo_checkpoint,
@@ -133,19 +136,28 @@ COPY_ICON_PATH = (
 )
 
 
-def _node_undo_button() -> None:
-    """The Node options panel's Undo (issue #491).
+def _node_undo_buttons() -> None:
+    """The Node options panel's Undo and Redo (issue #491), side by side.
 
-    A callback rather than an ``if st.button(...)``: the undo rewrites state the
-    widgets above it are seeded from, which is only allowed before they render.
+    Callbacks rather than ``if st.button(...)``: both rewrite state the widgets
+    above them are seeded from, which is only allowed before those render.
     """
-    st.button(
+    undo_col, redo_col = st.columns([1, 1])
+    undo_col.button(
         "↶ Undo",
         key="viz_node_undo",
         on_click=viz_node_undo,
         disabled=not viz_node_undo_available(),
         use_container_width=True,
         help="Take back the last change to the node filters or the focus.",
+    )
+    redo_col.button(
+        "↷ Redo",
+        key="viz_node_redo",
+        on_click=viz_node_redo,
+        disabled=not viz_node_redo_available(),
+        use_container_width=True,
+        help="Put back the change Undo just took back.",
     )
 
 
@@ -1110,6 +1122,7 @@ def render_visualization():
             # And the undo steps (issue #491), which name the entities of the
             # ontology that was swapped out for the same reason.
             st.session_state.pop(VIZ_NODE_UNDO_KEY, None)
+            st.session_state.pop(VIZ_NODE_REDO_KEY, None)
         # The graph component carries a renamed node's cached position over to
         # the id it now has, so the render it lands on stays where it was
         # instead of re-framing the whole graph (issue #329). Flattened here
@@ -1374,7 +1387,7 @@ def render_visualization():
                 _focus_entries, _focus_tokens = build_focus_seed_entries(focus_records)
                 _fundo_col, _fpaste_col = st.columns([1, 1])
                 with _fundo_col:
-                    _node_undo_button()
+                    _node_undo_buttons()
                 with _fpaste_col.popover("Paste / copy", use_container_width=True):
                     _fpaste_text = st.text_area(
                         "Paste a list of focus nodes",
@@ -1621,7 +1634,7 @@ def render_visualization():
                     # label names none of them.
                     _auto_col, _undo_col = st.columns([1, 1])
                     with _undo_col:
-                        _node_undo_button()
+                        _node_undo_buttons()
                     _auto_col.checkbox(
                         "Auto-show new",
                         key="viz_auto_show_new",

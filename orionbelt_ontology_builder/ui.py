@@ -104,9 +104,11 @@ VIZ_FOCUS_SEED_KINDS = {
 #: not outlive a reload either.
 VIZ_PARKED_SEEDS_KEY = "_viz_parked_focus_seeds"
 #: Earlier states of the Node options panel to step back to, most recent last
-#: (issue #491). Session-only, and dropped with the rest of an ontology's
-#: per-file state: every entry names entities of the ontology it was taken in.
+#: (issue #491), and the ones Undo stepped back from, for Redo. Session-only,
+#: and dropped with the rest of an ontology's per-file state: every entry names
+#: entities of the ontology it was taken in.
 VIZ_NODE_UNDO_KEY = "_viz_node_undo"
+VIZ_NODE_REDO_KEY = "_viz_node_redo"
 VIZ_NODE_UNDO_MAX = 20
 VIZ_FILE_STATE_KEY = "viz_file_state"
 VIZ_FILE_STATE_MAX_FILES = 20
@@ -1932,8 +1934,10 @@ def viz_auto_show_new_toggled():
     if not st.session_state.get("_viz_cfg_auto_show_new"):
         return
     # The setting itself is a display option and not undone; letting the queue
-    # in is a change to the filters, so it is.
-    viz_node_undo_checkpoint()
+    # in is a change to the filters, so it is. Only when there is a queue: a
+    # checkpoint also drops the redo steps.
+    if any(st.session_state.get(f"_viz_new_hidden_{k['key']}") for k in _FILTER_KINDS):
+        viz_node_undo_checkpoint()
     for kind in _FILTER_KINDS:
         key = kind["key"]
         pending = st.session_state.get(f"_viz_new_hidden_{key}") or []
@@ -2325,8 +2329,11 @@ def viz_node_undo_checkpoint() -> None:
     user changing the view, and which an undo should not walk back.
 
     A snapshot that looks the same as the one on top is not stacked again, so a
-    control that ends up changing nothing does not cost an undo step.
+    control that ends up changing nothing does not cost an undo step. The redo
+    steps go either way: a new change branches off from the undone ones, so
+    redoing them on top of it would replay changes made to a different view.
     """
+    st.session_state.pop(VIZ_NODE_REDO_KEY, None)
     state = _viz_node_options_state()
     history = list(st.session_state.get(VIZ_NODE_UNDO_KEY) or [])
     if history and _viz_node_options_view(history[-1]) == _viz_node_options_view(state):
@@ -2335,26 +2342,61 @@ def viz_node_undo_checkpoint() -> None:
     st.session_state[VIZ_NODE_UNDO_KEY] = history[-VIZ_NODE_UNDO_MAX:]
 
 
-def viz_node_undo_available() -> bool:
-    """Whether Undo has a change to take back.
+def _viz_node_steps(stack_key: str) -> list:
+    """The steps on ``stack_key``, less those that look like the screen now.
 
-    Drops entries that look like what is on screen now first: a control that
-    checkpointed and then changed nothing, or a change the render reverted by
-    itself, would otherwise make Undo a click that does nothing.
+    A control that checkpointed and then changed nothing, or a change the render
+    reverted by itself, would otherwise make the button a click that does
+    nothing. Stored back pruned, so the button's enabled state and its click
+    agree.
     """
-    history = list(st.session_state.get(VIZ_NODE_UNDO_KEY) or [])
+    steps = list(st.session_state.get(stack_key) or [])
     now = _viz_node_options_view(_viz_node_options_state())
-    while history and _viz_node_options_view(history[-1]) == now:
-        history.pop()
-    st.session_state[VIZ_NODE_UNDO_KEY] = history
-    return bool(history)
+    while steps and _viz_node_options_view(steps[-1]) == now:
+        steps.pop()
+    st.session_state[stack_key] = steps
+    return steps
+
+
+def viz_node_undo_available() -> bool:
+    """Whether Undo has a change to take back."""
+    return bool(_viz_node_steps(VIZ_NODE_UNDO_KEY))
+
+
+def viz_node_redo_available() -> bool:
+    """Whether Redo has an undone change to put back."""
+    return bool(_viz_node_steps(VIZ_NODE_REDO_KEY))
 
 
 def viz_node_undo() -> None:
     """Put the Node options panel back the way it was before the last change.
 
     An ``on_click`` callback, so it runs before the page does and every widget
-    it affects is re-seeded from the ``_viz_cfg_`` keys it writes.
+    it affects is re-seeded from the ``_viz_cfg_`` keys it writes. What was on
+    screen goes onto the redo steps.
+    """
+    _viz_node_step(VIZ_NODE_UNDO_KEY, VIZ_NODE_REDO_KEY)
+
+
+def viz_node_redo() -> None:
+    """Put back the change the last Undo took back (an ``on_click`` callback)."""
+    _viz_node_step(VIZ_NODE_REDO_KEY, VIZ_NODE_UNDO_KEY)
+
+
+def _viz_node_step(from_key: str, to_key: str) -> None:
+    """Restore the top of ``from_key``, keeping what it replaces on ``to_key``."""
+    steps = _viz_node_steps(from_key)
+    if not steps:
+        return
+    snap = steps.pop()
+    other = list(st.session_state.get(to_key) or [])
+    other.append(_viz_node_options_state())
+    st.session_state[to_key] = other[-VIZ_NODE_UNDO_MAX:]
+    _viz_node_restore(snap)
+
+
+def _viz_node_restore(snap: dict) -> None:
+    """Write a Node options snapshot back into the ``_viz_cfg_`` keys.
 
     A filter is restored for the entities the snapshot knew about only. One
     created since was not part of the choice being undone, so it keeps
@@ -2363,10 +2405,6 @@ def viz_node_undo() -> None:
     back after it. A renamed entity is that case too, since a rename mints a
     new URI. Entities deleted since drop out on the next render's reconcile.
     """
-    if not viz_node_undo_available():
-        return
-    history = st.session_state[VIZ_NODE_UNDO_KEY]
-    snap = history.pop()
     for kind in _FILTER_KINDS:
         key = kind["key"]
         cfg_key = f"_viz_cfg_selected_{key}_uris"
@@ -2796,6 +2834,7 @@ def _clear_viz_file_session_state() -> None:
     st.session_state.pop("_viz_new_hidden_announce", None)
     # Every step names that file's entities, the way its selection does.
     st.session_state.pop(VIZ_NODE_UNDO_KEY, None)
+    st.session_state.pop(VIZ_NODE_REDO_KEY, None)
     viz_drop_focus_seeds()
     st.session_state.pop("_viz_pending_focus_seed_ids", None)
     # The mutation counters seen on the last render belong to the file we just

@@ -147,3 +147,67 @@ def test_switching_files_forgets_the_history(session):
     _pick(session, A)
     ui._clear_viz_file_session_state()
     assert ui.VIZ_NODE_UNDO_KEY not in session
+
+
+# --- redo ---------------------------------------------------------------------
+
+
+def test_nothing_to_redo_until_something_is_undone(session):
+    _pick(session, A)
+    assert ui.viz_node_redo_available() is False
+
+
+def test_redo_puts_back_what_undo_took_back(session):
+    _pick(session, A, B)
+    _pick(session, A)
+    ui.viz_node_undo()
+    ui.viz_node_undo()
+
+    ui.viz_node_redo()
+    assert session["_viz_cfg_selected_class_uris"] == [A, B]
+    ui.viz_node_redo()
+    assert session["_viz_cfg_selected_class_uris"] == [A]
+    assert ui.viz_node_redo_available() is False
+    # And the redone change can be undone again.
+    ui.viz_node_undo()
+    assert session["_viz_cfg_selected_class_uris"] == [A, B]
+
+
+def test_a_new_change_drops_the_redo_steps(session):
+    """It branches off from the undone ones, so replaying them would apply
+    changes made to a view that is no longer there."""
+    _pick(session, A)
+    ui.viz_node_undo()
+    _pick(session, B)
+
+    assert ui.viz_node_redo_available() is False
+    ui.viz_node_redo()
+    assert session["_viz_cfg_selected_class_uris"] == [B]
+
+
+def test_redo_takes_back_a_canvas_focus_click_again(session):
+    session["_viz_cfg_focus_seeds"] = [ORG]
+    ui.viz_apply_focus_click(PERSON, replace=True)
+    ui.viz_node_undo()
+
+    ui.viz_node_redo()
+
+    assert session["_viz_cfg_focus_seeds"] == [PERSON]
+    assert session["_viz_cfg_focus_mode"] is True
+
+
+def test_auto_show_new_with_nothing_queued_keeps_the_redo_steps(session):
+    """Switching it on changes no filter then, so it is not a new change."""
+    _pick(session, A)
+    ui.viz_node_undo()
+    session["viz_auto_show_new"] = True
+    ui.viz_auto_show_new_toggled()
+
+    assert ui.viz_node_redo_available() is True
+
+
+def test_switching_files_forgets_the_redo_steps_too(session):
+    _pick(session, A)
+    ui.viz_node_undo()
+    ui._clear_viz_file_session_state()
+    assert ui.VIZ_NODE_REDO_KEY not in session
