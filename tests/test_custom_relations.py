@@ -326,3 +326,57 @@ def test_nothing_to_convert_makes_nothing(om):
 def test_a_literal_valued_restriction_is_not_offered(om):
     om.add_restriction("Step1", "age", "hasValue", Literal(3))
     assert om.get_convertible_restriction_properties() == []
+
+
+# --- review of PR #493 ---------------------------------------------------------------
+
+
+def test_relations_sharing_a_local_name_are_told_apart(om):
+    """No prefix bound for either, so the bare names would be the same word."""
+    om.add_custom_relation("Step1", "http://one.example/next", "Step2")
+    om.add_custom_relation("Step1", "http://two.example/next", "Step2")
+
+    displays = {r["relation_uri"]: r["relation"] for r in om.get_custom_relations()}
+    assert len(set(displays.values())) == 2
+    assert {t["display"] for t in om.get_custom_relation_types()} == set(
+        displays.values()
+    )
+
+
+def test_a_unique_name_stays_short(om):
+    om.add_custom_relation("Step1", "http://one.example/next", "Step2")
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    assert {r["relation"] for r in om.get_custom_relations()} == {"next", "nextItem"}
+
+
+def _share_with_equivalent_class(om):
+    """The Step1 restriction also defines Pnt, through an equivalentClass."""
+    node = next(om.graph.subjects(OWL.onProperty, URIRef(NS + "nextItem")))
+    om.graph.add((URIRef(NS + "Pnt"), OWL.equivalentClass, node))
+    return node
+
+
+def test_converting_keeps_a_restriction_another_axiom_uses(om):
+    om.add_restriction("Step1", "nextItem", "someValuesFrom", "Step2")
+    node = _share_with_equivalent_class(om)
+
+    # Moving under the same name would leave the property in use by the
+    # restriction that has to stay, so that name is refused...
+    with pytest.raises(ValueError, match="restriction"):
+        om.convert_restrictions_to_relations(NS + "nextItem")
+    # ...and under another one the link is made and the axiom is left whole.
+    assert om.convert_restrictions_to_relations(NS + "nextItem", relation="next") == 1
+    assert (URIRef(NS + "Step1"), RDFS.subClassOf, node) not in om.graph
+    assert om.graph.value(node, OWL.someValuesFrom) == URIRef(NS + "Step2")
+    assert om.graph.value(node, OWL.onProperty) == URIRef(NS + "nextItem")
+
+
+def test_deleting_a_shared_restriction_from_one_class_keeps_it_for_the_other(om):
+    """The same helper backs the Restrictions page's delete."""
+    om.add_restriction("Step1", "nextItem", "someValuesFrom", "Step2")
+    node = _share_with_equivalent_class(om)
+
+    assert om.delete_restriction(
+        NS + "Step1", NS + "nextItem", "someValuesFrom", NS + "Step2"
+    )
+    assert om.graph.value(node, OWL.someValuesFrom) == URIRef(NS + "Step2")

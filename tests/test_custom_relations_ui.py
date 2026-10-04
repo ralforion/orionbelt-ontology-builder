@@ -166,7 +166,7 @@ def test_open_full_editor_opens_the_row():
     ename = _ename("Step1", "nextItem", "Step2")
     at = _run("relations", ename=ename)
 
-    row_key = app._uid(f"{NS}Step1|nextItem|{NS}Step2")
+    row_key = app._uid(f"{NS}Step1|{NS}nextItem|{NS}Step2")
     assert at.session_state["active_cusrel"] == (row_key, "edit")
     assert "_rel_open_custom_edge" not in at.session_state
 
@@ -209,3 +209,45 @@ def test_keeping_the_restrictions_under_the_same_name_is_refused():
 
     assert any("OWL 2 DL" in e.value for e in at.error)
     assert len(_rels(at)) == 2
+
+
+def _same_name_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_class("A")
+        om.add_class("B")
+        # Two relations sharing a local name, with no prefix bound for either,
+        # linking the same two classes.
+        om.add_custom_relation("A", "http://one.example/next", "B")
+        om.add_custom_relation("A", "http://two.example/next", "B")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["rel_active_tab"] = "View Relations"
+    app.render_relations()
+
+
+def test_two_relations_sharing_a_name_are_two_rows():
+    """Read as one, they collided on the row key and the page crashed."""
+    at = AppTest.from_function(_same_name_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    assert len([b for b in at.button if (b.key or "").startswith("del_cusrel_")]) == 2
+
+
+def test_deleting_one_of_them_deletes_that_one():
+    at = AppTest.from_function(_same_name_script)
+    at.run(timeout=120)
+    key = app._uid(
+        "http://example.org/ontology#A|http://two.example/next|"
+        "http://example.org/ontology#B"
+    )
+    at.button(key=f"del_cusrel_{key}").click().run(timeout=120)
+    assert not at.exception, at.exception
+    assert [
+        r["relation_uri"] for r in at.session_state["ontology"].get_custom_relations()
+    ] == ["http://one.example/next"]

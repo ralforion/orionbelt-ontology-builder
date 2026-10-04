@@ -9,7 +9,7 @@ import os
 import re
 import tempfile
 import weakref
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -2493,9 +2493,15 @@ class OntologyManager:
 
     def _detach_restriction(self, node: Node, class_name: str) -> None:
         """Unlink a restriction from one class, dropping the node once nothing
-        else refers to it (a restriction can be shared by several classes)."""
+        else refers to it (a restriction can be shared by several classes).
+
+        Anything else, not only another ``rdfs:subClassOf``: the same node can
+        sit in an ``owl:equivalentClass`` axiom or an intersection list, and
+        emptying it there left that axiom pointing at a blank node with nothing
+        in it (Codex review of PR #493).
+        """
         self.graph.remove((self._uri(class_name), RDFS.subClassOf, node))
-        if not any(self.graph.subjects(RDFS.subClassOf, node)):
+        if (None, None, node) not in self.graph:
             self.graph.remove((node, None, None))
 
     def delete_restriction(
@@ -5734,6 +5740,25 @@ class OntologyManager:
             return False
         return set(self.graph.objects(pred, RDF.type)) == {OWL.AnnotationProperty}
 
+    def _custom_relation_types(self) -> dict[URIRef, str]:
+        """Every custom relation type, mapped to the name lists show it under.
+
+        The names are unique. Two relations in different namespaces can share
+        a local name, and with no prefix bound for either both would show as
+        the same word, which the page then read as one relation: edits went to
+        whichever it looked up, and two links between the same ends got the
+        same row key (Codex review of PR #493). A name that is not unique is
+        shown as its full URI instead.
+        """
+        preds = [
+            p
+            for p in set(self.graph.subjects(RDF.type, OWL.AnnotationProperty))
+            if isinstance(p, URIRef) and self._is_custom_relation_type(p)
+        ]
+        names = {p: self._custom_relation_display(p) for p in preds}
+        taken = Counter(names.values())
+        return {p: (n if taken[n] == 1 else str(p)) for p, n in names.items()}
+
     def _custom_relation_display(self, pred: URIRef) -> str:
         """How a relation is named in lists: the bare name in this ontology's
         own namespace, ``prefix:name`` elsewhere when the prefix is bound."""
@@ -5817,9 +5842,7 @@ class OntologyManager:
         picked. Each entry carries ``uri``, ``display`` and ``usage``.
         """
         types: list[dict[str, Any]] = []
-        for pred in set(self.graph.subjects(RDF.type, OWL.AnnotationProperty)):
-            if not isinstance(pred, URIRef) or not self._is_custom_relation_type(pred):
-                continue
+        for pred, display in self._custom_relation_types().items():
             # A declared type nothing uses yet is listed, so a name whose last
             # link was deleted is still offered. One in use, but never between
             # two declared resources, is an annotation type (a note, a link to
@@ -5830,7 +5853,7 @@ class OntologyManager:
             types.append(
                 {
                     "uri": str(pred),
-                    "display": self._custom_relation_display(pred),
+                    "display": display,
                     "usage": usage,
                 }
             )
@@ -5854,10 +5877,7 @@ class OntologyManager:
         search and edit them the same way.
         """
         relations = []
-        for pred in self.graph.subjects(RDF.type, OWL.AnnotationProperty):
-            if not isinstance(pred, URIRef) or not self._is_custom_relation_type(pred):
-                continue
-            display = self._custom_relation_display(pred)
+        for pred, display in self._custom_relation_types().items():
             for subj, obj in self._custom_relation_triples(pred):
                 subj_name = self._local_name(subj)
                 obj_name = self._local_name(obj)
@@ -5982,20 +6002,18 @@ class OntologyManager:
         pred = self._resolve_predicate_uri(relation) if relation else prop_uri
         if relation and (reason := self.invalid_annotation_predicate_reason(relation)):
             raise ValueError(reason)
-        # Only restrictions that go away entirely: one also hanging off a
-        # resource that is not declared here stays attached to it, and so
-        # stays a use of the property.
-        converted = {(node, subj) for node, subj, _obj in found}
+        # Only restrictions that go away entirely: one that anything besides
+        # the converted subclass links refers to (a class not declared here,
+        # an equivalentClass axiom, a list) is kept for it by
+        # _detach_restriction, and so stays a use of the property.
+        converted = {(subj, RDFS.subClassOf) for _node, subj, _obj in found}
         ignoring = (
             frozenset()
             if keep_restrictions
             else frozenset(
                 node
                 for node, _s, _o in found
-                if all(
-                    (node, s) in converted
-                    for s in self.graph.subjects(RDFS.subClassOf, node)
-                )
+                if set(self.graph.subject_predicates(node)) <= converted
             )
         )
         if reason := self._custom_relation_conflict(pred, ignoring):

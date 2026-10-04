@@ -162,14 +162,7 @@ def render_relations():
             if _hit is not None:
                 if len(custom_relations) > LIST_PAGE_SIZE:
                     st.session_state["rel_custom_page"] = _hit // LIST_PAGE_SIZE + 1
-                _row = custom_relations[_hit]
-                _open_entity(
-                    "cusrel",
-                    _uid(
-                        f"{_row['subject_uri']}|{_row['relation']}|{_row['object_uri']}"
-                    ),
-                    "edit",
-                )
+                _open_entity("cusrel", _uid("|".join(_open_custom)), "edit")
         if _raw_custom_relations:
             st.write("**Custom Relations:**")
             if not custom_relations:

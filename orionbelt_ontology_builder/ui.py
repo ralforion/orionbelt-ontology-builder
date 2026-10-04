@@ -6342,7 +6342,11 @@ def render_relation_rows(ont, rows, spec):
     for rel in rows:
         subj_uri = rel.get("subject_uri", rel["subject"])
         obj_uri = rel.get("object_uri", rel["object"])
-        rel_uid = _uid(f"{subj_uri}|{rel['relation']}|{obj_uri}")
+        # A custom relation is identified by its URI (issue #484): its name is
+        # only what the list shows. The built-in kinds have no URI on the row,
+        # and their names are fixed.
+        rel_ref = rel.get("relation_uri", rel["relation"])
+        rel_uid = _uid(f"{subj_uri}|{rel_ref}|{obj_uri}")
         icon = spec["icon"]
 
         col1, col2, col3, col_edit, col_del = st.columns([3, 2, 3, 0.7, 0.7])
@@ -6364,7 +6368,7 @@ def render_relation_rows(ont, rows, spec):
             if st.button(
                 "🗑️", key=f"del_{spec['kind']}_{rel_uid}", help="Delete this relation"
             ):
-                spec["remove"](subj_uri, rel["relation"], obj_uri)
+                spec["remove"](subj_uri, rel_ref, obj_uri)
                 save_checkpoint(f"Delete {spec['label']}")
                 show_message("Relation deleted!", "success")
                 st.rerun()
@@ -6481,7 +6485,7 @@ def render_relation_form(ont, rel, form_key, spec, on_close=None):
                 return
             try:
                 changed = spec["update"](
-                    (subj_uri, rel["relation"], obj_uri),
+                    (subj_uri, rel.get("relation_uri", rel["relation"]), obj_uri),
                     (new_subj_uri, new_type, new_obj_uri),
                 )
             except ValueError as e:
