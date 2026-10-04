@@ -2306,6 +2306,11 @@ def _viz_node_options_state() -> dict:
             for k in _FILTER_KINDS
         },
         "focus_seeds": _copy_or_none(st.session_state.get("_viz_cfg_focus_seeds")),
+        # What each seed label resolved to, so a rename made after the snapshot
+        # can be followed into it (see viz_node_history_follow_renames).
+        "focus_seed_ids": dict(
+            st.session_state.get("_viz_cfg_focus_seed_ids_by_label") or {}
+        ),
         "focus_mode": bool(st.session_state.get("_viz_cfg_focus_mode")),
     }
 
@@ -2425,12 +2430,59 @@ def _viz_node_restore(snap: dict) -> None:
         st.session_state.pop("_viz_cfg_focus_seeds", None)
         st.session_state.pop("_viz_cfg_focus_seed_ids_by_label", None)
     else:
+        # The ids come back with the labels, so the reuse prune can still tell
+        # a seed's entity from a stranger that has taken its name since.
+        st.session_state["_viz_cfg_focus_seed_ids_by_label"] = dict(
+            snap["focus_seed_ids"]
+        )
         viz_set_focus_seeds(snap["focus_seeds"])
     if snap["focus_mode"] != bool(st.session_state.get("_viz_cfg_focus_mode")):
         # The config key only, as the canvas click does: the page copies it into
         # the checkbox's widget key. focus_mode is a persisted setting (#142).
         st.session_state["_viz_cfg_focus_mode"] = snap["focus_mode"]
         st.session_state["_viz_settings_dirty"] = True
+
+
+def viz_node_history_follow_renames(renames, uris_by_kind, focus_targets) -> None:
+    """Carry renames into the undo and redo steps (issue #491).
+
+    A step names entities the way the live state does, by URI in the filters
+    and by label in the focus seeds, and a rename changes both. The live state
+    follows a rename on the next render (issue #275); a step left behind would
+    restore the old name, which the render then prunes as an entity that is
+    gone, so undoing back to a focus on a class you have since renamed would
+    lose the focus instead of restoring it.
+
+    Called with the same notes and at the same point as the live state's
+    follow, so the two cannot disagree about where an entity went.
+    ``uris_by_kind`` maps each filter kind's key to its current URIs.
+    """
+    if not renames:
+        return
+    node_kind = {k["key"]: k["node_kind"] for k in _FILTER_KINDS}
+    for stack_key in (VIZ_NODE_UNDO_KEY, VIZ_NODE_REDO_KEY):
+        for snap in st.session_state.get(stack_key) or []:
+            for key, kind in node_kind.items():
+                all_uris = uris_by_kind.get(key) or []
+                selected, known = follow_filter_renames(
+                    all_uris,
+                    snap["selected"][key],
+                    snap["known"][key],
+                    renames,
+                    kind,
+                )
+                snap["selected"][key] = selected
+                snap["known"][key] = None if known is None else list(known)
+                snap["new_hidden"][key] = follow_filter_renames(
+                    all_uris, snap["new_hidden"][key], None, renames, kind
+                )[0]
+            if snap["focus_seeds"] is not None:
+                snap["focus_seeds"], snap["focus_seed_ids"] = follow_focus_seed_renames(
+                    snap["focus_seeds"],
+                    snap["focus_seed_ids"],
+                    focus_targets,
+                    renames,
+                )
 
 
 def viz_find_changed():

@@ -260,6 +260,7 @@ from .ui import (  # noqa: F401
     viz_leave_empty_focus,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
+    viz_node_history_follow_renames,
     viz_node_id,
     viz_node_redo,
     viz_node_redo_available,

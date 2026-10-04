@@ -211,3 +211,80 @@ def test_switching_files_forgets_the_redo_steps_too(session):
     ui.viz_node_undo()
     ui._clear_viz_file_session_state()
     assert ui.VIZ_NODE_REDO_KEY not in session
+
+
+# --- renames made after a step was taken --------------------------------------
+
+
+def test_a_step_follows_a_rename_in_its_filter(session):
+    """Hide A, rename it to Human, Undo: Human is shown again. Restoring the old
+    URI instead dropped out as a deletion and left Human hidden."""
+    human = "http://example.org/o#Human"
+    _pick(session, B, C)
+    renames = {ui.viz_node_id("class", A): ui.viz_node_id("class", human)}
+    session["_viz_cfg_selected_class_uris"] = [B, C]
+    session["_viz_cfg_known_class_uris"] = [human, B, C]
+
+    ui.viz_node_history_follow_renames(renames, {"class": [human, B, C]}, {})
+    ui.viz_node_undo()
+
+    assert set(session["_viz_cfg_selected_class_uris"]) == {human, B, C}
+
+
+def _rename_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app as _app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_class("Person")
+        om.add_class("Organization")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+    if st.session_state.pop("_test_focus_person", False):
+        # What an Alt-click on Person in the canvas does.
+        _app.viz_apply_focus_click("Class: Person", replace=True)
+    if st.session_state.pop("_test_rename", False):
+        om = st.session_state.ontology
+        old_uri = next(c["uri"] for c in om.get_classes() if c["name"] == "Person")
+        om.rename_class(old_uri, "Human")
+        new_uri = next(c["uri"] for c in om.get_classes() if c["name"] == "Human")
+        _app.viz_note_rename("class", old_uri, new_uri)
+    _app.render_visualization()
+
+
+def _run(at):
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return at
+
+
+def test_undo_restores_a_focus_on_a_class_renamed_since(monkeypatch):
+    """Focus on Person, switch focus off, rename Person to Human, Undo: the
+    focus comes back on Human. Restoring the old label had the render prune it
+    as a class that is gone, and switch focus straight off again."""
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setattr(
+        "streamlit.components.v1.declare_component",
+        lambda *a, **k: lambda **kw: None,
+    )
+    at = _run(AppTest.from_function(_rename_script, default_timeout=300))
+    at.session_state["_test_focus_person"] = True
+    _run(at)
+    assert at.session_state["_viz_cfg_focus_seeds"] == ["Class: Person"]
+
+    at.checkbox(key="viz_focus_mode").uncheck()
+    _run(at)
+    assert at.session_state["_viz_cfg_focus_mode"] is False
+    at.session_state["_test_rename"] = True
+    _run(at)
+
+    at.button(key="viz_node_undo").click()
+    _run(at)
+
+    assert at.session_state["_viz_cfg_focus_mode"] is True
+    assert at.session_state["_viz_cfg_focus_seeds"] == ["Class: Human"]

@@ -88,6 +88,7 @@ from ..ui import (
     viz_leave_empty_focus,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
+    viz_node_history_follow_renames,
     viz_node_id,
     viz_node_redo,
     viz_node_redo_available,
@@ -1128,6 +1129,9 @@ def render_visualization():
         # instead of re-framing the whole graph (issue #329). Flattened here
         # because the component applies one hop per id.
         _viz_renames = viz_rename_map(_renames)
+        viz_node_history_follow_renames(
+            _renames, {k: f["uris"] for k, f in filters.items()}, focus_targets
+        )
         if _renames and "_viz_cfg_focus_seeds" in st.session_state:
             (
                 st.session_state["_viz_cfg_focus_seeds"],
