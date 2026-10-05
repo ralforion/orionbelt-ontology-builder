@@ -496,3 +496,35 @@ def test_a_restriction_already_there_is_not_written_twice(om):
 
 def test_nothing_to_convert_back_makes_nothing(om):
     assert om.convert_relations_to_restrictions(NS + "nextItem") == 0
+
+
+@pytest.mark.parametrize(
+    "characteristic",
+    [
+        "functional",
+        "inverse_functional",
+        "transitive",
+        "symmetric",
+        "asymmetric",
+        "reflexive",
+        "irreflexive",
+    ],
+)
+def test_an_object_property_with_a_characteristic_is_a_target(om, characteristic):
+    """Each characteristic is one more rdf:type on the property, and was read
+    as a conflicting declaration (Codex review of PR #495)."""
+    om.add_object_property("precedes", **{characteristic: True})
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+
+    assert om.convert_relations_to_restrictions(NS + "nextItem", prop="precedes") == 1
+    assert _links(om, "precedes") == {("Step1", "Step2")}
+
+
+def test_a_functional_data_property_is_still_refused(om):
+    """FunctionalProperty is shared with data properties; the DatatypeProperty
+    declaration beside it is what makes it the wrong kind."""
+    om.add_data_property("rank", functional=True)
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+
+    with pytest.raises(ValueError, match="DatatypeProperty"):
+        om.convert_relations_to_restrictions(NS + "nextItem", prop="rank")

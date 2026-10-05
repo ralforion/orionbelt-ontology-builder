@@ -6036,6 +6036,24 @@ class OntologyManager:
     # so only links between two classes go back; a link from an individual or
     # a property has no restriction to become.
 
+    #: The types an object property can carry: the declaration itself and the
+    #: characteristics :meth:`add_object_property` writes. A restriction can use
+    #: such a property; any other type (annotation or data property, a class)
+    #: is a conflict. FunctionalProperty is shared with data properties, but a
+    #: data property also carries DatatypeProperty, which is still refused.
+    _OBJECT_PROPERTY_TYPES: ClassVar[frozenset] = frozenset(
+        {
+            OWL.ObjectProperty,
+            OWL.FunctionalProperty,
+            OWL.InverseFunctionalProperty,
+            OWL.TransitiveProperty,
+            OWL.SymmetricProperty,
+            OWL.AsymmetricProperty,
+            OWL.ReflexiveProperty,
+            OWL.IrreflexiveProperty,
+        }
+    )
+
     def _class_relation_links(self, pred: URIRef) -> list[tuple]:
         """The ``(subject, object)`` links of ``pred`` between two classes."""
         return [
@@ -6100,7 +6118,9 @@ class OntologyManager:
                 f"'{name}' is a term of a standard vocabulary ({prop_uri}), not a "
                 "property of this ontology. Pick a name of your own."
             )
-        other = set(self.graph.objects(prop_uri, RDF.type)) - {OWL.ObjectProperty}
+        other = (
+            set(self.graph.objects(prop_uri, RDF.type)) - self._OBJECT_PROPERTY_TYPES
+        )
         if prop_uri == rel_uri and not keep_relations:
             # Moved out under its own name: it stops being an annotation
             # property, provided nothing else is left using it as one.
