@@ -649,3 +649,72 @@ def test_the_requesters_round_trip_differs_only_by_the_removed_inverse(declared)
     declared.convert_relations_to_restrictions(NS + "nextItem")
 
     assert isomorphic(before, declared.graph)
+
+
+# --- review of PR #500 ---------------------------------------------------------------
+
+
+@pytest.fixture
+def declared_only(chain):
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    return chain
+
+
+def test_an_anonymous_inverse_used_elsewhere_blocks_the_move(declared_only):
+    """``_:inv owl:inverseOf :nextItem`` is an expression another restriction
+    uses; removing it emptied the node under that restriction."""
+    from rdflib import BNode
+
+    om = declared_only
+    inverse = BNode()
+    om.graph.add((inverse, OWL.inverseOf, URIRef(NS + "nextItem")))
+    other = BNode()
+    om.graph.add((other, RDF.type, OWL.Restriction))
+    om.graph.add((other, OWL.onProperty, inverse))
+    om.graph.add((other, OWL.someValuesFrom, URIRef(NS + "Pnt")))
+    om.graph.add((URIRef(NS + "Step3"), RDFS.subClassOf, other))
+    before = len(om.graph)
+
+    with pytest.raises(ValueError, match="anonymous property expression"):
+        om.convert_restrictions_to_relations(
+            NS + "nextItem", drop_object_property_axioms=True
+        )
+    assert len(om.graph) == before
+    assert om.graph.value(inverse, OWL.inverseOf) == URIRef(NS + "nextItem")
+
+
+def test_a_negative_property_assertion_blocks_the_move(declared_only):
+    """It needs an object property, and is not removed for one; this got past
+    every guard, even without removing anything (Codex review of PR #500)."""
+    from rdflib import BNode
+
+    om = declared_only
+    om.add_individual("a", "Step1")
+    om.add_individual("b", "Step2")
+    npa = BNode()
+    om.graph.add((npa, RDF.type, OWL.NegativePropertyAssertion))
+    om.graph.add((npa, OWL.sourceIndividual, URIRef(NS + "a")))
+    om.graph.add((npa, OWL.assertionProperty, URIRef(NS + "nextItem")))
+    om.graph.add((npa, OWL.targetIndividual, URIRef(NS + "b")))
+    before = len(om.graph)
+
+    for drop in (False, True):
+        with pytest.raises(ValueError, match="negative property assertion"):
+            om.convert_restrictions_to_relations(
+                NS + "nextItem", drop_object_property_axioms=drop
+            )
+    assert len(om.graph) == before
+    assert _types(om) == {OWL.ObjectProperty}
+
+
+def test_a_named_inverse_is_still_removable(declared_only):
+    """The blank-node rule does not catch the reporter's named inverse."""
+    om = declared_only
+    om.add_object_property("previousItem")
+    om.graph.add((URIRef(NS + "previousItem"), OWL.inverseOf, URIRef(NS + "nextItem")))
+    assert (
+        om.convert_restrictions_to_relations(
+            NS + "nextItem", drop_object_property_axioms=True
+        )
+        == 3
+    )

@@ -6002,11 +6002,25 @@ class OntologyManager:
     def _object_property_axioms(self, pred: URIRef) -> list[tuple]:
         """The triples that tie ``pred`` to being an object property, and which
         a conversion may remove: its inverse, sub-, equivalent and disjoint
-        property axioms in either direction, and its characteristics."""
+        property axioms in either direction, and its characteristics.
+
+        Only axioms between named properties. One whose other end is a blank
+        node is an expression, such as an anonymous ``inverse(p)``, that other
+        axioms can point at; removing its triple would empty it under them, so
+        it is a blocker instead (see :meth:`_object_property_fixed_uses`).
+        """
         found: list[tuple] = []
         for axiom in self._OBJECT_PROPERTY_AXIOMS:
-            found += [(pred, axiom, o) for o in self.graph.objects(pred, axiom)]
-            found += [(s, axiom, pred) for s in self.graph.subjects(axiom, pred)]
+            found += [
+                (pred, axiom, o)
+                for o in self.graph.objects(pred, axiom)
+                if isinstance(o, URIRef)
+            ]
+            found += [
+                (s, axiom, pred)
+                for s in self.graph.subjects(axiom, pred)
+                if isinstance(s, URIRef)
+            ]
         found += [
             (pred, RDF.type, t)
             for t in self.graph.objects(pred, RDF.type)
@@ -6014,15 +6028,45 @@ class OntologyManager:
         ]
         return found
 
-    def _object_property_list_uses(self, pred: URIRef) -> bool:
-        """True if ``pred`` has or sits in a list axiom (a property chain, a
-        key, a set of disjoint properties). Those are not removed for it: the
-        list belongs to an axiom about other properties as well."""
-        return (pred, OWL.propertyChainAxiom, None) in self.graph or (
-            None,
-            RDF.first,
-            pred,
-        ) in self.graph
+    #: Where an axiom names a property it needs to be an object property, as
+    #: (predicate pointing at the property, what to call that use).
+    _OBJECT_PROPERTY_REFERENCES: ClassVar[tuple] = (
+        (RDF.first, "a property chain, key or other list axiom"),
+        (OWL.assertionProperty, "a negative property assertion"),
+        (OWL.onProperties, "an n-ary restriction"),
+    )
+
+    def _object_property_fixed_uses(self, pred: URIRef) -> list[str]:
+        """The uses of ``pred`` that need it to stay an object property and
+        that a conversion does not remove for it, described for a message.
+
+        Each belongs to an axiom about more than this one property: a property
+        chain, key or list of disjoint properties, a negative property
+        assertion, or an expression such as an anonymous ``inverse(p)`` that
+        other axioms point at (Codex review of PR #500). Removing the use would
+        break that axiom, or leave a blank node with nothing in it, so the
+        move needs another relation name instead.
+        """
+        uses = []
+        if (pred, OWL.propertyChainAxiom, None) in self.graph:
+            uses.append("a property chain of its own")
+        for link, what in self._OBJECT_PROPERTY_REFERENCES:
+            if (None, link, pred) in self.graph:
+                uses.append(what)
+        for axiom in self._OBJECT_PROPERTY_AXIOMS:
+            anonymous = [
+                n
+                for n in (
+                    *self.graph.objects(pred, axiom),
+                    *self.graph.subjects(axiom, pred),
+                )
+                if isinstance(n, BNode)
+            ]
+            if anonymous:
+                uses.append(
+                    f"an anonymous property expression ({self._local_name(axiom)})"
+                )
+        return uses
 
     def _describe_triple(self, triple: tuple) -> str:
         """``triple`` in local names, for a message that lists axioms."""
@@ -6088,10 +6132,10 @@ class OntologyManager:
             raise ValueError(reason)
         name = self._local_name(pred)
         axioms = self._object_property_axioms(pred) if retype else []
-        if retype and self._object_property_list_uses(pred):
+        if retype and (fixed := self._object_property_fixed_uses(pred)):
             raise ValueError(
-                f"'{name}' is part of a property chain, key or other list axiom, "
-                "which needs it to stay an object property. Pick another name "
+                f"'{name}' is used in {', '.join(fixed)}, which needs it to stay "
+                "an object property and is not removed for it. Pick another name "
                 "for the relation."
             )
         if axioms and not drop_object_property_axioms:
