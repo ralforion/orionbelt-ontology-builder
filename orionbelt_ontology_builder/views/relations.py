@@ -475,12 +475,19 @@ def _render_custom_relations_tab(ont):
     if not props:
         st.info("No someValuesFrom restrictions between declared classes to convert.")
         return
-    labels = {
-        f"{p['display']} ({p['count']} link{'s' if p['count'] != 1 else ''})": p
-        for p in props
-    }
+    # Picked by URI: two properties can share a name, and a caption-keyed
+    # list kept only one of them (Codex review of PR #493).
+    by_uri = {p["uri"]: p for p in props}
     with st.form("convert_restrictions_form"):
-        picked = st.selectbox("Property", list(labels), key="cusrel_conv_prop")
+        picked = st.selectbox(
+            "Property",
+            list(by_uri),
+            format_func=lambda uri: (
+                f"{by_uri[uri]['display']} ({by_uri[uri]['count']} "
+                f"link{'s' if by_uri[uri]['count'] != 1 else ''})"
+            ),
+            key="cusrel_conv_prop",
+        )
         relation = st.text_input(
             "Relation name",
             key="cusrel_conv_name",
@@ -497,7 +504,7 @@ def _render_custom_relations_tab(ont):
             horizontal=True,
         )
         if st.form_submit_button("Convert"):
-            prop = labels[picked]
+            prop = by_uri[picked]
             try:
                 made = ont.convert_restrictions_to_relations(
                     prop["uri"],

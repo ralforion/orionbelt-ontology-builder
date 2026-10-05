@@ -380,3 +380,14 @@ def test_deleting_a_shared_restriction_from_one_class_keeps_it_for_the_other(om)
         NS + "Step1", NS + "nextItem", "someValuesFrom", NS + "Step2"
     )
     assert om.graph.value(node, OWL.someValuesFrom) == URIRef(NS + "Step2")
+
+
+def test_convertible_properties_sharing_a_name_are_told_apart(om):
+    om.add_restriction("Step1", "http://one.example/next", "someValuesFrom", "Step2")
+    om.add_restriction("Step2", "http://two.example/next", "someValuesFrom", "Step3")
+
+    props = om.get_convertible_restriction_properties()
+    assert {p["uri"]: p["display"] for p in props} == {
+        "http://one.example/next": "http://one.example/next",
+        "http://two.example/next": "http://two.example/next",
+    }

@@ -5755,6 +5755,11 @@ class OntologyManager:
             for p in set(self.graph.subjects(RDF.type, OWL.AnnotationProperty))
             if isinstance(p, URIRef) and self._is_custom_relation_type(p)
         ]
+        return self._unique_relation_displays(preds)
+
+    def _unique_relation_displays(self, preds) -> dict[URIRef, str]:
+        """``preds`` mapped to their display names, with any name that is not
+        unique among them replaced by the full URI."""
         names = {p: self._custom_relation_display(p) for p in preds}
         taken = Counter(names.values())
         return {p: (n if taken[n] == 1 else str(p)) for p, n in names.items()}
@@ -5964,20 +5969,19 @@ class OntologyManager:
 
         Each entry carries ``uri``, ``display`` and ``count`` (how many links
         converting it would make), for the Relations page's conversion form.
+        The display names are unique, for the reason the relation names are
+        (see :meth:`_custom_relation_types`).
         """
-        props: list[dict[str, Any]] = []
-        for pred in set(self.graph.objects(None, OWL.onProperty)):
-            if not isinstance(pred, URIRef):
-                continue
-            count = len(self._convertible_restrictions(pred))
-            if count:
-                props.append(
-                    {
-                        "uri": str(pred),
-                        "display": self._custom_relation_display(pred),
-                        "count": count,
-                    }
-                )
+        counts = {
+            pred: len(self._convertible_restrictions(pred))
+            for pred in set(self.graph.objects(None, OWL.onProperty))
+            if isinstance(pred, URIRef)
+        }
+        counts = {pred: n for pred, n in counts.items() if n}
+        props: list[dict[str, Any]] = [
+            {"uri": str(pred), "display": display, "count": counts[pred]}
+            for pred, display in self._unique_relation_displays(counts).items()
+        ]
         props.sort(key=lambda p: p["display"].lower())
         return props
 

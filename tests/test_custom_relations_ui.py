@@ -194,7 +194,9 @@ def test_a_refused_name_is_reported_and_nothing_is_added():
 
 def test_converting_restrictions_moves_them():
     at = _run("relations", tab="Custom Relations")
-    assert at.selectbox(key="cusrel_conv_prop").value == "follows (2 links)"
+    conv = at.selectbox(key="cusrel_conv_prop")
+    assert conv.value == NS + "follows"
+    assert conv.format_func(conv.value) == "follows (2 links)"
     _submit(at, "Convert")
 
     om = at.session_state["ontology"]
@@ -251,3 +253,40 @@ def test_deleting_one_of_them_deletes_that_one():
     assert [
         r["relation_uri"] for r in at.session_state["ontology"].get_custom_relations()
     ] == ["http://one.example/next"]
+
+
+def _same_name_conversion_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        for name in ("A", "B", "C"):
+            om.add_class(name)
+        om.add_restriction("A", "http://one.example/next", "someValuesFrom", "B")
+        om.add_restriction("B", "http://two.example/next", "someValuesFrom", "C")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["rel_active_tab"] = "Custom Relations"
+    app.render_relations()
+
+
+def test_the_conversion_picker_offers_same_named_properties_apart():
+    """Keyed by caption, one overwrote the other and could not be picked."""
+    at = AppTest.from_function(_same_name_conversion_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    conv = at.selectbox(key="cusrel_conv_prop")
+    assert set(conv.options) == {
+        "http://one.example/next (1 link)",
+        "http://two.example/next (1 link)",
+    }
+
+    conv.set_value("http://two.example/next")
+    next(b for b in at.button if b.label == "Convert").click().run(timeout=120)
+    assert not at.exception, at.exception
+    assert [
+        r["relation_uri"] for r in at.session_state["ontology"].get_custom_relations()
+    ] == ["http://two.example/next"]
