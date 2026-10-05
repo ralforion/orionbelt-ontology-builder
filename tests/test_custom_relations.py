@@ -404,17 +404,37 @@ def _links(om, prop="nextItem"):
     }
 
 
+def _copy(graph):
+    copy = Graph()
+    for triple in graph:
+        copy.add(triple)
+    return copy
+
+
 def test_a_round_trip_gives_back_the_graph_it_started_from(chain):
-    """The point of the issue: a conversion is safe to try because it undoes
-    exactly, not only through Undo in the same session."""
+    """The point of #494: a conversion is safe to try because it undoes
+    exactly, not only through Undo in the same session. For a declared object
+    property, which is what a property used in restrictions should be."""
     from rdflib.compare import isomorphic
 
-    before = Graph()
-    for triple in chain.graph:
-        before.add(triple)
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    before = _copy(chain.graph)
 
     chain.convert_restrictions_to_relations(NS + "nextItem")
     assert chain.convert_relations_to_restrictions(NS + "nextItem") == 3
+
+    assert isomorphic(before, chain.graph)
+
+
+def test_an_undeclared_property_comes_back_declared(chain):
+    """The only difference a round trip makes to one that never was (#499)."""
+    from rdflib.compare import isomorphic
+
+    before = _copy(chain.graph)
+    before.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+
+    chain.convert_restrictions_to_relations(NS + "nextItem")
+    chain.convert_relations_to_restrictions(NS + "nextItem")
 
     assert isomorphic(before, chain.graph)
 
@@ -427,8 +447,10 @@ def test_moving_back_turns_links_into_restrictions_and_removes_them(om):
 
     assert om.get_custom_relations() == []
     assert _links(om) == {("Step1", "Step2"), ("Step2", "Step3")}
-    # No longer an annotation property, so the restrictions keep it OWL 2 DL.
-    assert (URIRef(NS + "nextItem"), RDF.type, OWL.AnnotationProperty) not in om.graph
+    # An object property again, so the restrictions keep it OWL 2 DL.
+    assert set(om.graph.objects(URIRef(NS + "nextItem"), RDF.type)) == {
+        OWL.ObjectProperty
+    }
 
 
 def test_the_relations_with_class_links_are_listed_with_a_count(om):
@@ -528,3 +550,171 @@ def test_a_functional_data_property_is_still_refused(om):
 
     with pytest.raises(ValueError, match="DatatypeProperty"):
         om.convert_relations_to_restrictions(NS + "nextItem", prop="rank")
+
+
+# --- moving a declared object property under its own name (issue #499) ------------
+
+
+@pytest.fixture
+def declared(chain):
+    """The requester's shape: nextItem declared, labelled, with an inverse."""
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    chain.graph.add((URIRef(NS + "nextItem"), RDFS.label, Literal("next item")))
+    chain.add_object_property("previousItem")
+    chain.graph.add(
+        (URIRef(NS + "previousItem"), OWL.inverseOf, URIRef(NS + "nextItem"))
+    )
+    return chain
+
+
+def _types(om, name="nextItem"):
+    return set(om.graph.objects(URIRef(NS + name), RDF.type))
+
+
+def test_a_declared_object_property_is_retyped_by_the_move(chain):
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+
+    assert chain.convert_restrictions_to_relations(NS + "nextItem") == 3
+
+    assert _types(chain) == {OWL.AnnotationProperty}
+    assert ("Step1", "nextItem", "Step2") in _rels(chain)
+
+
+def test_an_inverse_is_named_in_the_refusal_and_nothing_changes(declared):
+    before = len(declared.graph)
+    with pytest.raises(ValueError, match="previousItem inverseOf nextItem"):
+        declared.convert_restrictions_to_relations(NS + "nextItem")
+    assert len(declared.graph) == before
+    assert _types(declared) == {OWL.ObjectProperty}
+
+
+def test_removing_the_axioms_as_well_completes_the_move(declared):
+    assert (
+        declared.convert_restrictions_to_relations(
+            NS + "nextItem", drop_object_property_axioms=True
+        )
+        == 3
+    )
+    assert _types(declared) == {OWL.AnnotationProperty}
+    assert (URIRef(NS + "previousItem"), OWL.inverseOf, None) not in declared.graph
+    # The label is an annotation, which an annotation property keeps.
+    assert declared.graph.value(URIRef(NS + "nextItem"), RDFS.label) == Literal(
+        "next item"
+    )
+    # The inverse itself stays an object property; only the axiom went.
+    assert _types(declared, "previousItem") == {OWL.ObjectProperty}
+
+
+def test_characteristics_go_with_the_declaration(chain):
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.TransitiveProperty))
+
+    with pytest.raises(ValueError, match="nextItem is TransitiveProperty"):
+        chain.convert_restrictions_to_relations(NS + "nextItem")
+    chain.convert_restrictions_to_relations(
+        NS + "nextItem", drop_object_property_axioms=True
+    )
+    assert _types(chain) == {OWL.AnnotationProperty}
+
+
+def test_a_property_chain_still_needs_another_name(chain):
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    chain.add_object_property("after")
+    chain.add_property_chain("after", [NS + "nextItem", NS + "nextItem"])
+
+    with pytest.raises(ValueError, match="property chain"):
+        chain.convert_restrictions_to_relations(
+            NS + "nextItem", drop_object_property_axioms=True
+        )
+
+
+def test_copying_a_declared_object_property_still_needs_another_name(chain):
+    """Keeping the restrictions keeps it an object property."""
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    with pytest.raises(ValueError, match="ObjectProperty"):
+        chain.convert_restrictions_to_relations(
+            NS + "nextItem", keep_restrictions=True, drop_object_property_axioms=True
+        )
+
+
+def test_the_requesters_round_trip_differs_only_by_the_removed_inverse(declared):
+    from rdflib.compare import isomorphic
+
+    before = _copy(declared.graph)
+    before.remove((URIRef(NS + "previousItem"), OWL.inverseOf, URIRef(NS + "nextItem")))
+
+    declared.convert_restrictions_to_relations(
+        NS + "nextItem", drop_object_property_axioms=True
+    )
+    declared.convert_relations_to_restrictions(NS + "nextItem")
+
+    assert isomorphic(before, declared.graph)
+
+
+# --- review of PR #500 ---------------------------------------------------------------
+
+
+@pytest.fixture
+def declared_only(chain):
+    chain.graph.add((URIRef(NS + "nextItem"), RDF.type, OWL.ObjectProperty))
+    return chain
+
+
+def test_an_anonymous_inverse_used_elsewhere_blocks_the_move(declared_only):
+    """``_:inv owl:inverseOf :nextItem`` is an expression another restriction
+    uses; removing it emptied the node under that restriction."""
+    from rdflib import BNode
+
+    om = declared_only
+    inverse = BNode()
+    om.graph.add((inverse, OWL.inverseOf, URIRef(NS + "nextItem")))
+    other = BNode()
+    om.graph.add((other, RDF.type, OWL.Restriction))
+    om.graph.add((other, OWL.onProperty, inverse))
+    om.graph.add((other, OWL.someValuesFrom, URIRef(NS + "Pnt")))
+    om.graph.add((URIRef(NS + "Step3"), RDFS.subClassOf, other))
+    before = len(om.graph)
+
+    with pytest.raises(ValueError, match="anonymous property expression"):
+        om.convert_restrictions_to_relations(
+            NS + "nextItem", drop_object_property_axioms=True
+        )
+    assert len(om.graph) == before
+    assert om.graph.value(inverse, OWL.inverseOf) == URIRef(NS + "nextItem")
+
+
+def test_a_negative_property_assertion_blocks_the_move(declared_only):
+    """It needs an object property, and is not removed for one; this got past
+    every guard, even without removing anything (Codex review of PR #500)."""
+    from rdflib import BNode
+
+    om = declared_only
+    om.add_individual("a", "Step1")
+    om.add_individual("b", "Step2")
+    npa = BNode()
+    om.graph.add((npa, RDF.type, OWL.NegativePropertyAssertion))
+    om.graph.add((npa, OWL.sourceIndividual, URIRef(NS + "a")))
+    om.graph.add((npa, OWL.assertionProperty, URIRef(NS + "nextItem")))
+    om.graph.add((npa, OWL.targetIndividual, URIRef(NS + "b")))
+    before = len(om.graph)
+
+    for drop in (False, True):
+        with pytest.raises(ValueError, match="negative property assertion"):
+            om.convert_restrictions_to_relations(
+                NS + "nextItem", drop_object_property_axioms=drop
+            )
+    assert len(om.graph) == before
+    assert _types(om) == {OWL.ObjectProperty}
+
+
+def test_a_named_inverse_is_still_removable(declared_only):
+    """The blank-node rule does not catch the reporter's named inverse."""
+    om = declared_only
+    om.add_object_property("previousItem")
+    om.graph.add((URIRef(NS + "previousItem"), OWL.inverseOf, URIRef(NS + "nextItem")))
+    assert (
+        om.convert_restrictions_to_relations(
+            NS + "nextItem", drop_object_property_axioms=True
+        )
+        == 3
+    )

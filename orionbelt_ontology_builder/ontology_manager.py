@@ -5778,7 +5778,7 @@ class OntologyManager:
         return set(self.graph.subjects(OWL.onProperty, pred))
 
     def _custom_relation_conflict(
-        self, pred: URIRef, ignoring: frozenset = frozenset()
+        self, pred: URIRef, ignoring: frozenset = frozenset(), retyping: bool = False
     ) -> str | None:
         """Why ``pred`` cannot carry custom relations, or None.
 
@@ -5787,6 +5787,9 @@ class OntologyManager:
         restriction: that use makes it an object property, and a property that
         is both is not OWL 2 DL. ``ignoring`` names restrictions about to be
         removed, so a conversion that moves them can reuse the name.
+        ``retyping`` is a conversion about to turn a declared object property
+        into an annotation property (issue #499), so that declaration, and the
+        characteristics that go with it, are not a conflict.
         """
         name = self._local_name(pred)
         if self._namespace_of(pred) in self._EXTERNAL_ANNOTATION_NAMESPACES:
@@ -5795,6 +5798,8 @@ class OntologyManager:
                 "relation of this ontology. Pick a name of your own."
             )
         other = set(self.graph.objects(pred, RDF.type)) - {OWL.AnnotationProperty}
+        if retyping:
+            other -= self._OBJECT_PROPERTY_TYPES
         if other:
             kinds = ", ".join(sorted(self._local_name(t) for t in other))
             return (
@@ -5985,8 +5990,97 @@ class OntologyManager:
         props.sort(key=lambda p: p["display"].lower())
         return props
 
+    #: Axioms that only an object property can have, and that a conversion can
+    #: remove so the property can become an annotation property (issue #499).
+    _OBJECT_PROPERTY_AXIOMS: ClassVar[tuple] = (
+        OWL.inverseOf,
+        RDFS.subPropertyOf,
+        OWL.equivalentProperty,
+        OWL.propertyDisjointWith,
+    )
+
+    def _object_property_axioms(self, pred: URIRef) -> list[tuple]:
+        """The triples that tie ``pred`` to being an object property, and which
+        a conversion may remove: its inverse, sub-, equivalent and disjoint
+        property axioms in either direction, and its characteristics.
+
+        Only axioms between named properties. One whose other end is a blank
+        node is an expression, such as an anonymous ``inverse(p)``, that other
+        axioms can point at; removing its triple would empty it under them, so
+        it is a blocker instead (see :meth:`_object_property_fixed_uses`).
+        """
+        found: list[tuple] = []
+        for axiom in self._OBJECT_PROPERTY_AXIOMS:
+            found += [
+                (pred, axiom, o)
+                for o in self.graph.objects(pred, axiom)
+                if isinstance(o, URIRef)
+            ]
+            found += [
+                (s, axiom, pred)
+                for s in self.graph.subjects(axiom, pred)
+                if isinstance(s, URIRef)
+            ]
+        found += [
+            (pred, RDF.type, t)
+            for t in self.graph.objects(pred, RDF.type)
+            if t in self._OBJECT_PROPERTY_TYPES and t != OWL.ObjectProperty
+        ]
+        return found
+
+    #: Where an axiom names a property it needs to be an object property, as
+    #: (predicate pointing at the property, what to call that use).
+    _OBJECT_PROPERTY_REFERENCES: ClassVar[tuple] = (
+        (RDF.first, "a property chain, key or other list axiom"),
+        (OWL.assertionProperty, "a negative property assertion"),
+        (OWL.onProperties, "an n-ary restriction"),
+    )
+
+    def _object_property_fixed_uses(self, pred: URIRef) -> list[str]:
+        """The uses of ``pred`` that need it to stay an object property and
+        that a conversion does not remove for it, described for a message.
+
+        Each belongs to an axiom about more than this one property: a property
+        chain, key or list of disjoint properties, a negative property
+        assertion, or an expression such as an anonymous ``inverse(p)`` that
+        other axioms point at (Codex review of PR #500). Removing the use would
+        break that axiom, or leave a blank node with nothing in it, so the
+        move needs another relation name instead.
+        """
+        uses = []
+        if (pred, OWL.propertyChainAxiom, None) in self.graph:
+            uses.append("a property chain of its own")
+        for link, what in self._OBJECT_PROPERTY_REFERENCES:
+            if (None, link, pred) in self.graph:
+                uses.append(what)
+        for axiom in self._OBJECT_PROPERTY_AXIOMS:
+            anonymous = [
+                n
+                for n in (
+                    *self.graph.objects(pred, axiom),
+                    *self.graph.subjects(axiom, pred),
+                )
+                if isinstance(n, BNode)
+            ]
+            if anonymous:
+                uses.append(
+                    f"an anonymous property expression ({self._local_name(axiom)})"
+                )
+        return uses
+
+    def _describe_triple(self, triple: tuple) -> str:
+        """``triple`` in local names, for a message that lists axioms."""
+        s, p, o = triple
+        if p == RDF.type:
+            return f"{self._local_name(s)} is {self._local_name(o)}"
+        return f"{self._local_name(s)} {self._local_name(p)} {self._local_name(o)}"
+
     def convert_restrictions_to_relations(
-        self, prop: str, relation: str | None = None, keep_restrictions: bool = False
+        self,
+        prop: str,
+        relation: str | None = None,
+        keep_restrictions: bool = False,
+        drop_object_property_axioms: bool = False,
     ) -> int:
         """Turn the someValuesFrom restrictions on ``prop`` into direct links.
 
@@ -5995,6 +6089,15 @@ class OntologyManager:
         says otherwise. With ``keep_restrictions`` the restrictions stay, which
         needs a relation name different from ``prop`` (see
         :meth:`_custom_relation_conflict`). Returns how many links were made.
+
+        Moving the restrictions of a declared object property under its own
+        name retypes it as an annotation property, keeping its label and
+        comment (issue #499). Whatever else needs it to be an object property
+        has to go with the declaration: its inverse, sub-, equivalent and
+        disjoint property axioms and its characteristics are removed with
+        ``drop_object_property_axioms``, and named in the refusal without it. A
+        property chain, key or other list axiom it belongs to is never removed
+        for it, so that still needs another name.
 
         Checked in full before anything is written, so a refusal raises
         ``ValueError`` and leaves the ontology as it was.
@@ -6020,11 +6123,35 @@ class OntologyManager:
                 if set(self.graph.subject_predicates(node)) <= converted
             )
         )
-        if reason := self._custom_relation_conflict(pred, ignoring):
+        retype = (
+            not keep_restrictions
+            and pred == prop_uri
+            and (pred, RDF.type, OWL.ObjectProperty) in self.graph
+        )
+        if reason := self._custom_relation_conflict(pred, ignoring, retyping=retype):
             raise ValueError(reason)
+        name = self._local_name(pred)
+        axioms = self._object_property_axioms(pred) if retype else []
+        if retype and (fixed := self._object_property_fixed_uses(pred)):
+            raise ValueError(
+                f"'{name}' is used in {', '.join(fixed)}, which needs it to stay "
+                "an object property and is not removed for it. Pick another name "
+                "for the relation."
+            )
+        if axioms and not drop_object_property_axioms:
+            listed = "; ".join(self._describe_triple(t) for t in axioms)
+            raise ValueError(
+                f"'{name}' is an object property, and these axioms need it to "
+                f"stay one: {listed}. Choose to remove them as well to turn it "
+                "into a custom relation, or pick another name for the relation."
+            )
         if not keep_restrictions:
             for node, subj, _obj in found:
                 self._detach_restriction(node, str(subj))
+        if retype:
+            for triple in axioms:
+                self.graph.remove(triple)
+            self.graph.remove((pred, RDF.type, OWL.ObjectProperty))
         self.graph.add((pred, RDF.type, OWL.AnnotationProperty))
         made = {(subj, obj) for _node, subj, obj in found}
         for subj, obj in made:
@@ -6092,10 +6219,11 @@ class OntologyManager:
         owl:someValuesFrom :B ]``, on ``relation`` itself unless ``prop`` names
         another property. The inverse of
         :meth:`convert_restrictions_to_relations`: moving links back under the
-        same name drops the relation's annotation-property declaration once it
-        has no links left, so a round trip gives back the graph it started
-        from. The property is not declared, as :meth:`add_restriction` does not
-        declare one either.
+        same name turns the relation's annotation-property declaration back
+        into an object property one once it has no links left. A declared
+        object property therefore round-trips to the graph it started from,
+        except for axioms the forward conversion was told to remove; one that
+        started out undeclared comes back declared.
 
         A property cannot be both an annotation property and an object
         property in OWL 2 DL, so the name is refused while anything else still
@@ -6153,7 +6281,11 @@ class OntologyManager:
             and not keep_relations
             and (None, rel_uri, None) not in self.graph
         ):
+            # Back to the object property it was before converting, which also
+            # keeps the restrictions OWL 2 DL: their property is declared. One
+            # that started out undeclared comes back declared (issue #499).
             self.graph.remove((rel_uri, RDF.type, OWL.AnnotationProperty))
+            self.graph.add((rel_uri, RDF.type, OWL.ObjectProperty))
         return len(links)
 
     # ==================== ADVANCED OWL FEATURES ====================
