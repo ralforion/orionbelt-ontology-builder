@@ -6031,6 +6031,111 @@ class OntologyManager:
             self.graph.add((subj, pred, obj))
         return len(made)
 
+    # The way back (issue #494): a link can be turned into a restriction again,
+    # so a conversion is never a one-way door. A restriction is a class axiom,
+    # so only links between two classes go back; a link from an individual or
+    # a property has no restriction to become.
+
+    def _class_relation_links(self, pred: URIRef) -> list[tuple]:
+        """The ``(subject, object)`` links of ``pred`` between two classes."""
+        return [
+            (s, o)
+            for s, o in self._custom_relation_triples(pred)
+            if (s, RDF.type, OWL.Class) in self.graph
+            and (o, RDF.type, OWL.Class) in self.graph
+        ]
+
+    def get_relations_convertible_to_restrictions(self) -> list[dict[str, Any]]:
+        """The custom relations with links a conversion can turn into
+        restrictions, each with ``uri``, ``display`` and ``count``."""
+        result: list[dict[str, Any]] = []
+        for pred, display in self._custom_relation_types().items():
+            count = len(self._class_relation_links(pred))
+            if count:
+                result.append({"uri": str(pred), "display": display, "count": count})
+        result.sort(key=lambda r: r["display"].lower())
+        return result
+
+    def _has_some_values_from(self, subj: Node, prop: URIRef, obj: Node) -> bool:
+        """True if ``subj`` already has ``prop some obj`` among its superclasses."""
+        return any(
+            self.graph.value(node, OWL.onProperty) == prop
+            and self.graph.value(node, OWL.someValuesFrom) == obj
+            for node in self.graph.objects(subj, RDFS.subClassOf)
+            if isinstance(node, BNode)
+        )
+
+    def convert_relations_to_restrictions(
+        self, relation: str, prop: str | None = None, keep_relations: bool = False
+    ) -> int:
+        """Turn the class-to-class links of ``relation`` into restrictions.
+
+        ``:A :relation :B`` becomes ``:A rdfs:subClassOf [ owl:onProperty :p ;
+        owl:someValuesFrom :B ]``, on ``relation`` itself unless ``prop`` names
+        another property. The inverse of
+        :meth:`convert_restrictions_to_relations`: moving links back under the
+        same name drops the relation's annotation-property declaration once it
+        has no links left, so a round trip gives back the graph it started
+        from. The property is not declared, as :meth:`add_restriction` does not
+        declare one either.
+
+        A property cannot be both an annotation property and an object
+        property in OWL 2 DL, so the name is refused while anything else still
+        uses it as a relation: kept links (copying), or links from an
+        individual or a property, which have no restriction to become. A
+        restriction ``A`` already has is not written twice. Checked in full
+        before anything is written; a refusal raises ``ValueError``. Returns how
+        many links were converted.
+        """
+        rel_uri = self._resolve_predicate_uri(relation)
+        links = self._class_relation_links(rel_uri)
+        if not links:
+            return 0
+        if prop and (reason := self.invalid_annotation_predicate_reason(prop)):
+            raise ValueError(reason.replace("Annotation type", "Property name"))
+        prop_uri = self._resolve_predicate_uri(prop) if prop else rel_uri
+        name = self._local_name(prop_uri)
+        if self._namespace_of(prop_uri) in self._EXTERNAL_ANNOTATION_NAMESPACES:
+            raise ValueError(
+                f"'{name}' is a term of a standard vocabulary ({prop_uri}), not a "
+                "property of this ontology. Pick a name of your own."
+            )
+        other = set(self.graph.objects(prop_uri, RDF.type)) - {OWL.ObjectProperty}
+        if prop_uri == rel_uri and not keep_relations:
+            # Moved out under its own name: it stops being an annotation
+            # property, provided nothing else is left using it as one.
+            leftover = set(self.graph.subject_objects(rel_uri)) - set(links)
+            if not leftover:
+                other.discard(OWL.AnnotationProperty)
+        if other:
+            kinds = ", ".join(sorted(self._local_name(t) for t in other))
+            raise ValueError(
+                f"'{name}' is declared here as {kinds}, and a restriction needs "
+                "an object property. OWL 2 DL does not allow one property to be "
+                "both, so pick another name"
+                + (
+                    ", or remove the relation's other uses first."
+                    if prop_uri == rel_uri
+                    else "."
+                )
+            )
+        for subj, obj in links:
+            if not self._has_some_values_from(subj, prop_uri, obj):
+                node = BNode()
+                self.graph.add((node, RDF.type, OWL.Restriction))
+                self.graph.add((node, OWL.onProperty, prop_uri))
+                self.graph.add((node, OWL.someValuesFrom, obj))
+                self.graph.add((subj, RDFS.subClassOf, node))
+            if not keep_relations:
+                self.graph.remove((subj, rel_uri, obj))
+        if (
+            prop_uri == rel_uri
+            and not keep_relations
+            and (None, rel_uri, None) not in self.graph
+        ):
+            self.graph.remove((rel_uri, RDF.type, OWL.AnnotationProperty))
+        return len(links)
+
     # ==================== ADVANCED OWL FEATURES ====================
 
     def add_property_chain(self, property_name: str, chain_properties: list[str]):

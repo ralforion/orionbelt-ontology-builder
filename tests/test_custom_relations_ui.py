@@ -290,3 +290,35 @@ def test_the_conversion_picker_offers_same_named_properties_apart():
     assert [
         r["relation_uri"] for r in at.session_state["ontology"].get_custom_relations()
     ] == ["http://two.example/next"]
+
+
+# --- and back again (issue #494) -------------------------------------------------------
+
+
+def test_the_reverse_picker_offers_only_relations_between_classes():
+    """relatedTo links an individual, which has no restriction to become."""
+    at = _run("relations", tab="Custom Relations")
+    back = at.selectbox(key="cusrel_back_rel")
+    assert back.options == ["nextItem (1 link)"]
+
+
+def test_converting_links_back_moves_them_into_restrictions():
+    at = _run("relations", tab="Custom Relations")
+    _submit(at, "Convert back")
+
+    om = at.session_state["ontology"]
+    assert _rels(at) == {("alice", "relatedTo", "Step3")}
+    assert [
+        (r["applied_to"], r["type"], r["value"])
+        for r in om.get_restrictions()
+        if r["property"] == "nextItem"
+    ] == [(["Step1"], "someValuesFrom", "Step2")]
+
+
+def test_keeping_the_links_under_the_same_name_is_refused():
+    at = _run("relations", tab="Custom Relations")
+    at.radio(key="cusrel_back_mode").set_value("Keep them (copy)")
+    _submit(at, "Convert back")
+
+    assert any("OWL 2 DL" in e.value for e in at.error)
+    assert ("Step1", "nextItem", "Step2") in _rels(at)

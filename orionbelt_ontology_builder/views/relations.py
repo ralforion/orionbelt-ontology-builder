@@ -464,12 +464,20 @@ def _render_custom_relations_tab(ont):
                         st.rerun()
 
     st.divider()
-    st.subheader("Convert Restrictions")
+    _render_restrictions_to_relations(ont)
+    st.divider()
+    _render_relations_to_restrictions(ont)
+
+
+def _render_restrictions_to_relations(ont):
+    """Turn restrictions into custom relations (issue #484)."""
+    st.subheader("Restrictions → Custom Relations")
     st.caption(
         "Turn every `someValuesFrom` restriction on a property into a direct "
         "link: `A subClassOf (p some B)` becomes `A p B`. Other restrictions on "
         "the property are left as they are. Undo takes back the whole "
-        "conversion."
+        "conversion, and the section below turns the links back into "
+        "restrictions at any time."
     )
     props = ont.get_convertible_restriction_properties()
     if not props:
@@ -518,6 +526,73 @@ def _render_custom_relations_tab(ont):
                 set_flash_message(
                     f"Converted {made} restriction link{'s' if made != 1 else ''} "
                     f"on {prop['display']} into custom relations.",
+                    "success",
+                    toast=True,
+                )
+                st.rerun()
+
+
+def _render_relations_to_restrictions(ont):
+    """Turn custom relations back into restrictions (issue #494).
+
+    The other direction of :func:`_render_restrictions_to_relations`, laid out
+    the same way, so a conversion can always be taken back after the session
+    that made it, not only by Undo.
+    """
+    st.subheader("Custom Relations → Restrictions")
+    st.caption(
+        "Turn every link of a custom relation between two classes back into a "
+        "restriction: `A p B` becomes `A subClassOf (p some B)`, which a "
+        "reasoner can use. Moving the links back under the relation's own name "
+        "restores the ontology as it was before converting. Links from an "
+        "individual or a property have no restriction to become and are left "
+        "as they are."
+    )
+    rels = ont.get_relations_convertible_to_restrictions()
+    if not rels:
+        st.info("No custom relations between classes to convert.")
+        return
+    by_uri = {r["uri"]: r for r in rels}
+    with st.form("convert_relations_form"):
+        picked = st.selectbox(
+            "Relation",
+            list(by_uri),
+            format_func=lambda uri: (
+                f"{by_uri[uri]['display']} ({by_uri[uri]['count']} "
+                f"link{'s' if by_uri[uri]['count'] != 1 else ''})"
+            ),
+            key="cusrel_back_rel",
+        )
+        prop_name = st.text_input(
+            "Property name",
+            key="cusrel_back_name",
+            placeholder="Same as the relation",
+            help="Leave empty to keep the relation's name. Keeping the links "
+            "needs a different name: a property used in a restriction is an "
+            "object property, and OWL 2 DL does not allow it to be an "
+            "annotation property as well.",
+        ).strip()
+        mode = st.radio(
+            "Links",
+            ["Remove them (move)", "Keep them (copy)"],
+            key="cusrel_back_mode",
+            horizontal=True,
+        )
+        if st.form_submit_button("Convert back"):
+            rel = by_uri[picked]
+            try:
+                made = ont.convert_relations_to_restrictions(
+                    rel["uri"],
+                    prop=prop_name or None,
+                    keep_relations=mode.startswith("Keep"),
+                )
+            except ValueError as e:
+                show_message(str(e), "error")
+            else:
+                save_checkpoint("Convert custom relations to restrictions")
+                set_flash_message(
+                    f"Converted {made} {rel['display']} link"
+                    f"{'s' if made != 1 else ''} into restrictions.",
                     "success",
                     toast=True,
                 )

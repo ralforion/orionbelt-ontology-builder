@@ -7,7 +7,7 @@ triple as one beyond that shape, so a file from elsewhere reads the same way.
 """
 
 import pytest
-from rdflib import OWL, RDF, RDFS, Literal, URIRef
+from rdflib import OWL, RDF, RDFS, Graph, Literal, URIRef
 
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
 
@@ -391,3 +391,108 @@ def test_convertible_properties_sharing_a_name_are_told_apart(om):
         "http://one.example/next": "http://one.example/next",
         "http://two.example/next": "http://two.example/next",
     }
+
+
+# --- and back again (issue #494) -------------------------------------------------------
+
+
+def _links(om, prop="nextItem"):
+    return {
+        (r["applied_to"][0], r["value"])
+        for r in _restrictions(om, prop)
+        if r["type"] == "someValuesFrom"
+    }
+
+
+def test_a_round_trip_gives_back_the_graph_it_started_from(chain):
+    """The point of the issue: a conversion is safe to try because it undoes
+    exactly, not only through Undo in the same session."""
+    from rdflib.compare import isomorphic
+
+    before = Graph()
+    for triple in chain.graph:
+        before.add(triple)
+
+    chain.convert_restrictions_to_relations(NS + "nextItem")
+    assert chain.convert_relations_to_restrictions(NS + "nextItem") == 3
+
+    assert isomorphic(before, chain.graph)
+
+
+def test_moving_back_turns_links_into_restrictions_and_removes_them(om):
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    om.add_custom_relation("Step2", "nextItem", "Step3")
+
+    assert om.convert_relations_to_restrictions(NS + "nextItem") == 2
+
+    assert om.get_custom_relations() == []
+    assert _links(om) == {("Step1", "Step2"), ("Step2", "Step3")}
+    # No longer an annotation property, so the restrictions keep it OWL 2 DL.
+    assert (URIRef(NS + "nextItem"), RDF.type, OWL.AnnotationProperty) not in om.graph
+
+
+def test_the_relations_with_class_links_are_listed_with_a_count(om):
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    om.add_custom_relation("Step2", "nextItem", "Step3")
+    om.add_custom_relation("alice", "relatedTo", "Step3")
+
+    assert om.get_relations_convertible_to_restrictions() == [
+        {"uri": NS + "nextItem", "display": "nextItem", "count": 2}
+    ]
+
+
+def test_copying_back_needs_another_name(om):
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    before = len(om.graph)
+
+    with pytest.raises(ValueError, match="OWL 2 DL"):
+        om.convert_relations_to_restrictions(NS + "nextItem", keep_relations=True)
+    assert len(om.graph) == before
+
+    assert (
+        om.convert_relations_to_restrictions(
+            NS + "nextItem", prop="hasNext", keep_relations=True
+        )
+        == 1
+    )
+    assert _rels(om) == {("Step1", "nextItem", "Step2")}
+    assert _links(om, "hasNext") == {("Step1", "Step2")}
+
+
+def test_a_link_from_an_individual_keeps_the_name_taken(om):
+    """It has no restriction to become, so it stays, and the relation with it."""
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    om.add_custom_relation("alice", "nextItem", "Step3")
+
+    with pytest.raises(ValueError, match="other uses"):
+        om.convert_relations_to_restrictions(NS + "nextItem")
+    assert om.convert_relations_to_restrictions(NS + "nextItem", prop="hasNext") == 1
+    assert _rels(om) == {("alice", "nextItem", "Step3")}
+    assert _links(om, "hasNext") == {("Step1", "Step2")}
+
+
+def test_moving_back_onto_an_object_property(om):
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    assert om.convert_relations_to_restrictions(NS + "nextItem", prop="hasPart") == 1
+    assert _links(om, "hasPart") == {("Step1", "Step2")}
+
+
+@pytest.mark.parametrize("prop", ["age", "seeAlso", "next item"])
+def test_a_property_a_restriction_cannot_use_is_refused(om, prop):
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+    with pytest.raises(ValueError):
+        om.convert_relations_to_restrictions(NS + "nextItem", prop=prop)
+    assert _rels(om) == {("Step1", "nextItem", "Step2")}
+
+
+def test_a_restriction_already_there_is_not_written_twice(om):
+    om.add_restriction("Step1", "hasPart", "someValuesFrom", "Step2")
+    om.add_custom_relation("Step1", "nextItem", "Step2")
+
+    om.convert_relations_to_restrictions(NS + "nextItem", prop="hasPart")
+
+    assert len(_restrictions(om, "hasPart")) == 1
+
+
+def test_nothing_to_convert_back_makes_nothing(om):
+    assert om.convert_relations_to_restrictions(NS + "nextItem") == 0
