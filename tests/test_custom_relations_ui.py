@@ -322,3 +322,46 @@ def test_keeping_the_links_under_the_same_name_is_refused():
 
     assert any("OWL 2 DL" in e.value for e in at.error)
     assert ("Step1", "nextItem", "Step2") in _rels(at)
+
+
+# --- a declared object property (issue #499) -------------------------------------------
+
+
+def _declared_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        for name in ("Pnt", "Step1", "Step2"):
+            om.add_class(name)
+        om.add_object_property("nextItem", label="next item")
+        om.add_object_property("previousItem")
+        om.add_property_relation("previousItem", "inverseOf", "nextItem")
+        om.add_restriction("Pnt", "nextItem", "someValuesFrom", "Step1")
+        om.add_restriction("Step1", "nextItem", "someValuesFrom", "Step2")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["rel_active_tab"] = "Custom Relations"
+    app.render_relations()
+
+
+def test_moving_a_declared_object_property_names_what_is_in_the_way():
+    """The bug as reported: the default name refused with no way forward."""
+    at = AppTest.from_function(_declared_script)
+    at.run(timeout=120)
+    _submit(at, "Convert")
+
+    assert any("previousItem inverseOf nextItem" in e.value for e in at.error)
+    assert _rels(at) == set()
+
+
+def test_ticking_the_box_moves_it_under_its_own_name():
+    at = AppTest.from_function(_declared_script)
+    at.run(timeout=120)
+    at.checkbox(key="cusrel_conv_drop").check()
+    _submit(at, "Convert")
+
+    assert _rels(at) == {("Pnt", "nextItem", "Step1"), ("Step1", "nextItem", "Step2")}

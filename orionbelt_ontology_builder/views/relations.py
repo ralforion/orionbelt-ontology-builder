@@ -511,6 +511,18 @@ def _render_restrictions_to_relations(ont):
             key="cusrel_conv_mode",
             horizontal=True,
         )
+        # Moving a declared object property under its own name turns it into
+        # an annotation property, which cannot keep an inverse or the like
+        # (issue #499). The refusal names them, so this is never a surprise.
+        drop_axioms = st.checkbox(
+            "Also remove what makes it an object property",
+            key="cusrel_conv_drop",
+            help="Needed to move a declared object property under its own "
+            "name: its inverse, sub-, equivalent and disjoint property axioms "
+            "and its characteristics (functional, transitive, ...) are removed, "
+            "since an annotation property cannot have them. Without this, the "
+            "conversion stops and names them first. Undo brings them back.",
+        )
         if st.form_submit_button("Convert"):
             prop = by_uri[picked]
             try:
@@ -518,6 +530,7 @@ def _render_restrictions_to_relations(ont):
                     prop["uri"],
                     relation=relation or None,
                     keep_restrictions=mode.startswith("Keep"),
+                    drop_object_property_axioms=drop_axioms,
                 )
             except ValueError as e:
                 show_message(str(e), "error")
