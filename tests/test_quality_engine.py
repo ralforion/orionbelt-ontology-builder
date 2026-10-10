@@ -239,7 +239,9 @@ def _quality_page():
         st.session_state["_autosave_restored"] = True
         st.session_state["_viz_settings_restored"] = True
         st.session_state["_local_storage"] = None
-    st.session_state["val_active_tab"] = "Quality"
+    st.session_state["val_active_tab"] = (
+        st.session_state.get("_quality_tab_override") or "Quality"
+    )
     app.render_validation()
 
 
@@ -271,3 +273,76 @@ def test_page_marks_results_stale_after_an_edit():
     assert any("changed since this run" in w.value for w in at.warning)
     # The old findings stay up until the next run.
     assert any("already implied" in md.value for md in at.markdown)
+
+
+# -- review fixes (PR #504) ------------------------------------------------------
+
+
+def test_a_new_manager_never_shares_a_token():
+    """Loading a file builds a new manager whose revision counter can land on
+    the same number as the old one's; the token must still differ."""
+    first, second = _om(), _om()
+    assert first.revision_token() != second.revision_token()
+
+
+def test_replacing_the_graph_changes_the_token():
+    om = _om()
+    before = om.revision_token()
+    om.load_from_string(om.graph.serialize(format="turtle"))
+    assert om.revision_token() != before
+
+
+def test_replaced_ontology_marks_results_stale():
+    """The linked-file reload swaps in a new manager for the same ontology."""
+    at = AppTest.from_function(_quality_page)
+    at.run(timeout=120)
+    _run_button(at).click().run()
+    old = at.session_state["ontology"]
+    fresh = OntologyManager(base_uri="http://test.org/q#")
+    fresh.load_from_string(old.graph.serialize(format="turtle"))
+    at.session_state["ontology"] = fresh
+    at.run()
+    assert any("changed since this run" in w.value for w in at.warning)
+
+
+def test_rule_selection_survives_leaving_the_quality_section():
+    at = AppTest.from_function(_quality_page)
+    at.run(timeout=120)
+    q022 = next(c for c in at.checkbox if c.label.startswith("Q022"))
+    imports = next(c for c in at.checkbox if c.label == "Include imported vocabularies")
+    q022.check()
+    imports.check()
+    at.run()
+    # Away to another section, where the Quality widgets are not rendered...
+    at.session_state["_quality_tab_override"] = "Validation"
+    at.run()
+    assert not [c for c in at.checkbox if c.label.startswith("Q022")]
+    # ...and back.
+    at.session_state["_quality_tab_override"] = None
+    at.run()
+    assert next(c for c in at.checkbox if c.label.startswith("Q022")).value
+    assert next(
+        c for c in at.checkbox if c.label == "Include imported vocabularies"
+    ).value
+
+
+def test_rule_toggles_still_flip_both_ways():
+    """Seeding the widgets from the stored config must not pin them."""
+    at = AppTest.from_function(_quality_page)
+    at.run(timeout=120)
+
+    def q022():
+        return next(c for c in at.checkbox if c.label.startswith("Q022"))
+
+    q022().check()
+    at.run()
+    assert q022().value
+    q022().uncheck()
+    at.run()
+    assert not q022().value
+    stored = [
+        v
+        for k, v in at.session_state.filtered_state.items()
+        if k.startswith("_quality_config_")
+    ]
+    assert stored and not stored[0].enabled("Q022")

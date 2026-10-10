@@ -509,7 +509,17 @@ class OntologyManager:
         self._journal.touch()
 
     def _revision_key(self) -> tuple[Any, ...]:
-        return (self._journal.revision, self.base_uri, str(self.ontology_uri))
+        # The graph's identifier is a fresh blank node per graph, so it tells
+        # two managers apart (and a graph from the one that replaced it) even
+        # when their revision counters land on the same number: loading a
+        # linked file builds a new manager for the same ontology URI (Codex
+        # review of PR #504).
+        return (
+            str(self.graph.identifier),
+            self._journal.revision,
+            self.base_uri,
+            str(self.ontology_uri),
+        )
 
     def revision_token(self) -> str:
         """A short token that changes whenever the graph or its identity does.

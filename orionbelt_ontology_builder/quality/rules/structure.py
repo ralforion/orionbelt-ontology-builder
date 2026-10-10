@@ -257,9 +257,8 @@ def _multi_parent(ctx: QualityContext, severity: Severity) -> RuleResult:
 
 def _outside_hierarchy(ctx: QualityContext, severity: Severity) -> RuleResult:
     result = RuleResult(checked=len(ctx.classes))
-    linked = {uri for link in ctx.class_links for uri in link}
     for uri in sorted(ctx.classes):
-        if uri not in linked or uri in ctx.in_hierarchy:
+        if uri not in ctx.used_classes or uri in ctx.in_hierarchy:
             continue
         result.findings.append(
             ctx.finding(

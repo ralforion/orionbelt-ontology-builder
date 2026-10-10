@@ -122,12 +122,20 @@ def _open_finding(finding: QualityFinding) -> None:
     _nav_open_entity(kind, _uid(finding.resource), finding.resource)
 
 
-def _quality_config(ont, scope: str) -> QualityConfig:
-    """The configuration the "Rules" expander describes, for this ontology."""
+def _quality_config(scope: str) -> QualityConfig:
+    """The configuration the "Rules" expander describes, for this ontology.
+
+    Kept under a key of its own, not only in the widgets: Streamlit drops a
+    widget's state once the widget stops rendering, so leaving the Quality
+    section used to reset every choice (Codex review of PR #504). The widgets
+    start from the stored configuration and write back to it.
+    """
+    store_key = f"_quality_config_{scope}"
+    stored: QualityConfig = st.session_state.get(store_key) or QualityConfig()
     with st.expander("Rules", expanded=False):
         include_imports = st.checkbox(
             "Include imported vocabularies",
-            value=False,
+            value=stored.include_imports,
             key=f"quality_imports_{scope}",
             help="By default only the ontology's own classes and properties are "
             "checked: those in its base namespace or rdfs:isDefinedBy it. Turn "
@@ -141,13 +149,17 @@ def _quality_config(ont, scope: str) -> QualityConfig:
                     continue
                 enabled = st.checkbox(
                     f"{rule.id} · {rule.title}",
-                    value=rule.default_enabled,
+                    value=stored.enabled(rule.id),
                     key=f"quality_rule_{scope}_{rule.id}",
                     help=rule.description,
                 )
                 if enabled != rule.default_enabled:
                     overrides[rule.id] = RuleSettings(enabled=enabled)
-    return QualityConfig(include_imports=include_imports, rules=overrides)
+    config = QualityConfig(
+        profile=stored.profile, include_imports=include_imports, rules=overrides
+    )
+    st.session_state[store_key] = config
+    return config
 
 
 def _render_quality(ont) -> None:
@@ -160,7 +172,7 @@ def _render_quality(ont) -> None:
 
     # Keyed by ontology, so switching ontologies keeps each one's choices.
     scope = _uid(str(ont.ontology_uri))
-    config = _quality_config(ont, scope)
+    config = _quality_config(scope)
 
     run_key = f"_quality_run_{scope}"
     if st.button("Run Quality Checks"):

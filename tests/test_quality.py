@@ -289,3 +289,46 @@ def test_wine_island_is_the_real_one():
     """Vintage and VintageYear really are cut off from the rest of wine."""
     [island] = analyze(_sample("wine.owl"), ALL).by_rule("Q020")
     assert "Vintage, VintageYear" in island.message
+
+
+# -- review fixes (PR #504) ------------------------------------------------------
+
+
+def _data_restriction(om, cls, prop):
+    """``cls ⊑ ∃prop.xsd:string``, with ``prop`` a data property."""
+    from rdflib.namespace import XSD
+
+    g, ns = om.graph, om.namespace
+    if (ns[prop], RDF.type, OWL.DatatypeProperty) not in g:
+        om.add_data_property(prop)
+    restriction = BNode()
+    g.add((restriction, RDF.type, OWL.Restriction))
+    g.add((restriction, OWL.onProperty, ns[prop]))
+    g.add((restriction, OWL.someValuesFrom, XSD.string))
+    g.add((ns[cls], RDFS.subClassOf, restriction))
+
+
+def test_datatype_fillers_do_not_connect_islands():
+    """Two hierarchies that each restrict a data property to xsd:string are
+    still two hierarchies: a datatype is not a class they share."""
+    om = _om("A1", "A2", "A3", "B1", "B2")
+    _sub(om, "A2", "A1")
+    _sub(om, "A3", "A1")
+    _sub(om, "B2", "B1")
+    _data_restriction(om, "A1", "name")
+    _data_restriction(om, "B1", "name")
+    [island] = analyze(om, ALL).by_rule("Q020")
+    assert "B1, B2" in island.message
+    assert "string" not in island.message
+
+
+def test_q023_counts_data_property_domains_as_use():
+    om = _om("Person")
+    om.add_data_property("birthDate", domain="Person")
+    assert _names(analyze(om, ALL), "Q023") == ["Person"]
+
+
+def test_q023_counts_an_object_property_with_one_end_as_use():
+    om = _om("Person")
+    om.add_object_property("knowsSomething", domain="Person")
+    assert _names(analyze(om, ALL), "Q023") == ["Person"]

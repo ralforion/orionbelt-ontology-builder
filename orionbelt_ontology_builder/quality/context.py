@@ -16,7 +16,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 from rdflib import BNode, URIRef
-from rdflib.namespace import OWL, RDF, RDFS, SKOS
+from rdflib.namespace import OWL, RDF, RDFS, SKOS, XSD
 from rdflib.term import Node
 
 from ..ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES
@@ -40,6 +40,13 @@ _EXPRESSION_TARGETS = (
     OWL.onClass,
     OWL.complementOf,
     RDF.first,
+)
+
+#: Data ranges that are not in the XSD namespace. A restriction on a data
+#: property names one of these, or an XSD type, where an object restriction
+#: names a class.
+_BUILTIN_DATA_RANGES = frozenset(
+    {RDFS.Literal, RDF.langString, RDF.PlainLiteral, RDF.XMLLiteral, RDF.HTML}
 )
 
 #: How a named class is tied to an anonymous expression that names others:
@@ -236,7 +243,8 @@ class QualityContext:
         for pred in predicates:
             for obj in self.graph.objects(subject, pred):
                 if isinstance(obj, URIRef):
-                    targets.add(str(obj))
+                    if not self.is_data_range(str(obj)):
+                        targets.add(str(obj))
                 elif isinstance(obj, BNode):
                     targets |= self._expression_targets(obj)
         return targets
@@ -246,6 +254,19 @@ class QualityContext:
 
     def ranges(self, prop: URIRef) -> set[str]:
         return self._class_targets(prop, (RDFS.range, *_RANGE_INCLUDES))
+
+    def is_data_range(self, uri: str) -> bool:
+        """An XSD or RDF datatype, or anything declared ``rdfs:Datatype``.
+
+        Not a class, so not something two classes can be connected through:
+        two hierarchies that each restrict a data property to ``xsd:string``
+        are still two hierarchies (Codex review of PR #504).
+        """
+        return (
+            uri.startswith(str(XSD))
+            or URIRef(uri) in _BUILTIN_DATA_RANGES
+            or (URIRef(uri), RDF.type, RDFS.Datatype) in self.graph
+        )
 
     def _expression_targets(self, expression: BNode) -> set[str]:
         """Every named class an anonymous class expression mentions."""
@@ -259,9 +280,39 @@ class QualityContext:
                     if obj not in seen:
                         seen.add(obj)
                         queue.append(obj)
-                elif isinstance(obj, URIRef) and pred in _EXPRESSION_TARGETS:
+                elif (
+                    isinstance(obj, URIRef)
+                    and pred in _EXPRESSION_TARGETS
+                    and not self.is_data_range(str(obj))
+                ):
                     targets.add(str(obj))
         return targets
+
+    @cached_property
+    def used_classes(self) -> set[str]:
+        """Classes a property or a restriction uses.
+
+        Wider than the endpoints of :attr:`class_links`, which needs a class
+        at each end: a data property's domain, or an object property with a
+        domain and no range, uses its class all the same (Codex review of
+        PR #504).
+        """
+        used = {uri for link in self.class_links for uri in link}
+        for rdf_type in (OWL.ObjectProperty, OWL.DatatypeProperty):
+            for prop in self.graph.subjects(RDF.type, rdf_type):
+                if isinstance(prop, URIRef):
+                    used |= self.domains(prop)
+                    if rdf_type == OWL.ObjectProperty:
+                        used |= self.ranges(prop)
+        for pred in (RDFS.subClassOf, OWL.equivalentClass):
+            for cls, expression in self.graph.subject_objects(pred):
+                if (
+                    isinstance(cls, URIRef)
+                    and isinstance(expression, BNode)
+                    and (expression, RDF.type, OWL.Restriction) in self.graph
+                ):
+                    used.add(str(cls))
+        return used
 
     @cached_property
     def class_links(self) -> list[tuple[str, str]]:
