@@ -37,9 +37,6 @@ _KIND_BY_TYPE = {
 
 _OBO = Namespace("http://purl.obolibrary.org/obo/")
 
-#: Vocabularies whose types describe a resource's role, not its class.
-_META_NAMESPACES = (str(RDF), str(RDFS), str(OWL), str(SKOS))
-
 #: Where a preferred label lives.
 LABEL_PREDICATES = (RDFS.label, SKOS.prefLabel)
 
@@ -376,20 +373,19 @@ class QualityContext:
     def kind(self, uri: str) -> str | None:
         """What the resource is, as the navigation names it, or None.
 
-        An individual is anything typed ``owl:NamedIndividual`` or with a type
-        outside the RDF, RDFS, OWL and SKOS vocabularies; telling it apart is
-        what sends its Open button to Individuals rather than Classes (Codex
-        review of PR #505).
+        "Individual" only for a resource typed ``owl:NamedIndividual``: that is
+        what the Individuals page lists, so it is the only kind of individual
+        an Open button can land on (Codex review of PR #505). Anything else
+        typed by a class, such as ``:alice a :OldClass`` with no declaration,
+        has no page to open and gets None, which leaves the finding without an
+        Open button rather than with one leading to an empty list.
         """
         ref = URIRef(uri)
         for rdf_type, kind in _KIND_BY_TYPE.items():
             if (ref, RDF.type, rdf_type) in self.graph:
                 return kind
-        for type_node in self.graph.objects(ref, RDF.type):
-            if type_node == OWL.NamedIndividual or not str(type_node).startswith(
-                _META_NAMESPACES
-            ):
-                return "Individual"
+        if (ref, RDF.type, OWL.NamedIndividual) in self.graph:
+            return "Individual"
         if (ref, RDFS.subClassOf, None) in self.graph or (
             None,
             RDFS.subClassOf,

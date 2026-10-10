@@ -394,9 +394,21 @@ class TestQ016ReviewFixes:
     def test_typing_an_individual_with_a_deprecated_class_is_a_use(self):
         om = self._with_deprecated()
         om.graph.add((URIRef(NS + "alice"), RDF.type, URIRef(NS + "Old")))
+        om.graph.add((URIRef(NS + "alice"), RDF.type, OWL.NamedIndividual))
         [finding] = analyze(om, ALL).by_rule("Q016")
         assert finding.resource == NS + "alice"
         assert finding.resource_kind == "Individual"
+
+    def test_an_undeclared_individual_gets_no_kind_to_open(self):
+        """The Individuals page lists owl:NamedIndividual only; a finding about
+        anything else must not offer an Open that lands on an empty list."""
+        om = self._with_deprecated()
+        om.graph.add((URIRef(NS + "alice"), RDF.type, URIRef(NS + "Old")))
+        [finding] = analyze(om, ALL).by_rule("Q016")
+        assert finding.resource == NS + "alice"
+        assert finding.resource_kind is None
+        listed = {i["uri"] for i in om.get_individuals()}
+        assert NS + "alice" not in listed
 
     def test_individual_using_a_deprecated_property_opens_as_individual(self):
         om = _om()
