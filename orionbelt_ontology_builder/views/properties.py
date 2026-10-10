@@ -27,6 +27,7 @@ from ..ui import (
     option_sort_key,
     required_selectbox,
     save_checkpoint,
+    scroll_anchor,
     set_flash_message,
     show_message,
 )
@@ -103,6 +104,7 @@ def render_properties():
                     f"🔗 **{disp_name}** ({prop['domain'] or '?'} → {prop['range'] or '?'})",
                     expanded=_op_expanded,
                 ):
+                    scroll_anchor("objprop", prop_uid)
                     st.write(
                         f"**URI:** `{prop['uri']}`"
                         if prop["uri"].startswith("http://example.org/")
@@ -329,6 +331,7 @@ def render_properties():
                     f"📝 **{disp_name}** ({prop['domain'] or '?'} → {prop['range']})",
                     expanded=_dp_expanded,
                 ):
+                    scroll_anchor("dataprop", prop_uid)
                     st.write(
                         f"**URI:** `{prop['uri']}`"
                         if prop["uri"].startswith("http://example.org/")

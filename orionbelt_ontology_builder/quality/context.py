@@ -10,16 +10,18 @@ structure through anonymous class expressions, which a reading of plain
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections import deque
 from collections.abc import Iterable, Iterator
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
-from rdflib import BNode, URIRef
-from rdflib.namespace import OWL, RDF, RDFS, SKOS, XSD
+from rdflib import BNode, Literal, Namespace, URIRef
+from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 from rdflib.term import Node
 
-from ..ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES
+from ..ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES, SKOSXL
 from .models import QualityFinding, Severity
 from .registry import OWL_PROFILE, SKOS_PROFILE
 
@@ -30,7 +32,37 @@ _KIND_BY_TYPE = {
     OWL.Class: "Class",
     OWL.ObjectProperty: "Object Property",
     OWL.DatatypeProperty: "Data Property",
+    SKOS.Concept: "SKOS Concept",
 }
+
+_OBO = Namespace("http://purl.obolibrary.org/obo/")
+
+#: Where a preferred label lives.
+LABEL_PREDICATES = (RDFS.label, SKOS.prefLabel)
+
+#: Where a definition or description lives. IAO_0000115 is the OBO
+#: "definition" annotation.
+DEFINITION_PREDICATES = (
+    SKOS.definition,
+    RDFS.comment,
+    DCTERMS.description,
+    DC.description,
+    _OBO.IAO_0000115,
+)
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def words(text: str) -> list[str]:
+    """``"PersonName"``, ``"person_name"`` and ``"person name"`` as words."""
+    spaced = _CAMEL_BOUNDARY.sub(" ", text)
+    return [w for w in re.split(r"[\s_\-.]+", spaced) if w]
+
+
+def normalise(text: str) -> str:
+    """For comparing labels: Unicode NFC, case-folded, whitespace collapsed."""
+    return " ".join(unicodedata.normalize("NFC", text).casefold().split())
+
 
 #: Where an anonymous class expression names a class: a restriction's filler,
 #: a complement, or a member of an intersection or union list.
@@ -75,7 +107,12 @@ class QualityContext:
         used = set()
         if any(
             True
-            for rdf_type in (*_KIND_BY_TYPE, RDFS.Class)
+            for rdf_type in (
+                OWL.Class,
+                OWL.ObjectProperty,
+                OWL.DatatypeProperty,
+                RDFS.Class,
+            )
             for _ in self.graph.subjects(RDF.type, rdf_type)
         ):
             used.add(OWL_PROFILE)
@@ -148,6 +185,116 @@ class QualityContext:
     def classes(self) -> set[str]:
         """Named, in-scope ``owl:Class`` declarations."""
         return self._declared(OWL.Class)
+
+    @cached_property
+    def concepts(self) -> set[str]:
+        """Named, in-scope ``skos:Concept`` resources."""
+        return self._declared(SKOS.Concept)
+
+    @cached_property
+    def documentable(self) -> list[str]:
+        """Classes, properties and concepts: what labels and definitions are for."""
+        return sorted(self.classes | self.properties | self.concepts)
+
+    def literals(
+        self, uri: str, predicates: Iterable[URIRef]
+    ) -> list[tuple[URIRef, Literal]]:
+        ref = URIRef(uri)
+        return [
+            (pred, obj)
+            for pred in predicates
+            for obj in self.graph.objects(ref, pred)
+            if isinstance(obj, Literal)
+        ]
+
+    def labels(self, uri: str) -> list[Literal]:
+        """Preferred labels, SKOS-XL ones included.
+
+        A ``skosxl:prefLabel`` whose label resource has a ``literalForm`` is a
+        preferred label (SKOS Reference B.3.4.2), read through the same
+        helper the SKOS validator uses. Deduplicated by value and language,
+        since a plain and an XL label with the same literal are one statement
+        (Codex review of PR #505).
+        """
+        found: dict[tuple[str, str], Literal] = {}
+        for _, lit in self.literals(uri, LABEL_PREDICATES):
+            found.setdefault((str(lit), lit.language or ""), lit)
+        for item in self.ont._xl_literals(URIRef(uri), SKOSXL.prefLabel):
+            key = (item["value"], item["lang"])
+            found.setdefault(key, Literal(item["value"], lang=item["lang"] or None))
+        return list(found.values())
+
+    @cached_property
+    def skos_concepts(self) -> list[dict[str, Any]]:
+        """``get_concepts()``, for the rules that reuse the SKOS validator's
+        helpers on it."""
+        if SKOS_PROFILE not in self.vocabularies:
+            return []
+        return self.ont.get_concepts()
+
+    def definitions(self, uri: str) -> list[tuple[URIRef, Literal]]:
+        return self.literals(uri, DEFINITION_PREDICATES)
+
+    @cached_property
+    def uses_other_languages(self) -> bool:
+        """Whether any label is tagged with a language other than English."""
+        return any(
+            isinstance(lit, Literal)
+            and lit.language
+            and not lit.language.lower().startswith("en")
+            for pred in LABEL_PREDICATES
+            for lit in self.graph.objects(None, pred)
+        )
+
+    def english_name(self, uri: str) -> str | None:
+        """The English name to run English-only heuristics on, or None.
+
+        An ``@en`` label first, then an untagged one, then the local name, but
+        the last two only when nothing in the ontology is labelled in another
+        language: there an untagged or local name may well not be English.
+        """
+        labels = self.labels(uri)
+        for lit in labels:
+            if lit.language and lit.language.lower().startswith("en"):
+                return str(lit)
+        if self.uses_other_languages:
+            return None
+        for lit in labels:
+            if not lit.language:
+                return str(lit)
+        return self.ont._local_name(URIRef(uri))
+
+    @cached_property
+    def deprecated(self) -> set[str]:
+        """Resources marked ``owl:deprecated true``."""
+        return {
+            str(s)
+            for s, value in self.graph.subject_objects(OWL.deprecated)
+            if isinstance(s, URIRef)
+            and isinstance(value, Literal)
+            and str(value).strip().lower() in ("true", "1")
+        }
+
+    def named_owners(self, node) -> set[str]:
+        """The named resources a node is, or hangs off.
+
+        All of them: one restriction can be shared by several classes, and
+        reporting only the first one found would make the result depend on
+        triple order (Codex review of PR #505).
+        """
+        owners: set[str] = set()
+        seen = set()
+        frontier = [node]
+        while frontier:
+            current = frontier.pop()
+            if isinstance(current, URIRef):
+                owners.add(str(current))
+                continue
+            if current in seen:
+                continue
+            seen.add(current)
+            frontier.extend(self.graph.subjects(None, current))
+        return owners
 
     @cached_property
     def properties(self) -> set[str]:
@@ -223,11 +370,29 @@ class QualityContext:
     def name(self, uri: str) -> str:
         return self.names.get(uri) or self.ont._local_name(URIRef(uri))
 
-    def kind(self, uri: str) -> str:
+    def kind(self, uri: str) -> str | None:
+        """What the resource is, as the navigation names it, or None.
+
+        "Individual" only for a resource typed ``owl:NamedIndividual``: that is
+        what the Individuals page lists, so it is the only kind of individual
+        an Open button can land on (Codex review of PR #505). Anything else
+        typed by a class, such as ``:alice a :OldClass`` with no declaration,
+        has no page to open and gets None, which leaves the finding without an
+        Open button rather than with one leading to an empty list.
+        """
+        ref = URIRef(uri)
         for rdf_type, kind in _KIND_BY_TYPE.items():
-            if (URIRef(uri), RDF.type, rdf_type) in self.graph:
+            if (ref, RDF.type, rdf_type) in self.graph:
                 return kind
-        return "Class"
+        if (ref, RDF.type, OWL.NamedIndividual) in self.graph:
+            return "Individual"
+        if (ref, RDFS.subClassOf, None) in self.graph or (
+            None,
+            RDFS.subClassOf,
+            ref,
+        ) in self.graph:
+            return "Class"
+        return None
 
     @cached_property
     def validation_issues(self) -> list[dict[str, str]]:

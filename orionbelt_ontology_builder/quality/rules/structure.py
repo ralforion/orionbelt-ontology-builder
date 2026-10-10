@@ -6,38 +6,103 @@ from collections import deque
 
 import networkx as nx
 from rdflib import URIRef
-from rdflib.namespace import OWL, RDF
+from rdflib.namespace import OWL, RDF, RDFS, SKOS
 
 from ..context import QualityContext
 from ..models import Severity
-from ..registry import OWL_PROFILE, Rule, RuleResult, register
+from ..registry import OWL_PROFILE, SKOS_PROFILE, Rule, RuleResult, register
 
 _OWL = frozenset({OWL_PROFILE})
+_OWL_SKOS = frozenset({OWL_PROFILE, SKOS_PROFILE})
 
 
-def _class_cycles(ctx: QualityContext, severity: Severity) -> RuleResult:
-    """Adapter over ``validate()``'s ``class_cycle``: its message, our scope."""
-    result = RuleResult(checked=len(ctx.classes))
+def _cycles(ctx: QualityContext, severity: Severity) -> RuleResult:
+    """Adapter over ``validate()``'s ``class_cycle`` and ``validate_skos()``'s
+    ``broader_cycle``: their messages, our scope.
+
+    A one-member cycle (``A ⊑ A``) is Q009's, so it is left out here.
+    """
+    result = RuleResult(checked=len(ctx.classes) + len(ctx.concepts))
     # Both come from the same walk over the same parent map, in the same order.
     cycles = ctx.ont._cycles_in(ctx.ont._class_parent_map())
     for issue, cycle in zip(ctx.ont._class_cycle_issues(), cycles, strict=True):
         own = [uri for uri in cycle if uri in ctx.classes]
-        if not own:
+        if not own or len(cycle) < 2:
             continue
         result.findings.append(
             ctx.finding(
                 "Q006",
                 severity,
-                issue["subject_uri"],
+                own[0],
                 issue["message"],
                 evidence={"cycle": list(cycle)},
                 suggestion="Remove one subClassOf edge in the cycle, or replace the "
                 "cycle with owl:equivalentClass if the classes are meant to be "
                 "the same.",
-                related=cycle[1:],
+                related=[u for u in cycle if u != own[0]],
             )
         )
         result.affected.update(own)
+    # SKOS cycles straight from the validator's walk, so each finding carries
+    # its own members: two cycles through one concept stay two findings, a
+    # self-loop beside a larger cycle no longer hides it, and a cycle is in
+    # scope if any member is (Codex review of PR #505).
+    concepts = ctx.skos_concepts
+    shown = ctx.ont._skos_display_names(concepts) if concepts else {}
+    for cycle in ctx.ont._skos_cycles(concepts) if concepts else []:
+        own = [uri for uri in cycle if uri in ctx.concepts]
+        if not own or len(cycle) < 2:
+            continue
+        result.findings.append(
+            ctx.finding(
+                "Q006",
+                severity,
+                own[0],
+                "Broader/narrower cycle: "
+                + " -> ".join(shown.get(u, ctx.name(u)) for u in [*cycle, cycle[0]])
+                + ".",
+                evidence={"cycle": list(cycle)},
+                suggestion="Remove one skos:broader (or skos:narrower) link in the "
+                "cycle.",
+                related=[u for u in cycle if u != own[0]],
+            )
+        )
+        result.affected.update(own)
+    return result
+
+
+def _self_edges(ctx: QualityContext, severity: Severity) -> RuleResult:
+    result = RuleResult(checked=len(ctx.classes) + len(ctx.concepts))
+    for uri in sorted(ctx.classes):
+        if (URIRef(uri), RDFS.subClassOf, URIRef(uri)) in ctx.graph:
+            result.findings.append(
+                ctx.finding(
+                    "Q009",
+                    severity,
+                    uri,
+                    f"'{ctx.name(uri)}' is stated to be a subclass of itself.",
+                    suggestion="Remove the subClassOf edge: every class is a "
+                    "subclass of itself anyway, so it says nothing.",
+                )
+            )
+            result.affected.add(uri)
+    for uri in sorted(ctx.concepts):
+        ref = URIRef(uri)
+        for pred in (SKOS.broader, SKOS.narrower):
+            if (ref, pred, ref) in ctx.graph:
+                result.findings.append(
+                    ctx.finding(
+                        "Q009",
+                        severity,
+                        uri,
+                        f"Concept '{ctx.name(uri)}' is its own "
+                        f"{ctx.ont._local_name(pred)}.",
+                        evidence={"predicate": str(pred)},
+                        suggestion=f"Remove the skos:{ctx.ont._local_name(pred)} "
+                        "link to itself.",
+                    )
+                )
+                result.affected.add(uri)
     return result
 
 
@@ -279,12 +344,13 @@ for _rule in (
     Rule(
         "Q006",
         "Hierarchy cycles",
-        "Classes that are their own ancestor through rdfs:subClassOf.",
+        "Classes that are their own ancestor through rdfs:subClassOf, and "
+        "concepts that are their own ancestor through skos:broader.",
         "structure",
-        _OWL,
+        _OWL_SKOS,
         "warning",
         True,
-        _class_cycles,
+        _cycles,
     ),
     Rule(
         "Q007",
@@ -307,6 +373,17 @@ for _rule in (
         "info",
         False,
         _missing_domain_range,
+    ),
+    Rule(
+        "Q009",
+        "Self-referential hierarchy edge",
+        "A class stated as a subclass of itself, or a concept as its own "
+        "broader or narrower.",
+        "structure",
+        _OWL_SKOS,
+        "warning",
+        True,
+        _self_edges,
     ),
     Rule(
         "Q019",

@@ -761,6 +761,18 @@ if (doc) {
     // Streamlit already made for the dropdown arrow beside them.
     var clears = doc.querySelectorAll('button[aria-label="Clear value"]');
     for (var j = 0; j < clears.length; j++) clears[j].setAttribute('tabindex', '-1');
+    // A card opened from another page (search, graph, a quality finding)
+    // carries a marker on the rerun that opened it; bring its card into view,
+    // once per marker, since the card may be far down a long list.
+    var marker = doc.querySelector('.st-key-ob_scroll_target');
+    if (marker && !marker.__orionbeltScrolled) {
+      marker.__orionbeltScrolled = true;
+      var card = marker.closest('[data-testid="stExpander"]') || marker;
+      // Clear of Streamlit's fixed header, which would otherwise cover the
+      // card's title row.
+      card.style.scrollMarginTop = '4.5rem';
+      card.scrollIntoView({block: 'start'});
+    }
   }
 
   var pending = null;
@@ -3627,6 +3639,30 @@ def _nav_open_entity(display_type: str, uid: str, uri: str | None = None) -> Non
         return
     key = str(abs(hash(uri if uri is not None else uid)))[:8] if kind == "skos" else uid
     _open_entity(kind, key)
+    # Arriving from another page, the card can open far down a long list:
+    # ask for it to be scrolled into view once (see scroll_anchor).
+    st.session_state[_SCROLL_REQUEST] = (kind, key)
+
+
+#: One-shot "scroll this card into view", set by :func:`_nav_open_entity`.
+_SCROLL_REQUEST = "_scroll_to_card"
+#: Key of the marker :func:`scroll_anchor` renders; the page shim scrolls to it.
+SCROLL_TARGET_KEY = "ob_scroll_target"
+
+
+def scroll_anchor(kind: str, key: str) -> None:
+    """Mark the card being drawn as the one to scroll to, if it was asked for.
+
+    Called inside a list card. Renders an empty keyed marker on the one rerun
+    after a navigation opened this card, and consumes the request, so the page
+    shim scrolls once and later reruns (an edit in the card) leave the reader
+    where they are.
+    """
+    if st.session_state.get(_SCROLL_REQUEST) != (kind, key):
+        return
+    st.session_state.pop(_SCROLL_REQUEST, None)
+    with st.container(key=SCROLL_TARGET_KEY):
+        st.html("<span></span>")
 
 
 def _cb_confirm_delete(key_suffix):

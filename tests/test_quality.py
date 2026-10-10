@@ -257,6 +257,8 @@ SAMPLES = {
     "wine.owl": "xml",
     "gufo/gufo.ttl": "turtle",
     "gist/gistCore14.1.0.ttl": "turtle",
+    "geography-thesaurus.ttl": "turtle",
+    "skos-showcase.ttl": "turtle",
 }
 
 
@@ -272,7 +274,9 @@ def _sample(name):
 def test_samples_run_every_rule_cleanly(sample):
     run = analyze(_sample(sample), ALL)
     assert {s.rule_id for s in run.rules} == set(RULES)
-    assert all(s.state == "ran" for s in run.rules), run.rules
+    # Skipped is fine (a SKOS rule on an OWL file); failed never is.
+    assert not [s for s in run.rules if s.state == "failed"], run.rules
+    assert [s for s in run.rules if s.state == "ran"]
     for finding in run.findings:
         assert finding.resource and finding.message and finding.suggestion
 

@@ -27,6 +27,7 @@ from ..ui import (
     render_add_class_form,
     required_selectbox,
     save_checkpoint,
+    scroll_anchor,
     set_flash_message,
     show_message,
     viz_note_rename,
@@ -90,6 +91,7 @@ def render_classes():
                 display_name = format_label_name(disp_name, cls.get("label"))
                 _cls_expanded = _is_open("class", cls_uid)
                 with st.expander(f"📦 **{display_name}**", expanded=_cls_expanded):
+                    scroll_anchor("class", cls_uid)
                     st.write(
                         f"**URI:** `{cls['uri']}`"
                         if cls["uri"].startswith("http://example.org/")
