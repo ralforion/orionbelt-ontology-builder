@@ -2,7 +2,14 @@
 
 import streamlit as st
 
-from ..quality import QUALITY_CHECKS
+from ..quality import (
+    CATEGORIES,
+    RULES,
+    QualityConfig,
+    QualityFinding,
+    RuleSettings,
+    analyze,
+)
 from ..ui import (
     _PAGE_BY_TYPE,
     _nav_open_entity,
@@ -13,7 +20,6 @@ from ..ui import (
 )
 
 _SEVERITY_ICONS = {"error": "🔴", "warning": "🟡", "info": "🔵"}
-_CATEGORY_TITLES = {"structure": "Structure", "naming": "Naming"}
 
 #: Findings listed per check before "and N more": one button per finding, and
 #: a few hundred of them is the kind of render the desktop webview falls over on.
@@ -107,118 +113,138 @@ def render_validation():
                 show_message(f"Error during reasoning: {e!s}", "error")
 
 
-def _open_finding(issue: dict[str, str]) -> None:
-    """Callback: open the entity a finding is about on its own page."""
-    kind = issue["subject_kind"]
+def _open_finding(finding: QualityFinding) -> None:
+    """Callback: open the resource a finding is about on its own page."""
+    kind = finding.resource_kind
+    if kind not in _PAGE_BY_TYPE:
+        return
     st.session_state.search_navigate_to = _PAGE_BY_TYPE[kind]
-    _nav_open_entity(kind, _uid(issue["subject_uri"]), issue["subject_uri"])
+    _nav_open_entity(kind, _uid(finding.resource), finding.resource)
 
 
-def _render_quality(ont) -> None:
-    """The model quality checks: pick checks, run them, read the score."""
-    st.subheader("Model Quality")
-    st.caption(
-        "Modelling heuristics, not errors: each finding is worth a look, and "
-        "some will be deliberate. The score is the share of classes and "
-        "properties each check found nothing wrong with, weighted by severity."
-    )
-
-    # Keyed by ontology, so switching ontologies keeps each one's choices.
-    scope = _uid(str(ont.ontology_uri))
-    with st.expander("Checks", expanded=False):
-        include_external = st.checkbox(
-            "Include entities from other namespaces",
+def _quality_config(ont, scope: str) -> QualityConfig:
+    """The configuration the "Rules" expander describes, for this ontology."""
+    with st.expander("Rules", expanded=False):
+        include_imports = st.checkbox(
+            "Include imported vocabularies",
             value=False,
-            key=f"quality_external_{scope}",
+            key=f"quality_imports_{scope}",
             help="By default only the ontology's own classes and properties are "
             "checked: those in its base namespace or rdfs:isDefinedBy it. Turn "
             "this on to check merged-in vocabularies too.",
         )
-        enabled = []
-        for category, title in _CATEGORY_TITLES.items():
+        overrides: dict[str, RuleSettings] = {}
+        for category, title in CATEGORIES.items():
             st.markdown(f"**{title}**")
-            for check in QUALITY_CHECKS:
-                if check.category != category:
+            for rule in RULES.values():
+                if rule.category != category:
                     continue
-                if st.checkbox(
-                    check.title,
-                    value=check.default_on,
-                    key=f"quality_check_{scope}_{check.key}",
-                    help=check.description,
-                ):
-                    enabled.append(check.key)
+                enabled = st.checkbox(
+                    f"{rule.id} · {rule.title}",
+                    value=rule.default_enabled,
+                    key=f"quality_rule_{scope}_{rule.id}",
+                    help=rule.description,
+                )
+                if enabled != rule.default_enabled:
+                    overrides[rule.id] = RuleSettings(enabled=enabled)
+    return QualityConfig(include_imports=include_imports, rules=overrides)
 
-    if st.button("Run Quality Checks"):
-        st.session_state["_quality_ran"] = True
 
-    if not st.session_state.get("_quality_ran"):
-        return
-
-    # Recomputed per graph revision (OntologyManager memoizes it), so an entity
-    # fixed through one of the links below drops off the list on return.
-    report = ont.assess_quality(enabled=enabled, include_external=include_external)
-
-    if report.score is None:
-        st.metric("Quality score", "Score not available")
-        st.caption("No enabled check had any classes or properties to look at.")
-        return
-    band = (
-        "Good" if report.score >= 90 else "Fair" if report.score >= 70 else "Needs work"
+def _render_quality(ont) -> None:
+    """The quality rules: configure them, run them, read the findings."""
+    st.subheader("Model Quality")
+    st.caption(
+        "Modelling advice, not errors: each finding is worth a look, and some "
+        "will be deliberate. Formal problems are under Validation."
     )
-    st.metric("Quality score", f"{report.score} / 100")
-    st.caption(band)
 
-    counts: dict[str, int] = {}
-    for issue in report.issues:
-        counts[issue["severity"]] = counts.get(issue["severity"], 0) + 1
-    if not counts:
-        st.success("No findings from the enabled checks.")
-    else:
-        st.write(
-            " · ".join(
-                f"{_SEVERITY_ICONS[sev]} {counts[sev]} "
-                f"{sev}{'s' if counts[sev] != 1 else ''}"
-                for sev in ("warning", "info")
-                if counts.get(sev)
-            )
+    # Keyed by ontology, so switching ontologies keeps each one's choices.
+    scope = _uid(str(ont.ontology_uri))
+    config = _quality_config(ont, scope)
+
+    run_key = f"_quality_run_{scope}"
+    if st.button("Run Quality Checks"):
+        st.session_state[run_key] = analyze(ont, config)
+
+    run = st.session_state.get(run_key)
+    if run is None:
+        return
+
+    # Runs are explicit: an edit or a changed rule leaves the last results up,
+    # marked, rather than re-running on every rerender.
+    if run.graph_fingerprint != ont.revision_token():
+        st.warning("The ontology changed since this run. Run the checks again.")
+    elif run.config_fingerprint != config.fingerprint:
+        st.warning("The rule selection changed since this run. Run the checks again.")
+
+    counts = run.counts()
+    ran = sum(status.state == "ran" for status in run.rules)
+    skipped = [status for status in run.rules if status.state == "skipped"]
+    failed = [status for status in run.rules if status.state == "failed"]
+    st.write(
+        " · ".join(
+            [
+                *(
+                    f"{_SEVERITY_ICONS[sev]} {counts[sev]} {sev}"
+                    f"{'s' if counts[sev] != 1 else ''}"
+                    for sev in counts
+                    if counts[sev]
+                ),
+                f"{ran} rule{'s' if ran != 1 else ''} ran",
+            ]
         )
+    )
+    st.caption(f"Run {run.started_at} · graph {run.graph_fingerprint}")
+    for status in failed:
+        st.error(
+            f"{status.rule_id} {RULES[status.rule_id].title} failed: {status.reason}"
+        )
+    if skipped:
+        st.caption(
+            "Skipped: " + "; ".join(f"{s.rule_id} ({s.reason})" for s in skipped)
+        )
+    if not run.findings and not failed:
+        st.success("No findings from the enabled rules.")
 
-    for check in QUALITY_CHECKS:
-        findings = report.findings.get(check.key)
+    for rule_id, rule in RULES.items():
+        findings = run.by_rule(rule_id)
         if not findings:
             continue
         # A constant label: one that changed with the count would close the
         # expander whenever a fix made the count move.
         with st.expander(
-            f"{_SEVERITY_ICONS[check.severity]} {check.title}", expanded=False
+            f"{_SEVERITY_ICONS[findings[0].severity]} {rule.id} · {rule.title}",
+            expanded=False,
         ):
-            st.caption(f"{len(findings)} finding(s). {check.description}")
-            for i, issue in enumerate(findings[:_FINDINGS_SHOWN]):
+            st.caption(f"{len(findings)} finding(s). {rule.description}")
+            for i, finding in enumerate(findings[:_FINDINGS_SHOWN]):
                 text_col, open_col = st.columns([6, 1])
-                text_col.markdown(f"- {issue['message']}")
-                open_col.button(
-                    "Open",
-                    key=f"quality_open_{check.key}_{i}_{_uid(issue['subject_uri'])}",
-                    on_click=_open_finding,
-                    args=(issue,),
-                    help=f"Open '{issue['subject']}'",
-                )
+                text_col.markdown(f"- {finding.message}")
+                if finding.suggestion:
+                    text_col.caption(finding.suggestion)
+                if finding.resource_kind in _PAGE_BY_TYPE:
+                    open_col.button(
+                        "Open",
+                        key=f"quality_open_{rule_id}_{i}_{_uid(finding.resource)}",
+                        on_click=_open_finding,
+                        args=(finding,),
+                        help=finding.resource,
+                    )
             if len(findings) > _FINDINGS_SHOWN:
                 st.caption(f"…and {len(findings) - _FINDINGS_SHOWN} more.")
 
-    with st.expander("Score breakdown", expanded=False):
+    with st.expander("Rule coverage", expanded=False):
         st.dataframe(
             [
                 {
-                    "Check": check.title,
-                    "Affected": result.affected,
-                    "Out of": result.population,
-                    "Score": None
-                    if result.score is None
-                    else round(100 * result.score),
+                    "Rule": f"{status.rule_id} · {RULES[status.rule_id].title}",
+                    "Status": status.state,
+                    "Checked": status.checked,
+                    "Affected": status.affected,
+                    "ms": round(status.duration_ms, 1),
+                    "Note": status.reason or "",
                 }
-                for check in QUALITY_CHECKS
-                if (result := report.per_check.get(check.key))
+                for status in run.rules
             ],
             hide_index=True,
             width="stretch",

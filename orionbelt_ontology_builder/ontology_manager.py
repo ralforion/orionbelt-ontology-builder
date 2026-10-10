@@ -4,6 +4,7 @@ OntologyManager - Core class for managing OWL ontologies using rdflib.
 
 import datetime
 import functools
+import hashlib
 import logging
 import os
 import re
@@ -11,12 +12,11 @@ import tempfile
 import weakref
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
-from collections.abc import Collection as AbcCollection
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import owlrl
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
@@ -26,9 +26,6 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
-
-if TYPE_CHECKING:
-    from .quality import QualityReport
 
 logger = logging.getLogger(__name__)
 
@@ -511,6 +508,19 @@ class OntologyManager:
         self.graph = self._new_graph()
         self._journal.touch()
 
+    def _revision_key(self) -> tuple[Any, ...]:
+        return (self._journal.revision, self.base_uri, str(self.ontology_uri))
+
+    def revision_token(self) -> str:
+        """A short token that changes whenever the graph or its identity does.
+
+        What :meth:`_memo` invalidates on, as a string: callers that keep a
+        result across reruns (a quality run) compare it to tell whether that
+        result is stale.
+        """
+        key = "\x1f".join(str(part) for part in self._revision_key())
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+
     def _memo(self, key: tuple[Any, ...], build: Callable[[], Any]) -> Any:
         """Return ``build()`` for ``key``, computed once per graph revision.
 
@@ -518,7 +528,7 @@ class OntologyManager:
         the ontology URI moves, everything cached is stale and is dropped,
         rather than checked entry by entry.
         """
-        token = (self._journal.revision, self.base_uri, str(self.ontology_uri))
+        token = self._revision_key()
         if token != self._memo_token:
             self._memo_cache.clear()
             self._memo_token = token
@@ -7366,25 +7376,6 @@ class OntologyManager:
         return "\n".join(lines)
 
     # ==================== VALIDATION & REASONING ====================
-
-    def assess_quality(
-        self,
-        enabled: AbcCollection[str] | None = None,
-        include_external: bool = False,
-    ) -> "QualityReport":
-        """Model quality checks and a 0-100 score; see :mod:`.quality`.
-
-        Computed once per graph revision, so the page can show the report on
-        every rerun and still pick up an edit made from one of its links.
-        """
-        from .quality import assess_quality
-
-        key = (
-            "assess_quality",
-            None if enabled is None else frozenset(enabled),
-            include_external,
-        )
-        return self._memo(key, lambda: assess_quality(self, enabled, include_external))
 
     def validate(self, check_missing_domain_range: bool = True) -> list[dict[str, str]]:
         """Validate the ontology and return issues."""
