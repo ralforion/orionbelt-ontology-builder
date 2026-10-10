@@ -4,6 +4,7 @@ OntologyManager - Core class for managing OWL ontologies using rdflib.
 
 import datetime
 import functools
+import hashlib
 import logging
 import os
 import re
@@ -507,6 +508,29 @@ class OntologyManager:
         self.graph = self._new_graph()
         self._journal.touch()
 
+    def _revision_key(self) -> tuple[Any, ...]:
+        # The graph's identifier is a fresh blank node per graph, so it tells
+        # two managers apart (and a graph from the one that replaced it) even
+        # when their revision counters land on the same number: loading a
+        # linked file builds a new manager for the same ontology URI (Codex
+        # review of PR #504).
+        return (
+            str(self.graph.identifier),
+            self._journal.revision,
+            self.base_uri,
+            str(self.ontology_uri),
+        )
+
+    def revision_token(self) -> str:
+        """A short token that changes whenever the graph or its identity does.
+
+        What :meth:`_memo` invalidates on, as a string: callers that keep a
+        result across reruns (a quality run) compare it to tell whether that
+        result is stale.
+        """
+        key = "\x1f".join(str(part) for part in self._revision_key())
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+
     def _memo(self, key: tuple[Any, ...], build: Callable[[], Any]) -> Any:
         """Return ``build()`` for ``key``, computed once per graph revision.
 
@@ -514,7 +538,7 @@ class OntologyManager:
         the ontology URI moves, everything cached is stale and is dropped,
         rather than checked entry by entry.
         """
-        token = (self._journal.revision, self.base_uri, str(self.ontology_uri))
+        token = self._revision_key()
         if token != self._memo_token:
             self._memo_cache.clear()
             self._memo_token = token
@@ -7387,6 +7411,7 @@ class OntologyManager:
                         "severity": "warning",
                         "type": "missing_label",
                         "subject": self._local_name(class_uri),
+                        "subject_uri": str(class_uri),
                         "message": f"Class '{self._local_name(class_uri)}' has no label (rdfs:label or skos:prefLabel)",
                     }
                 )
@@ -7413,6 +7438,7 @@ class OntologyManager:
                             "severity": "info",
                             "type": "missing_domain",
                             "subject": self._local_name(prop_uri),
+                            "subject_uri": str(prop_uri),
                             "message": f"Object property '{self._local_name(prop_uri)}' has no domain",
                         }
                     )
@@ -7422,6 +7448,7 @@ class OntologyManager:
                             "severity": "info",
                             "type": "missing_range",
                             "subject": self._local_name(prop_uri),
+                            "subject_uri": str(prop_uri),
                             "message": f"Object property '{self._local_name(prop_uri)}' has no range",
                         }
                     )
@@ -7435,6 +7462,7 @@ class OntologyManager:
                             "severity": "info",
                             "type": "missing_domain",
                             "subject": self._local_name(prop_uri),
+                            "subject_uri": str(prop_uri),
                             "message": f"Data property '{self._local_name(prop_uri)}' has no domain",
                         }
                     )
@@ -7505,6 +7533,7 @@ class OntologyManager:
                     "severity": "info",
                     "type": "orphan_class",
                     "subject": name,
+                    "subject_uri": orphan_uri,
                     "message": f"Class '{name}' is not used in any hierarchy, property domain/range, restriction, or instance typing",
                 }
             )
