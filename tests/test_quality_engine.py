@@ -168,7 +168,7 @@ class TestRun:
         monkeypatch.setattr(om.graph, "add", refuse)
         monkeypatch.setattr(om.graph, "remove", refuse)
         run = analyze(om, everything)
-        assert all(s.state == "ran" for s in run.rules), run.rules
+        assert not [s for s in run.rules if s.state == "failed"], run.rules
         assert len(om.graph) == before
 
 
@@ -187,7 +187,13 @@ class TestApplicability:
         run = analyze(om)
         assert run.status("Q019").state == "skipped"
         assert "OWL" in run.status("Q019").reason
-        assert run.findings == ()
+        owl_only = {r.id for r in RULES.values() if r.applies_to == {"owl"}}
+        assert not [f for f in run.findings if f.rule_id in owl_only]
+
+    def test_skos_rules_skip_an_owl_only_graph(self):
+        run = analyze(_om())
+        assert run.status("Q010").state == "skipped"
+        assert "SKOS" in run.status("Q010").reason
 
     def test_every_rule_declares_a_known_vocabulary(self):
         from orionbelt_ontology_builder.quality.registry import (

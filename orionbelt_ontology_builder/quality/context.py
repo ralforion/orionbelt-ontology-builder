@@ -10,13 +10,15 @@ structure through anonymous class expressions, which a reading of plain
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections import deque
 from collections.abc import Iterable, Iterator
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
-from rdflib import BNode, URIRef
-from rdflib.namespace import OWL, RDF, RDFS, SKOS, XSD
+from rdflib import BNode, Literal, Namespace, URIRef
+from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 from rdflib.term import Node
 
 from ..ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES
@@ -30,7 +32,37 @@ _KIND_BY_TYPE = {
     OWL.Class: "Class",
     OWL.ObjectProperty: "Object Property",
     OWL.DatatypeProperty: "Data Property",
+    SKOS.Concept: "SKOS Concept",
 }
+
+_OBO = Namespace("http://purl.obolibrary.org/obo/")
+
+#: Where a preferred label lives.
+LABEL_PREDICATES = (RDFS.label, SKOS.prefLabel)
+
+#: Where a definition or description lives. IAO_0000115 is the OBO
+#: "definition" annotation.
+DEFINITION_PREDICATES = (
+    SKOS.definition,
+    RDFS.comment,
+    DCTERMS.description,
+    DC.description,
+    _OBO.IAO_0000115,
+)
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def words(text: str) -> list[str]:
+    """``"PersonName"``, ``"person_name"`` and ``"person name"`` as words."""
+    spaced = _CAMEL_BOUNDARY.sub(" ", text)
+    return [w for w in re.split(r"[\s_\-.]+", spaced) if w]
+
+
+def normalise(text: str) -> str:
+    """For comparing labels: Unicode NFC, case-folded, whitespace collapsed."""
+    return " ".join(unicodedata.normalize("NFC", text).casefold().split())
+
 
 #: Where an anonymous class expression names a class: a restriction's filler,
 #: a complement, or a member of an intersection or union list.
@@ -75,7 +107,12 @@ class QualityContext:
         used = set()
         if any(
             True
-            for rdf_type in (*_KIND_BY_TYPE, RDFS.Class)
+            for rdf_type in (
+                OWL.Class,
+                OWL.ObjectProperty,
+                OWL.DatatypeProperty,
+                RDFS.Class,
+            )
             for _ in self.graph.subjects(RDF.type, rdf_type)
         ):
             used.add(OWL_PROFILE)
@@ -148,6 +185,87 @@ class QualityContext:
     def classes(self) -> set[str]:
         """Named, in-scope ``owl:Class`` declarations."""
         return self._declared(OWL.Class)
+
+    @cached_property
+    def concepts(self) -> set[str]:
+        """Named, in-scope ``skos:Concept`` resources."""
+        return self._declared(SKOS.Concept)
+
+    @cached_property
+    def documentable(self) -> list[str]:
+        """Classes, properties and concepts: what labels and definitions are for."""
+        return sorted(self.classes | self.properties | self.concepts)
+
+    def literals(
+        self, uri: str, predicates: Iterable[URIRef]
+    ) -> list[tuple[URIRef, Literal]]:
+        ref = URIRef(uri)
+        return [
+            (pred, obj)
+            for pred in predicates
+            for obj in self.graph.objects(ref, pred)
+            if isinstance(obj, Literal)
+        ]
+
+    def labels(self, uri: str) -> list[Literal]:
+        return [lit for _, lit in self.literals(uri, LABEL_PREDICATES)]
+
+    def definitions(self, uri: str) -> list[tuple[URIRef, Literal]]:
+        return self.literals(uri, DEFINITION_PREDICATES)
+
+    @cached_property
+    def uses_other_languages(self) -> bool:
+        """Whether any label is tagged with a language other than English."""
+        return any(
+            isinstance(lit, Literal)
+            and lit.language
+            and not lit.language.lower().startswith("en")
+            for pred in LABEL_PREDICATES
+            for lit in self.graph.objects(None, pred)
+        )
+
+    def english_name(self, uri: str) -> str | None:
+        """The English name to run English-only heuristics on, or None.
+
+        An ``@en`` label first, then an untagged one, then the local name, but
+        the last two only when nothing in the ontology is labelled in another
+        language: there an untagged or local name may well not be English.
+        """
+        labels = self.labels(uri)
+        for lit in labels:
+            if lit.language and lit.language.lower().startswith("en"):
+                return str(lit)
+        if self.uses_other_languages:
+            return None
+        for lit in labels:
+            if not lit.language:
+                return str(lit)
+        return self.ont._local_name(URIRef(uri))
+
+    @cached_property
+    def deprecated(self) -> set[str]:
+        """Resources marked ``owl:deprecated true``."""
+        return {
+            str(s)
+            for s, value in self.graph.subject_objects(OWL.deprecated)
+            if isinstance(s, URIRef)
+            and isinstance(value, Literal)
+            and str(value).strip().lower() in ("true", "1")
+        }
+
+    def named_owner(self, node) -> str | None:
+        """The named resource an anonymous node hangs off, if any."""
+        seen = set()
+        frontier = [node]
+        while frontier:
+            current = frontier.pop()
+            if isinstance(current, URIRef):
+                return str(current)
+            if current in seen:
+                continue
+            seen.add(current)
+            frontier.extend(self.graph.subjects(None, current))
+        return None
 
     @cached_property
     def properties(self) -> set[str]:
@@ -228,6 +346,13 @@ class QualityContext:
             if (URIRef(uri), RDF.type, rdf_type) in self.graph:
                 return kind
         return "Class"
+
+    @cached_property
+    def skos_issues(self) -> list[dict[str, str]]:
+        """``validate_skos()``'s findings, error tier only, for the SKOS rules."""
+        if SKOS_PROFILE not in self.vocabularies:
+            return []
+        return self.ont.validate_skos(check_editorial=False, check_conventions=False)
 
     @cached_property
     def validation_issues(self) -> list[dict[str, str]]:
