@@ -11,11 +11,12 @@ import tempfile
 import weakref
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
+from collections.abc import Collection as AbcCollection
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import owlrl
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
@@ -25,6 +26,9 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
+
+if TYPE_CHECKING:
+    from .quality import QualityReport
 
 logger = logging.getLogger(__name__)
 
@@ -7363,6 +7367,25 @@ class OntologyManager:
 
     # ==================== VALIDATION & REASONING ====================
 
+    def assess_quality(
+        self,
+        enabled: AbcCollection[str] | None = None,
+        include_external: bool = False,
+    ) -> "QualityReport":
+        """Model quality checks and a 0-100 score; see :mod:`.quality`.
+
+        Computed once per graph revision, so the page can show the report on
+        every rerun and still pick up an edit made from one of its links.
+        """
+        from .quality import assess_quality
+
+        key = (
+            "assess_quality",
+            None if enabled is None else frozenset(enabled),
+            include_external,
+        )
+        return self._memo(key, lambda: assess_quality(self, enabled, include_external))
+
     def validate(self, check_missing_domain_range: bool = True) -> list[dict[str, str]]:
         """Validate the ontology and return issues."""
         issues = []
@@ -7387,6 +7410,7 @@ class OntologyManager:
                         "severity": "warning",
                         "type": "missing_label",
                         "subject": self._local_name(class_uri),
+                        "subject_uri": str(class_uri),
                         "message": f"Class '{self._local_name(class_uri)}' has no label (rdfs:label or skos:prefLabel)",
                     }
                 )
@@ -7413,6 +7437,7 @@ class OntologyManager:
                             "severity": "info",
                             "type": "missing_domain",
                             "subject": self._local_name(prop_uri),
+                            "subject_uri": str(prop_uri),
                             "message": f"Object property '{self._local_name(prop_uri)}' has no domain",
                         }
                     )
@@ -7422,6 +7447,7 @@ class OntologyManager:
                             "severity": "info",
                             "type": "missing_range",
                             "subject": self._local_name(prop_uri),
+                            "subject_uri": str(prop_uri),
                             "message": f"Object property '{self._local_name(prop_uri)}' has no range",
                         }
                     )
@@ -7435,6 +7461,7 @@ class OntologyManager:
                             "severity": "info",
                             "type": "missing_domain",
                             "subject": self._local_name(prop_uri),
+                            "subject_uri": str(prop_uri),
                             "message": f"Data property '{self._local_name(prop_uri)}' has no domain",
                         }
                     )
@@ -7505,6 +7532,7 @@ class OntologyManager:
                     "severity": "info",
                     "type": "orphan_class",
                     "subject": name,
+                    "subject_uri": orphan_uri,
                     "message": f"Class '{name}' is not used in any hierarchy, property domain/range, restriction, or instance typing",
                 }
             )
