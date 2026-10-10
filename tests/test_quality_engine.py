@@ -308,7 +308,7 @@ def test_replaced_ontology_marks_results_stale():
 def test_rule_selection_survives_leaving_the_quality_section():
     at = AppTest.from_function(_quality_page)
     at.run(timeout=120)
-    q022 = next(c for c in at.checkbox if c.label.startswith("Q022"))
+    q022 = next(c for c in at.checkbox if c.label == "Multiple parents")
     imports = next(c for c in at.checkbox if c.label == "Include imported vocabularies")
     q022.check()
     imports.check()
@@ -316,11 +316,11 @@ def test_rule_selection_survives_leaving_the_quality_section():
     # Away to another section, where the Quality widgets are not rendered...
     at.session_state["_quality_tab_override"] = "Validation"
     at.run()
-    assert not [c for c in at.checkbox if c.label.startswith("Q022")]
+    assert not [c for c in at.checkbox if c.label == "Multiple parents"]
     # ...and back.
     at.session_state["_quality_tab_override"] = None
     at.run()
-    assert next(c for c in at.checkbox if c.label.startswith("Q022")).value
+    assert next(c for c in at.checkbox if c.label == "Multiple parents").value
     assert next(
         c for c in at.checkbox if c.label == "Include imported vocabularies"
     ).value
@@ -332,7 +332,7 @@ def test_rule_toggles_still_flip_both_ways():
     at.run(timeout=120)
 
     def q022():
-        return next(c for c in at.checkbox if c.label.startswith("Q022"))
+        return next(c for c in at.checkbox if c.label == "Multiple parents")
 
     q022().check()
     at.run()
@@ -357,3 +357,12 @@ def test_rules_and_categories_read_in_id_order():
         for category in CATEGORIES
     }
     assert list(CATEGORIES) == sorted(CATEGORIES, key=lowest.get)
+
+
+def test_rule_labels_show_titles_not_ids():
+    """IDs stay in tooltips and the coverage table, not in the visible labels."""
+    at = AppTest.from_function(_quality_page)
+    at.run(timeout=120)
+    rule_boxes = [c for c in at.checkbox if c.label != "Include imported vocabularies"]
+    assert {c.label for c in rule_boxes} == {r.title for r in RULES.values()}
+    assert all("Rule ID Q" in c.help for c in rule_boxes)

@@ -147,11 +147,14 @@ def _quality_config(scope: str) -> QualityConfig:
             for rule in RULES.values():
                 if rule.category != category:
                     continue
+                # Titles only: the stable ID is for config files and exports,
+                # and a list showing Q001, Q006, Q019 reads as if rules were
+                # missing. The tooltip still names it.
                 enabled = st.checkbox(
-                    f"{rule.id} · {rule.title}",
+                    rule.title,
                     value=stored.enabled(rule.id),
                     key=f"quality_rule_{scope}_{rule.id}",
-                    help=rule.description,
+                    help=f"{rule.description} (Rule ID {rule.id})",
                 )
                 if enabled != rule.default_enabled:
                     overrides[rule.id] = RuleSettings(enabled=enabled)
@@ -208,12 +211,11 @@ def _render_quality(ont) -> None:
     )
     st.caption(f"Run {run.started_at} · graph {run.graph_fingerprint}")
     for status in failed:
-        st.error(
-            f"{status.rule_id} {RULES[status.rule_id].title} failed: {status.reason}"
-        )
+        st.error(f"{RULES[status.rule_id].title} failed: {status.reason}")
     if skipped:
         st.caption(
-            "Skipped: " + "; ".join(f"{s.rule_id} ({s.reason})" for s in skipped)
+            "Skipped: "
+            + "; ".join(f"{RULES[s.rule_id].title} ({s.reason})" for s in skipped)
         )
     if not run.findings and not failed:
         st.success("No findings from the enabled rules.")
@@ -225,7 +227,7 @@ def _render_quality(ont) -> None:
         # A constant label: one that changed with the count would close the
         # expander whenever a fix made the count move.
         with st.expander(
-            f"{_SEVERITY_ICONS[findings[0].severity]} {rule.id} · {rule.title}",
+            f"{_SEVERITY_ICONS[findings[0].severity]} {rule.title}",
             expanded=False,
         ):
             st.caption(f"{len(findings)} finding(s). {rule.description}")
@@ -249,12 +251,13 @@ def _render_quality(ont) -> None:
         st.dataframe(
             [
                 {
-                    "Rule": f"{status.rule_id} · {RULES[status.rule_id].title}",
+                    "Rule": RULES[status.rule_id].title,
                     "Status": status.state,
                     "Checked": status.checked,
                     "Affected": status.affected,
                     "ms": round(status.duration_ms, 1),
                     "Note": status.reason or "",
+                    "ID": status.rule_id,
                 }
                 for status in run.rules
             ],
