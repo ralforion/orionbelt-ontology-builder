@@ -33,33 +33,41 @@ def _cycles(ctx: QualityContext, severity: Severity) -> RuleResult:
             ctx.finding(
                 "Q006",
                 severity,
-                issue["subject_uri"],
+                own[0],
                 issue["message"],
                 evidence={"cycle": list(cycle)},
                 suggestion="Remove one subClassOf edge in the cycle, or replace the "
                 "cycle with owl:equivalentClass if the classes are meant to be "
                 "the same.",
-                related=cycle[1:],
+                related=[u for u in cycle if u != own[0]],
             )
         )
         result.affected.update(own)
-    for issue in ctx.skos_issues:
-        uri = issue.get("subject_uri", "")
-        if issue["type"] != "broader_cycle" or uri not in ctx.concepts:
+    # SKOS cycles straight from the validator's walk, so each finding carries
+    # its own members: two cycles through one concept stay two findings, a
+    # self-loop beside a larger cycle no longer hides it, and a cycle is in
+    # scope if any member is (Codex review of PR #505).
+    concepts = ctx.skos_concepts
+    shown = ctx.ont._skos_display_names(concepts) if concepts else {}
+    for cycle in ctx.ont._skos_cycles(concepts) if concepts else []:
+        own = [uri for uri in cycle if uri in ctx.concepts]
+        if not own or len(cycle) < 2:
             continue
-        if (URIRef(uri), SKOS.broader, URIRef(uri)) in ctx.graph:
-            continue  # a self-loop: Q009
         result.findings.append(
             ctx.finding(
                 "Q006",
                 severity,
-                uri,
-                issue["message"],
+                own[0],
+                "Broader/narrower cycle: "
+                + " -> ".join(shown.get(u, ctx.name(u)) for u in [*cycle, cycle[0]])
+                + ".",
+                evidence={"cycle": list(cycle)},
                 suggestion="Remove one skos:broader (or skos:narrower) link in the "
                 "cycle.",
+                related=[u for u in cycle if u != own[0]],
             )
         )
-        result.affected.add(uri)
+        result.affected.update(own)
     return result
 
 

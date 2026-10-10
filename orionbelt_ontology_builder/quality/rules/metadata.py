@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from rdflib import URIRef
-from rdflib.namespace import DCTERMS, OWL, RDF, RDFS
+from rdflib.namespace import DCTERMS, OWL, RDFS
 
 from ..context import _OBO, QualityContext
 from ..models import Severity
@@ -127,40 +127,47 @@ def _deprecated_use(ctx: QualityContext, severity: Severity) -> RuleResult:
     if not ctx.deprecated:
         return result
     for subject, pred, obj in ctx.graph:
-        if pred in _NOT_A_USE or pred == RDF.type:
+        if pred in _NOT_A_USE:
             continue
-        used = [str(t) for t in (pred, obj) if str(t) in ctx.deprecated]
+        # A literal that happens to spell a deprecated URI is text, not a
+        # reference (Codex review of PR #505). Typing an individual with a
+        # deprecated class is a use, so rdf:type is not skipped.
+        used = [
+            str(term)
+            for term in (pred, obj)
+            if isinstance(term, URIRef) and str(term) in ctx.deprecated
+        ]
         if not used:
             continue
-        owner = ctx.named_owner(subject)
-        # A deprecated resource describing itself, or another deprecated
-        # one, is not a use anyone needs to fix.
-        if owner is None or owner in ctx.deprecated or not ctx.in_scope(owner):
-            continue
-        for target in used:
-            replacement = _replacement(ctx, target)
-            hint = (
-                f"Use '{ctx.name(replacement)}' instead."
-                if replacement
-                else "Replace it with a current resource, or drop the reference."
-            )
-            result.findings.append(
-                ctx.finding(
-                    "Q016",
-                    severity,
-                    owner,
-                    f"'{ctx.name(owner)}' uses '{ctx.name(target)}', which is "
-                    "deprecated.",
-                    evidence={
-                        "deprecated": target,
-                        "predicate": str(pred),
-                        "replacement": replacement,
-                    },
-                    suggestion=hint,
-                    related=[target] + ([replacement] if replacement else []),
+        for owner in sorted(ctx.named_owners(subject)):
+            # A deprecated resource describing itself, or another deprecated
+            # one, is not a use anyone needs to fix.
+            if owner in ctx.deprecated or not ctx.in_scope(owner):
+                continue
+            for target in used:
+                replacement = _replacement(ctx, target)
+                hint = (
+                    f"Use '{ctx.name(replacement)}' instead."
+                    if replacement
+                    else "Replace it with a current resource, or drop the reference."
                 )
-            )
-            result.affected.add(owner)
+                result.findings.append(
+                    ctx.finding(
+                        "Q016",
+                        severity,
+                        owner,
+                        f"'{ctx.name(owner)}' uses '{ctx.name(target)}', which is "
+                        "deprecated.",
+                        evidence={
+                            "deprecated": target,
+                            "predicate": str(pred),
+                            "replacement": replacement,
+                        },
+                        suggestion=hint,
+                        related=[target] + ([replacement] if replacement else []),
+                    )
+                )
+                result.affected.add(owner)
     return result
 
 

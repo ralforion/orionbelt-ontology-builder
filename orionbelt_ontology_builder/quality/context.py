@@ -21,7 +21,7 @@ from rdflib import BNode, Literal, Namespace, URIRef
 from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 from rdflib.term import Node
 
-from ..ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES
+from ..ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES, SKOSXL
 from .models import QualityFinding, Severity
 from .registry import OWL_PROFILE, SKOS_PROFILE
 
@@ -36,6 +36,9 @@ _KIND_BY_TYPE = {
 }
 
 _OBO = Namespace("http://purl.obolibrary.org/obo/")
+
+#: Vocabularies whose types describe a resource's role, not its class.
+_META_NAMESPACES = (str(RDF), str(RDFS), str(OWL), str(SKOS))
 
 #: Where a preferred label lives.
 LABEL_PREDICATES = (RDFS.label, SKOS.prefLabel)
@@ -208,7 +211,29 @@ class QualityContext:
         ]
 
     def labels(self, uri: str) -> list[Literal]:
-        return [lit for _, lit in self.literals(uri, LABEL_PREDICATES)]
+        """Preferred labels, SKOS-XL ones included.
+
+        A ``skosxl:prefLabel`` whose label resource has a ``literalForm`` is a
+        preferred label (SKOS Reference B.3.4.2), read through the same
+        helper the SKOS validator uses. Deduplicated by value and language,
+        since a plain and an XL label with the same literal are one statement
+        (Codex review of PR #505).
+        """
+        found: dict[tuple[str, str], Literal] = {}
+        for _, lit in self.literals(uri, LABEL_PREDICATES):
+            found.setdefault((str(lit), lit.language or ""), lit)
+        for item in self.ont._xl_literals(URIRef(uri), SKOSXL.prefLabel):
+            key = (item["value"], item["lang"])
+            found.setdefault(key, Literal(item["value"], lang=item["lang"] or None))
+        return list(found.values())
+
+    @cached_property
+    def skos_concepts(self) -> list[dict[str, Any]]:
+        """``get_concepts()``, for the rules that reuse the SKOS validator's
+        helpers on it."""
+        if SKOS_PROFILE not in self.vocabularies:
+            return []
+        return self.ont.get_concepts()
 
     def definitions(self, uri: str) -> list[tuple[URIRef, Literal]]:
         return self.literals(uri, DEFINITION_PREDICATES)
@@ -253,19 +278,26 @@ class QualityContext:
             and str(value).strip().lower() in ("true", "1")
         }
 
-    def named_owner(self, node) -> str | None:
-        """The named resource an anonymous node hangs off, if any."""
+    def named_owners(self, node) -> set[str]:
+        """The named resources a node is, or hangs off.
+
+        All of them: one restriction can be shared by several classes, and
+        reporting only the first one found would make the result depend on
+        triple order (Codex review of PR #505).
+        """
+        owners: set[str] = set()
         seen = set()
         frontier = [node]
         while frontier:
             current = frontier.pop()
             if isinstance(current, URIRef):
-                return str(current)
+                owners.add(str(current))
+                continue
             if current in seen:
                 continue
             seen.add(current)
             frontier.extend(self.graph.subjects(None, current))
-        return None
+        return owners
 
     @cached_property
     def properties(self) -> set[str]:
@@ -341,18 +373,30 @@ class QualityContext:
     def name(self, uri: str) -> str:
         return self.names.get(uri) or self.ont._local_name(URIRef(uri))
 
-    def kind(self, uri: str) -> str:
-        for rdf_type, kind in _KIND_BY_TYPE.items():
-            if (URIRef(uri), RDF.type, rdf_type) in self.graph:
-                return kind
-        return "Class"
+    def kind(self, uri: str) -> str | None:
+        """What the resource is, as the navigation names it, or None.
 
-    @cached_property
-    def skos_issues(self) -> list[dict[str, str]]:
-        """``validate_skos()``'s findings, error tier only, for the SKOS rules."""
-        if SKOS_PROFILE not in self.vocabularies:
-            return []
-        return self.ont.validate_skos(check_editorial=False, check_conventions=False)
+        An individual is anything typed ``owl:NamedIndividual`` or with a type
+        outside the RDF, RDFS, OWL and SKOS vocabularies; telling it apart is
+        what sends its Open button to Individuals rather than Classes (Codex
+        review of PR #505).
+        """
+        ref = URIRef(uri)
+        for rdf_type, kind in _KIND_BY_TYPE.items():
+            if (ref, RDF.type, rdf_type) in self.graph:
+                return kind
+        for type_node in self.graph.objects(ref, RDF.type):
+            if type_node == OWL.NamedIndividual or not str(type_node).startswith(
+                _META_NAMESPACES
+            ):
+                return "Individual"
+        if (ref, RDFS.subClassOf, None) in self.graph or (
+            None,
+            RDFS.subClassOf,
+            ref,
+        ) in self.graph:
+            return "Class"
+        return None
 
     @cached_property
     def validation_issues(self) -> list[dict[str, str]]:

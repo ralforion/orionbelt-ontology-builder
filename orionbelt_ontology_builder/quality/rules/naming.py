@@ -22,7 +22,7 @@ def _duplicate_labels(ctx: QualityContext, severity: Severity) -> RuleResult:
     groups: dict[tuple[str, str, str], set[str]] = {}
     shown: dict[tuple[str, str, str], str] = {}
     for uri in ctx.documentable:
-        family = "property" if uri in ctx.properties else ctx.kind(uri)
+        family = "property" if uri in ctx.properties else ctx.kind(uri) or "other"
         for label in ctx.labels(uri):
             text = normalise(str(label))
             if not text:
