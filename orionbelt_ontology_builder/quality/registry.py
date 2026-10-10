@@ -44,10 +44,13 @@ class Rule:
     evaluate: Callable[[QualityContext, Severity], RuleResult]
 
 
-#: Every rule, in the order the UI lists them. Filled by the rules modules.
+#: Every rule, kept in ID order whichever module registers it first, because
+#: the UI, the coverage table and the run all list rules in this order.
 RULES: dict[str, Rule] = {}
 
-CATEGORIES = {"structure": "Structure", "metadata": "Metadata"}
+#: Categories in the order the rules panel shows them: by their lowest rule
+#: ID, so the list reads Q001 upward.
+CATEGORIES = {"metadata": "Metadata", "structure": "Structure"}
 
 
 def register(rule: Rule) -> Rule:
@@ -56,4 +59,7 @@ def register(rule: Rule) -> Rule:
     if rule.category not in CATEGORIES:
         raise ValueError(f"Rule {rule.id} has unknown category {rule.category!r}")
     RULES[rule.id] = rule
+    ordered = sorted(RULES.items())
+    RULES.clear()
+    RULES.update(ordered)
     return rule

@@ -346,3 +346,14 @@ def test_rule_toggles_still_flip_both_ways():
         if k.startswith("_quality_config_")
     ]
     assert stored and not stored[0].enabled("Q022")
+
+
+def test_rules_and_categories_read_in_id_order():
+    from orionbelt_ontology_builder.quality import CATEGORIES
+
+    assert list(RULES) == sorted(RULES)
+    lowest = {
+        category: min(r.id for r in RULES.values() if r.category == category)
+        for category in CATEGORIES
+    }
+    assert list(CATEGORIES) == sorted(CATEGORIES, key=lowest.get)
