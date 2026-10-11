@@ -534,3 +534,105 @@ def test_page_marks_results_stale_when_one_off_shapes_change():
     _button(at, "Check shapes").click().run()
     _button(at, "Use for one check").click().run()
     assert any("one-off shapes changed" in w.value for w in at.warning)
+
+
+# -- review fixes, second round (PR #506) --------------------------------------------
+
+
+def test_a_blank_node_target_keeps_its_identity_in_the_worker():
+    """Data and shapes share the blank node: it must be one node in the worker."""
+    om = _people()
+    person = BNode()
+    om.graph.add((person, RDF.type, Q.Person))
+    om.graph.add((person, Q.name, Literal("Anon")))
+    om.graph.add((Q.S, RDF.type, SH.NodeShape))
+    om.graph.add((Q.S, SH.targetNode, person))
+    prop = BNode()
+    om.graph.add((Q.S, SH.property, prop))
+    om.graph.add((prop, SH.path, Q.name))
+    om.graph.add((prop, SH.minCount, Literal(1)))
+    assert _check(om).conforms is True
+
+
+def test_a_blank_node_has_value_matches_in_the_worker():
+    om = _people()
+    thing = BNode()
+    om.graph.add((Q.alice, Q.owns, thing))
+    om.graph.add((Q.bob, Q.owns, thing))
+    om.graph.add((Q.S, RDF.type, SH.NodeShape))
+    om.graph.add((Q.S, SH.targetClass, Q.Person))
+    prop = BNode()
+    om.graph.add((Q.S, SH.property, prop))
+    om.graph.add((prop, SH.path, Q.owns))
+    om.graph.add((prop, SH.hasValue, thing))
+    assert _check(om).conforms is True
+
+
+def test_a_named_sparql_constraint_belongs_to_the_shape():
+    om = _people()
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; sh:sparql q:C .\n"
+        'q:C a sh:SPARQLConstraint ; sh:message "no name" ; sh:select """'
+        "SELECT $this WHERE { FILTER NOT EXISTS { $this <http://test.org/q#name> ?n } }"
+        '""" .',
+    )
+    data, shapes = shacl.split_shapes(om.graph)
+    assert (Q.C, SH.select, None) in shapes and (Q.C, SH.select, None) not in data
+    run = _check(om)
+    assert run.error is None
+    assert [f.resource for f in run.findings] == [str(Q.alice)]
+    exported = Graph().parse(
+        data=om.export_to_string(content="shapes"), format="turtle"
+    )
+    assert (Q.C, SH.select, None) in exported
+
+
+def test_a_targeted_shape_another_refers_to_stays_its_own_root():
+    om = _people()
+    _with_shapes(
+        om,
+        "q:A a sh:NodeShape ; sh:targetClass q:Person ; sh:node q:B .\n"
+        "q:B a sh:NodeShape ; sh:targetNode q:bob ; "
+        "sh:property [ sh:path q:name ; sh:minCount 1 ] .",
+    )
+    assert {s.name for s in shacl.list_shapes(om.graph)} == {":A", ":B"}
+    shacl.remove_shape(om.graph, Q.A)
+    assert (Q.B, SH.targetNode, Q.bob) in om.graph
+    assert (Q.B, SH.property, None) in om.graph
+
+
+def test_a_self_referencing_targeted_shape_is_listed_and_checked():
+    om = _people()
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; "
+        "sh:or ( q:S [ sh:property [ sh:path q:name ; sh:minCount 1 ] ] ) .",
+    )
+    assert [s.name for s in shacl.list_shapes(om.graph)] == [":S"]
+
+
+def test_language_tagged_values_are_separate_findings():
+    om = _people()
+    om.graph.add((Q.bob, Q.nick, Literal("x", lang="en")))
+    om.graph.add((Q.bob, Q.nick, Literal("x", lang="de")))
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetNode q:bob ; "
+        "sh:property [ sh:path q:nick ; sh:minLength 2 ] .",
+    )
+    assert len(_check(om).findings) == 2
+
+
+def test_removing_a_shape_another_still_uses_only_drops_its_targets():
+    om = _people()
+    _with_shapes(
+        om,
+        "q:A a sh:NodeShape ; sh:targetClass q:Person ; sh:node q:B .\n"
+        "q:B a sh:NodeShape ; sh:targetNode q:bob ; "
+        "sh:property [ sh:path q:name ; sh:minCount 1 ] .",
+    )
+    shacl.remove_shape(om.graph, Q.B)
+    assert (Q.B, SH.targetNode, None) not in om.graph
+    assert (Q.B, SH.property, None) in om.graph  # A still needs it
+    assert [s.name for s in shacl.list_shapes(om.graph)] == [":A"]

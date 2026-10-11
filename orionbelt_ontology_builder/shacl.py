@@ -68,6 +68,11 @@ _SHAPE_LIST_REFS = (SH["and"], SH["or"], SH.xone)
 _VALUE_REFS = (SH.targetNode, SH.hasValue)
 #: Predicates whose object is a list of such values.
 _VALUE_LIST_REFS = (SH["in"],)
+#: Predicates whose object may be a *named* node that is still part of the
+#: shape: a SPARQL constraint, its prefix declarations. Of such a node only
+#: its SHACL statements are the shape's (``sh:prefixes`` usually points at
+#: the ontology itself, whose other statements are data).
+_NAMED_STRUCTURE_REFS = (SH.sparql, SH.prefixes, SH.declare)
 
 #: Where SHACL-SPARQL keeps query text.
 _QUERY_TEXT = (SH.select, SH.ask, SH.construct, SH.update)
@@ -141,29 +146,41 @@ def _own_triples(graph: Graph, node: Node, shapes: set[Node]) -> set[Triple]:
     which has triples of its own.
     """
     triples: set[Triple] = set()
-    frontier: list[tuple[Node, bool]] = []  # (node, inside a value list)
+    # (node, inside a value list, a named node of which only SHACL counts)
+    frontier: list[tuple[Node, bool, bool]] = []
+
+    def is_shacl(pred: Node, obj: Node) -> bool:
+        return str(pred).startswith(str(SH)) or (
+            pred == RDF.type and str(obj).startswith(str(SH))
+        )
 
     def take(subject: Node, pred: Node, obj: Node, in_values: bool) -> None:
         triples.add((subject, pred, obj))
-        if not isinstance(obj, BNode) or obj in shapes:
+        if obj in shapes:
+            return
+        if isinstance(obj, URIRef):
+            if pred in _NAMED_STRUCTURE_REFS:
+                frontier.append((obj, False, True))
+            return
+        if not isinstance(obj, BNode):
             return
         if pred in _VALUE_REFS or (in_values and pred == RDF.first):
             return
-        frontier.append((obj, in_values or pred in _VALUE_LIST_REFS))
+        frontier.append((obj, in_values or pred in _VALUE_LIST_REFS, False))
 
     pure = _is_pure_shape(graph, node)
     for pred, obj in graph.predicate_objects(node):
-        is_shacl = str(pred).startswith(str(SH))
-        if pure or is_shacl or (pred == RDF.type and obj in _SHAPE_TYPES):
+        if pure or is_shacl(pred, obj):
             take(node, pred, obj, False)
     seen: set[Node] = set()
     while frontier:
-        current, in_values = frontier.pop()
+        current, in_values, shacl_only = frontier.pop()
         if current in seen:
             continue
         seen.add(current)
         for pred, obj in graph.predicate_objects(current):
-            take(current, pred, obj, in_values)
+            if not shacl_only or is_shacl(pred, obj):
+                take(current, pred, obj, in_values)
     return triples
 
 
@@ -179,11 +196,25 @@ def _reachable(graph: Graph, start: Node) -> set[Node]:
     return found
 
 
+#: Types that make a shape an implicit class target (SHACL 2.1.3.1).
+_CLASS_TYPES = (RDFS.Class, URIRef("http://www.w3.org/2002/07/owl#Class"))
+
+
+def _has_target(graph: Graph, node: Node) -> bool:
+    return any((node, pred, None) in graph for pred in _TARGETS) or any(
+        (node, RDF.type, t) in graph for t in _CLASS_TYPES
+    )
+
+
 def _top_level(graph: Graph, shapes: set[Node]) -> set[Node]:
+    """The shapes that stand on their own: every shape with a target of its
+    own (explicit, or implicit as a class), and every shape no other refers
+    to. A targeted shape is checked for itself even when another shape also
+    uses it, and a shape that refers to itself is still a root."""
     referenced: set[Node] = set()
     for node in shapes:
         referenced |= _referenced(graph, node)
-    return shapes - referenced
+    return {n for n in shapes if n not in referenced or _has_target(graph, n)}
 
 
 def split_shapes(graph: Graph) -> tuple[Graph, Graph]:
@@ -371,6 +402,15 @@ def remove_shape(graph: Graph, node: Node) -> int:
     kept_reach: set[Node] = set()
     for other in _top_level(graph, shapes) - {node}:
         kept_reach |= _reachable(graph, other)
+    if node in kept_reach:
+        # Another shape still uses this one: it stops being checked on its
+        # own (its targets go) and stays as that shape's part.
+        targets: set[Triple] = {
+            (node, pred, obj) for pred in _TARGETS for obj in graph.objects(node, pred)
+        }
+        for target in targets:
+            graph.remove(target)
+        return len(targets)
     owned = _reachable(graph, node) - kept_reach
     doomed: set[Triple] = set()
     for shape in owned:
@@ -445,8 +485,12 @@ def _validate_in_worker(
     from pyshacl import validate
     from pyshacl.errors import ReportableRuntimeError
 
-    data = Graph().parse(data=data_nt, format="nt")
-    shapes = Graph().parse(data=shapes_nt, format="nt")
+    # One blank-node map for both: a node the shapes name as a target or a
+    # value is the same node in the data, and parsing the two separately
+    # would make it two.
+    bnodes: dict[str, Node] = {}
+    data = Graph().parse(data=data_nt, format="nt", bnode_context=bnodes)
+    shapes = Graph().parse(data=shapes_nt, format="nt", bnode_context=bnodes)
     for prefix, namespace in prefixes:
         shapes.bind(prefix, namespace, override=True)
     try:
@@ -498,6 +542,8 @@ def _result_rows(report: Graph, shapes: Graph) -> list[dict[str, Any]]:
                 "severity": str(severity) if severity is not None else None,
                 "path": _short(shapes, path) if path is not None else None,
                 "value": str(value) if value is not None else None,
+                # The whole term: "x"@en and "x"@de print alike and are not.
+                "value_term": value.n3() if value is not None else None,
                 "component": str(component) if component is not None else None,
                 "shape": shape_label(shapes, shape) if shape is not None else None,
                 # The shape itself, not its label: two property shapes on one
@@ -596,6 +642,7 @@ def _findings(
                 "severity": row["severity"],
                 "path": row["path"],
                 "value": row["value"],
+                "value_term": row["value_term"],
                 "component": row["component"],
                 "shape": row["shape"],
                 "shape_id": row["shape_id"],
