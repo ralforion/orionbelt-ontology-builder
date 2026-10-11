@@ -1,0 +1,189 @@
+@prefix : <http://skohub.io/skohub-shacl> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix sdo: <https://schema.org> .
+
+
+# declare the skos prefix to use it in later SPARQL-based constraints
+skos:
+  a owl:Ontology ;
+  sh:declare [
+    sh:prefix "skos" ;
+    sh:namespace "http://www.w3.org/2004/02/skos/core#"^^xsd:anyURI ;
+  ] ,
+  [
+    sh:prefix "sh" ;
+    sh:namespace "https://www.w3.org/ns/shacl#"^^xsd:anyURI ;
+  ] .
+
+####################
+# ConceptSchemes
+####################
+:DisjointConceptAndConceptScheme
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:sparql [
+    sh:prefixes skos: ;
+    sh:message "S9: skos:ConceptScheme is disjoint with skos:Concept." ;
+    sh:select """
+    SELECT $this
+    WHERE {
+      $this a skos:ConceptScheme 
+    }""" ;
+  ] ;
+.
+
+:DisjointConceptSchemeAndConcept
+  a sh:NodeShape ;
+  sh:targetClass skos:ConceptScheme ;
+  sh:sparql [
+    sh:prefixes skos: ;
+    sh:message "S9: skos:ConceptScheme is disjoint with skos:Concept." ;
+    sh:select """
+    SELECT $this
+    WHERE {
+      $this a skos:Concept
+    }""" ;
+  ] ;
+.
+
+###################
+# Lexical Labels
+###################
+:LexicalLabels
+  a sh:NodeShape ;
+  sh:targetSubjectsOf skos:prefLabel ;
+  sh:targetSubjectsOf skos:altLabel ;
+  sh:targetSubjectsOf skos:hiddenLabel ;
+  sh:property [
+    sh:path skos:prefLabel ;
+    sh:message "S13: skos:prefLabel, skos:altLabel and skos:hiddenLabel are pairwise disjoint properties." ;
+    sh:disjoint skos:altLabel ;
+    sh:disjoint skos:hiddenLabel ;
+  ] ;
+  sh:property [
+    sh:path skos:altLabel ;
+    sh:message "S13: skos:prefLabel, skos:altLabel and skos:hiddenLabel are pairwise disjoint properties." ;
+    sh:disjoint skos:hiddenLabel ;
+    sh:disjoint skos:prefLabel ;
+  ] ;
+  sh:property [
+    sh:path skos:hiddenLabel ;
+    sh:message "S13: skos:prefLabel, skos:altLabel and skos:hiddenLabel are pairwise disjoint properties." ;
+    sh:disjoint skos:altLabel ;
+    sh:disjoint skos:prefLabel ;
+  ] ;
+  sh:property [
+    sh:path skos:prefLabel ;
+    sh:message "S14: A resource has no more than one value of skos:prefLabel per language tag." ;
+    sh:datatype rdf:langString ;
+    sh:uniqueLang true ;
+  ] ;
+  .
+
+######################
+# Semantic Relations
+######################
+:SemanticRelationsS27
+  a sh:NodeShape ;
+  sh:targetSubjectsOf skos:broader ;
+  sh:targetSubjectsOf skos:related ;
+  sh:property [
+    sh:path skos:related ;
+    sh:message "S27: skos:related is disjoint with the property skos:broaderTransitive." ;
+    sh:disjoint skos:broader ;
+    sh:disjoint skos:broaderTransitive ;
+    sh:disjoint skos:narrower ;
+    sh:disjoint skos:narrowerTransitive ;
+  ] ;
+  .
+
+:SemanticRelationsS19S20
+  a sh:NodeShape ;
+  sh:targetObjectsOf skos:broader ;
+  sh:targetObjectsOf skos:narrower ;
+  sh:targetObjectsOf skos:related ;
+  sh:targetSubjectsOf skos:broader ;
+  sh:targetSubjectsOf skos:narrower ;
+  sh:targetSubjectsOf skos:related ;
+  sh:sparql [
+    sh:prefixes skos: ;    
+    sh:message "S19/S20: domain and range of SKOS semantic relations is the class skos:Concept. " ;
+    sh:select """
+    SELECT $this
+    WHERE {
+      FILTER NOT EXISTS { $this a skos:Concept .}
+    }""" ;
+  ] ;
+.
+
+######################
+# Concept Collections
+######################
+:DisjointConceptAndCollection
+  a sh:NodeShape ;
+  sh:targetSubjectsOf skos:narrower ;
+  sh:targetSubjectsOf skos:broader ;
+  sh:targetSubjectsOf skos:related ;
+  sh:sparql [
+    sh:prefixes skos: ;
+    sh:message "S37: skos:Concept is disjoint with skos:Collection." ;
+    sh:select """
+    SELECT $this
+    WHERE {
+      $this a skos:Collection .
+    }""" ;
+  ] ;
+.
+
+:DisjointConceptSchemeAndCollection
+  a sh:NodeShape ;
+  sh:targetSubjectsOf skos:topConceptOf ;
+  sh:targetSubjectsOf skos:inScheme ;
+  sh:sparql [
+    sh:prefixes skos: ;
+    sh:message "S37: skos:ConceptScheme is disjoint with skos:Collection." ;
+    sh:select """
+    SELECT $this
+    WHERE {
+      $this a skos:Collection
+    }""" ;
+  ] ;
+.
+
+#############################
+# Mapping Properties
+#############################
+:DisjointMappingRelations
+  a sh:NodeShape ;
+  sh:property [
+      sh:path skos:exactMatch ;
+      sh:message "S46: skos:exactMatch is disjoint with each of the properties skos:broadMatch and skos:relatedMatch." ;
+      sh:disjoint skos:broadMatch ;
+      sh:disjoint skos:relatedMatch ;
+      sh:disjoint skos:narrowMatch ; #since broadMatch and narrowMatch are inverses
+    ];
+  sh:property [
+    sh:path skos:relatedMatch ;
+    sh:class skos:Concept ;
+    sh:name "related match" ;
+    sh:nodeKind sh:IRI ;
+  ] ;
+  sh:targetObjectsOf skos:broadMatch ;
+  sh:targetObjectsOf skos:closeMatch ;
+  sh:targetObjectsOf skos:exactMatch ;
+  sh:targetObjectsOf skos:narrowMatch ;
+  sh:targetObjectsOf skos:relatedMatch ;
+  sh:targetSubjectsOf skos:broadMatch ;
+  sh:targetSubjectsOf skos:closeMatch ;
+  sh:targetSubjectsOf skos:exactMatch ;
+  sh:targetSubjectsOf skos:narrowMatch ;
+  sh:targetSubjectsOf skos:relatedMatch ;
+.
+

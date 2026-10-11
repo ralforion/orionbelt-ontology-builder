@@ -17,6 +17,20 @@ wheel; nothing here is a build-time or development-only dependency.
 vis-network is offered under Apache-2.0 **or** MIT, at the recipient's choice. We take MIT.
 Copyright (c) 2011-2017 Almende B.V.; (c) 2017-2019 visjs contributors.
 
+## Bundled SHACL shapes
+
+Offered as built-in shapes on the Validation & Reasoning page's SHACL section.
+`skos.shacl.ttl` is redistributed unmodified. `skos.bestPractice.shacl.ttl` carries one
+correction, noted at the top of the file: the predicate `sh:group:` (a typo with a stray colon,
+which RDF/XML cannot serialize) is written `sh:group`.
+
+| Shipped as | Upstream | Version | Licence | Text |
+|---|---|---|---|---|
+| `shapes/skos/*.shacl.ttl` | [skohub-shapes](https://github.com/skohub-io/skohub-shapes) | commit `ce46984` | Apache-2.0 | [`licenses/Apache-2.0-skohub-shapes.txt`](orionbelt_ontology_builder/licenses/Apache-2.0-skohub-shapes.txt) |
+
+skohub-shapes' `skos.shacl.ttl` states that it borrows from the SKOS-XL shapes of the EU
+Vocabularies application profiles.
+
 ## Bundled ontologies and vocabularies
 
 These are sample and reference vocabularies loaded from the Import/Export page. They are

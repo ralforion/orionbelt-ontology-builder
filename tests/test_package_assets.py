@@ -22,6 +22,9 @@ ASSETS = [
     pathlib.Path("assets/ORIONBELT_Logo.png"),
     pathlib.Path("assets/ORIONBELT Logo w.png"),
     pathlib.Path("samples"),
+    pathlib.Path("shapes/quality-policy.ttl"),
+    pathlib.Path("shapes/skos/skos.shacl.ttl"),
+    pathlib.Path("shapes/skos/skos.bestPractice.shacl.ttl"),
 ]
 
 

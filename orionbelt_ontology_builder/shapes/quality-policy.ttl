@@ -1,0 +1,108 @@
+# OrionBelt quality policy, as SHACL.
+#
+# The SHACL form of three of the app's quality rules, so the same checks can
+# run anywhere pySHACL or another SHACL engine does (a CI job, another tool):
+#
+#   Q001  Missing preferred label     (warning)
+#   Q002  Missing definition          (info)
+#   Q010  More than one prefLabel per language  (violation)
+#
+# They agree with the Python rules: tests run both over the same fixtures and
+# compare what each flags. One difference by design: the Python rules check
+# only the ontology's own resources unless told otherwise, while these shapes
+# check every target in the data they are given.
+#
+# Part of OrionBelt Ontology Builder, under its licence (see LICENSE).
+
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
+@prefix skos:   <http://www.w3.org/2004/02/skos/core#> .
+@prefix skosxl: <http://www.w3.org/2008/05/skos-xl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix dc:     <http://purl.org/dc/elements/1.1/> .
+@prefix obo:    <http://purl.obolibrary.org/obo/> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix obq:    <https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/orionbelt_ontology_builder/shapes/quality-policy.ttl#> .
+
+obq:
+    rdfs:label "OrionBelt quality policy" ;
+    sh:declare
+        [ sh:prefix "skos" ; sh:namespace "http://www.w3.org/2004/02/skos/core#"^^xsd:anyURI ] ,
+        [ sh:prefix "skosxl" ; sh:namespace "http://www.w3.org/2008/05/skos-xl#"^^xsd:anyURI ] .
+
+# A literal with something other than whitespace in it.
+obq:NonBlankLiteral
+    a sh:NodeShape ;
+    sh:nodeKind sh:Literal ;
+    sh:pattern "\\S" .
+
+obq:PreferredLabelShape
+    a sh:NodeShape ;
+    rdfs:label "Missing preferred label (Q001)" ;
+    sh:description "Add an rdfs:label (skos:prefLabel for a concept) with a language tag." ;
+    sh:targetClass owl:Class , owl:ObjectProperty , owl:DatatypeProperty , skos:Concept ;
+    sh:severity sh:Warning ;
+    sh:message "Has no preferred label (rdfs:label or skos:prefLabel)." ;
+    sh:or (
+        # Anonymous classes (unions, restrictions) are not named, so not labelled.
+        [ sh:nodeKind sh:BlankNode ]
+        [ sh:path rdfs:label ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+        [ sh:path skos:prefLabel ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+        [ sh:path ( skosxl:prefLabel skosxl:literalForm ) ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+    ) .
+
+obq:DefinitionShape
+    a sh:NodeShape ;
+    rdfs:label "Missing definition (Q002)" ;
+    sh:description "Add a skos:definition (or rdfs:comment) saying what it is and how it differs from its siblings." ;
+    sh:targetClass owl:Class , owl:ObjectProperty , owl:DatatypeProperty , skos:Concept ;
+    sh:severity sh:Info ;
+    sh:message "Has no definition or description." ;
+    sh:or (
+        [ sh:nodeKind sh:BlankNode ]
+        [ sh:path skos:definition ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+        [ sh:path rdfs:comment ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+        [ sh:path dcterms:description ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+        [ sh:path dc:description ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+        [ sh:path obo:IAO_0000115 ;
+          sh:qualifiedValueShape obq:NonBlankLiteral ; sh:qualifiedMinCount 1 ]
+    ) .
+
+# A SPARQL constraint rather than sh:uniqueLang, which skips untagged labels
+# and cannot see SKOS-XL ones. Like the rule, it counts distinct literal
+# values per language tag (untagged counting as one), plain and SKOS-XL
+# together, on named concepts. The language is bound as the result's value,
+# so two over-full languages are two results that stay apart.
+obq:OnePreferredLabelPerLanguageShape
+    a sh:NodeShape ;
+    rdfs:label "More than one prefLabel per language (Q010)" ;
+    sh:description "Keep one prefLabel per language and move the others to skos:altLabel (SKOS Reference S14)." ;
+    sh:targetClass skos:Concept ;
+    sh:severity sh:Violation ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "Has {?count} prefLabels in language '{?lang}'; SKOS allows at most one per language tag." ;
+        sh:prefixes obq: ;
+        sh:select """
+            SELECT $this ?lang (?lang AS ?value) (COUNT(DISTINCT STR(?label)) AS ?count)
+            WHERE {
+                FILTER (isIRI($this))
+                { $this skos:prefLabel ?label }
+                UNION
+                { $this skosxl:prefLabel/skosxl:literalForm ?label }
+                FILTER (isLiteral(?label))
+                BIND (LANG(?label) AS ?lang)
+            }
+            GROUP BY $this ?lang
+            HAVING (COUNT(DISTINCT STR(?label)) > 1)
+        """ ;
+    ] .
