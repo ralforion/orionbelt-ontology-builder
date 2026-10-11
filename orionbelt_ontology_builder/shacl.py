@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
@@ -602,6 +602,14 @@ def _validate_in_worker(
     """
     from pyshacl import validate
     from pyshacl.errors import ReportableRuntimeError
+    from rdflib.plugins.sparql.operators import register_custom_function
+
+    from .shacl_generate import RATIONAL_IN, rational_in
+
+    # The exact rational check generated shapes call (see rational_in).
+    # rdflib's annotation describes the raw=True calling convention; with the
+    # default it calls the function with the evaluated arguments.
+    register_custom_function(RATIONAL_IN, cast(Any, rational_in), override=True)
 
     # One blank-node map for both: a node the shapes name as a target or a
     # value is the same node in the data, and parsing the two separately

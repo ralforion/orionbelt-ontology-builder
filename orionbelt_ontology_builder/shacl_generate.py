@@ -33,6 +33,7 @@ user-defined datatype, a property chain) is left out rather than approximated.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from fractions import Fraction
 
 from rdflib import BNode, Graph, Literal, URIRef
 from rdflib.collection import Collection
@@ -98,18 +99,49 @@ _INTEGRAL = r"^[+-]?[0-9]+(\.0*)?$"
 #: An ``owl:rational`` literal: ``n/d`` with a non-zero denominator.
 _RATIONAL = r"^[+-]?[0-9]+/[0-9]*[1-9][0-9]*$"
 
-_XSD_INTEGER = "<http://www.w3.org/2001/XMLSchema#integer>"
+#: The SPARQL function the rational check calls (registered by the SHACL
+#: worker, see :func:`rational_in`). SPARQL alone cannot decide this exactly:
+#: it has no modulo, and its decimal division rounds, so ``1/7`` would pass as
+#: a decimal and a 29-digit numerator over 3 as an integer.
+RATIONAL_IN = URIRef("urn:orionbelt:function:rationalIn")
 
 
-def _rational_query(conditions: list[str]) -> str:
-    """A SPARQL constraint on an ``owl:rational`` value node: a result when
-    ``n/d`` breaks any of ``conditions`` (over ``?n``, ``?d`` and ``?v``)."""
+def rational_in(value: Node, kind: Node, low: Node, high: Node) -> Literal:
+    """Whether the ``owl:rational`` literal ``value`` lies in a numeric type.
+
+    Exact, with :class:`fractions.Fraction`: ``kind`` ``"integer"`` asks for a
+    reduced denominator of 1, ``"decimal"`` for one whose only prime factors
+    are 2 and 5 (a terminating decimal), ``""`` for any rational; ``low`` and
+    ``high`` are inclusive bounds, ``""`` for none.
+    """
+    try:
+        numerator, denominator = str(value).split("/")
+        fraction = Fraction(int(numerator), int(denominator))
+    except (ValueError, ZeroDivisionError):
+        return Literal(False)
+    ok = True
+    if str(kind) == "integer":
+        ok = fraction.denominator == 1
+    elif str(kind) == "decimal":
+        rest = fraction.denominator
+        for factor in (2, 5):
+            while rest % factor == 0:
+                rest //= factor
+        ok = rest == 1
+    if ok and str(low):
+        ok = fraction >= int(str(low))
+    if ok and str(high):
+        ok = fraction <= int(str(high))
+    return Literal(ok)
+
+
+def _rational_query(kind: str, low: int | None, high: int | None) -> str:
+    """A SPARQL constraint on an ``owl:rational`` value node: a result when it
+    is not of ``kind`` within ``low`` and ``high``."""
+    bounds = f'"{"" if low is None else low}", "{"" if high is None else high}"'
     return (
         "SELECT $this WHERE {\n"
-        f'  BIND ({_XSD_INTEGER}(STRBEFORE(STR($this), "/")) AS ?n)\n'
-        f'  BIND ({_XSD_INTEGER}(STRAFTER(STR($this), "/")) AS ?d)\n'
-        "  BIND (?n / ?d AS ?v)\n"
-        f"  FILTER (!({' && '.join(conditions)}))\n"
+        f'  FILTER (!<{RATIONAL_IN}>($this, "{kind}", {bounds}))\n'
         "}"
     )
 
@@ -286,8 +318,11 @@ class _Generator:
         pattern on the lexical form) and the type's bounds (inclusive limits,
         which compare values across numeric datatypes). One more alternative
         for ``owl:rational`` literals, ``n/d`` with a non-zero denominator,
-        whose value is checked by a SPARQL constraint: a pattern cannot tell
-        whether ``6/2`` is whole or ``1/2`` a decimal. ``owl:real`` has no
+        whose value is checked exactly by a SPARQL constraint calling
+        :func:`rational_in`: a pattern cannot tell whether ``6/2`` is whole
+        or ``1/2`` a decimal. That function is this app's, registered in its
+        SHACL worker, so another SHACL engine running the downloaded shapes
+        will not know it; only this rare alternative depends on it. ``owl:real`` has no
         literals of its own (OWL 2 syntax, 4.1), so ``"…"^^owl:real`` is not a
         value of any of them.
         """
@@ -307,20 +342,16 @@ class _Generator:
         rational = BNode()
         self.out.add((rational, SH.datatype, OWL.rational))
         self.out.add((rational, SH.pattern, Literal(_RATIONAL)))
-        conditions = []
         if integral:
-            conditions.append("FLOOR(?v) = ?v")
-        elif target not in (OWL.real, OWL.rational):
-            # A decimal: the fraction terminates (n/d, times d, is n again).
-            conditions.append("?v * ?d = ?n")
-        if low is not None:
-            conditions.append(f"?v >= {low}")
-        if high is not None:
-            conditions.append(f"?v <= {high}")
-        if conditions:
+            kind = "integer"
+        elif target in (OWL.real, OWL.rational):
+            kind = ""
+        else:
+            kind = "decimal"
+        if kind or low is not None or high is not None:
             check = BNode()
             self.out.add((rational, SH.sparql, check))
-            self.out.add((check, SH.select, Literal(_rational_query(conditions))))
+            self.out.add((check, SH.select, Literal(_rational_query(kind, low, high))))
         alternatives.append(rational)
         head = BNode()
         Collection(self.out, head, alternatives)

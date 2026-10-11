@@ -525,3 +525,47 @@ def test_page_infers_by_default_and_marks_a_change_stale():
         c for c in at.checkbox if c.label == "Apply OWL RL inference before checking"
     ).uncheck().run()
     assert any("inference setting changed" in w.value for w in at.warning)
+
+
+@pytest.mark.parametrize(
+    ("declared", "value", "ok"),
+    [
+        (XSD.decimal, "1/6", False),
+        (XSD.decimal, "1/7", False),
+        (XSD.decimal, "2/3", False),
+        (XSD.decimal, "3/12", True),
+        (XSD.decimal, "7/1280", True),
+        (XSD.integer, "30000000000000000000000000001/3", False),
+        (XSD.integer, "30000000000000000000000000000/3", True),
+        (XSD.long, "18446744073709551616/2", False),
+    ],
+)
+def test_rational_membership_is_exact(declared, value, ok):
+    """No rounding: a decimal is a reduced fraction whose denominator has only
+    2 and 5 as factors, an integer one whose denominator is 1."""
+    assert _range_check(declared, Literal(value, datatype=OWL.rational)) is ok
+
+
+@pytest.mark.parametrize(
+    ("value", "kind", "low", "high", "expected"),
+    [
+        ("6/2", "integer", "", "", True),
+        ("7/2", "integer", "", "", False),
+        ("1/8", "decimal", "", "", True),
+        ("1/12", "decimal", "", "", False),
+        ("-4/2", "integer", "0", "", False),
+        ("10/2", "integer", "", "4", False),
+        ("1/3", "", "", "", True),
+        ("1/0", "", "", "", False),
+        ("abc", "", "", "", False),
+    ],
+)
+def test_rational_in_is_exact(value, kind, low, high, expected):
+    from orionbelt_ontology_builder.shacl_generate import rational_in
+
+    assert (
+        rational_in(
+            Literal(value), Literal(kind), Literal(low), Literal(high)
+        ).toPython()
+        is expected
+    )
