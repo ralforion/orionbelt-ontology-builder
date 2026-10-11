@@ -98,6 +98,22 @@ _INTEGRAL = r"^[+-]?[0-9]+(\.0*)?$"
 #: An ``owl:rational`` literal: ``n/d`` with a non-zero denominator.
 _RATIONAL = r"^[+-]?[0-9]+/[0-9]*[1-9][0-9]*$"
 
+_XSD_INTEGER = "<http://www.w3.org/2001/XMLSchema#integer>"
+
+
+def _rational_query(conditions: list[str]) -> str:
+    """A SPARQL constraint on an ``owl:rational`` value node: a result when
+    ``n/d`` breaks any of ``conditions`` (over ``?n``, ``?d`` and ``?v``)."""
+    return (
+        "SELECT $this WHERE {\n"
+        f'  BIND ({_XSD_INTEGER}(STRBEFORE(STR($this), "/")) AS ?n)\n'
+        f'  BIND ({_XSD_INTEGER}(STRAFTER(STR($this), "/")) AS ?d)\n'
+        "  BIND (?n / ?d AS ?v)\n"
+        f"  FILTER (!({' && '.join(conditions)}))\n"
+        "}"
+    )
+
+
 #: Classes every resource belongs to: no constraint at all, literals included.
 _UNIVERSAL = (OWL.Thing, RDFS.Resource)
 
@@ -265,34 +281,50 @@ class _Generator:
     def constrain_number(self, node: Node, target: URIRef) -> None:
         """A numeric value of ``target``'s value space, whatever its datatype.
 
-        Any decimal-family literal is accepted, then held to what ``target``
-        asks of its value: a whole number for the integer types (a pattern
-        on the lexical form) and the type's bounds (inclusive limits, which
-        compare values across numeric datatypes). ``owl:real`` and
-        ``owl:rational`` also take an ``owl:rational`` literal of the form
-        ``n/d``; ``owl:real`` has no literals of its own (OWL 2 syntax, 4.1),
-        so ``"…"^^owl:real`` is not a value.
+        One alternative per decimal-family datatype, each held to what
+        ``target`` asks of the value: a whole number for the integer types (a
+        pattern on the lexical form) and the type's bounds (inclusive limits,
+        which compare values across numeric datatypes). One more alternative
+        for ``owl:rational`` literals, ``n/d`` with a non-zero denominator,
+        whose value is checked by a SPARQL constraint: a pattern cannot tell
+        whether ``6/2`` is whole or ``1/2`` a decimal. ``owl:real`` has no
+        literals of its own (OWL 2 syntax, 4.1), so ``"…"^^owl:real`` is not a
+        value of any of them.
         """
+        integral = target in _INTEGER_FAMILY
+        low, high = _BOUNDS.get(target, (None, None))
         alternatives: list[Node] = []
         for datatype in sorted(_DECIMAL_FAMILY, key=str):
             alternative = BNode()
             self.out.add((alternative, SH.datatype, datatype))
+            if integral:
+                self.out.add((alternative, SH.pattern, Literal(_INTEGRAL)))
+            if low is not None:
+                self.out.add((alternative, SH.minInclusive, Literal(low)))
+            if high is not None:
+                self.out.add((alternative, SH.maxInclusive, Literal(high)))
             alternatives.append(alternative)
-        if target in (OWL.real, OWL.rational):
-            rational = BNode()
-            self.out.add((rational, SH.datatype, OWL.rational))
-            self.out.add((rational, SH.pattern, Literal(_RATIONAL)))
-            alternatives.append(rational)
+        rational = BNode()
+        self.out.add((rational, SH.datatype, OWL.rational))
+        self.out.add((rational, SH.pattern, Literal(_RATIONAL)))
+        conditions = []
+        if integral:
+            conditions.append("FLOOR(?v) = ?v")
+        elif target not in (OWL.real, OWL.rational):
+            # A decimal: the fraction terminates (n/d, times d, is n again).
+            conditions.append("?v * ?d = ?n")
+        if low is not None:
+            conditions.append(f"?v >= {low}")
+        if high is not None:
+            conditions.append(f"?v <= {high}")
+        if conditions:
+            check = BNode()
+            self.out.add((rational, SH.sparql, check))
+            self.out.add((check, SH.select, Literal(_rational_query(conditions))))
+        alternatives.append(rational)
         head = BNode()
         Collection(self.out, head, alternatives)
         self.out.add((node, SH["or"], head))
-        if target in _INTEGER_FAMILY:
-            self.out.add((node, SH.pattern, Literal(_INTEGRAL)))
-        low, high = _BOUNDS.get(target, (None, None))
-        if low is not None:
-            self.out.add((node, SH.minInclusive, Literal(low)))
-        if high is not None:
-            self.out.add((node, SH.maxInclusive, Literal(high)))
 
     def value_shape(self, filler: Node) -> BNode | None:
         """A shape a value has to meet to be of ``filler``, or None."""

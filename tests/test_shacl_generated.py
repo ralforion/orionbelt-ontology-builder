@@ -440,3 +440,21 @@ def test_a_named_restriction_is_still_a_restriction():
 def test_rdfs_resource_is_no_constraint():
     """#4: everything is an rdfs:Resource, literals included."""
     assert _range_check(RDFS.Resource, Literal("plain"))
+
+
+@pytest.mark.parametrize(
+    ("declared", "value", "ok"),
+    [
+        (XSD.decimal, "1/2", True),
+        (XSD.decimal, "1/3", False),
+        (XSD.integer, "6/2", True),
+        (XSD.integer, "1/2", False),
+        (XSD.nonNegativeInteger, "-6/2", False),
+        (XSD.byte, "256/2", False),
+        (XSD.byte, "254/2", True),
+        (XSD.decimal, "1/0", False),
+    ],
+)
+def test_rational_literals_are_checked_by_value_too(declared, value, ok):
+    """ "1/2"^^owl:rational is the decimal 0.5, "6/2" the integer 3."""
+    assert _range_check(declared, Literal(value, datatype=OWL.rational)) is ok
