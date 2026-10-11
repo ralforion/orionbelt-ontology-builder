@@ -285,3 +285,94 @@ def test_page_shows_the_generated_shapes():
         True
     ).run()
     assert any("sh:minCount" in c.value for c in at.code)
+
+
+# -- review fixes (PR #509) ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("declared", "value", "ok"),
+    [
+        (XSD.integer, Literal("3", datatype=XSD.int), True),
+        (XSD.integer, Literal("3", datatype=XSD.nonNegativeInteger), True),
+        (XSD.decimal, Literal("3", datatype=XSD.byte), True),
+        (XSD.integer, Literal("3.5", datatype=XSD.decimal), False),
+        (XSD.string, Literal("x", datatype=XSD.token), True),
+        (OWL.real, Literal("2.5", datatype=XSD.decimal), True),
+        (OWL.real, Literal("2", datatype=XSD.integer), True),
+        (OWL.rational, Literal("2", datatype=XSD.long), True),
+        (OWL.real, Literal("x"), False),
+        (RDFS.Literal, Literal("anything", lang="en"), True),
+    ],
+)
+def test_datatypes_accept_their_whole_value_space(declared, value, ok):
+    """#1, #5: a range, allValuesFrom, someValuesFrom and a qualified count all
+    accept values of a derived datatype."""
+    om = _om()
+    _declare(om, "Thing")
+    om.graph.add((Q.v, RDF.type, OWL.DatatypeProperty))
+    om.graph.add((Q.v, RDFS.range, declared))
+    _restriction(om, Q.Thing, Q.v, OWL.allValuesFrom, declared)
+    _restriction(om, Q.Thing, Q.v, OWL.someValuesFrom, declared)
+    _restriction(
+        om, Q.Thing, Q.v, OWL.minQualifiedCardinality, Literal(1), onDataRange=declared
+    )
+    _thing(om, "t", Q.Thing, v=value)
+    assert (_violations(om)[0] == set()) is ok
+
+
+def test_a_custom_datatype_is_left_out_rather_than_misread():
+    om = _om()
+    om.graph.add((Q.Celsius, RDF.type, RDFS.Datatype))
+    om.graph.add((Q.temp, RDFS.range, Q.Celsius))
+    _thing(om, "today", temp=Literal("21", datatype=XSD.decimal))
+    assert _violations(om)[0] == set()
+
+
+def test_a_range_on_an_untyped_property_is_checked():
+    """#2: FOAF declares ranges on properties it types only as rdf:Property."""
+    om = _om()
+    _declare(om, "Document")
+    om.graph.add((Q.topicOf, RDFS.range, Q.Document))
+    _thing(om, "page", topicOf=Literal("not a document"))
+    assert _violations(om)[0] == {"page"}
+
+
+def _intersection(om, *members):
+    head = BNode()
+    Collection(om.graph, head, list(members))
+    node = BNode()
+    om.graph.add((node, OWL.intersectionOf, head))
+    return node
+
+
+def _some(om, prop, cls):
+    r = BNode()
+    om.graph.add((r, RDF.type, OWL.Restriction))
+    om.graph.add((r, OWL.onProperty, prop))
+    om.graph.add((r, OWL.someValuesFrom, cls))
+    return r
+
+
+@pytest.mark.parametrize("style", ["subclass", "own", "nested", "reversed"])
+def test_necessary_restrictions_in_every_intersection_style(style):
+    """#3, #4: A ⊑ (B ⊓ ∃p.C), A owl:intersectionOf (…), nested intersections,
+    and R owl:equivalentClass A all make ∃p.C necessary for A."""
+    om = _om()
+    _declare(om, "A", "B", "C")
+    some = _some(om, Q.p, Q.C)
+    if style == "subclass":
+        om.graph.add((Q.A, RDFS.subClassOf, _intersection(om, Q.B, some)))
+    elif style == "own":
+        head = BNode()
+        Collection(om.graph, head, [Q.B, some])
+        om.graph.add((Q.A, OWL.intersectionOf, head))
+    elif style == "nested":
+        inner = _intersection(om, Q.B, some)
+        om.graph.add((Q.A, OWL.equivalentClass, _intersection(om, Q.B, inner)))
+    else:
+        om.graph.add((some, OWL.equivalentClass, Q.A))
+    c = _thing(om, "c", Q.C)
+    _thing(om, "good", Q.A, p=c)
+    _thing(om, "bad", Q.A)
+    assert _violations(om)[0] == {"bad"}

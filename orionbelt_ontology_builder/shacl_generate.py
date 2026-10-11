@@ -21,11 +21,13 @@ What is derived:
 | functional property                     | ``sh:maxCount 1`` on every subject using it  |
 | property range                          | ``sh:class`` or ``sh:datatype``              |
 
-Restrictions count whether stated through ``rdfs:subClassOf`` or as a member of
-an ``owl:equivalentClass`` intersection (gist's style): ``A ≡ B ⊓ ∃p.C`` makes
-``∃p.C`` necessary for ``A`` as surely as ``A ⊑ ∃p.C`` does. Anything the
-generator cannot express faithfully (a union filler, a datatype restriction
-with facets, a property chain) is left out rather than approximated.
+Restrictions count however they are made necessary: ``A ⊑ E``, ``A ≡ E`` in
+either orientation, or ``A`` defined as an intersection itself, with
+intersections walked to any depth (``A ≡ B ⊓ ∃p.C`` makes ``∃p.C`` necessary
+for ``A`` as surely as ``A ⊑ ∃p.C`` does). A datatype admits its whole value
+space: ``xsd:integer`` accepts an ``xsd:int`` literal, ``owl:real`` any decimal
+type. Anything the generator cannot express faithfully (a union filler, a
+user-defined datatype, a property chain) is left out rather than approximated.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from rdflib import BNode, Graph, Literal, URIRef
+from rdflib.collection import Collection
 from rdflib.namespace import OWL, RDF, RDFS, XSD
 from rdflib.term import Node
 
@@ -44,7 +47,70 @@ _BUILTIN_DATA_RANGES = {
     RDF.PlainLiteral,
     RDF.XMLLiteral,
     RDF.HTML,
+    OWL.real,
+    OWL.rational,
 }
+
+#: The built-in XSD datatypes derived from another, by restriction (XSD 1.1
+#: Part 2, section 3). A value of a derived type is a value of its base, so a
+#: check for the base must accept it: ``"3"^^xsd:int`` is an ``xsd:integer``.
+_XSD_DERIVED: dict[URIRef, tuple[URIRef, ...]] = {
+    XSD.decimal: (XSD.integer,),
+    XSD.integer: (XSD.nonPositiveInteger, XSD.long, XSD.nonNegativeInteger),
+    XSD.nonPositiveInteger: (XSD.negativeInteger,),
+    XSD.long: (XSD.int,),
+    XSD.int: (XSD.short,),
+    XSD.short: (XSD.byte,),
+    XSD.nonNegativeInteger: (XSD.unsignedLong, XSD.positiveInteger),
+    XSD.unsignedLong: (XSD.unsignedInt,),
+    XSD.unsignedInt: (XSD.unsignedShort,),
+    XSD.unsignedShort: (XSD.unsignedByte,),
+    XSD.string: (XSD.normalizedString,),
+    XSD.normalizedString: (XSD.token,),
+    XSD.token: (XSD.language, XSD.Name, XSD.NMTOKEN),
+    XSD.Name: (XSD.NCName,),
+    XSD.NCName: (XSD.ID, XSD.IDREF, XSD.ENTITY),
+    XSD.dateTime: (XSD.dateTimeStamp,),
+    XSD.duration: (XSD.dayTimeDuration, XSD.yearMonthDuration),
+}
+
+#: A datatype whose value space is "every literal": checked by node kind.
+ANY_LITERAL = "any literal"
+
+
+def _with_derived(datatype: URIRef) -> set[URIRef]:
+    found = {datatype}
+    frontier = [datatype]
+    while frontier:
+        for child in _XSD_DERIVED.get(frontier.pop(), ()):
+            if child not in found:
+                found.add(child)
+                frontier.append(child)
+    return found
+
+
+def accepted_datatypes(graph: Graph, datatype: URIRef) -> set[URIRef] | str | None:
+    """The datatype IRIs whose literals lie in ``datatype``'s value space.
+
+    ``ANY_LITERAL`` for ``rdfs:Literal``; ``None`` for a datatype this cannot
+    map faithfully (a user-defined one, whose definition it does not read), so
+    the caller leaves the constraint out rather than misreading it. OWL 2's
+    numeric types nest: ``owl:real`` holds ``owl:rational`` holds every
+    ``xsd:decimal`` type (but not ``xsd:double`` or ``xsd:float``, whose value
+    spaces OWL 2 keeps apart).
+    """
+    if datatype == RDFS.Literal:
+        return ANY_LITERAL
+    if datatype == OWL.real:
+        return {OWL.real, OWL.rational} | _with_derived(XSD.decimal)
+    if datatype == OWL.rational:
+        return {OWL.rational} | _with_derived(XSD.decimal)
+    if datatype == RDF.PlainLiteral:
+        return {RDF.PlainLiteral, RDF.langString} | _with_derived(XSD.string)
+    if str(datatype).startswith(str(XSD)) or datatype in _BUILTIN_DATA_RANGES:
+        return _with_derived(datatype)
+    return None
+
 
 _CARDINALITIES = {
     OWL.minCardinality: ("min", None),
@@ -69,6 +135,7 @@ def _short(graph: Graph, node: Node) -> str:
 
 
 def _is_data_range(graph: Graph, node: Node) -> bool:
+    """A datatype: built in, or declared ``rdfs:Datatype``. Not a class."""
     return isinstance(node, URIRef) and (
         str(node).startswith(str(XSD))
         or node in _BUILTIN_DATA_RANGES
@@ -129,15 +196,44 @@ class _Generator:
         inverse = self.model.value(prop, OWL.inverseOf)
         return f"inverse {self.name(inverse)}" if inverse is not None else "a property"
 
+    def supported(self, filler: Node) -> bool:
+        """Whether a value constraint for ``filler`` can be stated faithfully."""
+        if not isinstance(filler, URIRef) or filler == OWL.Thing:
+            return False
+        if _is_data_range(self.model, filler):
+            return accepted_datatypes(self.model, filler) is not None
+        return True
+
+    def constrain(self, node: Node, filler: Node) -> None:
+        """Make every value of ``node`` (a property or value shape) be of
+        ``filler``: its class, or its datatype's whole value space. Only for a
+        ``filler`` :meth:`supported` accepts."""
+        if not isinstance(filler, URIRef):
+            return
+        if not _is_data_range(self.model, filler):
+            self.out.add((node, SH["class"], filler))
+            return
+        accepted = accepted_datatypes(self.model, filler)
+        if accepted == ANY_LITERAL:
+            self.out.add((node, SH.nodeKind, SH.Literal))
+        elif isinstance(accepted, set) and len(accepted) == 1:
+            self.out.add((node, SH.datatype, next(iter(accepted))))
+        elif isinstance(accepted, set):
+            alternatives: list[Node] = []
+            for datatype in sorted(accepted, key=str):
+                alternative = BNode()
+                self.out.add((alternative, SH.datatype, datatype))
+                alternatives.append(alternative)
+            head = BNode()
+            Collection(self.out, head, alternatives)
+            self.out.add((node, SH["or"], head))
+
     def value_shape(self, filler: Node) -> BNode | None:
         """A shape a value has to meet to be of ``filler``, or None."""
-        if not isinstance(filler, URIRef) or filler == OWL.Thing:
+        if not self.supported(filler):
             return None
         shape = BNode()
-        if _is_data_range(self.model, filler):
-            self.out.add((shape, SH.datatype, filler))
-        else:
-            self.out.add((shape, SH["class"], filler))
+        self.constrain(shape, filler)
         return shape
 
     def property_shape(
@@ -154,22 +250,44 @@ class _Generator:
     # -- what the model says ---------------------------------------------------
 
     def restrictions(self) -> Iterator[tuple[Node, Node]]:
-        """``(class, restriction)`` for every restriction a named class must meet."""
+        """``(class, restriction)`` for every restriction a named class must meet.
+
+        Necessary conditions come from ``C ⊑ E``, from ``C ≡ E`` stated either
+        way round, and from a class defined as an intersection itself (OWL 1
+        style); an intersection makes each of its members necessary, nested
+        to any depth.
+        """
+        necessary: list[tuple[Node, Node]] = []
         for cls, expr in self.model.subject_objects(RDFS.subClassOf):
-            if (
-                isinstance(cls, URIRef)
-                and (expr, RDF.type, OWL.Restriction) in self.model
-            ):
-                yield cls, expr
-        for cls, expr in self.model.subject_objects(OWL.equivalentClass):
-            if not isinstance(cls, URIRef) or not isinstance(expr, BNode):
-                continue
-            if (expr, RDF.type, OWL.Restriction) in self.model:
-                yield cls, expr
-            for members in self.model.objects(expr, OWL.intersectionOf):
+            if isinstance(cls, URIRef) and isinstance(expr, BNode):
+                necessary.append((cls, expr))
+        for a, b in self.model.subject_objects(OWL.equivalentClass):
+            if isinstance(a, URIRef) and isinstance(b, BNode):
+                necessary.append((a, b))
+            elif isinstance(b, URIRef) and isinstance(a, BNode):
+                necessary.append((b, a))
+        for cls, members in self.model.subject_objects(OWL.intersectionOf):
+            if isinstance(cls, URIRef):
                 for member in _list_items(self.model, members):
-                    if (member, RDF.type, OWL.Restriction) in self.model:
-                        yield cls, member
+                    if isinstance(member, BNode):
+                        necessary.append((cls, member))
+        seen: set[tuple[Node, Node]] = set()
+        for cls, expr in necessary:
+            yield from self._flatten(cls, expr, seen)
+
+    def _flatten(
+        self, cls: Node, expr: Node, seen: set[tuple[Node, Node]]
+    ) -> Iterator[tuple[Node, Node]]:
+        if (cls, expr) in seen:
+            return
+        seen.add((cls, expr))
+        if (expr, OWL.onProperty, None) in self.model:
+            yield cls, expr
+            return
+        for members in self.model.objects(expr, OWL.intersectionOf):
+            for member in _list_items(self.model, members):
+                if isinstance(member, BNode):
+                    yield from self._flatten(cls, member, seen)
 
     def restriction(self, cls: Node, restriction: Node) -> None:
         prop = self.model.value(restriction, OWL.onProperty)
@@ -197,7 +315,7 @@ class _Generator:
 
         every = self.model.value(restriction, OWL.allValuesFrom)
         if every is not None:
-            if not isinstance(every, URIRef) or every == OWL.Thing:
+            if not self.supported(every):
                 return
             p = self.property_shape(
                 owner,
@@ -205,10 +323,7 @@ class _Generator:
                 f"Every {what} of '{who}' must be {self.name(every)}.",
                 f"From {who} ⊑ {what} only {self.name(every)}.",
             )
-            if _is_data_range(self.model, every):
-                self.out.add((p, SH.datatype, every))
-            else:
-                self.out.add((p, SH["class"], every))
+            self.constrain(p, every)
             return
 
         required = self.model.value(restriction, OWL.hasValue)
@@ -262,18 +377,18 @@ class _Generator:
 
     def property_axioms(self) -> None:
         """Functional properties and ranges, checked on whoever uses the property."""
+        # Every subject of rdfs:range, typed or not: a range applies to a
+        # property whatever it is declared as (FOAF types several only as
+        # rdf:Property).
         props = {
             p
-            for t in (OWL.ObjectProperty, OWL.DatatypeProperty, OWL.FunctionalProperty)
-            for p in self.model.subjects(RDF.type, t)
+            for p in self.model.subjects(RDF.type, OWL.FunctionalProperty)
             if isinstance(p, URIRef)
-        }
+        } | {p for p in self.model.subjects(RDFS.range, None) if isinstance(p, URIRef)}
         for prop in sorted(props, key=str):
             functional = (prop, RDF.type, OWL.FunctionalProperty) in self.model
             ranges = [
-                r
-                for r in self.model.objects(prop, RDFS.range)
-                if isinstance(r, URIRef) and r != OWL.Thing
+                r for r in self.model.objects(prop, RDFS.range) if self.supported(r)
             ]
             if not functional and not ranges:
                 continue
@@ -297,10 +412,7 @@ class _Generator:
                     f"Every value of {name} must be {self.name(rng)}.",
                     f"From the range of {name}: {self.name(rng)}.",
                 )
-                if _is_data_range(self.model, rng):
-                    self.out.add((p, SH.datatype, rng))
-                else:
-                    self.out.add((p, SH["class"], rng))
+                self.constrain(p, rng)
 
 
 def generate_shapes(model: Graph) -> Graph:
