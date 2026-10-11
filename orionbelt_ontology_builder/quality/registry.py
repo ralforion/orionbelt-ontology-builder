@@ -50,7 +50,12 @@ RULES: dict[str, Rule] = {}
 
 #: Categories in the order the rules panel shows them: by their lowest rule
 #: ID, so the list reads Q001 upward.
-CATEGORIES = {"metadata": "Metadata", "structure": "Structure"}
+CATEGORIES = {
+    "metadata": "Metadata",
+    "naming": "Naming",
+    "structure": "Structure",
+    "skos": "SKOS",
+}
 
 
 def register(rule: Rule) -> Rule:

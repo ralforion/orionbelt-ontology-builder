@@ -23,6 +23,7 @@ from ..ui import (
     missing_required,
     required_selectbox,
     save_checkpoint,
+    scroll_anchor,
     set_flash_message,
     show_message,
 )
@@ -77,6 +78,7 @@ def render_individuals():
                 with st.expander(
                     f"👤 **{disp_ind_name}** ({classes_str})", expanded=_ind_expanded
                 ):
+                    scroll_anchor("ind", _ik)
                     st.write(
                         f"**URI:** `{ind['uri']}`"
                         if ind["uri"].startswith("http://example.org/")

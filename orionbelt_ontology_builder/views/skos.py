@@ -24,6 +24,7 @@ from ..ui import (
     render_skos_literal_editor,
     required_selectbox,
     save_checkpoint,
+    scroll_anchor,
     set_flash_message,
     show_message,
     viz_note_rename,
@@ -327,6 +328,7 @@ def render_skos_vocabulary():
                 with st.expander(
                     f"🏷️ **{display_name}**{badge_str}", expanded=_skos_expanded
                 ):
+                    scroll_anchor("skos", _ck)
                     st.write(
                         f"**URI:** `{concept['uri']}`"
                         if concept["uri"].startswith("http://example.org/")

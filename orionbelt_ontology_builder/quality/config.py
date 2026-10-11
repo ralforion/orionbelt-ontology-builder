@@ -30,11 +30,21 @@ class RuleSettings:
     severity: Severity | None = None
 
 
-#: Profiles: named sets of overrides. More arrive with the rules they tune
-#: (``skos_vocabulary`` with the SKOS rules, ``strict_documentation`` with the
-#: definition rules), because a profile may only name rules that exist.
+#: Profiles: named sets of overrides on the rules' own defaults. A profile
+#: may only name rules that exist.
 PROFILES: dict[str, dict[str, RuleSettings]] = {
     "general_ontology": {},
+    # A thesaurus lives by its definitions; class naming rules do not apply.
+    "skos_vocabulary": {
+        "Q002": RuleSettings(severity="warning"),
+        "Q005": RuleSettings(enabled=False),
+    },
+    # Every class and property documented, nothing left as a placeholder.
+    "strict_documentation": {
+        "Q002": RuleSettings(severity="warning"),
+        "Q004": RuleSettings(severity="error"),
+        "Q022": RuleSettings(enabled=True),
+    },
 }
 
 DEFAULT_PROFILE = "general_ontology"
