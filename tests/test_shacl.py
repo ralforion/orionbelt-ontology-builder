@@ -292,7 +292,8 @@ def test_page_adds_shapes_checks_and_opens_a_finding():
 
     _button(at, "Run SHACL check").click().run()
     assert not at.exception, at.exception
-    assert any("exactly one name" in md.value for md in at.markdown)
+    assert any("exactly one name" in m for m in table_messages(at))
+    select_first_finding(at, "shacl_")
     _button(at, "Open").click().run()
     assert at.session_state["search_navigate_to"] == "Individuals"
 
@@ -314,7 +315,7 @@ def test_one_off_shapes_are_checked_but_not_saved():
     _button(at, "Check shapes").click().run()
     _button(at, "Use for one check").click().run()
     _button(at, "Run SHACL check").click().run()
-    assert any("exactly one name" in md.value for md in at.markdown)
+    assert any("exactly one name" in m for m in table_messages(at))
     assert len(at.session_state["ontology"].graph) == before
 
 
@@ -518,7 +519,7 @@ def test_page_lists_warnings_when_the_data_conforms():
     _button(at, "Add to ontology").click().run()
     _button(at, "Run SHACL check").click().run()
     assert any("see the notes below" in s.value for s in at.success)
-    assert any("exactly one name" in md.value for md in at.markdown)
+    assert any("exactly one name" in m for m in table_messages(at))
 
 
 def test_page_marks_results_stale_when_one_off_shapes_change():
@@ -678,3 +679,24 @@ def ui_uid(uri):
     from orionbelt_ontology_builder.ui import _uid
 
     return _uid(uri)
+
+
+def table_messages(at):
+    """Every message in the findings tables on the page."""
+    return [
+        message
+        for frame in at.dataframe
+        if "Message" in frame.value.columns
+        for message in frame.value["Message"]
+    ]
+
+
+def select_first_finding(at, prefix):
+    """Select the first row of the findings table whose key starts with prefix."""
+    key = next(
+        k
+        for k in at.session_state.filtered_state
+        if k.startswith(prefix) and "_table_" in k
+    )
+    at.session_state[key] = {"selection": {"rows": [0], "columns": [], "cells": []}}
+    at.run()

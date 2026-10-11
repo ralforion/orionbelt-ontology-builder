@@ -1580,6 +1580,100 @@ def persist_sparql_state() -> None:
     ls.setItem(SPARQL_STATE_KEY, payload, key=f"orionbelt_sparql_state_set_{h[:12]}")
 
 
+#: Storage key (browser localStorage, or the desktop config file) for the
+#: quality rule settings, ``{ontology IRI: QualityConfig.to_dict()}``.
+QUALITY_CONFIGS_KEY = "orionbelt_quality_configs"
+#: Session key holding the same mapping.
+QUALITY_CONFIGS_STATE = "quality_configs"
+#: Bumped whenever stored settings replace what the rule widgets show (a late
+#: restore, a reset, an import). It is part of those widgets' keys, so they are
+#: drawn afresh from the settings rather than keeping their own old state.
+QUALITY_CONFIGS_GENERATION = "_quality_configs_generation"
+
+
+def _apply_quality_configs(data) -> None:
+    """Seed the session from stored settings, dropping any that no longer
+    validate (a rule removed since, a hand-edited file)."""
+    if not isinstance(data, dict):
+        return
+    from .quality import QualityConfig, QualityConfigError
+
+    kept: dict[str, dict] = {}
+    for iri, raw in data.items():
+        if not isinstance(iri, str):
+            continue
+        try:
+            kept[iri] = QualityConfig.from_dict(raw).to_dict()
+        except QualityConfigError:
+            continue
+    st.session_state[QUALITY_CONFIGS_STATE] = kept
+    st.session_state[QUALITY_CONFIGS_GENERATION] = (
+        st.session_state.get(QUALITY_CONFIGS_GENERATION, 0) + 1
+    )
+
+
+def restore_quality_configs() -> None:
+    """Restore saved quality rule settings once per session.
+
+    Mirrors :func:`restore_sparql_state`, retry included: on the cloud the
+    localStorage value only arrives on a later rerun.
+    """
+    if st.session_state.get("_quality_configs_restored"):
+        return
+    if st.session_state.get("_quality_configs_dirty"):
+        st.session_state["_quality_configs_restored"] = True
+        return
+    if local_store.local_persist_enabled():
+        _apply_quality_configs(local_store.load_config().get(QUALITY_CONFIGS_KEY))
+        st.session_state["_quality_configs_restored"] = True
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        st.session_state["_quality_configs_restored"] = True
+        return
+    saved = ls.getItem(QUALITY_CONFIGS_KEY)
+    if isinstance(saved, dict):
+        saved = saved.get(QUALITY_CONFIGS_KEY) or next(
+            (v for v in saved.values() if isinstance(v, str)), None
+        )
+    if isinstance(saved, str) and saved.strip():
+        try:
+            _apply_quality_configs(json.loads(saved))
+        except (ValueError, TypeError):
+            pass
+        st.session_state["_quality_configs_restored"] = True
+
+
+def persist_quality_configs() -> None:
+    """Save the quality rule settings after a change. No-op otherwise.
+
+    Re-offers the browser write until a pass survives, as
+    :func:`persist_sparql_state` does and for the same reason.
+    """
+    if not st.session_state.get("_quality_configs_dirty"):
+        return
+    payload = json.dumps(
+        st.session_state.get(QUALITY_CONFIGS_STATE) or {}, sort_keys=True
+    )
+    if local_store.local_persist_enabled():
+        if payload == st.session_state.get("_quality_configs_saved_json"):
+            return
+        try:
+            cfg = local_store.load_config()
+            cfg[QUALITY_CONFIGS_KEY] = json.loads(payload)
+            local_store.save_config(cfg)
+        except OSError as e:
+            log_error(e, context="Quality settings save")
+            return
+        st.session_state["_quality_configs_saved_json"] = payload
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        return
+    h = _content_hash(payload)
+    ls.setItem(QUALITY_CONFIGS_KEY, payload, key=f"orionbelt_quality_cfg_set_{h[:12]}")
+
+
 def render_language_pack_sidebar() -> None:
     """The app-wide language-pack picker (issue #252).
 
