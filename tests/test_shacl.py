@@ -636,3 +636,45 @@ def test_removing_a_shape_another_still_uses_only_drops_its_targets():
     assert (Q.B, SH.targetNode, None) not in om.graph
     assert (Q.B, SH.property, None) in om.graph  # A still needs it
     assert [s.name for s in shacl.list_shapes(om.graph)] == [":A"]
+
+
+CLASS_SHAPE = """
+q:Person a sh:NodeShape ; sh:property [ sh:path q:name ; sh:minCount 1 ] .
+q:Team a sh:NodeShape ; sh:targetClass q:Team ; sh:property [ sh:path q:lead ; sh:node q:Person ] .
+"""
+
+
+def test_a_used_class_shape_is_refused_with_the_reason():
+    """q:Person is a class and a shape (implicit target) that q:Team uses:
+    there is no removal that keeps both the class and q:Team intact."""
+    om = _people()
+    _with_shapes(om, CLASS_SHAPE)
+    before = set(om.graph)
+    with pytest.raises(ShapesError, match="also a class") as exc:
+        shacl.remove_shape(om.graph, Q.Person)
+    assert ":Team" in str(exc.value)
+    assert set(om.graph) == before
+
+
+def test_page_explains_a_refused_removal():
+    import streamlit as st  # noqa: F401 - the script below imports it
+
+    at = AppTest.from_function(_shacl_page)
+    at.run(timeout=120)
+    at.text_area[0].set_value(PREFIXES + CLASS_SHAPE).run()
+    _button(at, "Check shapes").click().run()
+    _button(at, "Add to ontology").click().run()
+    before = len(at.session_state["ontology"].graph)
+    remove = [b for b in at.button if b.label == "Remove"]
+    for button in remove:
+        if button.key.endswith(ui_uid(str(Q.Person))):
+            button.click().run()
+    assert len(at.session_state["ontology"].graph) == before
+    flash = at.session_state["flash_message"]
+    assert flash["type"] == "error" and "also a class" in flash["message"]
+
+
+def ui_uid(uri):
+    from orionbelt_ontology_builder.ui import _uid
+
+    return _uid(uri)

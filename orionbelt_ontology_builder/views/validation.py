@@ -297,10 +297,17 @@ _SHAPE_SOURCES = {
 def _remove_shape_cb(node, name: str) -> None:
     """Callback: remove one shape from the ontology, as one undo step."""
     ont = st.session_state.ontology
-    if remove_shape(ont.graph, node):
+    try:
+        removed = remove_shape(ont.graph, node)
+    except ShapesError as exc:
+        set_flash_message(f"Cannot remove {name}: {exc}", "error")
+        return
+    if removed:
         save_checkpoint(f"Remove SHACL shape {name}")
         request_autosave_flush()
         set_flash_message(f"Removed SHACL shape {name}.", "success")
+    else:
+        set_flash_message(f"Nothing to remove for {name}.", "info")
 
 
 def _render_finding(finding: QualityFinding, key: str) -> None:

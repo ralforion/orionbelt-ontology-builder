@@ -393,6 +393,10 @@ def add_shapes(graph: Graph, shapes: Graph) -> int:
 def remove_shape(graph: Graph, node: Node) -> int:
     """Remove one top-level shape and what only it uses.
 
+    Raises :class:`ShapesError` for a class that is also a shape another
+    shape still uses: there is no way to stop it being checked that keeps
+    both the class and that shape intact.
+
     The shapes it refers to go with it unless another top-level shape still
     reaches them, and structure another shape shares (one ``sh:in`` list)
     stays. A class that is also a shape stays a class: only what makes it a
@@ -403,6 +407,25 @@ def remove_shape(graph: Graph, node: Node) -> int:
     for other in _top_level(graph, shapes) - {node}:
         kept_reach |= _reachable(graph, other)
     if node in kept_reach:
+        # Named by the top-level shapes that reach it, not by the blank
+        # property shape that may hold the reference.
+        users = sorted(
+            _short(graph, root)
+            for root in _top_level(graph, shapes) - {node}
+            if node in _reachable(graph, root)
+        )
+        if any((node, RDF.type, t) in graph for t in _CLASS_TYPES):
+            # Its target is implicit: being a class is what makes it check
+            # the class's instances. Dropping that would delete the class,
+            # and dropping its constraints would break the shapes using it,
+            # so it is refused, and said so, rather than quietly kept.
+            raise ShapesError(
+                f"{_short(graph, node)} is also a class, so it checks that "
+                "class's instances for as long as it is a shape, and "
+                f"{', '.join(users)} still use{'s' if len(users) == 1 else ''} it. "
+                "Remove those shapes first, or remove its constraints on the "
+                "Source page."
+            )
         # Another shape still uses this one: it stops being checked on its
         # own (its targets go) and stays as that shape's part.
         targets: set[Triple] = {
