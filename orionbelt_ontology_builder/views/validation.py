@@ -1,5 +1,7 @@
 """The validation page."""
 
+import uuid
+
 import streamlit as st
 
 from ..ontology_manager import rdf_format_for_path
@@ -414,14 +416,16 @@ def _render_shacl(ont) -> None:
                 set_flash_message(f"Added {added} triples of SHACL shapes.", "success")
                 st.rerun()
             if once_col.button("Use for one check"):
-                st.session_state[once_key] = pending
+                # With an identity of its own, so a check run against earlier
+                # one-off shapes shows as stale once these replace them.
+                st.session_state[once_key] = (uuid.uuid4().hex, pending)
                 st.session_state.pop(pending_key, None)
                 st.rerun()
             if drop_col.button("Discard"):
                 st.session_state.pop(pending_key, None)
                 st.rerun()
 
-    once = st.session_state.get(once_key)
+    once_id, once = st.session_state.get(once_key) or (None, None)
     sources = []
     if shapes:
         sources.append("shacl:ontology")
@@ -452,38 +456,45 @@ def _render_shacl(ont) -> None:
             )
             for origin in sources
         }
-        st.session_state[run_key] = (ont.revision_token(), runs)
+        st.session_state[run_key] = (ont.revision_token(), once_id, runs)
     if not sources:
         st.caption("Add shapes to check the data against.")
 
     stored = st.session_state.get(run_key)
     if stored is None:
         return
-    token, runs = stored
+    token, ran_once_id, runs = stored
     if token != ont.revision_token():
         st.warning("The ontology changed since this check. Run it again.")
+    elif ran_once_id != once_id:
+        st.warning("The one-off shapes changed since this check. Run it again.")
     for origin, run in runs.items():
         st.markdown(f"**{_SHAPE_SOURCES[origin]}**")
         if run.error:
             st.error(run.error)
             continue
-        if run.conforms:
+        # A run can conform and still carry warnings and info results: only
+        # violations decide conformance, so those are listed either way.
+        if run.conforms and not run.findings:
             st.success(
                 f"Conforms: the data meets all {run.shapes_checked} shape(s) "
                 f"({run.duration_ms:.0f} ms)."
             )
-            continue
+        elif run.conforms:
+            st.success("Conforms: no violations, but see the notes below.")
         counts: dict[str, int] = {}
         for finding in run.findings:
             counts[finding.severity] = counts.get(finding.severity, 0) + 1
-        st.write(
-            " · ".join(
-                f"{_SEVERITY_ICONS[sev]} {counts[sev]} {sev}{'s' if counts[sev] != 1 else ''}"
-                for sev in ("error", "warning", "info")
-                if counts.get(sev)
+        if counts:
+            st.write(
+                " · ".join(
+                    f"{_SEVERITY_ICONS[sev]} {counts[sev]} "
+                    f"{sev}{'s' if counts[sev] != 1 else ''}"
+                    for sev in ("error", "warning", "info")
+                    if counts.get(sev)
+                )
+                + f" · {run.duration_ms:.0f} ms"
             )
-            + f" · {run.duration_ms:.0f} ms"
-        )
         by_shape: dict[str, list[QualityFinding]] = {}
         for finding in run.findings:
             by_shape.setdefault(finding.source_shape or "(unnamed shape)", []).append(
@@ -501,10 +512,10 @@ def _render_shacl(ont) -> None:
                     )
                 if len(findings) > _FINDINGS_SHOWN:
                     st.caption(f"…and {len(findings) - _FINDINGS_SHOWN} more.")
-        if run.report is not None:
+        if run.report_ttl is not None:
             _download_or_save(
                 "Download validation report (.ttl)",
-                run.report.serialize(format="turtle"),
+                run.report_ttl,
                 "shacl-report.ttl",
                 key=f"shacl_report_{origin}",
             )

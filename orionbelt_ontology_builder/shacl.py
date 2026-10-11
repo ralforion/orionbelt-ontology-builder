@@ -9,24 +9,37 @@ itself, where save, load, undo, autosave and export already handle them. A
 check splits the graph in two first: the shapes, and the data they check. The
 shapes are never validated as data.
 
-Runs are bounded: a deadline on every triple lookup (the SPARQL console's store
-proxy), no ``owl:imports`` resolution, and no SHACL-SPARQL constraint that
-reaches the network through ``SERVICE``.
+What belongs to a shape is its *structure*: its SHACL statements, the blank
+nodes they build (property shapes, paths, lists), and the shapes it refers to.
+The values a shape merely mentions (``sh:targetNode``, ``sh:hasValue``, the
+members of ``sh:in``) are data the shape talks about, and stay data.
+
+Runs are bounded. pySHACL runs in a worker process that is killed when the
+time limit passes, because a constraint can spend its time inside a regular
+expression, where no check of the clock can interrupt it. ``owl:imports`` is
+not resolved, and no SHACL-SPARQL constraint may reach another server through
+``SERVICE``.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import sys
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
+from rdflib.collection import Collection
 from rdflib.namespace import RDF, RDFS
 from rdflib.term import Node
 
 from .quality.models import QualityFinding, Severity
-from .sparql import QueryTimeout, _DeadlineStore
 
 SH = Namespace("http://www.w3.org/ns/shacl#")
 
@@ -35,15 +48,26 @@ SHACL_RULE_ID = "Q015"
 
 DEFAULT_DEADLINE_SECONDS = 10.0
 
-_SEVERITY: dict[Node, Severity] = {
-    SH.Violation: "error",
-    SH.Warning: "warning",
-    SH.Info: "info",
+_SHAPE_TYPES = (SH.NodeShape, SH.PropertyShape)
+
+_SEVERITY: dict[str, Severity] = {
+    str(SH.Violation): "error",
+    str(SH.Warning): "warning",
+    str(SH.Info): "info",
 }
 
 #: Predicates that make an untyped node a shape (SHACL 2.1: a node with a
-#: target, or a constraint parameter, is a shape).
+#: target is a shape).
 _TARGETS = (SH.targetClass, SH.targetNode, SH.targetSubjectsOf, SH.targetObjectsOf)
+
+#: Predicates whose object is a shape.
+_SHAPE_REFS = (SH.property, SH.node, SH.qualifiedValueShape, SH["not"])
+#: Predicates whose object is a list of shapes.
+_SHAPE_LIST_REFS = (SH["and"], SH["or"], SH.xone)
+#: Predicates whose object is a value the shape talks about, not structure.
+_VALUE_REFS = (SH.targetNode, SH.hasValue)
+#: Predicates whose object is a list of such values.
+_VALUE_LIST_REFS = (SH["in"],)
 
 #: Where SHACL-SPARQL keeps query text.
 _QUERY_TEXT = (SH.select, SH.ask, SH.construct, SH.update)
@@ -51,65 +75,128 @@ _QUERY_TEXT = (SH.select, SH.ask, SH.construct, SH.update)
 #: ``SERVICE <iri>`` or ``SERVICE ?var``, with or without ``SILENT``.
 _SERVICE = re.compile(r"\bSERVICE\s+(?:SILENT\s+)?[<?$]", re.IGNORECASE)
 
+Triple = tuple[Node, Node, Node]
+
 
 class ShapesError(ValueError):
     """Shapes that cannot be added or run: unparsable, invalid, or unsafe."""
 
 
-# -- finding shapes ----------------------------------------------------------
+# -- shape structure -----------------------------------------------------------
+
+
+def _list_items(graph: Graph, head: Node) -> list[Node]:
+    try:
+        return list(Collection(graph, head))
+    except Exception:  # noqa: BLE001 - a malformed list contributes nothing
+        return []
+
+
+def _referenced(graph: Graph, node: Node) -> set[Node]:
+    """The shapes ``node`` refers to directly."""
+    found: set[Node] = set()
+    for pred in _SHAPE_REFS:
+        found.update(graph.objects(node, pred))
+    for pred in _SHAPE_LIST_REFS:
+        for head in graph.objects(node, pred):
+            found.update(_list_items(graph, head))
+    return {n for n in found if not isinstance(n, Literal)}
 
 
 def shape_nodes(graph: Graph) -> set[Node]:
-    """Every shape in ``graph``: typed ones, and untyped ones with a target."""
-    nodes: set[Node] = set(graph.subjects(RDF.type, SH.NodeShape))
-    nodes |= set(graph.subjects(RDF.type, SH.PropertyShape))
+    """Every shape in ``graph``: typed ones, ones with a target, and every
+    shape another one refers to (an untyped named helper behind ``sh:node``
+    is as much a shape as a typed one)."""
+    nodes: set[Node] = set()
+    for shape_type in _SHAPE_TYPES:
+        nodes.update(graph.subjects(RDF.type, shape_type))
     for pred in _TARGETS:
-        nodes |= set(graph.subjects(pred, None))
+        nodes.update(graph.subjects(pred, None))
+    frontier = list(nodes)
+    while frontier:
+        for ref in _referenced(graph, frontier.pop()):
+            if ref not in nodes:
+                nodes.add(ref)
+                frontier.append(ref)
     return nodes
 
 
-def _closure(graph: Graph, node: Node) -> set[tuple[Node, Node, Node]]:
-    """The triples that make up one shape.
+def _is_pure_shape(graph: Graph, node: Node) -> bool:
+    """A shape and nothing else: any annotation on it is the shape's.
 
-    For a named shape, only its SHACL statements and its ``rdf:type``s: a
-    class that doubles as a shape (an implicit class target) keeps its
-    ``rdfs:label`` and its OWL axioms as data. Everything reached through blank
-    nodes from there (property shapes, ``sh:path`` sequences, ``sh:in`` lists)
-    belongs to the shape.
+    A class that is also a node shape (an implicit class target) is not: its
+    label and OWL axioms are the class's, and stay data.
     """
-    triples: set[tuple[Node, Node, Node]] = set()
     if isinstance(node, BNode):
-        frontier: list[Node] = [node]
-    else:
-        frontier = []
-        for pred, obj in graph.predicate_objects(node):
-            if str(pred).startswith(str(SH)) or pred == RDF.type:
-                triples.add((node, pred, obj))
-                if isinstance(obj, BNode):
-                    frontier.append(obj)
+        return True
+    return all(t in _SHAPE_TYPES for t in graph.objects(node, RDF.type))
+
+
+def _own_triples(graph: Graph, node: Node, shapes: set[Node]) -> set[Triple]:
+    """The triples that make up one shape, not counting the shapes it refers to.
+
+    Blank nodes are followed as structure (property shapes, paths, lists),
+    except where they are values: the object of ``sh:targetNode`` or
+    ``sh:hasValue``, a member of an ``sh:in`` list, and any other shape,
+    which has triples of its own.
+    """
+    triples: set[Triple] = set()
+    frontier: list[tuple[Node, bool]] = []  # (node, inside a value list)
+
+    def take(subject: Node, pred: Node, obj: Node, in_values: bool) -> None:
+        triples.add((subject, pred, obj))
+        if not isinstance(obj, BNode) or obj in shapes:
+            return
+        if pred in _VALUE_REFS or (in_values and pred == RDF.first):
+            return
+        frontier.append((obj, in_values or pred in _VALUE_LIST_REFS))
+
+    pure = _is_pure_shape(graph, node)
+    for pred, obj in graph.predicate_objects(node):
+        is_shacl = str(pred).startswith(str(SH))
+        if pure or is_shacl or (pred == RDF.type and obj in _SHAPE_TYPES):
+            take(node, pred, obj, False)
     seen: set[Node] = set()
     while frontier:
-        current = frontier.pop()
+        current, in_values = frontier.pop()
         if current in seen:
             continue
         seen.add(current)
         for pred, obj in graph.predicate_objects(current):
-            triples.add((current, pred, obj))
-            if isinstance(obj, BNode):
-                frontier.append(obj)
+            take(current, pred, obj, in_values)
     return triples
+
+
+def _reachable(graph: Graph, start: Node) -> set[Node]:
+    """``start`` and every shape it refers to, however indirectly."""
+    found = {start}
+    frontier = [start]
+    while frontier:
+        for ref in _referenced(graph, frontier.pop()):
+            if ref not in found:
+                found.add(ref)
+                frontier.append(ref)
+    return found
+
+
+def _top_level(graph: Graph, shapes: set[Node]) -> set[Node]:
+    referenced: set[Node] = set()
+    for node in shapes:
+        referenced |= _referenced(graph, node)
+    return shapes - referenced
 
 
 def split_shapes(graph: Graph) -> tuple[Graph, Graph]:
     """``(data, shapes)``: the shapes' triples apart from everything else.
 
-    A named shape's ``rdf:type`` triples go to both, because a class that is
-    also a node shape is validated by being a class (an implicit target) and
-    is data by being a class.
+    A class that is also a shape keeps its non-SHACL types in both graphs:
+    it is validated by being a class (an implicit target) and is data by
+    being a class.
     """
-    shape_triples: set[tuple[Node, Node, Node]] = set()
-    for node in shape_nodes(graph):
-        shape_triples |= _closure(graph, node)
+    shapes_set = shape_nodes(graph)
+    shape_triples: set[Triple] = set()
+    for node in shapes_set:
+        shape_triples |= _own_triples(graph, node, shapes_set)
     data, shapes = Graph(), Graph()
     for prefix, namespace in graph.namespaces():
         data.bind(prefix, namespace, override=True)
@@ -117,14 +204,14 @@ def split_shapes(graph: Graph) -> tuple[Graph, Graph]:
     for triple in graph:
         if triple in shape_triples:
             shapes.add(triple)
-            if (
-                triple[1] == RDF.type
-                and not isinstance(triple[0], BNode)
-                and triple[2] not in (SH.NodeShape, SH.PropertyShape)
-            ):
-                data.add(triple)
         else:
             data.add(triple)
+            if (
+                triple[1] == RDF.type
+                and triple[0] in shapes_set
+                and triple[2] not in _SHAPE_TYPES
+            ):
+                shapes.add(triple)
     return data, shapes
 
 
@@ -149,25 +236,31 @@ def _short(graph: Graph, node: Node) -> str:
     return f"_:{node}"
 
 
+def _shape_closure(graph: Graph, node: Node, shapes: set[Node]) -> set[Triple]:
+    """A shape with every shape it refers to, as one readable whole."""
+    triples: set[Triple] = set()
+    for shape in _reachable(graph, node):
+        triples |= _own_triples(graph, shape, shapes)
+    return triples
+
+
 def list_shapes(graph: Graph) -> list[ShapeInfo]:
-    """The top-level shapes: those no other shape nests through sh:property."""
-    nodes = shape_nodes(graph)
-    nested = {o for o in graph.objects(None, SH.property)}
+    """The top-level shapes: those no other shape refers to."""
+    shapes = shape_nodes(graph)
     result = []
-    for node in nodes - nested:
+    for node in _top_level(graph, shapes):
         label = graph.value(node, RDFS.label)
         targets = tuple(
-            f"{graph.namespace_manager.normalizeUri(pred).split(':')[-1]} "
-            f"{_short(graph, obj)}"
+            f"{str(pred).rsplit('#', 1)[-1]} {_short(graph, obj)}"
             for pred in _TARGETS
             for obj in graph.objects(node, pred)
         )
-        closure = _closure(graph, node)
+        closure = _shape_closure(graph, node, shapes)
         constraints = sum(
             1
             for _, pred, _ in closure
             if str(pred).startswith(str(SH))
-            and pred not in (*_TARGETS, SH.property, SH.path, SH.name)
+            and pred not in (*_TARGETS, *_SHAPE_REFS, SH.path, SH.name)
         )
         kind = (
             "Property shape"
@@ -189,11 +282,11 @@ def list_shapes(graph: Graph) -> list[ShapeInfo]:
 
 
 def shape_turtle(graph: Graph, node: Node) -> str:
-    """One shape as Turtle, for reading."""
+    """One shape, with the shapes it refers to, as Turtle for reading."""
     out = Graph()
     for prefix, namespace in graph.namespaces():
         out.bind(prefix, namespace, override=True)
-    for triple in _closure(graph, node):
+    for triple in _shape_closure(graph, node, shape_nodes(graph)):
         out.add(triple)
     return out.serialize(format="turtle")
 
@@ -212,11 +305,15 @@ def _refuse_network(shapes: Graph) -> None:
                 )
 
 
-def parse_shapes(text: str, format: str = "turtle") -> Graph:
+def parse_shapes(
+    text: str, format: str = "turtle", deadline_s: float = DEFAULT_DEADLINE_SECONDS
+) -> Graph:
     """Parse and vet shapes before they are added or run.
 
-    Refuses text that does not parse, holds no shape, does not conform to the
-    SHACL meta-shapes (SHACL for SHACL), or would query another server.
+    Refuses text that does not parse, holds no shape, would query another
+    server, or does not conform to the SHACL meta-shapes (SHACL for SHACL).
+    The meta-shapes check runs in the worker, under the same time limit as a
+    check.
     """
     shapes = Graph()
     try:
@@ -229,30 +326,16 @@ def parse_shapes(text: str, format: str = "turtle") -> Graph:
             "or nodes with a target such as sh:targetClass."
         )
     _refuse_network(shapes)
-    from pyshacl import validate
-    from pyshacl.errors import ReportableRuntimeError
-
-    # A copy: the meta-shapes check mixes RDFS triples into the shapes graph it
-    # is given (owl:Class rdfs:subClassOf rdfs:Class and the like), and those
-    # must not ride along into the ontology.
-    scratch = Graph()
-    for triple in shapes:
-        scratch.add(triple)
-    try:
-        validate(
-            Graph(),
-            shacl_graph=scratch,
-            meta_shacl=True,
-            inference="none",
-            do_owl_imports=False,
-            advanced=False,
-            js=False,
+    outcome = _in_worker(Graph(), shapes, meta=True, deadline_s=deadline_s)
+    if "timeout" in outcome:
+        raise ShapesError(
+            f"Checking the shapes did not finish within {deadline_s:g} seconds."
         )
-    except ReportableRuntimeError as exc:
-        # pySHACL raises, rather than returning conforms=False, when the
-        # shapes themselves fail SHACL-for-SHACL; its message is the report.
-        report = str(exc).split("Validation Report", 1)[-1].strip()
-        raise ShapesError(f"The shapes are not valid SHACL.\n\n{report}") from exc
+    if "invalid" in outcome:
+        report = outcome["invalid"].split("Validation Report", 1)[-1].strip()
+        raise ShapesError(f"The shapes are not valid SHACL.\n\n{report}")
+    if "failure" in outcome:
+        raise ShapesError(f"pySHACL could not check these shapes: {outcome['failure']}")
     return shapes
 
 
@@ -277,23 +360,156 @@ def add_shapes(graph: Graph, shapes: Graph) -> int:
 
 
 def remove_shape(graph: Graph, node: Node) -> int:
-    """Remove one shape, leaving anything another shape still uses.
+    """Remove one top-level shape and what only it uses.
 
-    Its blank-node structure can be shared (one ``sh:in`` list, one nested
-    property shape); triples another shape still reaches stay.
+    The shapes it refers to go with it unless another top-level shape still
+    reaches them, and structure another shape shares (one ``sh:in`` list)
+    stays. A class that is also a shape stays a class: only what makes it a
+    shape is removed. Data the shape mentions is never touched.
     """
-    mine = _closure(graph, node)
-    others: set[tuple[Node, Node, Node]] = set()
-    for other in shape_nodes(graph) - {node}:
-        others |= _closure(graph, other)
-    removed = 0
-    for triple in mine - others:
-        # A class that is also a shape stays a class: only the shape typing goes.
-        if triple[1] == RDF.type and triple[2] not in (SH.NodeShape, SH.PropertyShape):
-            continue
+    shapes = shape_nodes(graph)
+    kept_reach: set[Node] = set()
+    for other in _top_level(graph, shapes) - {node}:
+        kept_reach |= _reachable(graph, other)
+    owned = _reachable(graph, node) - kept_reach
+    doomed: set[Triple] = set()
+    for shape in owned:
+        doomed |= _own_triples(graph, shape, shapes)
+    for shape in kept_reach:
+        doomed -= _own_triples(graph, shape, shapes)
+    for triple in doomed:
         graph.remove(triple)
-        removed += 1
-    return removed
+    return len(doomed)
+
+
+# -- the worker --------------------------------------------------------------------
+
+
+def _in_worker(
+    data: Graph, shapes: Graph, *, meta: bool, deadline_s: float
+) -> dict[str, Any]:
+    """Run pySHACL in a fresh worker process, killed if the deadline passes.
+
+    A subprocess per check (see :mod:`.shacl_worker`): it starts in a fraction
+    of a second, and killing it is the whole of the cleanup.
+    """
+    request = json.dumps(
+        {
+            "data_nt": data.serialize(format="nt"),
+            "shapes_nt": shapes.serialize(format="nt"),
+            "prefixes": [(p, str(n)) for p, n in shapes.namespaces()],
+            "meta": meta,
+        }
+    )
+    # The package's own location first, so the worker imports this copy of it
+    # whether or not it is installed (a checkout run with streamlit run).
+    env = dict(os.environ)
+    package_root = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [package_root, *filter(None, [env.get("PYTHONPATH")])]
+    )
+    worker = subprocess.Popen(
+        [sys.executable, "-m", "orionbelt_ontology_builder.shacl_worker"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env=env,
+    )
+    try:
+        out, err = worker.communicate(request, timeout=deadline_s)
+    except subprocess.TimeoutExpired:
+        worker.kill()
+        worker.communicate()
+        return {"timeout": True}
+    if worker.returncode != 0:
+        tail = (err or "").strip().splitlines()[-1:] or ["no output"]
+        return {"failure": f"the SHACL worker stopped ({tail[0]})"}
+    try:
+        result: dict[str, Any] = json.loads(out)
+    except json.JSONDecodeError:
+        return {"failure": "the SHACL worker returned no readable result"}
+    return result
+
+
+def _validate_in_worker(
+    data_nt: str, shapes_nt: str, prefixes: list[tuple[str, str]], meta: bool
+) -> dict[str, Any]:
+    """The worker's side: validate, and hand back plain data.
+
+    Results are turned into dictionaries here, where the shapes graph is, so
+    shape labels and identities are worked out against the same blank nodes
+    the report names.
+    """
+    from pyshacl import validate
+    from pyshacl.errors import ReportableRuntimeError
+
+    data = Graph().parse(data=data_nt, format="nt")
+    shapes = Graph().parse(data=shapes_nt, format="nt")
+    for prefix, namespace in prefixes:
+        shapes.bind(prefix, namespace, override=True)
+    try:
+        conforms, report, text = validate(
+            data,
+            shacl_graph=shapes,
+            meta_shacl=meta,
+            inference="none",
+            abort_on_first=False,
+            allow_infos=True,
+            allow_warnings=True,
+            do_owl_imports=False,
+            advanced=False,
+            js=False,
+        )
+    except ReportableRuntimeError as exc:
+        return {"invalid": str(exc)} if meta else {"failure": str(exc)}
+    except Exception as exc:  # noqa: BLE001 - reported to the user, not raised
+        return {"failure": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(report, Graph):
+        # pySHACL hands back a ValidationFailure rather than raising when a
+        # constraint cannot be evaluated.
+        return {"failure": str(report) or str(text)}
+    for prefix, namespace in prefixes:
+        report.bind(prefix, namespace, override=True)
+    return {
+        "conforms": bool(conforms),
+        "results": _result_rows(report, shapes),
+        "report_ttl": report.serialize(format="turtle"),
+    }
+
+
+def _result_rows(report: Graph, shapes: Graph) -> list[dict[str, Any]]:
+    rows = []
+    for result in report.subjects(RDF.type, SH.ValidationResult):
+        focus = report.value(result, SH.focusNode)
+        if focus is None:
+            continue
+        shape = report.value(result, SH.sourceShape)
+        path = report.value(result, SH.resultPath)
+        value = report.value(result, SH.value)
+        component = report.value(result, SH.sourceConstraintComponent)
+        severity = report.value(result, SH.resultSeverity)
+        description = shapes.value(shape, SH.description) if shape is not None else None
+        rows.append(
+            {
+                "focus": str(focus),
+                "focus_is_uri": isinstance(focus, URIRef),
+                "severity": str(severity) if severity is not None else None,
+                "path": _short(shapes, path) if path is not None else None,
+                "value": str(value) if value is not None else None,
+                "component": str(component) if component is not None else None,
+                "shape": shape_label(shapes, shape) if shape is not None else None,
+                # The shape itself, not its label: two property shapes on one
+                # path read the same and are still two shapes.
+                "shape_id": str(shape) if shape is not None else None,
+                "messages": sorted(
+                    str(m) for m in report.objects(result, SH.resultMessage)
+                ),
+                "description": str(description) if description is not None else None,
+            }
+        )
+    return rows
 
 
 # -- running ---------------------------------------------------------------------
@@ -303,7 +519,8 @@ def remove_shape(graph: Graph, node: Node) -> int:
 class ShaclRun:
     conforms: bool | None
     findings: list[QualityFinding] = field(default_factory=list)
-    report: Graph | None = None
+    #: The full validation report, as Turtle, for download.
+    report_ttl: str | None = None
     duration_ms: float = 0.0
     #: Why the run did not complete: a timeout, or shapes pySHACL rejected.
     error: str | None = None
@@ -324,8 +541,9 @@ def run_shacl(
     ``kind`` and ``name`` resolve a focus node for navigation and display;
     the caller has the ontology context to do that.
     """
-    run = ShaclRun(conforms=None, shapes_checked=len(shape_nodes(shapes)))
-    if not run.shapes_checked:
+    all_shapes = shape_nodes(shapes)
+    run = ShaclRun(conforms=None, shapes_checked=len(_top_level(shapes, all_shapes)))
+    if not all_shapes:
         run.conforms = True
         return run
     try:
@@ -333,84 +551,57 @@ def run_shacl(
     except ShapesError as exc:
         run.error = str(exc)
         return run
-    from pyshacl import validate
-
     began = time.monotonic()
-    # Same identifier as the data graph: the memory store answers a lookup only
-    # for the graph it is asked about, so a fresh identifier would see nothing.
-    bounded = Graph(
-        store=_DeadlineStore(data.store, began + deadline_s),
-        identifier=data.identifier,
-    )
-    try:
-        conforms, report, _ = validate(
-            bounded,
-            shacl_graph=shapes,
-            inference="none",
-            abort_on_first=False,
-            allow_infos=True,
-            allow_warnings=True,
-            do_owl_imports=False,
-            advanced=False,
-            js=False,
-        )
-    except QueryTimeout:
+    outcome = _in_worker(data, shapes, meta=False, deadline_s=deadline_s)
+    run.duration_ms = (time.monotonic() - began) * 1000
+    if "timeout" in outcome:
         run.error = (
             f"The check did not finish within {deadline_s:g} seconds and was "
             "stopped. Narrow the shapes' targets, or check fewer shapes at once."
         )
         return run
-    except Exception as exc:  # noqa: BLE001 - pySHACL failures are reported, not raised
-        run.error = f"pySHACL could not run these shapes: {exc}"
+    if "failure" in outcome or "invalid" in outcome:
+        run.error = (
+            "pySHACL could not run these shapes: "
+            f"{outcome.get('failure') or outcome.get('invalid')}"
+        )
         return run
-    finally:
-        run.duration_ms = (time.monotonic() - began) * 1000
-    run.conforms = bool(conforms)
-    run.report = report
-    run.findings = _findings(report, shapes, origin, kind, name)
+    run.conforms = outcome["conforms"]
+    run.report_ttl = outcome["report_ttl"]
+    run.findings = _findings(outcome["results"], origin, kind, name)
     return run
 
 
 def _findings(
-    report: Graph,
-    shapes: Graph,
+    rows: list[dict[str, Any]],
     origin: str,
     kind: Callable[[str], str | None] | None,
     name: Callable[[str], str] | None,
 ) -> list[QualityFinding]:
     findings: dict[tuple[str, str, str], QualityFinding] = {}
-    for result in report.subjects(RDF.type, SH.ValidationResult):
-        focus = report.value(result, SH.focusNode)
-        if focus is None:
-            continue
-        severity_iri = report.value(result, SH.resultSeverity)
-        severity = _SEVERITY.get(severity_iri, "error") if severity_iri else "error"
-        path = report.value(result, SH.resultPath)
-        value = report.value(result, SH.value)
-        shape = report.value(result, SH.sourceShape)
-        component = report.value(result, SH.sourceConstraintComponent)
-        messages = [str(m) for m in report.objects(result, SH.resultMessage)]
-        focus_str = str(focus) if isinstance(focus, URIRef) else f"_:{focus}"
-        shown = name(focus_str) if name and isinstance(focus, URIRef) else focus_str
-        detail = messages[0] if messages else _component_text(component)
-        on_path = f" ({_short(shapes, path)})" if path is not None else ""
+    for row in rows:
+        focus = row["focus"] if row["focus_is_uri"] else f"_:{row['focus']}"
+        shown = name(focus) if name and row["focus_is_uri"] else focus
+        detail = (
+            row["messages"][0] if row["messages"] else _component_text(row["component"])
+        )
+        on_path = f" ({row['path']})" if row["path"] else ""
         finding = QualityFinding(
             rule_id=SHACL_RULE_ID,
-            severity=severity,
-            resource=focus_str,
-            resource_kind=kind(focus_str)
-            if kind and isinstance(focus, URIRef)
-            else None,
+            severity=_SEVERITY.get(row["severity"] or "", "error"),
+            resource=focus,
+            resource_kind=kind(focus) if kind and row["focus_is_uri"] else None,
             message=f"'{shown}'{on_path}: {detail}",
             evidence={
-                "severity": str(severity_iri) if severity_iri else None,
-                "path": _short(shapes, path) if path is not None else None,
-                "value": str(value) if value is not None else None,
-                "component": str(component) if component is not None else None,
-                "shape": shape_label(shapes, shape) if shape is not None else None,
+                "severity": row["severity"],
+                "path": row["path"],
+                "value": row["value"],
+                "component": row["component"],
+                "shape": row["shape"],
+                "shape_id": row["shape_id"],
             },
-            suggestion=_shape_description(shapes, shape),
-            source_shape=shape_label(shapes, shape) if shape is not None else None,
+            suggestion=row["description"],
+            source_shape=row["shape"],
             origin=origin,  # type: ignore[arg-type]
         )
         findings.setdefault(finding.key, finding)
@@ -421,20 +612,11 @@ def _findings(
     )
 
 
-def _component_text(component: Node | None) -> str:
-    if component is None:
+def _component_text(component: str | None) -> str:
+    if not component:
         return "does not conform to the shape."
-    local = str(component).rsplit("#", 1)[-1].removesuffix("ConstraintComponent")
+    local = component.rsplit("#", 1)[-1].removesuffix("ConstraintComponent")
     return f"violates {local}."
-
-
-def _shape_description(shapes: Graph, shape: Node | None) -> str | None:
-    """A shape's sh:description, as the suggestion. Its sh:message is already
-    the finding's message, through pySHACL's sh:resultMessage."""
-    if shape is None:
-        return None
-    text = shapes.value(shape, SH.description)
-    return str(text) if text is not None else None
 
 
 def shape_label(shapes: Graph, shape: Node) -> str:
@@ -448,14 +630,3 @@ def shape_label(shapes: Graph, shape: Node) -> str:
             return f"{shape_label(shapes, parent)} › {where}"
     label = shapes.value(shape, RDFS.label)
     return str(label) if label else _short(shapes, shape)
-
-
-def shapes_from(graphs: Iterable[Graph]) -> Graph:
-    """Several shapes graphs as one."""
-    merged = Graph()
-    for g in graphs:
-        for prefix, namespace in g.namespaces():
-            merged.bind(prefix, namespace, override=False)
-        for triple in g:
-            merged.add(triple)
-    return merged

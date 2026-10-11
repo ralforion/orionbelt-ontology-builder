@@ -1,7 +1,9 @@
 """General SHACL: shapes in the ontology, shapes added to it, checks against them."""
 
+import time
+
 import pytest
-from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
 from streamlit.testing.v1 import AppTest
 
@@ -347,3 +349,188 @@ def test_adding_shapes_does_not_give_a_namespace_a_second_prefix():
     shacl.add_shapes(om.graph, shacl.parse_shapes(PERSON_SHAPE))  # declares q:
     prefixes = [p for p, n in om.graph.namespaces() if str(n) == str(Q)]
     assert len(prefixes) == 1
+
+
+# -- review fixes (PR #506) ------------------------------------------------------------
+
+PREFIXES = """
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix q: <http://test.org/q#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+"""
+
+
+def _with_shapes(om, text):
+    shacl.add_shapes(om.graph, shacl.parse_shapes(PREFIXES + text))
+
+
+def test_a_blank_node_target_stays_data_and_survives_removal():
+    """#1: sh:targetNode names data; neither split nor remove may take it."""
+    om = _people()
+    person = BNode()
+    om.graph.add((person, RDF.type, Q.Person))
+    om.graph.add((person, Q.name, Literal("Anon")))
+    om.graph.add((Q.S, RDF.type, SH.NodeShape))
+    om.graph.add((Q.S, SH.targetNode, person))
+    data, shapes = shacl.split_shapes(om.graph)
+    assert (person, Q.name, Literal("Anon")) in data
+    assert (person, Q.name, Literal("Anon")) not in shapes
+    shacl.remove_shape(om.graph, Q.S)
+    assert (person, Q.name, Literal("Anon")) in om.graph
+
+
+def test_the_deadline_stops_a_runaway_regex():
+    """#2: the time is spent inside re, where no clock check can interrupt it;
+    only stopping the worker can."""
+    om = _people()
+    om.graph.add((Q.alice, Q.name, Literal("a" * 30 + "!")))
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; "
+        'sh:property [ sh:path q:name ; sh:pattern "^(a+)+$" ] .',
+    )
+    began = time.monotonic()
+    run = _check(om, deadline_s=1.0)
+    assert time.monotonic() - began < 5
+    assert run.conforms is None and "did not finish" in run.error
+    # The next check gets a fresh worker and works.
+    om.graph.remove((Q.alice, Q.name, None))
+    om.graph.add((Q.alice, Q.name, Literal("aaa")))
+    assert _check(om).error is None
+
+
+def test_a_named_helper_shape_is_a_shape():
+    """#3: q:Helper behind sh:node is structure, not data."""
+    om = _people()
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; sh:node q:Helper .\n"
+        "q:Helper sh:property [ sh:path q:name ; sh:minCount 1 ] .",
+    )
+    data, shapes = shacl.split_shapes(om.graph)
+    assert (Q.Helper, SH.property, None) in shapes
+    assert (Q.Helper, SH.property, None) not in data
+    assert _check(om).conforms is False  # alice has no name
+    assert [s.name for s in shacl.list_shapes(om.graph)] == [":S"]
+
+
+def test_a_returned_validation_failure_is_reported_not_raised():
+    """#4: pySHACL returns a ValidationFailure for some SPARQL constraints."""
+    om = _people()
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; sh:sparql [ "
+        'sh:select "SELECT $this WHERE { $this ?p ?o MINUS { $this ?p ?o } }" ] .',
+    )
+    run = _check(om)
+    assert run.findings == [] and (run.error is None or "could not run" in run.error)
+
+
+def test_warnings_show_even_when_the_data_conforms():
+    """#5 (engine side): a warning-only run conforms and still has findings."""
+    om = _people()
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; sh:property [ "
+        "sh:path q:name ; sh:minCount 1 ; sh:severity sh:Warning ] .",
+    )
+    run = _check(om)
+    assert run.conforms is True
+    assert [f.severity for f in run.findings] == ["warning"]
+    assert run.report_ttl
+
+
+def test_two_shapes_on_one_path_are_two_findings():
+    """#6: same focus, same path, same label, different shapes."""
+    om = _people()
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; "
+        "sh:property [ sh:path q:boss ; sh:minCount 1 ; sh:message 'needs a boss' ] ; "
+        "sh:property [ sh:path q:boss ; sh:class q:Manager ; sh:minCount 1 ; "
+        "sh:message 'needs a boss' ] .",
+    )
+    findings = [f for f in _check(om).findings if f.resource == str(Q.alice)]
+    assert len({f.evidence["shape_id"] for f in findings}) == len(findings) >= 2
+
+
+def test_a_pure_shapes_label_belongs_to_the_shape():
+    """#7: a labelled shape targeting subjects of rdfs:label must not check
+    itself, and the shapes-only export keeps its label."""
+    om = _people()
+    _with_shapes(
+        om,
+        'q:S a sh:NodeShape ; rdfs:label "Labels are short" ; '
+        "sh:targetSubjectsOf rdfs:label ; "
+        "sh:property [ sh:path rdfs:label ; sh:maxLength 6 ] .",
+    )
+    data, shapes = shacl.split_shapes(om.graph)
+    assert (Q.S, RDFS.label, None) in shapes and (Q.S, RDFS.label, None) not in data
+    focus = {f.resource for f in _check(om).findings}
+    assert str(Q.S) not in focus
+    exported = Graph().parse(
+        data=om.export_to_string(content="shapes"), format="turtle"
+    )
+    assert (Q.S, RDFS.label, Literal("Labels are short")) in exported
+
+
+def test_removing_a_shape_takes_its_typed_children():
+    """#8: an exclusively owned [a sh:PropertyShape] child goes with it."""
+    om = _people()
+    before = set(om.graph)
+    _with_shapes(
+        om,
+        "q:S a sh:NodeShape ; sh:targetClass q:Person ; "
+        "sh:property [ a sh:PropertyShape ; sh:path q:name ; sh:minCount 1 ] .",
+    )
+    assert len(shacl.list_shapes(om.graph)) == 1
+    shacl.remove_shape(om.graph, Q.S)
+    assert shacl.list_shapes(om.graph) == []
+    assert {t for t in om.graph if t not in before} == set()
+
+
+def test_a_helper_two_shapes_share_outlives_one_of_them():
+    om = _people()
+    _with_shapes(
+        om,
+        "q:A a sh:NodeShape ; sh:targetClass q:Person ; sh:node q:Helper .\n"
+        "q:B a sh:NodeShape ; sh:targetNode q:alice ; sh:node q:Helper .\n"
+        "q:Helper sh:property [ sh:path q:name ; sh:minCount 1 ] .",
+    )
+    shacl.remove_shape(om.graph, Q.A)
+    assert (Q.Helper, SH.property, None) in om.graph
+    shacl.remove_shape(om.graph, Q.B)
+    assert (Q.Helper, SH.property, None) not in om.graph
+
+
+WARNING_SHAPE = PERSON_SHAPE.replace(
+    "sh:minCount 1 ;", "sh:minCount 1 ; sh:severity sh:Warning ;"
+)
+
+
+def test_page_lists_warnings_when_the_data_conforms():
+    """#5 (page side)."""
+    at = AppTest.from_function(_shacl_page)
+    at.run(timeout=120)
+    at.text_area[0].set_value(WARNING_SHAPE).run()
+    _button(at, "Check shapes").click().run()
+    _button(at, "Add to ontology").click().run()
+    _button(at, "Run SHACL check").click().run()
+    assert any("see the notes below" in s.value for s in at.success)
+    assert any("exactly one name" in md.value for md in at.markdown)
+
+
+def test_page_marks_results_stale_when_one_off_shapes_change():
+    """#9."""
+    at = AppTest.from_function(_shacl_page)
+    at.run(timeout=120)
+    at.text_area[0].set_value(WARNING_SHAPE).run()
+    _button(at, "Check shapes").click().run()
+    _button(at, "Use for one check").click().run()
+    _button(at, "Run SHACL check").click().run()
+    assert not at.warning
+    at.text_area[0].set_value(PERSON_SHAPE).run()
+    _button(at, "Check shapes").click().run()
+    _button(at, "Use for one check").click().run()
+    assert any("one-off shapes changed" in w.value for w in at.warning)
