@@ -376,3 +376,67 @@ def test_necessary_restrictions_in_every_intersection_style(style):
     _thing(om, "good", Q.A, p=c)
     _thing(om, "bad", Q.A)
     assert _violations(om)[0] == {"bad"}
+
+
+# -- review fixes, second round (PR #509) ----------------------------------------------
+
+
+def _range_check(declared, value):
+    om = _om()
+    om.graph.add((Q.v, RDFS.range, declared))
+    _thing(om, "t", v=value)
+    return _violations(om)[0] == set()
+
+
+@pytest.mark.parametrize(
+    ("declared", "value", "ok"),
+    [
+        (XSD.integer, Literal("3.0", datatype=XSD.decimal), True),
+        (XSD.integer, Literal("3.5", datatype=XSD.decimal), False),
+        (XSD.nonNegativeInteger, Literal("3", datatype=XSD.int), True),
+        (XSD.nonNegativeInteger, Literal("-3", datatype=XSD.int), False),
+        (XSD.positiveInteger, Literal("0", datatype=XSD.integer), False),
+        (XSD.byte, Literal("127", datatype=XSD.integer), True),
+        (XSD.byte, Literal("128", datatype=XSD.integer), False),
+        (XSD.unsignedShort, Literal("65535", datatype=XSD.long), True),
+        (XSD.decimal, Literal("2.5", datatype=XSD.decimal), True),
+        (XSD.decimal, Literal("2.5", datatype=XSD.double), False),
+    ],
+)
+def test_numeric_values_are_checked_by_value_not_datatype(declared, value, ok):
+    """#1: value-space membership, across numeric datatypes."""
+    assert _range_check(declared, value) is ok
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        (Literal("1/3", datatype=OWL.rational), True),
+        (Literal("-2/4", datatype=OWL.rational), True),
+        (Literal("1/0", datatype=OWL.rational), False),
+        (Literal("one third", datatype=OWL.rational), False),
+        (Literal("not a real", datatype=OWL.real), False),
+        (Literal("2.5", datatype=XSD.decimal), True),
+    ],
+)
+def test_owl_numeric_literals_are_validated(value, ok):
+    """#3: owl:rational has a syntax to check; owl:real has no literals of its own."""
+    assert _range_check(OWL.real, value) is ok
+
+
+def test_a_named_restriction_is_still_a_restriction():
+    """#2: Person ⊑ ex:NameRequired, where ex:NameRequired is a restriction."""
+    om = _om()
+    _declare(om, "Person")
+    om.graph.add((Q.NameRequired, RDF.type, OWL.Restriction))
+    om.graph.add((Q.NameRequired, OWL.onProperty, Q.name))
+    om.graph.add((Q.NameRequired, OWL.minCardinality, Literal(1)))
+    om.graph.add((Q.Person, RDFS.subClassOf, Q.NameRequired))
+    _thing(om, "alice", Q.Person)
+    _thing(om, "bob", Q.Person, name=Literal("Bob"))
+    assert _violations(om)[0] == {"alice"}
+
+
+def test_rdfs_resource_is_no_constraint():
+    """#4: everything is an rdfs:Resource, literals included."""
+    assert _range_check(RDFS.Resource, Literal("plain"))

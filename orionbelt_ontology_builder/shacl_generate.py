@@ -77,6 +77,30 @@ _XSD_DERIVED: dict[URIRef, tuple[URIRef, ...]] = {
 #: A datatype whose value space is "every literal": checked by node kind.
 ANY_LITERAL = "any literal"
 
+#: Value bounds of the bounded integer types (XSD 1.1 Part 2, 3.4).
+_BOUNDS: dict[URIRef, tuple[int | None, int | None]] = {
+    XSD.nonPositiveInteger: (None, 0),
+    XSD.negativeInteger: (None, -1),
+    XSD.long: (-(2**63), 2**63 - 1),
+    XSD.int: (-(2**31), 2**31 - 1),
+    XSD.short: (-(2**15), 2**15 - 1),
+    XSD.byte: (-(2**7), 2**7 - 1),
+    XSD.nonNegativeInteger: (0, None),
+    XSD.positiveInteger: (1, None),
+    XSD.unsignedLong: (0, 2**64 - 1),
+    XSD.unsignedInt: (0, 2**32 - 1),
+    XSD.unsignedShort: (0, 2**16 - 1),
+    XSD.unsignedByte: (0, 2**8 - 1),
+}
+
+#: A decimal literal whose value is a whole number: ``3``, ``-3``, ``3.0``, ``3.``.
+_INTEGRAL = r"^[+-]?[0-9]+(\.0*)?$"
+#: An ``owl:rational`` literal: ``n/d`` with a non-zero denominator.
+_RATIONAL = r"^[+-]?[0-9]+/[0-9]*[1-9][0-9]*$"
+
+#: Classes every resource belongs to: no constraint at all, literals included.
+_UNIVERSAL = (OWL.Thing, RDFS.Resource)
+
 
 def _with_derived(datatype: URIRef) -> set[URIRef]:
     found = {datatype}
@@ -87,6 +111,13 @@ def _with_derived(datatype: URIRef) -> set[URIRef]:
                 found.add(child)
                 frontier.append(child)
     return found
+
+
+#: The numeric types checked by value rather than by datatype IRI: a value
+#: belongs to ``xsd:integer`` whether it is written ``"3"^^xsd:int`` or
+#: ``"3.0"^^xsd:decimal``.
+_DECIMAL_FAMILY: frozenset[URIRef] = frozenset(_with_derived(XSD.decimal))
+_INTEGER_FAMILY: frozenset[URIRef] = frozenset(_with_derived(XSD.integer))
 
 
 def accepted_datatypes(graph: Graph, datatype: URIRef) -> set[URIRef] | str | None:
@@ -198,7 +229,7 @@ class _Generator:
 
     def supported(self, filler: Node) -> bool:
         """Whether a value constraint for ``filler`` can be stated faithfully."""
-        if not isinstance(filler, URIRef) or filler == OWL.Thing:
+        if not isinstance(filler, URIRef) or filler in _UNIVERSAL:
             return False
         if _is_data_range(self.model, filler):
             return accepted_datatypes(self.model, filler) is not None
@@ -212,6 +243,9 @@ class _Generator:
             return
         if not _is_data_range(self.model, filler):
             self.out.add((node, SH["class"], filler))
+            return
+        if filler in _DECIMAL_FAMILY or filler in (OWL.real, OWL.rational):
+            self.constrain_number(node, filler)
             return
         accepted = accepted_datatypes(self.model, filler)
         if accepted == ANY_LITERAL:
@@ -227,6 +261,38 @@ class _Generator:
             head = BNode()
             Collection(self.out, head, alternatives)
             self.out.add((node, SH["or"], head))
+
+    def constrain_number(self, node: Node, target: URIRef) -> None:
+        """A numeric value of ``target``'s value space, whatever its datatype.
+
+        Any decimal-family literal is accepted, then held to what ``target``
+        asks of its value: a whole number for the integer types (a pattern
+        on the lexical form) and the type's bounds (inclusive limits, which
+        compare values across numeric datatypes). ``owl:real`` and
+        ``owl:rational`` also take an ``owl:rational`` literal of the form
+        ``n/d``; ``owl:real`` has no literals of its own (OWL 2 syntax, 4.1),
+        so ``"…"^^owl:real`` is not a value.
+        """
+        alternatives: list[Node] = []
+        for datatype in sorted(_DECIMAL_FAMILY, key=str):
+            alternative = BNode()
+            self.out.add((alternative, SH.datatype, datatype))
+            alternatives.append(alternative)
+        if target in (OWL.real, OWL.rational):
+            rational = BNode()
+            self.out.add((rational, SH.datatype, OWL.rational))
+            self.out.add((rational, SH.pattern, Literal(_RATIONAL)))
+            alternatives.append(rational)
+        head = BNode()
+        Collection(self.out, head, alternatives)
+        self.out.add((node, SH["or"], head))
+        if target in _INTEGER_FAMILY:
+            self.out.add((node, SH.pattern, Literal(_INTEGRAL)))
+        low, high = _BOUNDS.get(target, (None, None))
+        if low is not None:
+            self.out.add((node, SH.minInclusive, Literal(low)))
+        if high is not None:
+            self.out.add((node, SH.maxInclusive, Literal(high)))
 
     def value_shape(self, filler: Node) -> BNode | None:
         """A shape a value has to meet to be of ``filler``, or None."""
@@ -259,17 +325,27 @@ class _Generator:
         """
         necessary: list[tuple[Node, Node]] = []
         for cls, expr in self.model.subject_objects(RDFS.subClassOf):
-            if isinstance(cls, URIRef) and isinstance(expr, BNode):
+            if isinstance(cls, URIRef) and self.is_expression(expr):
                 necessary.append((cls, expr))
         for a, b in self.model.subject_objects(OWL.equivalentClass):
-            if isinstance(a, URIRef) and isinstance(b, BNode):
+            # Either side may be the named class; a named restriction is an
+            # expression, not the class it constrains.
+            if (
+                isinstance(a, URIRef)
+                and not self.is_restriction(a)
+                and self.is_expression(b)
+            ):
                 necessary.append((a, b))
-            elif isinstance(b, URIRef) and isinstance(a, BNode):
+            if (
+                isinstance(b, URIRef)
+                and not self.is_restriction(b)
+                and self.is_expression(a)
+            ):
                 necessary.append((b, a))
         for cls, members in self.model.subject_objects(OWL.intersectionOf):
-            if isinstance(cls, URIRef):
+            if isinstance(cls, URIRef) and not self.is_restriction(cls):
                 for member in _list_items(self.model, members):
-                    if isinstance(member, BNode):
+                    if self.is_expression(member):
                         necessary.append((cls, member))
         seen: set[tuple[Node, Node]] = set()
         for cls, expr in necessary:
@@ -281,13 +357,23 @@ class _Generator:
         if (cls, expr) in seen:
             return
         seen.add((cls, expr))
-        if (expr, OWL.onProperty, None) in self.model:
+        if self.is_restriction(expr):
             yield cls, expr
             return
         for members in self.model.objects(expr, OWL.intersectionOf):
             for member in _list_items(self.model, members):
-                if isinstance(member, BNode):
+                if self.is_expression(member):
                     yield from self._flatten(cls, member, seen)
+
+    def is_restriction(self, node: Node) -> bool:
+        """A restriction, named or anonymous: it has ``owl:onProperty``."""
+        return (node, OWL.onProperty, None) in self.model
+
+    def is_expression(self, node: Node) -> bool:
+        """A class expression to read conditions from: anonymous, or a named
+        restriction (``Person ⊑ ex:NameRequired``). A named class is not one;
+        its own conditions are generated for it."""
+        return isinstance(node, BNode) or self.is_restriction(node)
 
     def restriction(self, cls: Node, restriction: Node) -> None:
         prop = self.model.value(restriction, OWL.onProperty)
