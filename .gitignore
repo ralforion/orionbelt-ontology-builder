@@ -35,6 +35,9 @@ Thumbs.db
 !samples/**/*.ttl
 !samples/**/*.owl
 !samples/**/*.rdf
+# The SHACL shapes the app ships (the SHACL section's built-in sets).
+!orionbelt_ontology_builder/shapes/*.ttl
+!orionbelt_ontology_builder/shapes/**/*.ttl
 
 
 # Playwright MCP session artifacts

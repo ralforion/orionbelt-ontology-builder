@@ -1,0 +1,264 @@
+@prefix : <http://skohub.io/skohub-shacl> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix sdo: <https://schema.org> .
+
+# ConceptScheme
+:ConceptSchemeShape
+  a sh:NodeShape ;
+  sh:targetClass skos:ConceptScheme ;
+  sh:property [
+    sh:path dct:title ;
+    sh:minCount 1;
+    sh:datatype rdf:langString ;
+    sh:message "Concept Scheme has no dct:title with a language tag!" ;
+    sh:severity sh:Warning ;
+    rdfs:comment "This is SkoHub specific" ;
+    sh:group :SkoHub
+  ] ;
+  .
+# Concept
+:ConceptShape
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:property [
+    sh:description "S14 A resource has no more than one value of skos:prefLabel per language tag." ;
+    sh:path skos:prefLabel ;
+    sh:datatype rdf:langString ;
+    sh:uniqueLang true ;
+    sh:message "S14: Each skos:Concept has to provide a unique language for skos:prefLabel" ;
+  ] ;
+  sh:property [
+    sh:name "Concept should provide a skos:prefLabel" ;
+    sh:path skos:prefLabel ;
+    sh:minCount 1;
+    sh:severity sh:Warning ;
+    sh:datatype rdf:langString ;
+    sh:message "S14: A resource has no more than one value of skos:prefLabel per language tag." ;
+    sh:group: :s14 ;
+  ] ;
+  sh:property [
+    sh:deactivated true ;
+    sh:path skos:definition ;
+    sh:minCount 1 ;
+    sh:name "definition" ;
+    sh:severity sh:Warning ;
+    sh:message "A definition should be given."
+  ] ;
+  .
+
+:OrphanConcepts 
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:severity sh:Warning ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:prefixes skos: ;
+    rdfs:comment "Orphan Concept" ;
+    sh:description """
+      An orphan concept is a concept without any associative or hierarchical 
+      relations. It might have attached literals like e.g., labels, but is 
+      not connected to any other resource, lacking valuable context information. 
+      A controlled vocabulary that contains many orphan concepts is less 
+      usable for search and retrieval use cases, because, e.g., no hierarchical 
+      query expansion can be performed on search terms to find documents with 
+      more general content.
+      """ ;
+    sh:message "The concept is not linked from a Concept Scheme or has no link to a Concept Scheme. Neither it has a relation to another concept. If it is a topConcept link it with skos:topConceptOf. Otherwise use one of the other relations." ;
+    sh:severity sh:Info ;
+    sh:select """
+    SELECT $this 
+    WHERE {
+      $this a skos:Concept .
+      FILTER NOT EXISTS {
+        ?this skos:topConceptOf | skos:inScheme ?cs .
+      }
+      FILTER NOT EXISTS {
+        ?cs skos:hasTopConcept ?this .
+      }
+      FILTER NOT EXISTS {
+      {?this skos:broader | skos:broaderTransitive | skos:related | skos:narrower | skos:narrowerTransitive ?other .}
+      }
+    }""" ;
+  ] ;
+.
+
+:AmbiguousNotation
+  a sh:NodeShape ;
+  sh:severity sh:Warning ;
+  sh:targetClass skos:Concept ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:prefixes skos: ;
+    rdfs:comment "Ambiguous Notation References" ;
+    sh:description "Concepts should not have identical skos:notation literals." ;
+    sh:message "the concept has the same notation {$value} as {$path}" ;
+    sh:select """
+    SELECT $this (?other as ?path) ?value
+    WHERE {
+      $this skos:notation ?value  .
+      ?other skos:notation ?value .
+      FILTER ($this != ?other)
+    }""" ;
+  ] ;
+.
+
+:DuplicateNotatationWithinCS
+  a sh:NodeShape ;
+  sh:severity sh:Warning ;
+  sh:targetClass skos:Concept ;
+  sh:sparql [
+    sh:prefixes skos: ;
+    rdfs:comment "Duplicate Notation References within Concept Scheme" ;
+    sh:description "Concepts within the same Concept Scheme should not have identlical skos:notation literals." ;
+    sh:message "the concept has the same notation {$value} as {$path}" ;
+    sh:select """
+    SELECT $this (?other as ?path) ?value
+    WHERE {
+      $this skos:notation ?value  .
+      ?other skos:notation ?value .
+      $this skos:inScheme | skos:topConceptOf ?cs .
+      ?other skos:inScheme | skos:topConceptOf ?cs .
+      FILTER ($this != ?other)
+    }""" ;
+  ] ;
+.
+
+:EmptyLabels
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:severity sh:Warning ;
+  rdfs:comment "Empty Labels" ;
+  sh:description "Labels also need to contain textual information to be useful, thus we find all SKOS labels with length 0 (after removing whitespaces)." ;
+  sh:message "Label with an empty value detected" ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:prefixes skos: ;
+    sh:select """
+    SELECT $this ?path (?lab as ?value) (lang(?lab) as ?lang)
+    WHERE {
+      $this a skos:Concept .
+      {
+      SELECT $this ?path ?lab 
+      WHERE{
+        $this skos:prefLabel | skos:altLabel | skos:hiddenLabel ?lab .
+        $this ?path ?lab .
+        bind ( strlen(?lab) as ?q)
+        FILTER ( ?q=0 )
+        }
+      }
+    }""" ;
+  ] ;
+.
+
+# changed ?this to $this
+# changed sh:message to provide more meaning
+:OverlappingLabels
+  a sh:NodeShape ;
+  sh:deactivated true ; 
+  sh:targetClass skos:Concept ;
+  sh:severity sh:Warning ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:prefixes skos: ;
+    rdfs:comment "Overlapping Labels (concepts with the same label, independent of concept scheme )" ;
+    sh:description "This is a generalization of a recommendation in the SKOS primer, that “no two concepts have the same preferred lexical label in a given language when they belong to the same concept scheme”. This could indicate missing disambiguation information and thus lead to problems in autocompletion application." ;
+    sh:message "Overlapping Labels (there is concept '{$this}' with the same pref label in language '{$lang}' for concept '{$value}')" ;
+    sh:select """
+    SELECT $this (skos:prefLabel AS ?path) (?other as ?value) (lang(?pl) as ?lang)
+    WHERE {
+      ?this  skos:prefLabel ?pl .
+      ?other skos:prefLabel ?opl .
+      ?other a skos:Concept .
+      FILTER ($this != ?other && ?pl = ?opl)
+    }""" ;
+  ] ;
+.
+
+# added | skos:topConceptOf in SPARQL query
+# changed sh:message to provide more meaning
+:OverlappingLabelsInSameConceptScheme
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:severity sh:Warning ;
+  sh:sparql [
+    sh:prefixes skos: ;
+    rdfs:comment "Overlapping labels in the same Concept Scheme (concepts with the same label in the same concept scheme)" ;
+    sh:message "Overlapping labels in the same Concept Scheme (there is concept '{$this}' with the same pref label in language '{$lang}' for concept '{$value}'). Label: '{$pl}" ;
+    sh:select """
+    SELECT $this (skos:prefLabel AS ?path) (?other as ?value) (lang(?pl) as ?lang) $pl
+    WHERE {
+      ?this  skos:prefLabel ?pl .
+      ?other skos:prefLabel ?opl .
+      ?other a skos:Concept .
+      ?this skos:inScheme | skos:topConceptOf ?cs .
+      ?other skos:inScheme | skos:topConceptOf ?cs .
+      FILTER ($this != ?other && ?pl = ?opl)
+    }""" ;
+  ] ;
+.
+
+:TopConceptsHavingBroader
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:severity sh:Warning ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:prefixes skos: ;
+    rdfs:comment "Top concept having broader concept" ;
+    sh:message "The top concept has a broader concept" ;
+    sh:select """
+    SELECT DISTINCT $this
+    WHERE {
+      $this skos:broader | skos:broaderTransitive ?other .
+      ?this skos:topConceptOf ?cs .
+    }""" ;
+  ] ;
+.
+
+:UndocumentedConcepts
+  a sh:NodeShape ;
+  sh:deactivated true ;
+  sh:targetClass skos:Concept ;
+  sh:severity sh:Warning ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:prefixes skos: ;
+    rdfs:label "Undocumented Concept (no concept meaning description)" ;
+    sh:description """The SKOS \"standard\" defines a number of properties useful for documenting the meaning of the concepts in a thesaurus (section 7) also in a human-readable form. Intense use of these properties leads to a well-documented thesaurus which should also improve its quality. 
+      Iteration over all concepts in the vocabulary and find those not using one of skos:note, skos:changeNote, skos:definition, skos:editorialNote, skos:example, skos:historyNote, or skos:scopeNote""" ;
+    sh:message "undocumented concept - none of the skos:notes is used to describe the meaning " ;
+    sh:select """
+    SELECT DISTINCT $this
+    WHERE {
+        $this a skos:Concept .
+        FILTER NOT EXISTS {?this skos:definition|skos:note|skos:example|skos:historyNote|skos:scopeNote ?note}
+    }""" ;
+  ] ;
+.
+
+:SemanticRelationCollection
+  a sh:NodeShape ;
+  sh:sparql [
+    sh:message "S19: The domain of semantic properties cannot be skos:Collection" ;
+    sh:select """
+    SELECT $this
+    WHERE {
+      ?this skos:broader | skos:narrower | skos:related ?c .
+    }""" ;
+  ] ;
+  sh:sparql [
+    sh:message "S20: The range of semantic properties cannot be skos:Collection" ;
+    sh:select """
+    SELECT $this
+    WHERE {
+        ?c skos:broader | skos:narrower | skos:related ?this .
+    }""" ;
+  ] ;
+.
