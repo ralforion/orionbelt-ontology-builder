@@ -273,6 +273,13 @@ Closed-world checks of the data against SHACL shapes, run with
   one-prefLabel-per-language rules as SHACL, kept in agreement with them by
   tests) and **SKOS integrity** and **SKOS best practice** from
   [skohub-shapes](https://github.com/skohub-io/skohub-shapes).
+- **Check individuals against the model** with shapes generated from the
+  ontology's own axioms: cardinality restrictions become minimum and maximum
+  counts, `someValuesFrom` a required value of that class, `allValuesFrom` the
+  class every value must have, `hasValue` a required value, functional
+  properties at most one value, and ranges the class or datatype of values.
+  Generated afresh on every check, never stored, and each finding names the
+  axiom it comes from.
 - Findings name the focus node, path and source shape, open the affected
   entity, and the full validation report downloads as Turtle.
 - Export the ontology with its shapes, without them, or the shapes alone.
@@ -599,14 +606,6 @@ that the hash matches its own label, so a pinned SHA of a genuinely malicious
 release passes. It does not stop a downgrade to a real but ancient version. And
 `actions/checkout` necessarily runs before the check, since nothing can be
 verified before the tree it fetches exists.
-
----
-
-## Roadmap
-
-Not implemented yet, listed here so it is clear what the workbench does *not* do today:
-
-- **SHACL shapes generated from the model.** SHACL checks run against shapes you add or that the ontology carries. Deriving shapes from the ontology's own restrictions, functional properties and ranges, so individuals can be checked against the model with nothing to maintain, is planned (#498).
 
 ---
 
