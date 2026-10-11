@@ -209,3 +209,60 @@ def test_page_copies_a_built_in_set_into_the_ontology():
     assert at.session_state["undo_manager"].can_undo()
     next(b for b in at.button if b.label == "Copy in").click().run()
     assert "already in the ontology" in at.session_state["flash_message"]["message"]
+
+
+# -- review fixes (PR #508) ------------------------------------------------------------
+
+
+def test_copying_skos_shapes_keeps_the_ontologys_identity():
+    """#1: skohub declares skos: an owl:Ontology; copied in, it took over the
+    ontology's namespace after an export and a reload."""
+    om = OntologyManager(base_uri=str(Q))
+    om.add_class("Mine", label="Mine")
+    shacl.add_shapes(om.graph, shacl.load_bundled("skos"))
+    assert (None, RDF.type, OWL.Ontology) in om.graph
+    ontologies = set(om.graph.subjects(RDF.type, OWL.Ontology))
+    assert URIRef("http://www.w3.org/2004/02/skos/core#") not in ontologies
+    again = OntologyManager()
+    again.load_from_string(om.export_to_string(format="xml"), format="xml")
+    assert again.base_uri == str(Q)
+    # The prefix declarations its SPARQL constraints need did come along.
+    data, shapes = shacl.split_shapes(om.graph)
+    assert shacl.run_shacl(data, shapes, origin="shacl:ontology").error is None
+
+
+def test_q010_reports_each_language_from_the_shapes_too():
+    """#2: two over-full languages are two findings, from the shape as from the rule."""
+    om = OntologyManager(base_uri=str(Q))
+    om.graph.add((Q.c, RDF.type, SKOS.Concept))
+    for text, lang in (("One", "en"), ("Two", "en"), ("Eins", "de"), ("Zwei", "de")):
+        om.graph.add((Q.c, SKOS.prefLabel, Literal(text, lang=lang)))
+    data, _ = shacl.split_shapes(om.graph)
+    run = shacl.run_shacl(data, shacl.load_bundled("policy"), origin="shacl:bundled")
+    q010 = [f for f in run.findings if f.source_shape == POLICY["Q010"]]
+    assert len(q010) == 2
+
+
+def test_q010_counts_literal_labels_on_named_concepts_only():
+    """#3: URI-valued labels and blank-node concepts are outside the rule."""
+    om = OntologyManager(base_uri=str(Q))
+    om.graph.add((Q.c_uri_labels, RDF.type, SKOS.Concept))
+    om.graph.add((Q.c_uri_labels, SKOS.prefLabel, Q.a))
+    om.graph.add((Q.c_uri_labels, SKOS.prefLabel, Q.b))
+    anon = BNode()
+    om.graph.add((anon, RDF.type, SKOS.Concept))
+    om.graph.add((anon, SKOS.prefLabel, Literal("One", lang="en")))
+    om.graph.add((anon, SKOS.prefLabel, Literal("Two", lang="en")))
+    assert _by_rule(om)["Q010"] == _by_shape(om)["Q010"] == set()
+
+
+def test_page_marks_results_stale_when_the_shape_selection_changes():
+    """#4."""
+    at = AppTest.from_function(_page)
+    at.run(timeout=120)
+    policy = next(c for c in at.checkbox if c.label == "OrionBelt quality policy")
+    policy.check().run()
+    next(b for b in at.button if b.label == "Run SHACL check").click().run()
+    assert not at.warning
+    next(c for c in at.checkbox if c.label == "SKOS integrity").check().run()
+    assert any("selection changed" in w.value for w in at.warning)

@@ -78,8 +78,10 @@ obq:DefinitionShape
     ) .
 
 # A SPARQL constraint rather than sh:uniqueLang, which skips untagged labels
-# and cannot see SKOS-XL ones. Like the rule, it counts distinct values per
-# language tag (untagged counting as one), plain and SKOS-XL together.
+# and cannot see SKOS-XL ones. Like the rule, it counts distinct literal
+# values per language tag (untagged counting as one), plain and SKOS-XL
+# together, on named concepts. The language is bound as the result's value,
+# so two over-full languages are two results that stay apart.
 obq:OnePreferredLabelPerLanguageShape
     a sh:NodeShape ;
     rdfs:label "More than one prefLabel per language (Q010)" ;
@@ -91,11 +93,13 @@ obq:OnePreferredLabelPerLanguageShape
         sh:message "Has {?count} prefLabels in language '{?lang}'; SKOS allows at most one per language tag." ;
         sh:prefixes obq: ;
         sh:select """
-            SELECT $this ?lang (COUNT(DISTINCT STR(?label)) AS ?count)
+            SELECT $this ?lang (?lang AS ?value) (COUNT(DISTINCT STR(?label)) AS ?count)
             WHERE {
+                FILTER (isIRI($this))
                 { $this skos:prefLabel ?label }
                 UNION
                 { $this skosxl:prefLabel/skosxl:literalForm ?label }
+                FILTER (isLiteral(?label))
                 BIND (LANG(?label) AS ?lang)
             }
             GROUP BY $this ?lang

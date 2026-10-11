@@ -618,18 +618,25 @@ def _render_shacl(ont) -> None:
             runs[source] = run_shacl(
                 data, graph, origin=origin, kind=ctx.kind, name=ctx.name
             )
-        st.session_state[run_key] = (ont.revision_token(), once_id, runs)
+        st.session_state[run_key] = (
+            ont.revision_token(),
+            once_id,
+            tuple(sources),
+            runs,
+        )
     if not sources:
         st.caption("Add shapes, or tick a built-in set, to check the data against.")
 
     stored = st.session_state.get(run_key)
     if stored is None:
         return
-    token, ran_once_id, runs = stored
+    token, ran_once_id, ran_sources, runs = stored
     if token != ont.revision_token():
         st.warning("The ontology changed since this check. Run it again.")
     elif ran_once_id != once_id:
         st.warning("The one-off shapes changed since this check. Run it again.")
+    elif ran_sources != tuple(sources):
+        st.warning("The shapes selection changed since this check. Run it again.")
     ctx = QualityContext(ont, include_imports=True)
     for origin, run in runs.items():
         st.markdown(f"**{_source_title(origin)}**")

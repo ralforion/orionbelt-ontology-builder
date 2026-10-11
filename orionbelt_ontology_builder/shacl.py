@@ -197,6 +197,8 @@ def _reachable(graph: Graph, start: Node) -> set[Node]:
     return found
 
 
+OWL_ONTOLOGY = URIRef("http://www.w3.org/2002/07/owl#Ontology")
+
 #: Types that make a shape an implicit class target (SHACL 2.1.3.1).
 _CLASS_TYPES = (RDFS.Class, URIRef("http://www.w3.org/2002/07/owl#Class"))
 
@@ -460,7 +462,15 @@ def add_shapes(graph: Graph, shapes: Graph) -> int:
             and str(namespace) not in bound_namespaces
         ):
             graph.bind(prefix, namespace)
+    # A shapes file often declares itself an owl:Ontology (skohub declares
+    # skos: one, to hang SPARQL prefixes on). Copied in, that declaration
+    # competes with the ontology's own and can take over its namespace on the
+    # next load (Codex review of PR #508). Of such a node only its SHACL
+    # statements come along: the sh:declare prefixes a constraint relies on.
+    foreign = set(shapes.subjects(RDF.type, OWL_ONTOLOGY))
     for triple in shapes:
+        if triple[0] in foreign and not str(triple[1]).startswith(str(SH)):
+            continue
         graph.add(triple)
     return len(graph) - before
 
