@@ -54,7 +54,7 @@ It's not trying to be Protégé. It's meant for people who want something lighte
 
 **Not losing your work.** Every change creates an undo checkpoint. Deletes show you what will break before you confirm. Imports show a diff so you can review before applying.
 
-**Keeping your ontology clean.** Validation catches orphan classes, duplicate labels, domain/range mismatches, missing annotations, and SKOS-specific issues like broader/narrower cycles. Not just "you have warnings" but "here's what's wrong and where."
+**Keeping your ontology clean.** Validation catches orphan classes, duplicate labels, domain/range mismatches, missing annotations, and SKOS-specific issues like broader/narrower cycles. Model quality rules point out redundant hierarchy edges, disconnected islands and naming problems, and SHACL shapes check the data against your own constraints. Not just "you have warnings" but "here's what's wrong and where."
 
 **Moving fast in large ontologies.** Global search across everything, including what an entity's annotations say about it, so a definition or a scope note finds it when the name does not. Usage/backlink views for any resource. Click a node in the graph and jump straight to the editor. Bulk add/edit/delete so you're not filling out forms one entity at a time.
 
@@ -247,6 +247,32 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 - Untyped individuals
 - SKOS checks (see above)
 - RDFS and OWL-RL reasoning via owlrl
+
+### Model quality
+
+Advisory rules on how well the model is made, separate from validation: missing
+labels and definitions, placeholder text, duplicate labels, naming conventions,
+hierarchy cycles and redundant subclass edges, disconnected class islands,
+opposite properties without `owl:inverseOf`, and use of deprecated resources.
+Each finding explains itself, suggests a fix and opens the affected entity.
+Rules can be switched on or off per ontology, and only the ontology's own
+resources are checked unless you include imported vocabularies.
+
+### SHACL
+
+Closed-world checks of the data against SHACL shapes, run with
+[pySHACL](https://github.com/RDFLib/pySHACL):
+
+- Shapes already in the ontology are found and checked automatically; the
+  shapes themselves are never validated as data.
+- Add shapes by pasting or uploading them. They are checked against the SHACL
+  meta-shapes first, then stored in the ontology file (one undo step), or used
+  for a single check without saving.
+- Findings name the focus node, path and source shape, open the affected
+  entity, and the full validation report downloads as Turtle.
+- Export the ontology with its shapes, without them, or the shapes alone.
+- Runs are bounded: a time limit, no `owl:imports` resolution, and no SPARQL
+  constraint that reaches another server through `SERVICE`.
 
 ### SPARQL queries
 
@@ -499,7 +525,7 @@ the 200 MB default; raise the value only when self-hosting with enough memory.
 | **Import / Export** | File import with merge review, export, new ontology, templates |
 | **Source**          | Live Turtle source view of the ontology                        |
 | **SPARQL**          | Read-only SPARQL console with row and time limits              |
-| **Validation**      | Ontology validation and OWL reasoning                          |
+| **Validation & Reasoning** | Validation, model quality, SHACL and OWL reasoning      |
 | **Visualization**   | Interactive graph (OWL + SKOS), hierarchy tree, statistics     |
 
 ## Project structure
@@ -575,7 +601,7 @@ verified before the tree it fetches exists.
 
 Not implemented yet, listed here so it is clear what the workbench does *not* do today:
 
-- **SHACL validation.** Validation is currently structural (orphan classes, duplicate labels, domain/range mismatches, SKOS cycles) plus OWL RL reasoning. Shape-based validation against SHACL constraints is not supported.
+- **SHACL shapes generated from the model.** SHACL checks run against shapes you add or that the ontology carries. Deriving shapes from the ontology's own restrictions, functional properties and ranges, so individuals can be checked against the model with nothing to maintain, is planned (#498).
 
 ---
 

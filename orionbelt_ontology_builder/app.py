@@ -506,7 +506,9 @@ def main():
         "Import / Export": render_import_export,
         "Source": render_source,
         "SPARQL": render_sparql,
-        "Validation": render_validation,
+        # Named like the page heading: it holds validation, quality, SHACL
+        # and reasoning, so "Validation" alone undersold it.
+        "Validation & Reasoning": render_validation,
         "Visualization": render_visualization,
     }
 
