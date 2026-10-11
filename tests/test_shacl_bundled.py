@@ -266,3 +266,16 @@ def test_page_marks_results_stale_when_the_shape_selection_changes():
     assert not at.warning
     next(c for c in at.checkbox if c.label == "SKOS integrity").check().run()
     assert any("selection changed" in w.value for w in at.warning)
+
+
+@pytest.mark.parametrize("key", list(shacl.BUNDLED_SHAPES))
+@pytest.mark.parametrize("content", ["all", "shapes", "ontology"])
+def test_every_built_in_set_survives_every_export_format(key, content):
+    """Copied in, a set must not break any export: RDF/XML in particular
+    cannot write a predicate whose IRI it cannot split (skohub's best
+    practice had ``sh:group:``)."""
+    om = OntologyManager(base_uri=str(Q))
+    om.add_class("Mine", label="Mine")
+    shacl.add_shapes(om.graph, shacl.load_bundled(key))
+    for fmt in ("xml", "turtle", "nt", "json-ld"):
+        assert om.export_to_string(format=fmt, content=content)

@@ -19,8 +19,10 @@ Copyright (c) 2011-2017 Almende B.V.; (c) 2017-2019 visjs contributors.
 
 ## Bundled SHACL shapes
 
-Offered as built-in shapes on the Validation & Reasoning page's SHACL section, redistributed
-unmodified.
+Offered as built-in shapes on the Validation & Reasoning page's SHACL section.
+`skos.shacl.ttl` is redistributed unmodified. `skos.bestPractice.shacl.ttl` carries one
+correction, noted at the top of the file: the predicate `sh:group:` (a typo with a stray colon,
+which RDF/XML cannot serialize) is written `sh:group`.
 
 | Shipped as | Upstream | Version | Licence | Text |
 |---|---|---|---|---|

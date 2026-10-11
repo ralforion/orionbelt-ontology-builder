@@ -1,3 +1,8 @@
+# From skohub-shapes (https://github.com/skohub-io/skohub-shapes), commit
+# ce46984, Apache-2.0. Modified by OrionBelt Ontology Builder: one typo
+# corrected, `sh:group:` to `sh:group` (the stray colon made RDF/XML export
+# fail). Otherwise as published.
+
 @prefix : <http://skohub.io/skohub-shacl> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -41,7 +46,7 @@
     sh:severity sh:Warning ;
     sh:datatype rdf:langString ;
     sh:message "S14: A resource has no more than one value of skos:prefLabel per language tag." ;
-    sh:group: :s14 ;
+    sh:group :s14 ;
   ] ;
   sh:property [
     sh:deactivated true ;
