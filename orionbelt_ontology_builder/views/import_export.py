@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from ..shacl import shape_nodes
 from ..ui import (
     _download_or_save,
     clearable_selectbox,
@@ -361,12 +362,32 @@ def render_import_export():
         }
 
         ext = file_extensions[format_]
+        # Only when there are shapes to choose about: otherwise the three
+        # options would all produce the same file, or an empty one.
+        content_choice = "all"
+        if shape_nodes(ont.graph):
+            content_choice = st.radio(
+                "Content",
+                options=["all", "ontology", "shapes"],
+                format_func={
+                    "all": "Ontology and SHACL shapes",
+                    "ontology": "Ontology only",
+                    "shapes": "SHACL shapes only",
+                }.get,
+                horizontal=True,
+                key="export_content_choice",
+                help="The ontology carries SHACL shapes. Export them with it, "
+                "leave them out, or export them on their own.",
+            )
         if st.button("Generate Export"):
             try:
                 st.session_state["_export_content"] = ont.export_to_string(
-                    format=format_
+                    format=format_, content=content_choice
                 )
                 st.session_state["_export_ext"] = ext
+                st.session_state["_export_stem"] = (
+                    "shapes" if content_choice == "shapes" else "ontology"
+                )
             except Exception as e:  # noqa: BLE001 - export failure must show as a message, not a traceback
                 st.session_state.pop("_export_content", None)
                 show_message(f"Error exporting ontology: {e!s}", "error")
@@ -377,10 +398,11 @@ def render_import_export():
         if content is not None:
             ext = st.session_state.get("_export_ext", ext)
             st.text_area("Exported Content", value=content, height=400)
+            stem = st.session_state.get("_export_stem", "ontology")
             _download_or_save(
                 f"Download .{ext} file",
                 content,
-                f"ontology.{ext}",
+                f"{stem}.{ext}",
                 key="export",
             )
 

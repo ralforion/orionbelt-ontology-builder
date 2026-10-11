@@ -6927,9 +6927,21 @@ class OntologyManager:
         return None
 
     @_cached_on_revision
-    def export_to_string(self, format: str = "turtle") -> str:
-        """Export ontology to a string."""
-        return self.graph.serialize(format=format)
+    def export_to_string(self, format: str = "turtle", content: str = "all") -> str:
+        """Export ontology to a string.
+
+        ``content`` is ``"all"`` (the default, everything), ``"ontology"``
+        (without SHACL shapes) or ``"shapes"`` (the shapes alone), so local
+        constraints can travel with the ontology or apart from it.
+        """
+        if content == "all":
+            return self.graph.serialize(format=format)
+        if content not in ("ontology", "shapes"):
+            raise ValueError(f"Unknown export content: {content!r}")
+        from .shacl import split_shapes
+
+        data, shapes = split_shapes(self.graph)
+        return (data if content == "ontology" else shapes).serialize(format=format)
 
     # ==================== SEARCH ====================
 

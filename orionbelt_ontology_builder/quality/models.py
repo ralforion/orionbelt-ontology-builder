@@ -9,7 +9,9 @@ Severity = Literal["error", "warning", "info"]
 SEVERITIES: tuple[Severity, ...] = ("error", "warning", "info")
 
 #: Where a finding came from: a Python rule, or a SHACL shapes source (M3).
-Origin = Literal["rule", "shacl:bundled", "shacl:generated", "shacl:user"]
+Origin = Literal[
+    "rule", "shacl:ontology", "shacl:bundled", "shacl:generated", "shacl:user"
+]
 
 
 @dataclass(frozen=True)
