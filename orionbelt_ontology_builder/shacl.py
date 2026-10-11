@@ -31,6 +31,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -259,11 +260,16 @@ class ShapeInfo:
 
 
 def _short(graph: Graph, node: Node) -> str:
+    """A prefixed name where a prefix is bound, else the IRI's local name."""
     if isinstance(node, URIRef):
         try:
-            return graph.namespace_manager.normalizeUri(node)
+            short = graph.namespace_manager.normalizeUri(node)
         except Exception:  # noqa: BLE001 - a display name must not fail
-            return str(node)
+            short = f"<{node}>"
+        if short.startswith("<"):
+            local = re.split(r"[#/]", str(node).rstrip("#/"))[-1]
+            return local or str(node)
+        return short
     return f"_:{node}"
 
 
@@ -320,6 +326,75 @@ def shape_turtle(graph: Graph, node: Node) -> str:
     for triple in _shape_closure(graph, node, shape_nodes(graph)):
         out.add(triple)
     return out.serialize(format="turtle")
+
+
+# -- built-in shapes ------------------------------------------------------------
+
+SHAPES_DIR = Path(__file__).resolve().parent / "shapes"
+
+
+@dataclass(frozen=True)
+class BundledShapes:
+    """A set of shapes that ships with the app."""
+
+    key: str
+    title: str
+    description: str
+    file: str
+    source: str
+
+
+BUNDLED_SHAPES: dict[str, BundledShapes] = {
+    b.key: b
+    for b in (
+        BundledShapes(
+            "policy",
+            "OrionBelt quality policy",
+            "The SHACL form of the quality rules for missing labels (Q001), "
+            "missing definitions (Q002) and more than one prefLabel per language "
+            "(Q010): the same checks, runnable by any SHACL engine.",
+            "quality-policy.ttl",
+            "OrionBelt Ontology Builder",
+        ),
+        BundledShapes(
+            "skos",
+            "SKOS integrity",
+            "The SKOS Reference's integrity conditions as shapes.",
+            "skos/skos.shacl.ttl",
+            "skohub-shapes (Apache-2.0)",
+        ),
+        BundledShapes(
+            "skos-practice",
+            "SKOS best practice",
+            "Conventions beyond the SKOS Reference: titled concept schemes, "
+            "definitions, orphan and undocumented concepts, overlapping labels "
+            "and duplicate notations. Mostly warnings.",
+            "skos/skos.bestPractice.shacl.ttl",
+            "skohub-shapes (Apache-2.0)",
+        ),
+    )
+}
+
+
+@cache
+def _bundled_text(key: str) -> str:
+    return (SHAPES_DIR / BUNDLED_SHAPES[key].file).read_text(encoding="utf-8")
+
+
+def load_bundled(key: str) -> Graph:
+    """A fresh graph of one built-in shapes set."""
+    return Graph().parse(data=_bundled_text(key), format="turtle")
+
+
+def bundled_in(graph: Graph, key: str) -> bool:
+    """Whether a built-in set's named shapes are already in ``graph``.
+
+    Asked before copying one in: its blank-node structure gets new nodes on
+    every load, so adding it twice would not be a no-op but a second copy of
+    every constraint.
+    """
+    named = {n for n in shape_nodes(load_bundled(key)) if isinstance(n, URIRef)}
+    return bool(named & shape_nodes(graph))
 
 
 # -- adding and removing ---------------------------------------------------------

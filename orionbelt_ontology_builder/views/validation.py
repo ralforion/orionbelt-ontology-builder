@@ -18,9 +18,12 @@ from ..quality import (
 from ..quality.context import QualityContext
 from ..quality.exports import findings_csv, findings_json
 from ..shacl import (
+    BUNDLED_SHAPES,
     ShapesError,
     add_shapes,
+    bundled_in,
     list_shapes,
+    load_bundled,
     parse_shapes,
     remove_shape,
     run_shacl,
@@ -394,11 +397,33 @@ def _render_quality(ont) -> None:
 
 # -- SHACL ---------------------------------------------------------------------
 
+
 #: The two places shapes come from, in the order they are checked and shown.
-_SHAPE_SOURCES = {
-    "shacl:ontology": "Shapes in this ontology",
-    "shacl:user": "One-off shapes (not saved)",
-}
+def _source_title(source: str) -> str:
+    """How a shapes source is named above its results."""
+    if source == "ontology":
+        return "Shapes in this ontology"
+    if source == "once":
+        return "One-off shapes (not saved)"
+    return f"{BUNDLED_SHAPES[source.removeprefix('bundled:')].title} (built-in)"
+
+
+def _adopt_bundled_cb(key: str) -> None:
+    """Callback: copy a built-in shapes set into the ontology, one undo step."""
+    ont = st.session_state.ontology
+    added = (
+        0 if bundled_in(ont.graph, key) else add_shapes(ont.graph, load_bundled(key))
+    )
+    if added:
+        save_checkpoint(f"Add {BUNDLED_SHAPES[key].title} shapes")
+        request_autosave_flush()
+    title = BUNDLED_SHAPES[key].title
+    set_flash_message(
+        f"Copied {title} into the ontology ({added} triples)."
+        if added
+        else f"{title} is already in the ontology.",
+        "success" if added else "info",
+    )
 
 
 def _remove_shape_cb(node, name: str) -> None:
@@ -523,12 +548,37 @@ def _render_shacl(ont) -> None:
                 st.session_state.pop(pending_key, None)
                 st.rerun()
 
+    with st.expander("Built-in shapes", expanded=False):
+        st.caption(
+            "Shapes that ship with the app. Tick one below to check against it, "
+            "or copy it into the ontology to edit it or export it with the file."
+        )
+        for bundled in BUNDLED_SHAPES.values():
+            text_col, show_col, copy_col = st.columns([5, 1, 1])
+            text_col.markdown(
+                f"**{bundled.title}** · {bundled.description}  \n"
+                f"<span style='opacity:.6'>Source: {bundled.source}</span>",
+                unsafe_allow_html=True,
+            )
+            with show_col.popover("Show"):
+                st.code(
+                    load_bundled(bundled.key).serialize(format="turtle"),
+                    language="turtle",
+                )
+            copy_col.button(
+                "Copy in",
+                key=f"shacl_adopt_{bundled.key}",
+                on_click=_adopt_bundled_cb,
+                args=(bundled.key,),
+                help="Add these shapes to the ontology (one undo step).",
+            )
+
     once_id, once = st.session_state.get(once_key) or (None, None)
     sources = []
     if shapes:
-        sources.append("shacl:ontology")
+        sources.append("ontology")
     if once is not None:
-        sources.append("shacl:user")
+        sources.append("once")
         note_col, drop_col = st.columns([5, 1])
         note_col.caption(
             f"One-off shapes ready: {len(list_shapes(once))} shape(s), not saved "
@@ -538,25 +588,39 @@ def _render_shacl(ont) -> None:
             st.session_state.pop(once_key, None)
             st.rerun()
 
+    # A checkbox per built-in set rather than one multiselect of every
+    # source: a multiselect's default would not follow one-off shapes that
+    # appear later. The ontology's own and one-off shapes are always checked.
+    st.markdown("**Also check against**")
+    for bundled in BUNDLED_SHAPES.values():
+        if st.checkbox(
+            bundled.title,
+            value=False,
+            key=f"shacl_use_{bundled.key}_{scope}",
+            help=bundled.description,
+        ):
+            sources.append(f"bundled:{bundled.key}")
+
     if st.button("Run SHACL check", disabled=not sources):
         data, embedded = split_shapes(ont.graph)
         ctx = QualityContext(ont, include_imports=True)
-        shape_graphs = {"shacl:ontology": embedded}
-        if once is not None:
-            shape_graphs["shacl:user"] = once
-        runs = {
-            origin: run_shacl(
-                data,
-                shape_graphs[origin],
-                origin=origin,
-                kind=ctx.kind,
-                name=ctx.name,
+
+        def shapes_for(source: str):
+            if source == "ontology":
+                return embedded, "shacl:ontology"
+            if source == "once":
+                return once, "shacl:user"
+            return load_bundled(source.removeprefix("bundled:")), "shacl:bundled"
+
+        runs = {}
+        for source in sources:
+            graph, origin = shapes_for(source)
+            runs[source] = run_shacl(
+                data, graph, origin=origin, kind=ctx.kind, name=ctx.name
             )
-            for origin in sources
-        }
         st.session_state[run_key] = (ont.revision_token(), once_id, runs)
     if not sources:
-        st.caption("Add shapes to check the data against.")
+        st.caption("Add shapes, or tick a built-in set, to check the data against.")
 
     stored = st.session_state.get(run_key)
     if stored is None:
@@ -568,7 +632,7 @@ def _render_shacl(ont) -> None:
         st.warning("The one-off shapes changed since this check. Run it again.")
     ctx = QualityContext(ont, include_imports=True)
     for origin, run in runs.items():
-        st.markdown(f"**{_SHAPE_SOURCES[origin]}**")
+        st.markdown(f"**{_source_title(origin)}**")
         if run.error:
             st.error(run.error)
             continue

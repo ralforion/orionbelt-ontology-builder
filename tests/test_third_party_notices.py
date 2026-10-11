@@ -29,6 +29,7 @@ LICENCES = {
     "CC-BY-1.0.txt": "Creative Commons",
     "CC-BY-3.0.txt": "Creative Commons",
     "W3C-Document-License.txt": "W3C Document License",
+    "Apache-2.0-skohub-shapes.txt": "Apache License",
 }
 
 #: Third-party files that ship, mapped to how the notices refer to them and the
@@ -44,6 +45,8 @@ BUNDLED = {
     "samples/gist/gistCore14.1.0.ttl": ("samples/gist/", "CC BY 4.0"),
     "samples/gufo/gufo.ttl": ("gufo.ttl", "CC BY 4.0"),
     "lib/graph_viewer/vis-network.min.js": ("vis-network.min.js", "MIT"),
+    "shapes/skos/skos.shacl.ttl": ("shapes/skos/", "Apache-2.0"),
+    "shapes/skos/skos.bestPractice.shacl.ttl": ("shapes/skos/", "Apache-2.0"),
 }
 
 

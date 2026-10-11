@@ -268,6 +268,11 @@ Closed-world checks of the data against SHACL shapes, run with
 - Add shapes by pasting or uploading them. They are checked against the SHACL
   meta-shapes first, then stored in the ontology file (one undo step), or used
   for a single check without saving.
+- Built-in shapes to check against, or copy into the ontology: the
+  **OrionBelt quality policy** (the missing-label, missing-definition and
+  one-prefLabel-per-language rules as SHACL, kept in agreement with them by
+  tests) and **SKOS integrity** and **SKOS best practice** from
+  [skohub-shapes](https://github.com/skohub-io/skohub-shapes).
 - Findings name the focus node, path and source shape, open the affected
   entity, and the full validation report downloads as Turtle.
 - Export the ontology with its shapes, without them, or the shapes alone.

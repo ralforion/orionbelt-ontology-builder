@@ -140,4 +140,7 @@ orionbelt_ontology_builder = [
     "samples/**/*.txt",
     "samples/**/LICENSE*",
     "samples/README.md",
+    # SHACL shapes the SHACL section offers as built-in sets.
+    "shapes/*.ttl",
+    "shapes/**/*.ttl",
 ]
