@@ -237,7 +237,7 @@ def test_details_offer_related_resources_to_open():
     key = next(
         k
         for k in at.session_state.filtered_state
-        if k.startswith("quality_") and k.endswith("_table")
+        if k.startswith("quality_") and "_table_" in k
     )
     at.session_state[key] = {"selection": {"rows": [row], "columns": [], "cells": []}}
     at.run()
@@ -255,3 +255,44 @@ def test_settings_survive_leaving_and_reloading():
     at.session_state["val_active_tab"] = "Validation"
     configs = at.session_state[ui.QUALITY_CONFIGS_STATE]
     assert QualityConfig.from_dict(configs["http://test.org/q"]).enabled("Q022")
+
+
+# -- review fixes (PR #507) ------------------------------------------------------------
+
+
+def test_drawing_the_defaults_does_not_mark_settings_for_saving():
+    """#1: before the browser's saved settings arrive, the page shows defaults;
+    writing those back would overwrite the saved ones and block the restore."""
+    at = AppTest.from_function(_quality_page)
+    at.session_state["_quality_configs_restored"] = False
+    at.run(timeout=120)
+    at.run()
+    assert "_quality_configs_dirty" not in at.session_state.filtered_state
+    # A real change still is one.
+    next(c for c in at.checkbox if c.label == "Multiple parents").check().run()
+    assert at.session_state["_quality_configs_dirty"] is True
+
+
+def test_a_severity_that_appears_on_a_rerun_is_shown():
+    """#2: the severity filter must not keep only the severities of the last run."""
+    at = AppTest.from_function(_quality_page)
+    at.run(timeout=120)
+    _run(at)
+    sev = next(
+        s for s in at.selectbox if s.label == "Severity of Redundant subclass edges"
+    )
+    sev.select("error").run()
+    _run(at)
+    assert "🔴 error" in set(_table(at)["Severity"])
+
+
+def test_the_table_key_follows_the_rows_shown():
+    """#3: a selection is a row position, so a new set of rows gets a fresh,
+    unselected table rather than the old position pointing elsewhere."""
+    from orionbelt_ontology_builder.views.findings import table_key
+
+    findings = list(analyze(_om()).findings)
+    assert len(findings) >= 2
+    assert table_key("k", findings) == table_key("k", list(findings))
+    assert table_key("k", findings) != table_key("k", findings[1:])
+    assert table_key("k", findings) != table_key("k", findings[::-1])

@@ -696,7 +696,7 @@ def select_first_finding(at, prefix):
     key = next(
         k
         for k in at.session_state.filtered_state
-        if k.startswith(prefix) and k.endswith("_table")
+        if k.startswith(prefix) and "_table_" in k
     )
     at.session_state[key] = {"selection": {"rows": [0], "columns": [], "cells": []}}
     at.run()

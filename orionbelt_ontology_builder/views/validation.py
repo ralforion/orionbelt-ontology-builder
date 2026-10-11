@@ -282,7 +282,12 @@ def _quality_config(ont) -> QualityConfig:
                 _redraw_rule_widgets()
                 set_flash_message("Quality settings applied.", "success")
                 st.rerun()
-    _store_config(iri, config)
+    # Only a real change is stored and marked for saving. Drawing the
+    # defaults is not one: on the web the saved settings can arrive a few
+    # reruns later, and writing the defaults first would overwrite them and
+    # end the restore (Codex review of PR #507).
+    if config.to_dict() != stored.to_dict():
+        _store_config(iri, config)
     return config
 
 

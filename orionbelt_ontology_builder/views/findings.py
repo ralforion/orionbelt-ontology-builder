@@ -9,6 +9,7 @@ behind it and buttons to open the resources it is about.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -32,6 +33,20 @@ def _short_name(uri: str) -> str:
         if sep in uri.rstrip(sep):
             return uri.rstrip(sep).rsplit(sep, 1)[-1]
     return uri
+
+
+def table_key(key: str, shown: Sequence[QualityFinding]) -> str:
+    """The table's widget key, which changes when the rows shown do.
+
+    The selection is a row position. Kept across a change of rows, it would
+    point at whatever finding moved into that position, and the details and
+    Open button would quietly switch to it (Codex review of PR #507). A new
+    key per set of rows starts that set unselected; the same rows keep it.
+    """
+    digest = hashlib.sha256(
+        "\n".join(repr(f.key) for f in shown).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"{key}_table_{digest}"
 
 
 def render_findings_table(
@@ -60,10 +75,13 @@ def render_findings_table(
     kinds = sorted({f.resource_kind or "Other" for f in findings})
 
     sev_col, group_col, kind_col, text_col = st.columns([2, 3, 2, 3])
+    # Empty means all, as for the other filters: a default of "the severities
+    # there are now" would stay put while a rerun brings a new one, and hide
+    # it (Codex review of PR #507).
     chosen_sev = sev_col.multiselect(
         "Severity",
         severities,
-        default=severities,
+        placeholder="All",
         format_func=lambda s: f"{SEVERITY_ICONS[s]} {s}",
         key=f"{key}_f_sev",
     )
@@ -84,7 +102,7 @@ def render_findings_table(
     shown = [
         f
         for f in findings
-        if f.severity in chosen_sev
+        if (not chosen_sev or f.severity in chosen_sev)
         and (not chosen_groups or group_of(f) in chosen_groups)
         and (not chosen_kinds or (f.resource_kind or "Other") in chosen_kinds)
         and (
@@ -114,7 +132,7 @@ def render_findings_table(
         width="stretch",
         on_select="rerun",
         selection_mode="single-row",
-        key=f"{key}_table",
+        key=table_key(key, shown),
         column_config={"Message": st.column_config.TextColumn(width="large")},
     )
     selected = list(getattr(getattr(event, "selection", None), "rows", []) or [])
