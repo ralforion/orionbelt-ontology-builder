@@ -458,3 +458,70 @@ def test_rdfs_resource_is_no_constraint():
 def test_rational_literals_are_checked_by_value_too(declared, value, ok):
     """ "1/2"^^owl:rational is the decimal 0.5, "6/2" the integer 3."""
     assert _range_check(declared, Literal(value, datatype=OWL.rational)) is ok
+
+
+# -- OWL RL inference before the check ---------------------------------------------------
+
+
+def _checked(om, infer):
+    data, _ = shacl.split_shapes(om.graph)
+    run = shacl.run_shacl(
+        data, generate_shapes(data), origin="shacl:generated", infer=infer
+    )
+    assert run.error is None, run.error
+    return {f.resource.rsplit("#")[-1] for f in run.findings}
+
+
+def test_inference_supplies_what_has_value_entails():
+    """Wine's case: every Anjou has body Light, so no Anjou needs to say so."""
+    om = _om()
+    _declare(om, "Anjou")
+    _restriction(om, Q.Anjou, Q.hasBody, OWL.hasValue, Q.Light)
+    _thing(om, "rose", Q.Anjou)
+    assert _checked(om, infer=False) == {"rose"}
+    assert _checked(om, infer=True) == set()
+
+
+def test_inference_does_not_invent_missing_values():
+    """OWL RL creates no individuals: a required value nobody states stays missing."""
+    om = _om()
+    _declare(om, "Person")
+    _restriction(om, Q.Person, Q.name, OWL.minCardinality, Literal(1))
+    _thing(om, "alice", Q.Person)
+    assert _checked(om, infer=True) == {"alice"}
+
+
+def test_inference_types_values_by_their_range():
+    """Documented trade-off: under inference a class range always holds."""
+    om = _om()
+    _declare(om, "Company")
+    om.graph.add((Q.worksFor, RDFS.range, Q.Company))
+    _thing(om, "ann", worksFor=Q.somewhere)
+    assert _checked(om, infer=False) == {"ann"}
+    assert _checked(om, infer=True) == set()
+
+
+def test_inference_leaves_the_model_alone():
+    om = _om()
+    _declare(om, "Anjou")
+    _restriction(om, Q.Anjou, Q.hasBody, OWL.hasValue, Q.Light)
+    _thing(om, "rose", Q.Anjou)
+    before = set(om.graph)
+    _checked(om, infer=True)
+    assert set(om.graph) == before
+
+
+def test_page_infers_by_default_and_marks_a_change_stale():
+    at = AppTest.from_function(_page)
+    at.run(timeout=120)
+    infer = next(
+        c for c in at.checkbox if c.label == "Apply OWL RL inference before checking"
+    )
+    assert infer.value is True
+    next(c for c in at.checkbox if c.label == "Generated from the model").check().run()
+    next(b for b in at.button if b.label == "Run SHACL check").click().run()
+    assert not at.warning
+    next(
+        c for c in at.checkbox if c.label == "Apply OWL RL inference before checking"
+    ).uncheck().run()
+    assert any("inference setting changed" in w.value for w in at.warning)

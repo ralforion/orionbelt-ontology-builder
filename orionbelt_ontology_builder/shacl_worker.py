@@ -20,6 +20,7 @@ def main() -> None:
         request["shapes_nt"],
         [(prefix, namespace) for prefix, namespace in request["prefixes"]],
         request["meta"],
+        request.get("inference", "none"),
     )
     json.dump(result, sys.stdout)
 

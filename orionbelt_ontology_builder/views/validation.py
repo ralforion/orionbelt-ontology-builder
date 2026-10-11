@@ -635,6 +635,18 @@ def _render_shacl(ont) -> None:
         ):
             sources.append(f"bundled:{bundled.key}")
 
+    infer = st.checkbox(
+        "Apply OWL RL inference before checking",
+        value=True,
+        key=f"shacl_infer_{scope}",
+        help="Check what the ontology implies, not only what it states: a value a "
+        "hasValue restriction entails, or a type a subclass axiom entails, no "
+        "longer reads as missing. Reasoning runs on a copy for the check only; "
+        "the ontology is not changed (Reasoning's Apply Reasoning is what writes "
+        "inferences in). Range checks say nothing while this is on, since "
+        "inference types every value as its range's class.",
+    )
+
     if st.button("Run SHACL check", disabled=not sources):
         data, embedded = split_shapes(ont.graph)
         ctx = QualityContext(ont, include_imports=True)
@@ -652,12 +664,13 @@ def _render_shacl(ont) -> None:
         for source in sources:
             graph, origin = shapes_for(source)
             runs[source] = run_shacl(
-                data, graph, origin=origin, kind=ctx.kind, name=ctx.name
+                data, graph, origin=origin, kind=ctx.kind, name=ctx.name, infer=infer
             )
         st.session_state[run_key] = (
             ont.revision_token(),
             once_id,
             tuple(sources),
+            infer,
             runs,
         )
     if not sources:
@@ -666,13 +679,15 @@ def _render_shacl(ont) -> None:
     stored = st.session_state.get(run_key)
     if stored is None:
         return
-    token, ran_once_id, ran_sources, runs = stored
+    token, ran_once_id, ran_sources, ran_infer, runs = stored
     if token != ont.revision_token():
         st.warning("The ontology changed since this check. Run it again.")
     elif ran_once_id != once_id:
         st.warning("The one-off shapes changed since this check. Run it again.")
     elif ran_sources != tuple(sources):
         st.warning("The shapes selection changed since this check. Run it again.")
+    elif ran_infer != infer:
+        st.warning("The inference setting changed since this check. Run it again.")
     ctx = QualityContext(ont, include_imports=True)
     for origin, run in runs.items():
         st.markdown(f"**{_source_title(origin)}**")
