@@ -7,13 +7,16 @@ import streamlit as st
 from ..ontology_manager import rdf_format_for_path
 from ..quality import (
     CATEGORIES,
+    PROFILES,
     RULES,
+    SEVERITIES,
     QualityConfig,
-    QualityFinding,
+    QualityConfigError,
     RuleSettings,
     analyze,
 )
 from ..quality.context import QualityContext
+from ..quality.exports import findings_csv, findings_json
 from ..shacl import (
     ShapesError,
     add_shapes,
@@ -25,21 +28,19 @@ from ..shacl import (
     split_shapes,
 )
 from ..ui import (
-    _PAGE_BY_TYPE,
+    QUALITY_CONFIGS_GENERATION,
+    QUALITY_CONFIGS_STATE,
     _download_or_save,
-    _nav_open_entity,
     _uid,
+    persist_quality_configs,
     request_autosave_flush,
+    restore_quality_configs,
     save_checkpoint,
     set_flash_message,
     show_message,
 )
-
-_SEVERITY_ICONS = {"error": "🔴", "warning": "🟡", "info": "🔵"}
-
-#: Findings listed per check before "and N more": one button per finding, and
-#: a few hundred of them is the kind of render the desktop webview falls over on.
-_FINDINGS_SHOWN = 50
+from .findings import SEVERITY_ICONS as _SEVERITY_ICONS
+from .findings import render_findings_table
 
 
 def render_validation():
@@ -132,26 +133,76 @@ def render_validation():
                 show_message(f"Error during reasoning: {e!s}", "error")
 
 
-def _open_finding(finding: QualityFinding) -> None:
-    """Callback: open the resource a finding is about on its own page."""
-    kind = finding.resource_kind
-    if kind not in _PAGE_BY_TYPE:
-        return
-    st.session_state.search_navigate_to = _PAGE_BY_TYPE[kind]
-    _nav_open_entity(kind, _uid(finding.resource), finding.resource)
+_PROFILE_LABELS = {
+    "general_ontology": "General ontology",
+    "skos_vocabulary": "SKOS vocabulary",
+    "strict_documentation": "Strict documentation",
+}
 
 
-def _quality_config(scope: str) -> QualityConfig:
-    """The configuration the "Rules" expander describes, for this ontology.
+def _stored_config(iri: str) -> QualityConfig:
+    raw = (st.session_state.get(QUALITY_CONFIGS_STATE) or {}).get(iri)
+    if not raw:
+        return QualityConfig()
+    try:
+        return QualityConfig.from_dict(raw)
+    except QualityConfigError:
+        return QualityConfig()
 
-    Kept under a key of its own, not only in the widgets: Streamlit drops a
-    widget's state once the widget stops rendering, so leaving the Quality
-    section used to reset every choice (Codex review of PR #504). The widgets
-    start from the stored configuration and write back to it.
+
+def _store_config(iri: str, config: QualityConfig) -> None:
+    """Keep ``config`` for this ontology, and mark it for saving if it changed."""
+    configs = dict(st.session_state.get(QUALITY_CONFIGS_STATE) or {})
+    if configs.get(iri) != config.to_dict():
+        configs[iri] = config.to_dict()
+        st.session_state[QUALITY_CONFIGS_STATE] = configs
+        st.session_state["_quality_configs_dirty"] = True
+
+
+def _redraw_rule_widgets() -> None:
+    """Have the rule widgets drawn afresh from the stored settings."""
+    st.session_state[QUALITY_CONFIGS_GENERATION] = (
+        st.session_state.get(QUALITY_CONFIGS_GENERATION, 0) + 1
+    )
+
+
+def _profile_changed_cb(iri: str, key: str) -> None:
+    """Callback: a new profile starts from its own defaults."""
+    _store_config(iri, QualityConfig(profile=st.session_state[key]))
+    _redraw_rule_widgets()
+
+
+def _reset_cb(iri: str, profile: str) -> None:
+    """Callback: drop every per-rule change, keep the profile."""
+    _store_config(iri, QualityConfig(profile=profile))
+    _redraw_rule_widgets()
+
+
+def _quality_config(ont) -> QualityConfig:
+    """The settings the "Rules" expander shows, for this ontology.
+
+    Kept per ontology IRI under a key of its own (saved to the browser, or to
+    the config file on desktop), not in the widgets: Streamlit drops a
+    widget's state once it stops rendering (Codex review of PR #504). The
+    widgets start from the stored settings and write back to them; their keys
+    carry a generation, bumped when stored settings replace what they show.
     """
-    store_key = f"_quality_config_{scope}"
-    stored: QualityConfig = st.session_state.get(store_key) or QualityConfig()
+    iri = str(ont.ontology_uri)
+    stored = _stored_config(iri)
+    scope = f"{_uid(iri)}_{st.session_state.get(QUALITY_CONFIGS_GENERATION, 0)}"
     with st.expander("Rules", expanded=False):
+        profile_key = f"quality_profile_{scope}"
+        profile = st.selectbox(
+            "Profile",
+            list(PROFILES),
+            index=list(PROFILES).index(stored.profile),
+            format_func=lambda p: _PROFILE_LABELS.get(p, p),
+            key=profile_key,
+            on_change=_profile_changed_cb,
+            args=(iri, profile_key),
+            help="A starting set of rules and severities. Changing it resets the "
+            "rules below to that profile's defaults.",
+        )
         include_imports = st.checkbox(
             "Include imported vocabularies",
             value=stored.include_imports,
@@ -160,27 +211,78 @@ def _quality_config(scope: str) -> QualityConfig:
             "checked: those in its base namespace or rdfs:isDefinedBy it. Turn "
             "this on to check merged-in vocabularies too.",
         )
+        baseline = QualityConfig(profile=profile)
         overrides: dict[str, RuleSettings] = {}
         for category, title in CATEGORIES.items():
             st.markdown(f"**{title}**")
             for rule in RULES.values():
                 if rule.category != category:
                     continue
+                on_col, sev_col = st.columns([4, 1])
                 # Titles only: the stable ID is for config files and exports,
                 # and a list showing Q001, Q006, Q019 reads as if rules were
                 # missing. The tooltip still names it.
-                enabled = st.checkbox(
+                enabled = on_col.checkbox(
                     rule.title,
                     value=stored.enabled(rule.id),
                     key=f"quality_rule_{scope}_{rule.id}",
                     help=f"{rule.description} (Rule ID {rule.id})",
                 )
-                if enabled != rule.default_enabled:
-                    overrides[rule.id] = RuleSettings(enabled=enabled)
-    config = QualityConfig(
-        profile=stored.profile, include_imports=include_imports, rules=overrides
-    )
-    st.session_state[store_key] = config
+                severity = sev_col.selectbox(
+                    f"Severity of {rule.title}",
+                    list(SEVERITIES),
+                    index=SEVERITIES.index(stored.severity(rule.id)),
+                    format_func=lambda s: f"{_SEVERITY_ICONS[s]} {s}",
+                    key=f"quality_sev_{scope}_{rule.id}",
+                    label_visibility="collapsed",
+                    disabled=not enabled,
+                )
+                setting = RuleSettings(
+                    enabled=enabled if enabled != baseline.enabled(rule.id) else None,
+                    severity=severity
+                    if severity != baseline.severity(rule.id)
+                    else None,
+                )
+                if setting != RuleSettings():
+                    overrides[rule.id] = setting
+        config = QualityConfig(
+            profile=profile, include_imports=include_imports, rules=overrides
+        )
+        st.button(
+            "Reset to profile defaults",
+            key=f"quality_reset_{scope}",
+            on_click=_reset_cb,
+            args=(iri, profile),
+            disabled=not overrides and not include_imports,
+        )
+        st.markdown("**Settings file**")
+        _download_or_save(
+            "Download settings (.json)",
+            config.to_json(),
+            "quality-settings.json",
+            mime="application/json",
+            key=f"quality_cfg_{scope}",
+        )
+        upload = st.file_uploader(
+            "Apply a settings file",
+            type=["json"],
+            key=f"quality_cfg_upload_{scope}",
+        )
+        if upload is not None and st.button(
+            "Apply settings", key=f"quality_cfg_apply_{scope}"
+        ):
+            try:
+                imported = QualityConfig.from_json(
+                    upload.getvalue().decode("utf-8", errors="replace")
+                )
+            except QualityConfigError as exc:
+                st.error(f"Not applied: {exc}")
+            else:
+                _store_config(iri, imported)
+                _redraw_rule_widgets()
+                set_flash_message("Quality settings applied.", "success")
+                st.rerun()
+    _store_config(iri, config)
     return config
 
 
@@ -191,11 +293,12 @@ def _render_quality(ont) -> None:
         "Modelling advice, not errors: each finding is worth a look, and some "
         "will be deliberate. Formal problems are under Validation."
     )
+    restore_quality_configs()
+    config = _quality_config(ont)
+    persist_quality_configs()
 
-    # Keyed by ontology, so switching ontologies keeps each one's choices.
+    # Keyed by ontology, so switching ontologies keeps each one's results.
     scope = _uid(str(ont.ontology_uri))
-    config = _quality_config(scope)
-
     run_key = f"_quality_run_{scope}"
     if st.button("Run Quality Checks"):
         st.session_state[run_key] = analyze(ont, config)
@@ -239,32 +342,15 @@ def _render_quality(ont) -> None:
     if not run.findings and not failed:
         st.success("No findings from the enabled rules.")
 
-    for rule_id, rule in RULES.items():
-        findings = run.by_rule(rule_id)
-        if not findings:
-            continue
-        # A constant label: one that changed with the count would close the
-        # expander whenever a fix made the count move.
-        with st.expander(
-            f"{_SEVERITY_ICONS[findings[0].severity]} {rule.title}",
-            expanded=False,
-        ):
-            st.caption(f"{len(findings)} finding(s). {rule.description}")
-            for i, finding in enumerate(findings[:_FINDINGS_SHOWN]):
-                text_col, open_col = st.columns([6, 1])
-                text_col.markdown(f"- {finding.message}")
-                if finding.suggestion:
-                    text_col.caption(finding.suggestion)
-                if finding.resource_kind in _PAGE_BY_TYPE:
-                    open_col.button(
-                        "Open",
-                        key=f"quality_open_{rule_id}_{i}_{_uid(finding.resource)}",
-                        on_click=_open_finding,
-                        args=(finding,),
-                        help=finding.resource,
-                    )
-            if len(findings) > _FINDINGS_SHOWN:
-                st.caption(f"…and {len(findings) - _FINDINGS_SHOWN} more.")
+    ctx = QualityContext(ont, include_imports=True)
+    render_findings_table(
+        run.findings,
+        key=f"quality_{scope}",
+        group_of=lambda f: RULES[f.rule_id].title if f.rule_id in RULES else f.rule_id,
+        group_label="Rule",
+        name_of=ctx.name,
+        kind_of=ctx.kind,
+    )
 
     with st.expander("Rule coverage", expanded=False):
         st.dataframe(
@@ -283,6 +369,22 @@ def _render_quality(ont) -> None:
             hide_index=True,
             width="stretch",
         )
+    if run.findings:
+        with st.expander("Export findings", expanded=False):
+            _download_or_save(
+                "Download findings (.json)",
+                findings_json(run.findings, run=run),
+                "quality-findings.json",
+                mime="application/json",
+                key=f"quality_export_json_{scope}",
+            )
+            _download_or_save(
+                "Download findings (.csv)",
+                findings_csv(run.findings),
+                "quality-findings.csv",
+                mime="text/csv",
+                key=f"quality_export_csv_{scope}",
+            )
 
 
 # -- SHACL ---------------------------------------------------------------------
@@ -308,22 +410,6 @@ def _remove_shape_cb(node, name: str) -> None:
         set_flash_message(f"Removed SHACL shape {name}.", "success")
     else:
         set_flash_message(f"Nothing to remove for {name}.", "info")
-
-
-def _render_finding(finding: QualityFinding, key: str) -> None:
-    """One finding: message, suggestion, and Open where a page can show it."""
-    text_col, open_col = st.columns([6, 1])
-    text_col.markdown(f"- {finding.message}")
-    if finding.suggestion:
-        text_col.caption(finding.suggestion)
-    if finding.resource_kind in _PAGE_BY_TYPE:
-        open_col.button(
-            "Open",
-            key=key,
-            on_click=_open_finding,
-            args=(finding,),
-            help=finding.resource,
-        )
 
 
 def _render_shacl(ont) -> None:
@@ -475,6 +561,7 @@ def _render_shacl(ont) -> None:
         st.warning("The ontology changed since this check. Run it again.")
     elif ran_once_id != once_id:
         st.warning("The one-off shapes changed since this check. Run it again.")
+    ctx = QualityContext(ont, include_imports=True)
     for origin, run in runs.items():
         st.markdown(f"**{_SHAPE_SOURCES[origin]}**")
         if run.error:
@@ -502,27 +589,34 @@ def _render_shacl(ont) -> None:
                 )
                 + f" · {run.duration_ms:.0f} ms"
             )
-        by_shape: dict[str, list[QualityFinding]] = {}
-        for finding in run.findings:
-            by_shape.setdefault(finding.source_shape or "(unnamed shape)", []).append(
-                finding
-            )
-        for shape, findings in by_shape.items():
-            with st.expander(
-                f"{_SEVERITY_ICONS[findings[0].severity]} {shape}", expanded=False
-            ):
-                st.caption(f"{len(findings)} finding(s).")
-                for i, finding in enumerate(findings[:_FINDINGS_SHOWN]):
-                    _render_finding(
-                        finding,
-                        f"shacl_open_{origin}_{_uid(shape)}_{i}_{_uid(finding.resource)}",
-                    )
-                if len(findings) > _FINDINGS_SHOWN:
-                    st.caption(f"…and {len(findings) - _FINDINGS_SHOWN} more.")
+        render_findings_table(
+            run.findings,
+            key=f"shacl_{origin}_{scope}",
+            group_of=lambda f: f.source_shape or "(unnamed shape)",
+            group_label="Shape",
+            name_of=ctx.name,
+            kind_of=ctx.kind,
+        )
         if run.report_ttl is not None:
-            _download_or_save(
-                "Download validation report (.ttl)",
-                run.report_ttl,
-                "shacl-report.ttl",
-                key=f"shacl_report_{origin}",
-            )
+            with st.expander("Export results", expanded=False):
+                _download_or_save(
+                    "Download validation report (.ttl)",
+                    run.report_ttl,
+                    "shacl-report.ttl",
+                    key=f"shacl_report_{origin}",
+                )
+                if run.findings:
+                    _download_or_save(
+                        "Download findings (.json)",
+                        findings_json(run.findings, source="shacl"),
+                        "shacl-findings.json",
+                        mime="application/json",
+                        key=f"shacl_export_json_{origin}",
+                    )
+                    _download_or_save(
+                        "Download findings (.csv)",
+                        findings_csv(run.findings),
+                        "shacl-findings.csv",
+                        mime="text/csv",
+                        key=f"shacl_export_csv_{origin}",
+                    )

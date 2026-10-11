@@ -261,10 +261,11 @@ def test_page_runs_rules_and_opens_a_finding():
     assert not at.exception, at.exception
     _run_button(at).click().run()
     assert not at.exception, at.exception
-    assert any("already implied by A ⊑ B ⊑ C" in md.value for md in at.markdown)
+    assert any("already implied by A ⊑ B ⊑ C" in m for m in table_messages(at))
     assert not at.warning  # fresh results
     assert not at.metric  # no headline score
 
+    select_first_finding(at, "quality_")
     next(b for b in at.button if b.label == "Open").click().run()
     assert not at.exception, at.exception
     assert at.session_state["search_navigate_to"] == "Classes"
@@ -278,7 +279,7 @@ def test_page_marks_results_stale_after_an_edit():
     at.run()
     assert any("changed since this run" in w.value for w in at.warning)
     # The old findings stay up until the next run.
-    assert any("already implied" in md.value for md in at.markdown)
+    assert any("already implied" in m for m in table_messages(at))
 
 
 # -- review fixes (PR #504) ------------------------------------------------------
@@ -346,12 +347,10 @@ def test_rule_toggles_still_flip_both_ways():
     q022().uncheck()
     at.run()
     assert not q022().value
-    stored = [
-        v
-        for k, v in at.session_state.filtered_state.items()
-        if k.startswith("_quality_config_")
-    ]
-    assert stored and not stored[0].enabled("Q022")
+    from orionbelt_ontology_builder.ui import QUALITY_CONFIGS_STATE
+
+    [stored] = at.session_state[QUALITY_CONFIGS_STATE].values()
+    assert not QualityConfig.from_dict(stored).enabled("Q022")
 
 
 def test_rules_and_categories_read_in_id_order():
@@ -372,3 +371,24 @@ def test_rule_labels_show_titles_not_ids():
     rule_boxes = [c for c in at.checkbox if c.label != "Include imported vocabularies"]
     assert {c.label for c in rule_boxes} == {r.title for r in RULES.values()}
     assert all("Rule ID Q" in c.help for c in rule_boxes)
+
+
+def table_messages(at):
+    """Every message in the findings tables on the page."""
+    return [
+        message
+        for frame in at.dataframe
+        if "Message" in frame.value.columns
+        for message in frame.value["Message"]
+    ]
+
+
+def select_first_finding(at, prefix):
+    """Select the first row of the findings table whose key starts with prefix."""
+    key = next(
+        k
+        for k in at.session_state.filtered_state
+        if k.startswith(prefix) and k.endswith("_table")
+    )
+    at.session_state[key] = {"selection": {"rows": [0], "columns": [], "cells": []}}
+    at.run()
