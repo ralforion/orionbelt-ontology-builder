@@ -373,12 +373,15 @@ class QualityContext:
     def kind(self, uri: str) -> str | None:
         """What the resource is, as the navigation names it, or None.
 
-        "Individual" only for a resource typed ``owl:NamedIndividual``: that is
-        what the Individuals page lists, so it is the only kind of individual
-        an Open button can land on (Codex review of PR #505). Anything else
-        typed by a class, such as ``:alice a :OldClass`` with no declaration,
-        has no page to open and gets None, which leaves the finding without an
-        Open button rather than with one leading to an empty list.
+        Only what a page can list, because the kind decides where an Open
+        button lands: Classes, Properties and SKOS list what is typed
+        ``owl:Class``, an OWL property type or ``skos:Concept``, and
+        Individuals lists ``owl:NamedIndividual``. A resource that is only
+        used as one, such as ``:alice a :OldClass`` or ``:Child
+        rdfs:subClassOf :Old`` with no declaration, has no page to open and
+        gets None, which leaves its finding without an Open button rather
+        than with one leading to a list it is not on (Codex review of
+        PR #505).
         """
         ref = URIRef(uri)
         for rdf_type, kind in _KIND_BY_TYPE.items():
@@ -386,12 +389,6 @@ class QualityContext:
                 return kind
         if (ref, RDF.type, OWL.NamedIndividual) in self.graph:
             return "Individual"
-        if (ref, RDFS.subClassOf, None) in self.graph or (
-            None,
-            RDFS.subClassOf,
-            ref,
-        ) in self.graph:
-            return "Class"
         return None
 
     @cached_property

@@ -438,3 +438,40 @@ class TestQ016ReviewFixes:
         om.add_class("Doc", label="Doc")
         om.graph.add((URIRef(NS + "Doc"), RDFS.comment, Literal(NS + "Old")))
         assert analyze(om, ALL).by_rule("Q016") == []
+
+
+def test_an_undeclared_class_gets_no_kind_to_open():
+    """The Classes page lists owl:Class only; ``:Child rdfs:subClassOf :Old``
+    without a declaration must not offer an Open that lands elsewhere."""
+    om = _om()
+    om.add_class("Old", label="Old")
+    om.graph.add((URIRef(NS + "Old"), OWL.deprecated, Literal(True)))
+    om.graph.add((URIRef(NS + "Child"), RDFS.subClassOf, URIRef(NS + "Old")))
+    [finding] = analyze(om, ALL).by_rule("Q016")
+    assert finding.resource == NS + "Child"
+    assert finding.resource_kind is None
+    assert NS + "Child" not in {c["uri"] for c in om.get_classes()}
+
+
+def test_every_kind_offered_is_one_its_page_lists():
+    """Each resource_kind a finding carries must be listed by the page it opens."""
+    om = _om()
+    om.add_class("C")
+    om.add_object_property("op")
+    om.add_data_property("dp")
+    om.add_individual("i", "C")
+    _concept(om, "k")
+    listed = {
+        "Class": {c["uri"] for c in om.get_classes()},
+        "Object Property": {p["uri"] for p in om.get_object_properties()},
+        "Data Property": {p["uri"] for p in om.get_data_properties()},
+        "Individual": {i["uri"] for i in om.get_individuals()},
+        "SKOS Concept": {c["uri"] for c in om.get_concepts()},
+    }
+    from orionbelt_ontology_builder.quality.context import QualityContext
+
+    ctx = QualityContext(om)
+    for name in ("C", "op", "dp", "i", "k"):
+        kind = ctx.kind(NS + name)
+        assert kind is not None, name
+        assert NS + name in listed[kind], (name, kind)
