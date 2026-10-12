@@ -576,3 +576,26 @@ def test_q017_checks_skos_xl_labels():
     om.graph.add((label, URIRef(xl + "literalForm"), Literal("Dog")))
     [finding] = analyze(om, ALL).by_rule("Q017")
     assert finding.evidence["predicates"] == ["skosxl:prefLabel"]
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [
+        "equals",
+        "disjoint",
+        "lessThan",
+        "lessThanOrEquals",
+        "targetSubjectsOf",
+        "targetObjectsOf",
+    ],
+)
+def test_q018_sees_properties_in_shacl_pairs_and_targets(pred):
+    """Codex review of #510, second round."""
+    om = _om()
+    for name in ("start", "end"):
+        om.graph.add((Q(name), RDF.type, OWL.DatatypeProperty))
+    om.graph.add((Q("x"), Q("start"), Literal(1)))
+    shape = BNode()
+    om.graph.add((shape, URIRef(SH + "path"), Q("start")))
+    om.graph.add((shape, URIRef(SH + pred), Q("end")))
+    assert "end" not in _names(analyze(om, ALL), "Q018")

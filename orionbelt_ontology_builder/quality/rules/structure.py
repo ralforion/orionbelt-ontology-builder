@@ -344,7 +344,8 @@ _SH = "http://www.w3.org/ns/shacl#"
 
 #: Predicates whose object is a property being used: in a restriction, a
 #: property axiom, a negative assertion or an axiom annotation, a SHACL path
-#: or one of its operators, or as a member of any RDF list. The lists cover
+#: or one of its operators, a SHACL property pair constraint or target, or as
+#: a member of any RDF list. The lists cover
 #: property chains, keys (owl:hasKey), owl:AllDisjointProperties members,
 #: n-ary data restrictions (owl:onProperties) and SHACL sequence and
 #: alternative paths, without a walk per construct.
@@ -362,6 +363,13 @@ _USED_AS_OBJECT = (
     URIRef(_SH + "zeroOrMorePath"),
     URIRef(_SH + "oneOrMorePath"),
     URIRef(_SH + "zeroOrOnePath"),
+    # Property pair constraints and targets name a property too.
+    URIRef(_SH + "equals"),
+    URIRef(_SH + "disjoint"),
+    URIRef(_SH + "lessThan"),
+    URIRef(_SH + "lessThanOrEquals"),
+    URIRef(_SH + "targetSubjectsOf"),
+    URIRef(_SH + "targetObjectsOf"),
 )
 
 #: Axioms a property states about itself that relate it to other
