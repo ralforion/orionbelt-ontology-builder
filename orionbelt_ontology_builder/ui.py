@@ -4728,6 +4728,23 @@ def _panel_add_parent(classes, ntype, ename):
     return None
 
 
+def _one_line(shown: str, full: str) -> str:
+    """A node's label on one line, for the heading.
+
+    A value label can wrap onto two lines (issue #511), and a line break would
+    end the HTML block. Each break goes back to what it was in ``full``: a
+    space between words, nothing where a long word (a URL) was broken.
+    """
+    flat_full = " ".join(full.split())
+    lines = [line for line in shown.split("\n") if line.strip()] or [""]
+    text = lines[0].strip()
+    for line in lines[1:]:
+        line = line.strip()
+        glued = text + line.removesuffix("…")
+        text = (text if flat_full.startswith(glued) else text + " ") + line
+    return text
+
+
 def panel_heading_html(shown: str, full: str) -> str:
     """The details panel's heading: a node's label, linking to its whole value.
 
@@ -4743,7 +4760,7 @@ def panel_heading_html(shown: str, full: str) -> str:
     would not do — markdown still parses the text between inline tags, and the
     linkifier put its own <a> inside ours.
     """
-    text = html.escape(shown or full)
+    text = html.escape(_one_line(shown or full, full))
     is_url = full.startswith(("http://", "https://")) and not any(
         c.isspace() for c in full
     )

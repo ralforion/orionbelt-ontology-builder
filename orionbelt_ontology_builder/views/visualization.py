@@ -3,6 +3,8 @@
 import html
 import json
 import logging
+import re
+import textwrap
 
 import streamlit as st
 
@@ -515,6 +517,53 @@ def graph_fullscreen_css(dark: bool) -> str:
     </style>"""
 
 
+#: A value node's drawn label: up to this many characters a line, this many
+#: lines. Two lines of 24 hold what one line of 30 did and more, in a box
+#: about as wide as the class nodes beside it.
+VALUE_LABEL_WIDTH = 24
+VALUE_LABEL_LINES = 2
+_NON_SPACE = re.compile(r"\S+")
+
+
+def value_label(value: str) -> str:
+    """How an annotation or literal value is drawn on its node.
+
+    Whitespace, line breaks included, is collapsed first: vis-network draws a
+    line break in a label as a new line, so a value with a stray newline got a
+    box two lines tall with the text cut short on the second line (issue
+    #511). Then the value wraps at word boundaries onto at most
+    ``VALUE_LABEL_LINES`` lines, with "…" only when that is not enough. The
+    whole value stays in the node's tooltip and the details panel.
+    """
+    # Only as much of the value as two lines can show is wrapped, plus one
+    # character to tell that there was more: an imported literal can be
+    # megabytes (base64 data), and wrapping all of it to draw two lines took
+    # seconds (Codex review of #512).
+    budget = VALUE_LABEL_WIDTH * VALUE_LABEL_LINES
+    words: list[str] = []
+    size = 0
+    more = False
+    for match in _NON_SPACE.finditer(value):
+        if size > budget:
+            more = True
+            break
+        whole = match.group()
+        word = whole[: budget + 1 - size]
+        words.append(word)
+        size += len(word) + 1
+        if len(word) < len(whole):
+            # Cut inside this word: the value goes on even if nothing follows
+            # it, and the cut text may still fit two lines.
+            more = True
+            break
+    lines = textwrap.wrap(" ".join(words), VALUE_LABEL_WIDTH, break_on_hyphens=False)
+    if not more and len(lines) <= VALUE_LABEL_LINES:
+        return "\n".join(lines)
+    kept = lines[:VALUE_LABEL_LINES]
+    last = kept[-1][: VALUE_LABEL_WIDTH - 1].rstrip()
+    return "\n".join([*kept[:-1], last + "…"])
+
+
 def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
     """Hang ``subject_uri``'s annotations off its node, at most ``room`` of them.
 
@@ -547,9 +596,7 @@ def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
         ann_ename = annotation_ename(subject_uri, ann)
         ann_id = f"ann_{_uid(ann_ename)}"
         pred_display = ann.get("predicate_prefixed", ann["predicate"])
-        value_display = (
-            ann["value"][:30] + "..." if len(ann["value"]) > 30 else ann["value"]
-        )
+        value_display = value_label(ann["value"])
         # Count what was actually drawn: an id already in the graph is dropped by
         # the builder, and charging the budget for it would leave room unused.
         before = len(net.nodes)
@@ -2693,7 +2740,7 @@ def render_visualization():
                             if _triple_new >= _max_triple_new:
                                 continue
                             o_str = str(o)
-                            o_display = o_str[:30] + "..." if len(o_str) > 30 else o_str
+                            o_display = value_label(o_str)
                             o_node = (
                                 f"lit_{abs(hash(s_uri_str + str(p) + o_str)) % 10**8}"
                             )
