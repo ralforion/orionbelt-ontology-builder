@@ -469,3 +469,110 @@ def test_page_suppresses_a_finding_and_shows_it_again():
     next(b for b in at.button if b.label == "Show again").click().run()
     assert _stored(at).suppressions == ()
     assert not any(e.label.startswith("Suppressed findings") for e in at.expander)
+
+
+# -- review fixes (PR #510) ---------------------------------------------------------------
+
+
+def test_q014_compares_identical_labels_once():
+    """#1: 2,000 resources under one label are one candidate, not millions."""
+    om = _om()
+    for i in range(2000):
+        _cls(om, f"C{i}", "Customer order")
+    _cls(om, "Typo", "Custmer order")
+    began = time.perf_counter()
+    run = analyze(om, QualityConfig(rules={"Q014": RuleSettings(enabled=True)}))
+    assert time.perf_counter() - began < 5
+    # Each resource under the label is still paired with the misspelt one.
+    assert len(run.by_rule("Q014")) == 2000
+    assert all(
+        NS + "Typo" in (f.resource, *f.related_resources) for f in run.by_rule("Q014")
+    )
+
+
+SH = "http://www.w3.org/ns/shacl#"
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        "inverse_path",
+        "sequence_path",
+        "alternative_path",
+        "has_key",
+        "all_disjoint",
+        "negative_assertion",
+        "zero_or_more",
+    ],
+)
+def test_q018_sees_properties_in_paths_and_lists(use):
+    """#2."""
+    om = _om()
+    g = om.graph
+    for name in ("p", "other"):
+        g.add((Q(name), RDF.type, OWL.ObjectProperty))
+    g.add((Q("x"), Q("other"), Q("y")))
+    shape = BNode()
+    if use == "inverse_path":
+        path = BNode()
+        g.add((path, URIRef(SH + "inversePath"), Q("p")))
+        g.add((shape, URIRef(SH + "path"), path))
+    elif use == "zero_or_more":
+        path = BNode()
+        g.add((path, URIRef(SH + "zeroOrMorePath"), Q("p")))
+        g.add((shape, URIRef(SH + "path"), path))
+    elif use == "sequence_path":
+        seq = BNode()
+        Collection(g, seq, [Q("other"), Q("p")])
+        g.add((shape, URIRef(SH + "path"), seq))
+    elif use == "alternative_path":
+        alt, path = BNode(), BNode()
+        Collection(g, alt, [Q("other"), Q("p")])
+        g.add((path, URIRef(SH + "alternativePath"), alt))
+        g.add((shape, URIRef(SH + "path"), path))
+    elif use == "has_key":
+        keys = BNode()
+        Collection(g, keys, [Q("p")])
+        g.add((Q("Person"), RDF.type, OWL.Class))
+        g.add((Q("Person"), OWL.hasKey, keys))
+    elif use == "all_disjoint":
+        members, axiom = BNode(), BNode()
+        Collection(g, members, [Q("p"), Q("other")])
+        g.add((axiom, RDF.type, OWL.AllDisjointProperties))
+        g.add((axiom, OWL.members, members))
+    elif use == "negative_assertion":
+        axiom = BNode()
+        g.add((axiom, RDF.type, OWL.NegativePropertyAssertion))
+        g.add((axiom, OWL.sourceIndividual, Q("x")))
+        g.add((axiom, OWL.assertionProperty, Q("p")))
+        g.add((axiom, OWL.targetIndividual, Q("y")))
+    assert "p" not in _names(analyze(om, ALL), "Q018")
+
+
+@pytest.mark.parametrize(
+    ("pred", "name"),
+    [
+        (URIRef("http://purl.org/dc/terms/description"), "description"),
+        (URIRef("http://purl.obolibrary.org/obo/IAO_0000115"), "IAO_0000115"),
+        (SKOS.altLabel, "altLabel"),
+    ],
+)
+def test_q017_checks_every_text_form(pred, name):
+    """#3."""
+    om = _om()
+    _cls(om, "A", "A")
+    om.graph.add((Q("A"), pred, Literal("Untagged text.")))
+    [finding] = analyze(om, ALL).by_rule("Q017")
+    assert finding.evidence["predicates"] == [name]
+
+
+def test_q017_checks_skos_xl_labels():
+    """#3."""
+    xl = "http://www.w3.org/2008/05/skos-xl#"
+    om = _om()
+    om.graph.add((Q("c"), RDF.type, SKOS.Concept))
+    label = BNode()
+    om.graph.add((Q("c"), URIRef(xl + "prefLabel"), label))
+    om.graph.add((label, URIRef(xl + "literalForm"), Literal("Dog")))
+    [finding] = analyze(om, ALL).by_rule("Q017")
+    assert finding.evidence["predicates"] == ["skosxl:prefLabel"]

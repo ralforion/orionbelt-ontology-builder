@@ -6,7 +6,6 @@ from collections import deque
 
 import networkx as nx
 from rdflib import URIRef
-from rdflib.collection import Collection
 from rdflib.namespace import OWL, RDF, RDFS, SKOS
 
 from ..context import QualityContext
@@ -341,38 +340,58 @@ def _outside_hierarchy(ctx: QualityContext, severity: Severity) -> RuleResult:
     return result
 
 
-#: Where a property is used other than in a statement of its own.
-_PROPERTY_USES = (
+_SH = "http://www.w3.org/ns/shacl#"
+
+#: Predicates whose object is a property being used: in a restriction, a
+#: property axiom, a negative assertion or an axiom annotation, a SHACL path
+#: or one of its operators, or as a member of any RDF list. The lists cover
+#: property chains, keys (owl:hasKey), owl:AllDisjointProperties members,
+#: n-ary data restrictions (owl:onProperties) and SHACL sequence and
+#: alternative paths, without a walk per construct.
+_USED_AS_OBJECT = (
     OWL.onProperty,
     RDFS.subPropertyOf,
     OWL.inverseOf,
     OWL.equivalentProperty,
     OWL.propertyDisjointWith,
-    URIRef("http://www.w3.org/ns/shacl#path"),
+    OWL.assertionProperty,
+    OWL.annotatedProperty,
+    RDF.first,
+    URIRef(_SH + "path"),
+    URIRef(_SH + "inversePath"),
+    URIRef(_SH + "zeroOrMorePath"),
+    URIRef(_SH + "oneOrMorePath"),
+    URIRef(_SH + "zeroOrOnePath"),
+)
+
+#: Axioms a property states about itself that relate it to other
+#: properties, so it takes part in the model.
+_USED_AS_SUBJECT = (
+    RDFS.subPropertyOf,
+    OWL.inverseOf,
+    OWL.equivalentProperty,
+    OWL.propertyDisjointWith,
+    OWL.propertyChainAxiom,
 )
 
 
 def _unused_properties(ctx: QualityContext, severity: Severity) -> RuleResult:
     """Properties nothing in this graph uses: no statement, restriction,
-    property axiom, chain or shape path names them."""
+    property axiom, list, or shape path names them."""
     result = RuleResult(checked=len(ctx.properties))
-    in_chains: set[str] = set()
-    for head in ctx.graph.objects(None, OWL.propertyChainAxiom):
-        try:
-            in_chains.update(str(member) for member in Collection(ctx.graph, head))
-        except ValueError:
-            continue  # a cyclic rdf:rest: a malformed chain uses nothing
+    used = {
+        str(obj)
+        for pred in _USED_AS_OBJECT
+        for obj in ctx.graph.objects(None, pred)
+        if isinstance(obj, URIRef)
+    }
     for uri in sorted(ctx.properties):
         prop = URIRef(uri)
+        if uri in used:
+            continue
         if next(ctx.graph.triples((None, prop, None)), None) is not None:
             continue
-        if uri in in_chains or (prop, OWL.propertyChainAxiom, None) in ctx.graph:
-            continue
-        if any(
-            (None, pred, prop) in ctx.graph
-            or (pred != OWL.onProperty and (prop, pred, None) in ctx.graph)
-            for pred in _PROPERTY_USES
-        ):
+        if any((prop, pred, None) in ctx.graph for pred in _USED_AS_SUBJECT):
             continue
         result.findings.append(
             ctx.finding(

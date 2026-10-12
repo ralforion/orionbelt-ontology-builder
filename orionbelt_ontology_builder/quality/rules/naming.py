@@ -259,7 +259,11 @@ def _similar_labels(ctx: QualityContext, severity: Severity) -> RuleResult:
     """Near-duplicates Q003's exact comparison misses: case, separators,
     plurals, and small spelling differences, within one kind and language."""
     result = RuleResult(checked=len(ctx.documentable))
-    by_group: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    # Per kind and language, the resources under each label as Q003
+    # normalises it: identical labels are one candidate, compared once,
+    # however many resources carry them (2,000 identical labels were millions
+    # of comparisons, Codex review of #510).
+    groups: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
     for uri in ctx.documentable:
         family = "property" if uri in ctx.properties else ctx.kind(uri) or "other"
         for label in ctx.labels(uri):
@@ -267,29 +271,38 @@ def _similar_labels(ctx: QualityContext, severity: Severity) -> RuleResult:
             if not text.strip():
                 continue
             lang = (label.language or "").lower()
-            by_group.setdefault((family, lang), []).append((uri, text, _loose(text)))
+            same = groups.setdefault((family, lang), {}).setdefault(normalise(text), {})
+            same.setdefault(uri, text)
     pairs: dict[tuple[str, str], dict[str, str]] = {}
-    for items in by_group.values():
+    for by_text in groups.values():
         # Candidates by deletion variants: two forms one insertion, deletion,
         # substitution or swap apart always share a variant with one
         # character dropped (or are equal). Comparing only within a variant
         # keeps a large vocabulary from costing every pair.
-        buckets: dict[str, list[tuple[str, str, str]]] = {}
-        for item in items:
-            loose = item[2]
-            variants = {loose} | {loose[:i] + loose[i + 1 :] for i in range(len(loose))}
-            for variant in variants:
-                buckets.setdefault(variant, []).append(item)
+        loose = {norm: _loose(norm) for norm in by_text}
+        buckets: dict[str, list[str]] = {}
+        for norm, form in loose.items():
+            for variant in {form} | {
+                form[:i] + form[i + 1 :] for i in range(len(form))
+            }:
+                buckets.setdefault(variant, []).append(norm)
+        compared: set[tuple[str, str]] = set()
         for bucket in buckets.values():
-            for i, (uri_a, text_a, loose_a) in enumerate(bucket):
-                for uri_b, text_b, loose_b in bucket[i + 1 :]:
-                    if uri_a == uri_b or normalise(text_a) == normalise(text_b):
-                        continue  # the same resource, or Q003's exact duplicate
-                    key = (min(uri_a, uri_b), max(uri_a, uri_b))
-                    if key in pairs:
+            for i, norm_a in enumerate(bucket):
+                for norm_b in bucket[i + 1 :]:
+                    candidate = (min(norm_a, norm_b), max(norm_a, norm_b))
+                    if candidate in compared:
                         continue
-                    if loose_a == loose_b or _one_typo_apart(loose_a, loose_b):
-                        pairs[key] = {uri_a: text_a, uri_b: text_b}
+                    compared.add(candidate)
+                    form_a, form_b = loose[norm_a], loose[norm_b]
+                    if form_a != form_b and not _one_typo_apart(form_a, form_b):
+                        continue
+                    for uri_a, text_a in by_text[norm_a].items():
+                        for uri_b, text_b in by_text[norm_b].items():
+                            if uri_a == uri_b:
+                                continue  # one resource's own two labels
+                            key = (min(uri_a, uri_b), max(uri_a, uri_b))
+                            pairs.setdefault(key, {uri_a: text_a, uri_b: text_b})
     for (a, b), texts in sorted(pairs.items()):
         result.findings.append(
             ctx.finding(

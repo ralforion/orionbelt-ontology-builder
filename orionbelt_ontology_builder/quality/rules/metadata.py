@@ -5,9 +5,16 @@ from __future__ import annotations
 import re
 
 from rdflib import URIRef
-from rdflib.namespace import DCTERMS, OWL, RDFS, XSD
+from rdflib.namespace import DCTERMS, OWL, RDFS, SKOS, XSD
 
-from ..context import _OBO, QualityContext, words
+from ..context import (
+    _OBO,
+    DEFINITION_PREDICATES,
+    LABEL_PREDICATES,
+    SKOSXL,
+    QualityContext,
+    words,
+)
 from ..models import Severity
 from ..registry import OWL_PROFILE, SKOS_PROFILE, Rule, RuleResult, register
 
@@ -331,28 +338,35 @@ def _vague_definitions(ctx: QualityContext, severity: Severity) -> RuleResult:
 
 # -- missing language tags (Q017) ----------------------------------------------------
 
-#: Literals a localised ontology tags with a language.
+#: Literals a localised ontology tags with a language: every label and
+#: definition form the other rules read, plus alternative and hidden labels.
 _TEXT_PREDICATES = (
-    RDFS.label,
-    URIRef("http://www.w3.org/2004/02/skos/core#prefLabel"),
-    URIRef("http://www.w3.org/2004/02/skos/core#altLabel"),
-    URIRef("http://www.w3.org/2004/02/skos/core#definition"),
-    RDFS.comment,
+    *LABEL_PREDICATES,
+    SKOS.altLabel,
+    SKOS.hiddenLabel,
+    *DEFINITION_PREDICATES,
 )
+_XL_LABELS = (SKOSXL.prefLabel, SKOSXL.altLabel, SKOSXL.hiddenLabel)
 
 
 def _untagged(ctx: QualityContext, severity: Severity) -> RuleResult:
     result = RuleResult(checked=len(ctx.documentable))
     for uri in ctx.documentable:
-        untagged = sorted(
-            {
-                ctx.ont._local_name(pred)
-                for pred, text in ctx.literals(uri, _TEXT_PREDICATES)
-                if not text.language
-                and (text.datatype is None or text.datatype == XSD.string)
-                and str(text).strip()
-            }
-        )
+        found = {
+            ctx.ont._local_name(pred)
+            for pred, text in ctx.literals(uri, _TEXT_PREDICATES)
+            if not text.language
+            and (text.datatype is None or text.datatype == XSD.string)
+            and str(text).strip()
+        }
+        # SKOS-XL labels, read through their literal form as Q001 reads them.
+        found |= {
+            f"skosxl:{ctx.ont._local_name(pred)}"
+            for pred in _XL_LABELS
+            for item in ctx.ont._xl_literals(URIRef(uri), pred)
+            if not item["lang"] and item["value"].strip()
+        }
+        untagged = sorted(found)
         if not untagged:
             continue
         result.findings.append(
