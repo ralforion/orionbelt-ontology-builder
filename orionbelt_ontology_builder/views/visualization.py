@@ -547,9 +547,15 @@ def value_label(value: str) -> str:
         if size > budget:
             more = True
             break
-        word = match.group()[: budget + 1 - size]
+        whole = match.group()
+        word = whole[: budget + 1 - size]
         words.append(word)
         size += len(word) + 1
+        if len(word) < len(whole):
+            # Cut inside this word: the value goes on even if nothing follows
+            # it, and the cut text may still fit two lines.
+            more = True
+            break
     lines = textwrap.wrap(" ".join(words), VALUE_LABEL_WIDTH, break_on_hyphens=False)
     if not more and len(lines) <= VALUE_LABEL_LINES:
         return "\n".join(lines)

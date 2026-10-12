@@ -75,3 +75,11 @@ def test_a_huge_value_costs_only_what_is_drawn(value):
 def test_a_value_just_past_two_lines_is_marked_as_cut():
     value = "abcdefghijklmnopqrstuvwx " * 2 + "y"
     assert value_label(value).endswith("…")
+
+
+def test_a_cut_inside_the_last_word_is_marked():
+    """Codex review of #512: the cut text fit two lines, so "/path" went
+    missing with no "…" to say so."""
+    drawn = value_label("A reference to the value https://example.org/long/path")
+    assert drawn.endswith("…")
+    assert "/path" not in drawn
