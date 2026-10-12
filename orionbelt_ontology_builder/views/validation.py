@@ -30,6 +30,7 @@ from ..shacl import (
     shape_turtle,
     split_shapes,
 )
+from ..shacl_generate import generate_shapes
 from ..ui import (
     QUALITY_CONFIGS_GENERATION,
     QUALITY_CONFIGS_STATE,
@@ -405,6 +406,8 @@ def _source_title(source: str) -> str:
         return "Shapes in this ontology"
     if source == "once":
         return "One-off shapes (not saved)"
+    if source == "generated":
+        return "Generated from the model"
     return f"{BUNDLED_SHAPES[source.removeprefix('bundled:')].title} (built-in)"
 
 
@@ -573,6 +576,29 @@ def _render_shacl(ont) -> None:
                 help="Add these shapes to the ontology (one undo step).",
             )
 
+    with st.expander("Shapes generated from the model", expanded=False):
+        st.markdown(
+            "Checks individuals against what the model already says, read "
+            "closed-world: cardinality restrictions become minimum and maximum "
+            "counts, `someValuesFrom` a required value of that class, "
+            "`allValuesFrom` the class every value must have, `hasValue` a "
+            "required value, a functional property at most one value, and a "
+            "property range the class or datatype of its values. Derived afresh "
+            "on every check, so there is nothing to keep in sync, and never "
+            "stored. Each finding names the axiom it comes from."
+        )
+        if st.toggle("Show the generated shapes", key=f"shacl_show_generated_{scope}"):
+            generated_ttl = generate_shapes(split_shapes(ont.graph)[0]).serialize(
+                format="turtle"
+            )
+            st.code(generated_ttl, language="turtle")
+            _download_or_save(
+                "Download generated shapes (.ttl)",
+                generated_ttl,
+                "generated-shapes.ttl",
+                key=f"shacl_generated_dl_{scope}",
+            )
+
     once_id, once = st.session_state.get(once_key) or (None, None)
     sources = []
     if shapes:
@@ -592,6 +618,33 @@ def _render_shacl(ont) -> None:
     # source: a multiselect's default would not follow one-off shapes that
     # appear later. The ontology's own and one-off shapes are always checked.
     st.markdown("**Also check against**")
+    infer = True
+    if st.checkbox(
+        "Generated from the model",
+        value=False,
+        key=f"shacl_use_generated_{scope}",
+        help="Check individuals against the ontology's own restrictions, "
+        "functional properties and ranges, read closed-world (issue #498).",
+    ):
+        sources.append("generated")
+        # For the generated check only: those shapes are the model's axioms
+        # read closed-world, and inference is what makes them mean what the
+        # model does. Shapes written to be checked as stated (the ontology's
+        # own, uploaded, built-in) stay so; inference adds triples a closed
+        # shape or a labelling policy would object to (Codex review of #509).
+        _, indent = st.columns([1, 24])
+        infer = indent.checkbox(
+            "Apply OWL RL inference first",
+            value=True,
+            key=f"shacl_infer_{scope}",
+            help="Check what the ontology implies, not only what it states: a "
+            "value a hasValue restriction entails, or a type a subclass axiom "
+            "entails, no longer reads as missing. Reasoning runs on a copy for "
+            "the check only; the ontology is not changed (Reasoning's Apply "
+            "Reasoning is what writes inferences in). Range checks say nothing "
+            "while this is on, since inference types every value as its "
+            "range's class.",
+        )
     for bundled in BUNDLED_SHAPES.values():
         if st.checkbox(
             bundled.title,
@@ -610,18 +663,26 @@ def _render_shacl(ont) -> None:
                 return embedded, "shacl:ontology"
             if source == "once":
                 return once, "shacl:user"
+            if source == "generated":
+                return generate_shapes(data), "shacl:generated"
             return load_bundled(source.removeprefix("bundled:")), "shacl:bundled"
 
         runs = {}
         for source in sources:
             graph, origin = shapes_for(source)
             runs[source] = run_shacl(
-                data, graph, origin=origin, kind=ctx.kind, name=ctx.name
+                data,
+                graph,
+                origin=origin,
+                kind=ctx.kind,
+                name=ctx.name,
+                infer=infer and source == "generated",
             )
         st.session_state[run_key] = (
             ont.revision_token(),
             once_id,
             tuple(sources),
+            infer and "generated" in sources,
             runs,
         )
     if not sources:
@@ -630,13 +691,15 @@ def _render_shacl(ont) -> None:
     stored = st.session_state.get(run_key)
     if stored is None:
         return
-    token, ran_once_id, ran_sources, runs = stored
+    token, ran_once_id, ran_sources, ran_infer, runs = stored
     if token != ont.revision_token():
         st.warning("The ontology changed since this check. Run it again.")
     elif ran_once_id != once_id:
         st.warning("The one-off shapes changed since this check. Run it again.")
     elif ran_sources != tuple(sources):
         st.warning("The shapes selection changed since this check. Run it again.")
+    elif ran_infer != (infer and "generated" in sources):
+        st.warning("The inference setting changed since this check. Run it again.")
     ctx = QualityContext(ont, include_imports=True)
     for origin, run in runs.items():
         st.markdown(f"**{_source_title(origin)}**")

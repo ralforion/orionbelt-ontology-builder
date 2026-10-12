@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
@@ -534,7 +534,12 @@ def remove_shape(graph: Graph, node: Node) -> int:
 
 
 def _in_worker(
-    data: Graph, shapes: Graph, *, meta: bool, deadline_s: float
+    data: Graph,
+    shapes: Graph,
+    *,
+    meta: bool,
+    deadline_s: float,
+    inference: str = "none",
 ) -> dict[str, Any]:
     """Run pySHACL in a fresh worker process, killed if the deadline passes.
 
@@ -547,6 +552,7 @@ def _in_worker(
             "shapes_nt": shapes.serialize(format="nt"),
             "prefixes": [(p, str(n)) for p, n in shapes.namespaces()],
             "meta": meta,
+            "inference": inference,
         }
     )
     # The package's own location first, so the worker imports this copy of it
@@ -582,7 +588,11 @@ def _in_worker(
 
 
 def _validate_in_worker(
-    data_nt: str, shapes_nt: str, prefixes: list[tuple[str, str]], meta: bool
+    data_nt: str,
+    shapes_nt: str,
+    prefixes: list[tuple[str, str]],
+    meta: bool,
+    inference: str = "none",
 ) -> dict[str, Any]:
     """The worker's side: validate, and hand back plain data.
 
@@ -592,6 +602,14 @@ def _validate_in_worker(
     """
     from pyshacl import validate
     from pyshacl.errors import ReportableRuntimeError
+    from rdflib.plugins.sparql.operators import register_custom_function
+
+    from .shacl_generate import RATIONAL_IN, rational_in
+
+    # The exact rational check generated shapes call (see rational_in).
+    # rdflib's annotation describes the raw=True calling convention; with the
+    # default it calls the function with the evaluated arguments.
+    register_custom_function(RATIONAL_IN, cast(Any, rational_in), override=True)
 
     # One blank-node map for both: a node the shapes name as a target or a
     # value is the same node in the data, and parsing the two separately
@@ -606,7 +624,7 @@ def _validate_in_worker(
             data,
             shacl_graph=shapes,
             meta_shacl=meta,
-            inference="none",
+            inference=inference,
             abort_on_first=False,
             allow_infos=True,
             allow_warnings=True,
@@ -689,11 +707,18 @@ def run_shacl(
     deadline_s: float = DEFAULT_DEADLINE_SECONDS,
     kind: Callable[[str], str | None] | None = None,
     name: Callable[[str], str] | None = None,
+    infer: bool = False,
 ) -> ShaclRun:
     """Validate ``data`` against ``shapes`` and map the report to findings.
 
     ``kind`` and ``name`` resolve a focus node for navigation and display;
     the caller has the ontology context to do that.
+
+    With ``infer``, pySHACL applies OWL RL inference to (a copy of) the data
+    first, so the check is of what the ontology implies rather than what it
+    states: a value a ``hasValue`` restriction entails no longer reads as
+    missing. Range checks then say nothing, as inference types every value
+    as the range's class.
     """
     all_shapes = shape_nodes(shapes)
     run = ShaclRun(conforms=None, shapes_checked=len(_top_level(shapes, all_shapes)))
@@ -706,7 +731,13 @@ def run_shacl(
         run.error = str(exc)
         return run
     began = time.monotonic()
-    outcome = _in_worker(data, shapes, meta=False, deadline_s=deadline_s)
+    outcome = _in_worker(
+        data,
+        shapes,
+        meta=False,
+        deadline_s=deadline_s,
+        inference="owlrl" if infer else "none",
+    )
     run.duration_ms = (time.monotonic() - began) * 1000
     if "timeout" in outcome:
         run.error = (

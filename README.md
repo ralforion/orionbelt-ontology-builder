@@ -273,6 +273,19 @@ Closed-world checks of the data against SHACL shapes, run with
   one-prefLabel-per-language rules as SHACL, kept in agreement with them by
   tests) and **SKOS integrity** and **SKOS best practice** from
   [skohub-shapes](https://github.com/skohub-io/skohub-shapes).
+- **Check individuals against the model** with shapes generated from the
+  ontology's own axioms: cardinality restrictions become minimum and maximum
+  counts, `someValuesFrom` a required value of that class, `allValuesFrom` the
+  class every value must have, `hasValue` a required value, functional
+  properties at most one value, and ranges the class or datatype of values.
+  Generated afresh on every check, never stored, and each finding names the
+  axiom it comes from.
+- **OWL RL inference first** for the generated check (on by default): it sees
+  what the ontology implies, not only what it states, so a value a `hasValue`
+  restriction entails no longer reads as missing. Reasoning runs on a copy for
+  the check only. Switch it off to check what is written down; range checks
+  only say something then. Shapes you write, upload or pick from the built-in
+  sets are always checked against the data as stated.
 - Findings name the focus node, path and source shape, open the affected
   entity, and the full validation report downloads as Turtle.
 - Export the ontology with its shapes, without them, or the shapes alone.
@@ -599,14 +612,6 @@ that the hash matches its own label, so a pinned SHA of a genuinely malicious
 release passes. It does not stop a downgrade to a real but ancient version. And
 `actions/checkout` necessarily runs before the check, since nothing can be
 verified before the tree it fetches exists.
-
----
-
-## Roadmap
-
-Not implemented yet, listed here so it is clear what the workbench does *not* do today:
-
-- **SHACL shapes generated from the model.** SHACL checks run against shapes you add or that the ontology carries. Deriving shapes from the ontology's own restrictions, functional properties and ranges, so individuals can be checked against the model with nothing to maintain, is planned (#498).
 
 ---
 
