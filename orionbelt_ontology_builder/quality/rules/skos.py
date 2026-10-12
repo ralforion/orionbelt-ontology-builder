@@ -6,6 +6,9 @@ them with a stable ID and the same scope as every other rule.
 
 from __future__ import annotations
 
+from rdflib import URIRef
+from rdflib.namespace import SKOS
+
 from ..context import QualityContext
 from ..models import Severity
 from ..registry import SKOS_PROFILE, Rule, RuleResult, register
@@ -43,6 +46,53 @@ def _prefLabel_per_language(ctx: QualityContext, severity: Severity) -> RuleResu
     return result
 
 
+def _unmirrored(ctx: QualityContext, severity: Severity) -> RuleResult:
+    """A broader link without the narrower link back, or the other way round.
+
+    SKOS makes them inverses, so a reasoner infers the missing half; this is
+    for projects that state both directions anyway, hence off by default.
+    """
+    result = RuleResult(checked=len(ctx.concepts))
+    pairs = ((SKOS.broader, SKOS.narrower), (SKOS.narrower, SKOS.broader))
+    for uri in sorted(ctx.concepts):
+        ref = URIRef(uri)
+        for stated, mirror in pairs:
+            for other in ctx.graph.objects(ref, stated):
+                if not isinstance(other, URIRef) or str(other) not in ctx.concepts:
+                    continue
+                if (other, mirror, ref) in ctx.graph:
+                    continue
+                result.findings.append(
+                    ctx.finding(
+                        "Q011",
+                        severity,
+                        uri,
+                        f"'{ctx.name(uri)}' has {ctx.ont._local_name(stated)} "
+                        f"'{ctx.name(str(other))}', which does not state "
+                        f"{ctx.ont._local_name(mirror)} back.",
+                        evidence={"stated": str(stated), "other": str(other)},
+                        suggestion=f"Add skos:{ctx.ont._local_name(mirror)} on "
+                        f"'{ctx.name(str(other))}', or rely on inference.",
+                        related=[str(other)],
+                    )
+                )
+                result.affected.add(uri)
+    return result
+
+
+register(
+    Rule(
+        "Q011",
+        "Broader and narrower not mirrored",
+        "A skos:broader without the skos:narrower back, or the other way round. "
+        "Only for projects that state both directions, so off by default.",
+        "skos",
+        frozenset({SKOS_PROFILE}),
+        "warning",
+        False,
+        _unmirrored,
+    )
+)
 register(
     Rule(
         "Q010",

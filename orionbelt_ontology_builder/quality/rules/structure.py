@@ -6,6 +6,7 @@ from collections import deque
 
 import networkx as nx
 from rdflib import URIRef
+from rdflib.collection import Collection
 from rdflib.namespace import OWL, RDF, RDFS, SKOS
 
 from ..context import QualityContext
@@ -340,6 +341,54 @@ def _outside_hierarchy(ctx: QualityContext, severity: Severity) -> RuleResult:
     return result
 
 
+#: Where a property is used other than in a statement of its own.
+_PROPERTY_USES = (
+    OWL.onProperty,
+    RDFS.subPropertyOf,
+    OWL.inverseOf,
+    OWL.equivalentProperty,
+    OWL.propertyDisjointWith,
+    URIRef("http://www.w3.org/ns/shacl#path"),
+)
+
+
+def _unused_properties(ctx: QualityContext, severity: Severity) -> RuleResult:
+    """Properties nothing in this graph uses: no statement, restriction,
+    property axiom, chain or shape path names them."""
+    result = RuleResult(checked=len(ctx.properties))
+    in_chains: set[str] = set()
+    for head in ctx.graph.objects(None, OWL.propertyChainAxiom):
+        try:
+            in_chains.update(str(member) for member in Collection(ctx.graph, head))
+        except ValueError:
+            continue  # a cyclic rdf:rest: a malformed chain uses nothing
+    for uri in sorted(ctx.properties):
+        prop = URIRef(uri)
+        if next(ctx.graph.triples((None, prop, None)), None) is not None:
+            continue
+        if uri in in_chains or (prop, OWL.propertyChainAxiom, None) in ctx.graph:
+            continue
+        if any(
+            (None, pred, prop) in ctx.graph
+            or (pred != OWL.onProperty and (prop, pred, None) in ctx.graph)
+            for pred in _PROPERTY_USES
+        ):
+            continue
+        result.findings.append(
+            ctx.finding(
+                "Q018",
+                severity,
+                uri,
+                f"Property '{ctx.name(uri)}' is not used: no statement, restriction "
+                "or other property refers to it.",
+                suggestion="Use it in a restriction or on individuals, or remove it "
+                "if it is left over. Another ontology may still use it.",
+            )
+        )
+        result.affected.add(uri)
+    return result
+
+
 for _rule in (
     Rule(
         "Q006",
@@ -384,6 +433,17 @@ for _rule in (
         "warning",
         True,
         _self_edges,
+    ),
+    Rule(
+        "Q018",
+        "Unused properties",
+        "Properties no statement, restriction, property axiom or shape in this "
+        "graph refers to. Relative to this graph only, so off by default.",
+        "structure",
+        _OWL,
+        "info",
+        False,
+        _unused_properties,
     ),
     Rule(
         "Q019",

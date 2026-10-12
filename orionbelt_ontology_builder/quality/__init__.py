@@ -12,6 +12,7 @@ the same from the page, a test, or a command line.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from importlib import metadata
 from typing import TYPE_CHECKING
@@ -19,7 +20,15 @@ from typing import TYPE_CHECKING
 from . import rules as _rules  # noqa: F401 - registers the rule catalogue
 from .config import PROFILES, QualityConfig, QualityConfigError, RuleSettings
 from .context import QualityContext
-from .models import SEVERITIES, QualityFinding, QualityRun, RuleStatus, Severity
+from .models import (
+    SEVERITIES,
+    QualityFinding,
+    QualityRun,
+    RuleStatus,
+    Severity,
+    Suppression,
+    finding_order,
+)
 from .registry import CATEGORIES, RULES, Rule, RuleResult
 
 if TYPE_CHECKING:
@@ -39,7 +48,9 @@ __all__ = [
     "RuleSettings",
     "RuleStatus",
     "Severity",
+    "Suppression",
     "analyze",
+    "partition",
 ]
 
 
@@ -106,17 +117,32 @@ def analyze(ont: OntologyManager, config: QualityConfig | None = None) -> Qualit
             )
         )
 
-    order = {severity: i for i, severity in enumerate(SEVERITIES)}
+    shown, suppressed = partition(sorted(findings.values(), key=finding_order), config)
     return QualityRun(
-        findings=tuple(
-            sorted(
-                findings.values(),
-                key=lambda f: (order[f.severity], f.rule_id, f.resource, f.message),
-            )
-        ),
+        findings=shown,
+        suppressed=suppressed,
         rules=tuple(statuses),
         graph_fingerprint=graph_fingerprint,
         config_fingerprint=config.fingerprint,
         started_at=started_at,
         analyzer_version=_version(),
     )
+
+
+def partition(
+    findings: Iterable[QualityFinding], config: QualityConfig
+) -> tuple[tuple[QualityFinding, ...], tuple[tuple[QualityFinding, Suppression], ...]]:
+    """Split findings into those to show and those ``config`` suppresses.
+
+    The page applies it again to a stored run, so marking a finding as fine,
+    or taking that back, shows at once without a new run.
+    """
+    shown: list[QualityFinding] = []
+    suppressed: list[tuple[QualityFinding, Suppression]] = []
+    for finding in findings:
+        suppression = config.suppression_for(finding)
+        if suppression is None:
+            shown.append(finding)
+        else:
+            suppressed.append((finding, suppression))
+    return tuple(shown), tuple(suppressed)

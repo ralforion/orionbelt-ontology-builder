@@ -208,3 +208,167 @@ for _rule in (
     ),
 ):
     register(_rule)
+
+
+# -- similar labels (Q014) --------------------------------------------------------
+
+
+def _loose(text: str) -> str:
+    """A label reduced for "probably the same thing": case, separators and a
+    plural last word gone (``Customer Orders`` → ``customerorder``)."""
+    parts = [w.casefold() for w in words(normalise(text))]
+    if parts and _looks_plural(parts[-1]):
+        parts[-1] = parts[-1][:-1]
+    return "".join(ch for ch in "".join(parts) if ch.isalnum())
+
+
+def _one_typo_apart(a: str, b: str) -> bool:
+    """One inserted, deleted or substituted character, or two swapped
+    neighbours, away from each other, and not at either end.
+
+    Both ends are left out on purpose: ``influenced``/``influencer``,
+    ``VegetarianPizza``/``VegetarianPizza1`` and ``height``/``weight`` differ
+    there by design, while a slip of the keyboard is as likely in between.
+    The characters that differ must be letters: ``Class 1 of …`` and
+    ``Class 2 of …`` are numbered, not misspelt. So is a whole word: a ratio
+    threshold took ``Qualitative``/``Quantitative`` and ``min``/``max`` for
+    duplicates, which they are not.
+    """
+    if a == b or min(len(a), len(b)) < 8 or abs(len(a) - len(b)) > 1:
+        return False
+    i = 0
+    while i < min(len(a), len(b)) and a[i] == b[i]:
+        i += 1
+    if i == 0 or i >= min(len(a), len(b)) - 2:
+        return False  # at the start or the end: other words, not a slip
+    if len(a) == len(b):
+        if a[i + 1 :] == b[i + 1 :]:
+            return a[i].isalpha() and b[i].isalpha()  # one substitution
+        return (
+            a[i] == b[i + 1]
+            and a[i + 1] == b[i]
+            and a[i + 2 :] == b[i + 2 :]
+            and a[i].isalpha()
+            and b[i].isalpha()
+        )
+    longer, shorter = (a, b) if len(a) > len(b) else (b, a)
+    return longer[i + 1 :] == shorter[i:] and longer[i].isalpha()
+
+
+def _similar_labels(ctx: QualityContext, severity: Severity) -> RuleResult:
+    """Near-duplicates Q003's exact comparison misses: case, separators,
+    plurals, and small spelling differences, within one kind and language."""
+    result = RuleResult(checked=len(ctx.documentable))
+    by_group: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    for uri in ctx.documentable:
+        family = "property" if uri in ctx.properties else ctx.kind(uri) or "other"
+        for label in ctx.labels(uri):
+            text = str(label)
+            if not text.strip():
+                continue
+            lang = (label.language or "").lower()
+            by_group.setdefault((family, lang), []).append((uri, text, _loose(text)))
+    pairs: dict[tuple[str, str], dict[str, str]] = {}
+    for items in by_group.values():
+        # Candidates by deletion variants: two forms one insertion, deletion,
+        # substitution or swap apart always share a variant with one
+        # character dropped (or are equal). Comparing only within a variant
+        # keeps a large vocabulary from costing every pair.
+        buckets: dict[str, list[tuple[str, str, str]]] = {}
+        for item in items:
+            loose = item[2]
+            variants = {loose} | {loose[:i] + loose[i + 1 :] for i in range(len(loose))}
+            for variant in variants:
+                buckets.setdefault(variant, []).append(item)
+        for bucket in buckets.values():
+            for i, (uri_a, text_a, loose_a) in enumerate(bucket):
+                for uri_b, text_b, loose_b in bucket[i + 1 :]:
+                    if uri_a == uri_b or normalise(text_a) == normalise(text_b):
+                        continue  # the same resource, or Q003's exact duplicate
+                    key = (min(uri_a, uri_b), max(uri_a, uri_b))
+                    if key in pairs:
+                        continue
+                    if loose_a == loose_b or _one_typo_apart(loose_a, loose_b):
+                        pairs[key] = {uri_a: text_a, uri_b: text_b}
+    for (a, b), texts in sorted(pairs.items()):
+        result.findings.append(
+            ctx.finding(
+                "Q014",
+                severity,
+                a,
+                f"'{texts[a]}' ({ctx.name(a)}) and '{texts[b]}' ({ctx.name(b)}) are "
+                "labelled almost alike.",
+                evidence={"labels": [texts[a], texts[b]]},
+                suggestion="If they are the same thing, merge them; otherwise make "
+                "the labels say how they differ.",
+                related=[b],
+            )
+        )
+        result.affected.update((a, b))
+    return result
+
+
+# -- unexpanded acronyms (Q012) ----------------------------------------------------
+
+_ACRONYM = re.compile(r"\b[A-Z][A-Z0-9]{1,5}s?\b")
+#: All-capital tokens that are not acronyms to expand.
+_NOT_ACRONYMS = {"I", "II", "III", "IV", "VI", "VII", "VIII", "IX", "XI", "XII", "OK"}
+
+
+def _acronyms(ctx: QualityContext, severity: Severity) -> RuleResult:
+    """Acronyms in labels of resources with no definition to expand them."""
+    result = RuleResult(checked=len(ctx.documentable))
+    for uri in ctx.documentable:
+        if any(str(text).strip() for _, text in ctx.definitions(uri)):
+            continue
+        found = sorted(
+            {
+                token
+                for label in ctx.labels(uri)
+                for token in _ACRONYM.findall(str(label))
+                if token.rstrip("s") not in _NOT_ACRONYMS
+            }
+        )
+        if not found:
+            continue
+        result.findings.append(
+            ctx.finding(
+                "Q012",
+                severity,
+                uri,
+                f"'{ctx.name(uri)}' uses {', '.join(found)} in its label, with no "
+                "definition saying what it stands for.",
+                evidence={"acronyms": found},
+                suggestion="Spell the acronym out in a definition (or an altLabel).",
+            )
+        )
+        result.affected.add(uri)
+    return result
+
+
+for _rule in (
+    Rule(
+        "Q012",
+        "Unexpanded acronyms",
+        "Labels with acronyms on resources that have no definition to say what "
+        "they stand for.",
+        "naming",
+        frozenset({OWL_PROFILE, SKOS_PROFILE}),
+        "info",
+        False,
+        _acronyms,
+    ),
+    Rule(
+        "Q014",
+        "Similar labels",
+        "Labels of the same kind and language that differ only by case, "
+        "separators, a plural, or one typo-like character. Suggestions, not "
+        "certain duplicates.",
+        "naming",
+        frozenset({OWL_PROFILE, SKOS_PROFILE}),
+        "info",
+        True,
+        _similar_labels,
+    ),
+):
+    register(_rule)

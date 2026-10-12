@@ -1,6 +1,8 @@
 """The validation page."""
 
 import uuid
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import streamlit as st
 
@@ -13,7 +15,9 @@ from ..quality import (
     QualityConfig,
     QualityConfigError,
     RuleSettings,
+    Suppression,
     analyze,
+    partition,
 )
 from ..quality.context import QualityContext
 from ..quality.exports import findings_csv, findings_json
@@ -171,15 +175,45 @@ def _redraw_rule_widgets() -> None:
 
 
 def _profile_changed_cb(iri: str, key: str) -> None:
-    """Callback: a new profile starts from its own defaults."""
-    _store_config(iri, QualityConfig(profile=st.session_state[key]))
+    """Callback: a new profile starts from its own defaults. Suppressions
+    stay: they are about findings, not about which rules run."""
+    _store_config(
+        iri,
+        QualityConfig(
+            profile=st.session_state[key],
+            suppressions=_stored_config(iri).suppressions,
+        ),
+    )
     _redraw_rule_widgets()
 
 
 def _reset_cb(iri: str, profile: str) -> None:
-    """Callback: drop every per-rule change, keep the profile."""
-    _store_config(iri, QualityConfig(profile=profile))
+    """Callback: drop every per-rule change, keep the profile (and the
+    suppressions)."""
+    _store_config(
+        iri,
+        QualityConfig(profile=profile, suppressions=_stored_config(iri).suppressions),
+    )
     _redraw_rule_widgets()
+
+
+def _suppress_cb(
+    iri: str, rule_id: str, resource: str, why_key: str, by_key: str
+) -> None:
+    """Callback: mark a finding as fine, with the reason given."""
+    suppression = Suppression(
+        rule_id,
+        resource,
+        st.session_state.get(why_key, "").strip(),
+        st.session_state.get(by_key, "").strip(),
+        datetime.now(UTC).date().isoformat(),
+    )
+    _store_config(iri, _stored_config(iri).with_suppression(suppression))
+
+
+def _lift_cb(iri: str, rule_id: str, resource: str) -> None:
+    """Callback: show a suppressed finding again."""
+    _store_config(iri, _stored_config(iri).without_suppression(rule_id, resource))
 
 
 def _quality_config(ont) -> QualityConfig:
@@ -250,7 +284,10 @@ def _quality_config(ont) -> QualityConfig:
                 if setting != RuleSettings():
                     overrides[rule.id] = setting
         config = QualityConfig(
-            profile=profile, include_imports=include_imports, rules=overrides
+            profile=profile,
+            include_imports=include_imports,
+            rules=overrides,
+            suppressions=stored.suppressions,
         )
         st.button(
             "Reset to profile defaults",
@@ -315,6 +352,11 @@ def _render_quality(ont) -> None:
     run = st.session_state.get(run_key)
     if run is None:
         return
+    # Suppressions apply to the stored run as they are now, so marking a
+    # finding as fine (or taking that back) shows without a new run.
+    shown, suppressed = partition(run.all_findings(), config)
+    run = replace(run, findings=shown, suppressed=suppressed)
+    iri = str(ont.ontology_uri)
 
     # Runs are explicit: an edit or a changed rule leaves the last results up,
     # marked, rather than re-running on every rerender.
@@ -336,6 +378,7 @@ def _render_quality(ont) -> None:
                     for sev in counts
                     if counts[sev]
                 ),
+                *([f"{len(suppressed)} suppressed"] if suppressed else []),
                 f"{ran} rule{'s' if ran != 1 else ''} ran",
             ]
         )
@@ -351,6 +394,27 @@ def _render_quality(ont) -> None:
     if not run.findings and not failed:
         st.success("No findings from the enabled rules.")
 
+    def suppress_controls(finding) -> None:
+        if finding.rule_id not in RULES:
+            return
+        tag = f"quality_{scope}_{finding.rule_id}_{_uid(finding.resource)}"
+        why_col, by_col, button_col = st.columns([5, 2, 1.4])
+        why = why_col.text_input(
+            "Why is this fine?",
+            key=f"{tag}_why",
+            placeholder="A deliberate modelling choice, because …",
+        )
+        by_col.text_input("By (optional)", key=f"{tag}_by")
+        button_col.button(
+            "Suppress",
+            key=f"{tag}_suppress",
+            disabled=not why.strip(),
+            on_click=_suppress_cb,
+            args=(iri, finding.rule_id, finding.resource, f"{tag}_why", f"{tag}_by"),
+            help="Hide this finding from now on, for this rule and resource. "
+            "Kept with the quality settings, and listed in exports.",
+        )
+
     ctx = QualityContext(ont, include_imports=True)
     render_findings_table(
         run.findings,
@@ -359,7 +423,10 @@ def _render_quality(ont) -> None:
         group_label="Rule",
         name_of=ctx.name,
         kind_of=ctx.kind,
+        actions=suppress_controls,
     )
+    if suppressed:
+        _render_suppressed(suppressed, iri=iri, scope=scope, name_of=ctx.name)
 
     with st.expander("Rule coverage", expanded=False):
         st.dataframe(
@@ -378,21 +445,58 @@ def _render_quality(ont) -> None:
             hide_index=True,
             width="stretch",
         )
-    if run.findings:
+    if run.findings or suppressed:
         with st.expander("Export findings", expanded=False):
             _download_or_save(
                 "Download findings (.json)",
-                findings_json(run.findings, run=run),
+                findings_json(run.findings, run=run, suppressed=suppressed),
                 "quality-findings.json",
                 mime="application/json",
                 key=f"quality_export_json_{scope}",
             )
             _download_or_save(
                 "Download findings (.csv)",
-                findings_csv(run.findings),
+                findings_csv(run.findings, suppressed),
                 "quality-findings.csv",
                 mime="text/csv",
                 key=f"quality_export_csv_{scope}",
+            )
+
+
+def _render_suppressed(suppressed, *, iri: str, scope: str, name_of) -> None:
+    """The findings marked as fine, why, and a way to show one again."""
+    with st.expander(f"Suppressed findings ({len(suppressed)})", expanded=False):
+        st.dataframe(
+            [
+                {
+                    "Rule": RULES[f.rule_id].title,
+                    "Resource": name_of(f.resource),
+                    "Why": s.justification,
+                    "By": s.author,
+                    "Date": s.date,
+                }
+                for f, s in suppressed
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+        pick_col, lift_col = st.columns([5, 1])
+        index = pick_col.selectbox(
+            "Show again",
+            list(range(len(suppressed))),
+            format_func=lambda i: (
+                f"{RULES[suppressed[i][0].rule_id].title}: "
+                f"{name_of(suppressed[i][0].resource)}"
+            ),
+            key=f"quality_{scope}_lift_pick",
+        )
+        if index is not None and index < len(suppressed):
+            finding = suppressed[index][0]
+            lift_col.button(
+                "Show again",
+                key=f"quality_{scope}_lift",
+                on_click=_lift_cb,
+                args=(iri, finding.rule_id, finding.resource),
             )
 
 

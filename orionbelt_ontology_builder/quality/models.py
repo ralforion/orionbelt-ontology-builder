@@ -40,6 +40,35 @@ class QualityFinding:
         return (self.rule_id, self.resource, repr(sorted(self.evidence.items())))
 
 
+def finding_order(finding: QualityFinding) -> tuple[int, str, str, str]:
+    """Severity first, then rule, resource and message."""
+    return (
+        SEVERITIES.index(finding.severity),
+        finding.rule_id,
+        finding.resource,
+        finding.message,
+    )
+
+
+@dataclass(frozen=True)
+class Suppression:
+    """A finding someone looked at and decided is fine, and why.
+
+    Matched by rule and resource, so it holds across runs and edits for as
+    long as that rule finds something on that resource.
+    """
+
+    rule_id: str
+    resource: str
+    justification: str
+    author: str = ""
+    #: ISO 8601 date it was made.
+    date: str = ""
+
+    def matches(self, finding: QualityFinding) -> bool:
+        return finding.rule_id == self.rule_id and finding.resource == self.resource
+
+
 @dataclass(frozen=True)
 class RuleStatus:
     """How one rule's run went, and what it covered."""
@@ -67,6 +96,17 @@ class QualityRun:
     #: ISO 8601, UTC.
     started_at: str
     analyzer_version: str
+    #: Findings the configuration's suppressions set aside, with the
+    #: suppression each matched. Not in ``findings`` or the counts.
+    suppressed: tuple[tuple[QualityFinding, Suppression], ...] = ()
+
+    def all_findings(self) -> tuple[QualityFinding, ...]:
+        """Shown and suppressed together, in the run's order."""
+        return tuple(
+            sorted(
+                (*self.findings, *(f for f, _ in self.suppressed)), key=finding_order
+            )
+        )
 
     def counts(self) -> dict[Severity, int]:
         """Findings per severity, every severity present."""
