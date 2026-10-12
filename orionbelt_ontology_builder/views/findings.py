@@ -57,6 +57,7 @@ def render_findings_table(
     group_label: str,
     name_of: Callable[[str], str] | None = None,
     kind_of: Callable[[str], str | None] | None = None,
+    actions: Callable[[QualityFinding], None] | None = None,
 ) -> None:
     """Filters, the table, and the selected finding's details.
 
@@ -64,7 +65,8 @@ def render_findings_table(
     Quality section, the source shape on the SHACL one). ``name_of`` and
     ``kind_of`` resolve resources for display and for the Open buttons of
     related resources; without them URIs are shortened and only the
-    finding's own resource can be opened.
+    finding's own resource can be opened. ``actions`` draws more controls
+    at the end of the selected finding's details.
     """
     name_of = name_of or _short_name
     if not findings:
@@ -137,7 +139,13 @@ def render_findings_table(
     )
     selected = list(getattr(getattr(event, "selection", None), "rows", []) or [])
     if selected and selected[0] < len(shown):
-        _render_details(shown[selected[0]], key=key, name_of=name_of, kind_of=kind_of)
+        _render_details(
+            shown[selected[0]],
+            key=key,
+            name_of=name_of,
+            kind_of=kind_of,
+            actions=actions,
+        )
 
 
 def _render_details(
@@ -146,6 +154,7 @@ def _render_details(
     key: str,
     name_of: Callable[[str], str],
     kind_of: Callable[[str], str | None] | None,
+    actions: Callable[[QualityFinding], None] | None = None,
 ) -> None:
     with st.container(border=True):
         text_col, open_col = st.columns([6, 1])
@@ -182,3 +191,5 @@ def _render_details(
         if evidence:
             with st.expander("Evidence", expanded=False):
                 st.json(evidence)
+        if actions is not None:
+            actions(finding)

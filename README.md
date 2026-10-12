@@ -251,12 +251,20 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 ### Model quality
 
 Advisory rules on how well the model is made, separate from validation: missing
-labels and definitions, placeholder text, duplicate labels, naming conventions,
-hierarchy cycles and redundant subclass edges, disconnected class islands,
-opposite properties without `owl:inverseOf`, and use of deprecated resources.
+labels and definitions, placeholder text, duplicate and near-duplicate labels,
+naming conventions, hierarchy cycles and redundant subclass edges, disconnected
+class islands, opposite properties without `owl:inverseOf`, and use of
+deprecated resources. Off by default, and on in the profiles they suit:
+unexplained acronyms, vague or circular definitions, missing language tags,
+unused properties, and broader links without the narrower link back.
 Each finding explains itself, suggests a fix and opens the affected entity.
 Rules can be switched on or off per ontology, and only the ontology's own
 resources are checked unless you include imported vocabularies.
+
+A finding that is deliberate can be **suppressed**, with the reason why. It is
+then hidden and counted, can be shown again, and is still listed in exports
+with its reason. Suppressions are kept with the quality settings, not in the
+ontology file.
 
 ### SHACL
 

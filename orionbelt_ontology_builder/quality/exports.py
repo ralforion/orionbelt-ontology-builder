@@ -2,7 +2,9 @@
 
 Both carry every finding with its evidence. JSON adds what produced them (the
 run's fingerprints, version and rule status), so a report can be traced back
-to the ontology revision and the rule settings it describes.
+to the ontology revision and the rule settings it describes. Suppressed
+findings are listed too, with the reason they were suppressed: a report that
+quietly left them out would read as if they had never been found.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from collections.abc import Iterable
 from dataclasses import asdict
 from typing import Any
 
-from .models import QualityFinding, QualityRun
+from .models import QualityFinding, QualityRun, Suppression
 from .registry import RULES
 
 #: CSV columns, in order. Evidence goes in last, as JSON, because its keys
@@ -31,6 +33,7 @@ CSV_COLUMNS = (
     "origin",
     "related_resources",
     "evidence",
+    "suppressed",
 )
 
 
@@ -52,6 +55,7 @@ def findings_json(
     *,
     run: QualityRun | None = None,
     source: str = "quality",
+    suppressed: Iterable[tuple[QualityFinding, Suppression]] = (),
 ) -> str:
     """Findings as a JSON document, with the run's metadata when there is one."""
     document: dict[str, Any] = {"source": source}
@@ -64,15 +68,23 @@ def findings_json(
             "rules": [asdict(status) for status in run.rules],
         }
     document["findings"] = [finding_record(f) for f in findings]
+    set_aside = [{**finding_record(f), "suppression": asdict(s)} for f, s in suppressed]
+    if set_aside:
+        document["suppressed"] = set_aside
     return json.dumps(document, indent=2, ensure_ascii=False, sort_keys=False)
 
 
-def findings_csv(findings: Iterable[QualityFinding]) -> str:
-    """Findings as CSV, one row each."""
+def findings_csv(
+    findings: Iterable[QualityFinding],
+    suppressed: Iterable[tuple[QualityFinding, Suppression]] = (),
+) -> str:
+    """Findings as CSV, one row each; suppressed ones last, with the reason
+    in the ``suppressed`` column."""
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, lineterminator="\n")
     writer.writeheader()
-    for finding in findings:
+    rows = [(f, None) for f in findings] + [(f, s) for f, s in suppressed]
+    for finding, suppression in rows:
         record = finding_record(finding)
         writer.writerow(
             {
@@ -81,6 +93,7 @@ def findings_csv(findings: Iterable[QualityFinding]) -> str:
                 "evidence": json.dumps(
                     finding.evidence, ensure_ascii=False, sort_keys=True
                 ),
+                "suppressed": suppression.justification if suppression else "",
             }
         )
     return buffer.getvalue()

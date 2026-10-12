@@ -340,6 +340,82 @@ def _outside_hierarchy(ctx: QualityContext, severity: Severity) -> RuleResult:
     return result
 
 
+_SH = "http://www.w3.org/ns/shacl#"
+
+#: Predicates whose object is a property being used: in a restriction, a
+#: property axiom, a negative assertion or an axiom annotation, a SHACL path
+#: or one of its operators, a SHACL property pair constraint or target, or as
+#: a member of any RDF list. The lists cover
+#: property chains, keys (owl:hasKey), owl:AllDisjointProperties members,
+#: n-ary data restrictions (owl:onProperties) and SHACL sequence and
+#: alternative paths, without a walk per construct.
+_USED_AS_OBJECT = (
+    OWL.onProperty,
+    RDFS.subPropertyOf,
+    OWL.inverseOf,
+    OWL.equivalentProperty,
+    OWL.propertyDisjointWith,
+    OWL.assertionProperty,
+    OWL.annotatedProperty,
+    RDF.first,
+    URIRef(_SH + "path"),
+    URIRef(_SH + "inversePath"),
+    URIRef(_SH + "zeroOrMorePath"),
+    URIRef(_SH + "oneOrMorePath"),
+    URIRef(_SH + "zeroOrOnePath"),
+    # Property pair constraints and targets name a property too.
+    URIRef(_SH + "equals"),
+    URIRef(_SH + "disjoint"),
+    URIRef(_SH + "lessThan"),
+    URIRef(_SH + "lessThanOrEquals"),
+    URIRef(_SH + "targetSubjectsOf"),
+    URIRef(_SH + "targetObjectsOf"),
+)
+
+#: Axioms a property states about itself that relate it to other
+#: properties, so it takes part in the model.
+_USED_AS_SUBJECT = (
+    RDFS.subPropertyOf,
+    OWL.inverseOf,
+    OWL.equivalentProperty,
+    OWL.propertyDisjointWith,
+    OWL.propertyChainAxiom,
+)
+
+
+def _unused_properties(ctx: QualityContext, severity: Severity) -> RuleResult:
+    """Properties nothing in this graph uses: no statement, restriction,
+    property axiom, list, or shape path names them."""
+    result = RuleResult(checked=len(ctx.properties))
+    used = {
+        str(obj)
+        for pred in _USED_AS_OBJECT
+        for obj in ctx.graph.objects(None, pred)
+        if isinstance(obj, URIRef)
+    }
+    for uri in sorted(ctx.properties):
+        prop = URIRef(uri)
+        if uri in used:
+            continue
+        if next(ctx.graph.triples((None, prop, None)), None) is not None:
+            continue
+        if any((prop, pred, None) in ctx.graph for pred in _USED_AS_SUBJECT):
+            continue
+        result.findings.append(
+            ctx.finding(
+                "Q018",
+                severity,
+                uri,
+                f"Property '{ctx.name(uri)}' is not used: no statement, restriction "
+                "or other property refers to it.",
+                suggestion="Use it in a restriction or on individuals, or remove it "
+                "if it is left over. Another ontology may still use it.",
+            )
+        )
+        result.affected.add(uri)
+    return result
+
+
 for _rule in (
     Rule(
         "Q006",
@@ -384,6 +460,17 @@ for _rule in (
         "warning",
         True,
         _self_edges,
+    ),
+    Rule(
+        "Q018",
+        "Unused properties",
+        "Properties no statement, restriction, property axiom or shape in this "
+        "graph refers to. Relative to this graph only, so off by default.",
+        "structure",
+        _OWL,
+        "info",
+        False,
+        _unused_properties,
     ),
     Rule(
         "Q019",
