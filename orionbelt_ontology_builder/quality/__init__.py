@@ -12,7 +12,7 @@ the same from the page, a test, or a command line.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from importlib import metadata
 from typing import TYPE_CHECKING
@@ -61,12 +61,20 @@ def _version() -> str:
         return "unknown"
 
 
-def analyze(ont: OntologyManager, config: QualityConfig | None = None) -> QualityRun:
+def analyze(
+    ont: OntologyManager,
+    config: QualityConfig | None = None,
+    *,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> QualityRun:
     """Run every rule ``config`` enables over ``ont`` and collect the findings.
 
     A rule that does not apply to the graph's vocabularies is skipped, with the
     reason. A rule that raises is reported as failed, with the error, and the
     run goes on: a crash must never read as "nothing found".
+
+    ``progress`` is called before each rule with how many have run, how many
+    there are, and the rule's ID, so a caller can show where the run is.
     """
     config = config or QualityConfig()
     started_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -75,7 +83,10 @@ def analyze(ont: OntologyManager, config: QualityConfig | None = None) -> Qualit
 
     findings: dict[tuple[str, str, str], QualityFinding] = {}
     statuses: list[RuleStatus] = []
-    for rule_id in config.enabled_rules():
+    enabled = config.enabled_rules()
+    for done, rule_id in enumerate(enabled):
+        if progress is not None:
+            progress(done, len(enabled), rule_id)
         rule = RULES[rule_id]
         if not rule.applies_to & ctx.vocabularies:
             statuses.append(
