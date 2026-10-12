@@ -280,11 +280,12 @@ Closed-world checks of the data against SHACL shapes, run with
   properties at most one value, and ranges the class or datatype of values.
   Generated afresh on every check, never stored, and each finding names the
   axiom it comes from.
-- **OWL RL inference before checking** (on by default): the check sees what
-  the ontology implies, not only what it states, so a value a `hasValue`
-  restriction entails no longer reads as missing. Reasoning runs on a copy
-  for the check only. Switch it off to check what is written down; range
-  checks only say something then.
+- **OWL RL inference first** for the generated check (on by default): it sees
+  what the ontology implies, not only what it states, so a value a `hasValue`
+  restriction entails no longer reads as missing. Reasoning runs on a copy for
+  the check only. Switch it off to check what is written down; range checks
+  only say something then. Shapes you write, upload or pick from the built-in
+  sets are always checked against the data as stated.
 - Findings name the focus node, path and source shape, open the affected
   entity, and the full validation report downloads as Turtle.
 - Export the ontology with its shapes, without them, or the shapes alone.

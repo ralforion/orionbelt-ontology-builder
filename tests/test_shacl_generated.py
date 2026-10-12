@@ -514,15 +514,14 @@ def test_inference_leaves_the_model_alone():
 def test_page_infers_by_default_and_marks_a_change_stale():
     at = AppTest.from_function(_page)
     at.run(timeout=120)
-    infer = next(
-        c for c in at.checkbox if c.label == "Apply OWL RL inference before checking"
-    )
-    assert infer.value is True
+    assert not [c for c in at.checkbox if c.label == "Apply OWL RL inference first"]
     next(c for c in at.checkbox if c.label == "Generated from the model").check().run()
+    infer = next(c for c in at.checkbox if c.label == "Apply OWL RL inference first")
+    assert infer.value is True
     next(b for b in at.button if b.label == "Run SHACL check").click().run()
     assert not at.warning
     next(
-        c for c in at.checkbox if c.label == "Apply OWL RL inference before checking"
+        c for c in at.checkbox if c.label == "Apply OWL RL inference first"
     ).uncheck().run()
     assert any("inference setting changed" in w.value for w in at.warning)
 
@@ -569,3 +568,47 @@ def test_rational_in_is_exact(value, kind, low, high, expected):
         ).toPython()
         is expected
     )
+
+
+def _policy_page():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager(base_uri="http://test.org/q#")
+        om.add_class("Labelled", label="Labelled")
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+        st.session_state["_local_storage"] = None
+    st.session_state["val_active_tab"] = "SHACL"
+    app.render_validation()
+
+
+def test_inference_is_for_the_generated_check_only():
+    """Shapes written to be checked as stated stay so: OWL RL adds owl:Thing
+    and owl:Nothing as classes, which the policy shapes would flag."""
+    at = AppTest.from_function(_policy_page)
+    at.run(timeout=120)
+    next(c for c in at.checkbox if c.label == "OrionBelt quality policy").check().run()
+    next(b for b in at.button if b.label == "Run SHACL check").click().run()
+    assert not at.exception, at.exception
+    resources = [
+        r
+        for frame in at.dataframe
+        if "Resource" in frame.value.columns
+        for r in frame.value["Resource"]
+    ]
+    assert not [r for r in resources if r in ("Thing", "Nothing")]
+
+
+def test_the_inference_option_belongs_to_the_generated_check():
+    at = AppTest.from_function(_policy_page)
+    at.run(timeout=120)
+    next(c for c in at.checkbox if c.label == "Generated from the model").check().run()
+    labels = [c.label for c in at.checkbox]
+    generated = labels.index("Generated from the model")
+    infer = labels.index("Apply OWL RL inference first")
+    assert infer == generated + 1

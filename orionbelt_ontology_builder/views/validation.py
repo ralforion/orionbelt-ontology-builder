@@ -618,6 +618,7 @@ def _render_shacl(ont) -> None:
     # source: a multiselect's default would not follow one-off shapes that
     # appear later. The ontology's own and one-off shapes are always checked.
     st.markdown("**Also check against**")
+    infer = True
     if st.checkbox(
         "Generated from the model",
         value=False,
@@ -626,6 +627,24 @@ def _render_shacl(ont) -> None:
         "functional properties and ranges, read closed-world (issue #498).",
     ):
         sources.append("generated")
+        # For the generated check only: those shapes are the model's axioms
+        # read closed-world, and inference is what makes them mean what the
+        # model does. Shapes written to be checked as stated (the ontology's
+        # own, uploaded, built-in) stay so; inference adds triples a closed
+        # shape or a labelling policy would object to (Codex review of #509).
+        _, indent = st.columns([1, 24])
+        infer = indent.checkbox(
+            "Apply OWL RL inference first",
+            value=True,
+            key=f"shacl_infer_{scope}",
+            help="Check what the ontology implies, not only what it states: a "
+            "value a hasValue restriction entails, or a type a subclass axiom "
+            "entails, no longer reads as missing. Reasoning runs on a copy for "
+            "the check only; the ontology is not changed (Reasoning's Apply "
+            "Reasoning is what writes inferences in). Range checks say nothing "
+            "while this is on, since inference types every value as its "
+            "range's class.",
+        )
     for bundled in BUNDLED_SHAPES.values():
         if st.checkbox(
             bundled.title,
@@ -634,18 +653,6 @@ def _render_shacl(ont) -> None:
             help=bundled.description,
         ):
             sources.append(f"bundled:{bundled.key}")
-
-    infer = st.checkbox(
-        "Apply OWL RL inference before checking",
-        value=True,
-        key=f"shacl_infer_{scope}",
-        help="Check what the ontology implies, not only what it states: a value a "
-        "hasValue restriction entails, or a type a subclass axiom entails, no "
-        "longer reads as missing. Reasoning runs on a copy for the check only; "
-        "the ontology is not changed (Reasoning's Apply Reasoning is what writes "
-        "inferences in). Range checks say nothing while this is on, since "
-        "inference types every value as its range's class.",
-    )
 
     if st.button("Run SHACL check", disabled=not sources):
         data, embedded = split_shapes(ont.graph)
@@ -664,13 +671,18 @@ def _render_shacl(ont) -> None:
         for source in sources:
             graph, origin = shapes_for(source)
             runs[source] = run_shacl(
-                data, graph, origin=origin, kind=ctx.kind, name=ctx.name, infer=infer
+                data,
+                graph,
+                origin=origin,
+                kind=ctx.kind,
+                name=ctx.name,
+                infer=infer and source == "generated",
             )
         st.session_state[run_key] = (
             ont.revision_token(),
             once_id,
             tuple(sources),
-            infer,
+            infer and "generated" in sources,
             runs,
         )
     if not sources:
@@ -686,7 +698,7 @@ def _render_shacl(ont) -> None:
         st.warning("The one-off shapes changed since this check. Run it again.")
     elif ran_sources != tuple(sources):
         st.warning("The shapes selection changed since this check. Run it again.")
-    elif ran_infer != infer:
+    elif ran_infer != (infer and "generated" in sources):
         st.warning("The inference setting changed since this check. Run it again.")
     ctx = QualityContext(ont, include_imports=True)
     for origin, run in runs.items():
