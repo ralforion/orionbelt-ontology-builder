@@ -3,6 +3,7 @@
 import html
 import json
 import logging
+import re
 import textwrap
 
 import streamlit as st
@@ -521,6 +522,7 @@ def graph_fullscreen_css(dark: bool) -> str:
 #: about as wide as the class nodes beside it.
 VALUE_LABEL_WIDTH = 24
 VALUE_LABEL_LINES = 2
+_NON_SPACE = re.compile(r"\S+")
 
 
 def value_label(value: str) -> str:
@@ -533,13 +535,27 @@ def value_label(value: str) -> str:
     ``VALUE_LABEL_LINES`` lines, with "…" only when that is not enough. The
     whole value stays in the node's tooltip and the details panel.
     """
-    flat = " ".join(value.split())
-    lines = textwrap.wrap(flat, VALUE_LABEL_WIDTH, break_on_hyphens=False)
-    if len(lines) <= VALUE_LABEL_LINES:
+    # Only as much of the value as two lines can show is wrapped, plus one
+    # character to tell that there was more: an imported literal can be
+    # megabytes (base64 data), and wrapping all of it to draw two lines took
+    # seconds (Codex review of #512).
+    budget = VALUE_LABEL_WIDTH * VALUE_LABEL_LINES
+    words: list[str] = []
+    size = 0
+    more = False
+    for match in _NON_SPACE.finditer(value):
+        if size > budget:
+            more = True
+            break
+        word = match.group()[: budget + 1 - size]
+        words.append(word)
+        size += len(word) + 1
+    lines = textwrap.wrap(" ".join(words), VALUE_LABEL_WIDTH, break_on_hyphens=False)
+    if not more and len(lines) <= VALUE_LABEL_LINES:
         return "\n".join(lines)
-    kept = lines[: VALUE_LABEL_LINES - 1]
-    last = lines[VALUE_LABEL_LINES - 1][: VALUE_LABEL_WIDTH - 1].rstrip()
-    return "\n".join([*kept, last + "…"])
+    kept = lines[:VALUE_LABEL_LINES]
+    last = kept[-1][: VALUE_LABEL_WIDTH - 1].rstrip()
+    return "\n".join([*kept[:-1], last + "…"])
 
 
 def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):

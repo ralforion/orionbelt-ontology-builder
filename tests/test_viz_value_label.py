@@ -50,3 +50,28 @@ def test_a_long_url_is_broken_and_cut():
     assert len(lines) == VALUE_LABEL_LINES
     assert all(len(line) <= VALUE_LABEL_WIDTH for line in lines)
     assert url.startswith(lines[0]) and lines[-1].endswith("…")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "A" * 5_000_000,  # base64-like, no spaces
+        "word " * 1_000_000,
+        " " * 5_000_000 + "late text",
+    ],
+)
+def test_a_huge_value_costs_only_what_is_drawn(value):
+    """Codex review of #512: wrapping 5 MB to draw two lines took seconds."""
+    import time
+
+    began = time.perf_counter()
+    drawn = value_label(value)
+    assert time.perf_counter() - began < 0.5
+    lines = drawn.split("\n")
+    assert len(lines) <= VALUE_LABEL_LINES
+    assert all(len(line) <= VALUE_LABEL_WIDTH for line in lines)
+
+
+def test_a_value_just_past_two_lines_is_marked_as_cut():
+    value = "abcdefghijklmnopqrstuvwx " * 2 + "y"
+    assert value_label(value).endswith("…")
