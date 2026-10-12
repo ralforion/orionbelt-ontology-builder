@@ -347,7 +347,18 @@ def _render_quality(ont) -> None:
     scope = _uid(str(ont.ontology_uri))
     run_key = f"_quality_run_{scope}"
     if st.button("Run Quality Checks"):
-        st.session_state[run_key] = analyze(ont, config)
+        # A large ontology takes seconds; without this the button looked like
+        # it did nothing.
+        bar = st.progress(0.0, text="Running the quality checks…")
+
+        def report(done: int, total: int, rule_id: str) -> None:
+            bar.progress(
+                done / total,
+                text=f"Rule {done + 1} of {total}: {RULES[rule_id].title}…",
+            )
+
+        st.session_state[run_key] = analyze(ont, config, progress=report)
+        bar.empty()
 
     run = st.session_state.get(run_key)
     if run is None:
@@ -504,6 +515,17 @@ def _render_suppressed(suppressed, *, iri: str, scope: str, name_of) -> None:
 
 
 #: The two places shapes come from, in the order they are checked and shown.
+def _checking_against(source: str) -> str:
+    """A shapes source as the progress text names it."""
+    if source == "ontology":
+        return "the shapes in this ontology"
+    if source == "once":
+        return "the one-off shapes"
+    if source == "generated":
+        return "the shapes generated from the model"
+    return f"{BUNDLED_SHAPES[source.removeprefix('bundled:')].title} (built-in)"
+
+
 def _source_title(source: str) -> str:
     """How a shapes source is named above its results."""
     if source == "ontology":
@@ -759,6 +781,9 @@ def _render_shacl(ont) -> None:
             sources.append(f"bundled:{bundled.key}")
 
     if st.button("Run SHACL check", disabled=not sources):
+        # Each source is a check of its own, and with inference one can take
+        # seconds: say which one is running rather than leave the page still.
+        bar = st.progress(0.0, text="Preparing the SHACL check…")
         data, embedded = split_shapes(ont.graph)
         ctx = QualityContext(ont, include_imports=True)
 
@@ -772,8 +797,18 @@ def _render_shacl(ont) -> None:
             return load_bundled(source.removeprefix("bundled:")), "shacl:bundled"
 
         runs = {}
-        for source in sources:
+        for done, source in enumerate(sources):
+            step = f" ({done + 1} of {len(sources)})" if len(sources) > 1 else ""
+            if source == "generated":
+                bar.progress(
+                    done / len(sources),
+                    text=f"Generating shapes from the model{step}…",
+                )
             graph, origin = shapes_for(source)
+            doing = f"Checking against {_checking_against(source)}"
+            if source == "generated" and infer:
+                doing += ", with OWL RL inference first"
+            bar.progress(done / len(sources), text=f"{doing}{step}…")
             runs[source] = run_shacl(
                 data,
                 graph,
@@ -789,6 +824,7 @@ def _render_shacl(ont) -> None:
             infer and "generated" in sources,
             runs,
         )
+        bar.empty()
     if not sources:
         st.caption("Add shapes, or tick a built-in set, to check the data against.")
 
