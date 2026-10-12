@@ -3,6 +3,7 @@
 import html
 import json
 import logging
+import textwrap
 
 import streamlit as st
 
@@ -515,6 +516,32 @@ def graph_fullscreen_css(dark: bool) -> str:
     </style>"""
 
 
+#: A value node's drawn label: up to this many characters a line, this many
+#: lines. Two lines of 24 hold what one line of 30 did and more, in a box
+#: about as wide as the class nodes beside it.
+VALUE_LABEL_WIDTH = 24
+VALUE_LABEL_LINES = 2
+
+
+def value_label(value: str) -> str:
+    """How an annotation or literal value is drawn on its node.
+
+    Whitespace, line breaks included, is collapsed first: vis-network draws a
+    line break in a label as a new line, so a value with a stray newline got a
+    box two lines tall with the text cut short on the second line (issue
+    #511). Then the value wraps at word boundaries onto at most
+    ``VALUE_LABEL_LINES`` lines, with "…" only when that is not enough. The
+    whole value stays in the node's tooltip and the details panel.
+    """
+    flat = " ".join(value.split())
+    lines = textwrap.wrap(flat, VALUE_LABEL_WIDTH, break_on_hyphens=False)
+    if len(lines) <= VALUE_LABEL_LINES:
+        return "\n".join(lines)
+    kept = lines[: VALUE_LABEL_LINES - 1]
+    last = lines[VALUE_LABEL_LINES - 1][: VALUE_LABEL_WIDTH - 1].rstrip()
+    return "\n".join([*kept, last + "…"])
+
+
 def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
     """Hang ``subject_uri``'s annotations off its node, at most ``room`` of them.
 
@@ -547,9 +574,7 @@ def _add_annotation_nodes(net, ont, subject_uri, subject_node_id, room):
         ann_ename = annotation_ename(subject_uri, ann)
         ann_id = f"ann_{_uid(ann_ename)}"
         pred_display = ann.get("predicate_prefixed", ann["predicate"])
-        value_display = (
-            ann["value"][:30] + "..." if len(ann["value"]) > 30 else ann["value"]
-        )
+        value_display = value_label(ann["value"])
         # Count what was actually drawn: an id already in the graph is dropped by
         # the builder, and charging the budget for it would leave room unused.
         before = len(net.nodes)
@@ -2693,7 +2718,7 @@ def render_visualization():
                             if _triple_new >= _max_triple_new:
                                 continue
                             o_str = str(o)
-                            o_display = o_str[:30] + "..." if len(o_str) > 30 else o_str
+                            o_display = value_label(o_str)
                             o_node = (
                                 f"lit_{abs(hash(s_uri_str + str(p) + o_str)) % 10**8}"
                             )

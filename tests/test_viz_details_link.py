@@ -18,9 +18,10 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder.app import panel_heading_html
+from orionbelt_ontology_builder.views.visualization import value_label
 
 URL = "https://webeep.polimi.it/course/view.php?id=123456"
-CUT = URL[:30] + "..."
+CUT = value_label(URL)
 
 _VIEWER = (
     Path(__file__).resolve().parent.parent
@@ -38,6 +39,7 @@ def _script():
 
     from orionbelt_ontology_builder import app
     from orionbelt_ontology_builder.ontology_manager import OntologyManager
+    from orionbelt_ontology_builder.views.visualization import value_label
 
     if "ontology" not in st.session_state:
         om = OntologyManager()
@@ -62,7 +64,7 @@ def _script():
                 "selected": True,
                 "ntype": "Annotation",
                 "ename": app.annotation_ename(om.namespace + "Course", ann),
-                "label": value[:30] + "..." if len(value) > 30 else value,
+                "label": value_label(value),
                 "flabel": value,
                 "title": f"webeep: {value}",
             }
@@ -124,7 +126,8 @@ def test_the_heading_links_the_cut_text_to_the_whole_url():
     Streamlit linkified — href and all — to ``https://webeep.polimi.it/cours``.
     The link is built here now: short text, whole destination."""
     assert _heading(_run(select=True)) == (
-        f'<p><strong><a href="{URL}" target="_blank">{CUT}</a></strong></p>'
+        f'<p><strong><a href="{URL}" target="_blank">{CUT.replace(chr(10), "")}'
+        "</a></strong></p>"
     )
 
 
@@ -143,7 +146,9 @@ def test_a_value_that_only_starts_with_a_url_is_not_linked_at_all():
     and the linkifier put its own <a> inside ours."""
     prose = f"{URL} notes"
     heading = _heading(_run(select=True, value=prose))
-    assert heading == f"<p><strong>{prose[:30]}...</strong></p>"
+    assert (
+        heading == f"<p><strong>{value_label(prose).replace(chr(10), '')}</strong></p>"
+    )
     assert "<a" not in heading
 
 
@@ -174,3 +179,15 @@ def test_only_web_urls_become_links():
     """``javascript:`` is not a destination this heading ever offers."""
     assert "<a" not in panel_heading_html("x", "javascript:alert(1)")
     assert "<a" not in panel_heading_html("x", "ftp://ex.org/x")
+
+
+# -- issue #511: wrapped value labels ----------------------------------------------------
+
+
+def test_a_wrapped_label_is_one_line_in_the_heading():
+    from orionbelt_ontology_builder.views.visualization import value_label
+
+    shown = value_label("la catena del valore di Porter")
+    assert "\n" in shown
+    heading = panel_heading_html(shown, "la catena del valore di Porter")
+    assert heading == "<p><strong>la catena del valore di Porter</strong></p>"
