@@ -3,9 +3,11 @@
 from pathlib import Path
 
 import pytest
-from rdflib import OWL, XSD, Literal
+from rdflib import OWL, RDF, XSD, Literal, Namespace, URIRef
 
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+ERR = Namespace("http://www.daml.org/2002/03/agents/agent-ont#")
 
 PROV_O = (
     Path(__file__).parent.parent
@@ -65,3 +67,21 @@ def test_reasoning_leaves_literal_parsing_as_it_was():
     om.apply_reasoning("owl-rl-ext")
     assert Literal("6/2", datatype=OWL.rational).value is None
     assert Literal("x y", datatype=XSD.NMTOKEN).value is None
+
+
+@pytest.mark.parametrize("profile", ["owl-rl", "owl-rl-ext"])
+def test_an_inconsistency_is_reported_once_and_settles(profile):
+    """owlrl writes each error on a fresh blank node; it must not pile up."""
+    om = OntologyManager(base_uri="http://test.org/r#")
+    a, b, x = (URIRef(f"http://test.org/r#{n}") for n in ("A", "B", "x"))
+    om.graph.add((a, OWL.disjointWith, b))
+    om.graph.add((x, RDF.type, a))
+    om.graph.add((x, RDF.type, b))
+    calls = []
+    om.apply_reasoning(profile, progress=lambda n, _: calls.append(n))
+    assert len(calls) < OntologyManager.REASONING_MAX_PASSES
+    errors = list(om.graph.subjects(RDF.type, ERR.ErrorMessage))
+    messages = [m for e in errors for m in om.graph.objects(e, ERR.error)]
+    assert messages
+    assert len(messages) == len(set(messages)) == len(errors)
+    assert om.apply_reasoning(profile) == 0

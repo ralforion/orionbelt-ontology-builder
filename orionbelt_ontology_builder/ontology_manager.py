@@ -105,6 +105,9 @@ _TripleUpdates = list[tuple[_Triple, _Triple]]
 #: the user knows why those labels are not editable here.
 SKOSXL = Namespace("http://www.w3.org/2008/05/skos-xl#")
 
+#: Where owlrl records an inconsistency it finds: a blank node per message.
+_OWLRL_ERR = Namespace("http://www.daml.org/2002/03/agents/agent-ont#")
+
 _SCHEMA = Namespace("https://schema.org/")
 _GIST = Namespace("https://w3id.org/semanticarts/ns/ontology/gist/")
 _DOMAIN_INCLUDES = (_SCHEMA.domainIncludes, _GIST.domainIncludes)
@@ -7800,6 +7803,9 @@ class OntologyManager:
         the next pass reads as datatype declarations ("``"0"^^xsd:int a
         owl:DataRange``"). Those are dropped after each pass, and passes repeat
         until the graph stops growing, so applying reasoning twice adds nothing.
+        An inconsistency owlrl reports is written on a fresh blank node every
+        pass; only one node per message is kept, or the graph would never stop
+        growing.
 
         ``progress(pass_number, triples_added_so_far)`` is called before each
         pass.
@@ -7821,10 +7827,21 @@ class OntologyManager:
                 owlrl.DeductiveClosure(semantics).expand(self.graph)
             for triple in [t for t in self.graph if isinstance(t[0], Literal)]:
                 self.graph.remove(triple)
+            self._drop_repeated_reasoner_errors()
             if len(self.graph) == before:
                 break
 
         return len(self.graph) - initial_count
+
+    def _drop_repeated_reasoner_errors(self) -> None:
+        """Keep one owlrl error node per distinct message, removing the rest."""
+        seen: set[frozenset[Node]] = set()
+        for node in list(self.graph.subjects(RDF.type, _OWLRL_ERR.ErrorMessage)):
+            message = frozenset(self.graph.objects(node, _OWLRL_ERR.error))
+            if message in seen:
+                self.graph.remove((node, None, None))
+            else:
+                seen.add(message)
 
     # ==================== PATH SEARCH ====================
 
