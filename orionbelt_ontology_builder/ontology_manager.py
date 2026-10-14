@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import weakref
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
@@ -19,6 +20,9 @@ from pathlib import Path
 from typing import Any, ClassVar, cast
 
 import owlrl
+import owlrl.DatatypeHandling
+import owlrl.XsdDatatypes
+import rdflib.term
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
 from rdflib.namespace import DC, DCTERMS, OWL, RDF, RDFS, SKOS, XSD, NamespaceManager
@@ -50,6 +54,38 @@ def rdf_format_for_path(path, default: str = "turtle") -> str:
 
 
 _UNSET: Any = object()  # sentinel: "parameter not provided"
+
+_OWLRL_LOCK = threading.Lock()
+
+
+@contextmanager
+def _owlrl_isolated() -> Iterator[None]:
+    """Run owlrl without leaving its changes to process-wide state behind.
+
+    owlrl installs its own lexical converters in rdflib's ``_toPythonMapping``,
+    and the OWL-RL Extended profile appends ``owl:rational`` and the
+    ontology's own restricted datatypes to module-level tables (and replaces
+    the ``xsd:decimal`` subsumption) on every run, never undoing any of it. In
+    a shared server process that would change how every session's literals
+    parse after anyone reasons. The lock keeps two runs from interleaving.
+    """
+    tables: list[dict[Any, Any]] = [
+        rdflib.term._toPythonMapping,
+        owlrl.DatatypeHandling.AltXSDToPYTHON,
+        owlrl.XsdDatatypes.OWL_Datatype_Subsumptions,
+    ]
+    datatypes = owlrl.XsdDatatypes.OWL_RL_Datatypes
+    with _OWLRL_LOCK:
+        saved = [dict(table) for table in tables]
+        saved_datatypes = list(datatypes)
+        try:
+            yield
+        finally:
+            # In place: other owlrl modules hold these same objects.
+            for table, copy in zip(tables, saved, strict=True):
+                table.clear()
+                table.update(copy)
+            datatypes[:] = saved_datatypes
 
 
 def _with_article(noun: str) -> str:
@@ -7747,16 +7783,46 @@ class OntologyManager:
 
         return issues
 
-    def apply_reasoning(self, profile: str = "rdfs") -> int:
-        """Apply reasoning to infer new triples."""
-        initial_count = len(self.graph)
+    #: Upper bound on closure passes; every bundled sample settles within two.
+    REASONING_MAX_PASSES: ClassVar[int] = 5
 
-        if profile == "rdfs":
-            owlrl.DeductiveClosure(owlrl.RDFS_Semantics).expand(self.graph)
-        elif profile == "owl-rl":
-            owlrl.DeductiveClosure(owlrl.OWLRL_Semantics).expand(self.graph)
-        elif profile == "owl-rl-ext":
-            owlrl.DeductiveClosure(owlrl.OWLRL_Extension).expand(self.graph)
+    def apply_reasoning(
+        self,
+        profile: str = "rdfs",
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int:
+        """Infer new triples, repeating the closure until nothing new appears.
+
+        A single owlrl pass is not a fixpoint: its axiomatic rules run once, up
+        front, so terms the pass itself introduces (``rdfs:Resource`` typing
+        under RDFS) only get them on the next pass. And owlrl leaves behind
+        triples with a literal subject, which no RDF syntax can write and which
+        the next pass reads as datatype declarations ("``"0"^^xsd:int a
+        owl:DataRange``"). Those are dropped after each pass, and passes repeat
+        until the graph stops growing, so applying reasoning twice adds nothing.
+
+        ``progress(pass_number, triples_added_so_far)`` is called before each
+        pass.
+        """
+        semantics = {
+            "rdfs": owlrl.RDFS_Semantics,
+            "owl-rl": owlrl.OWLRL_Semantics,
+            "owl-rl-ext": owlrl.OWLRL_Extension,
+        }.get(profile)
+        if semantics is None:
+            return 0
+
+        initial_count = len(self.graph)
+        for pass_number in range(1, self.REASONING_MAX_PASSES + 1):
+            before = len(self.graph)
+            if progress is not None:
+                progress(pass_number, before - initial_count)
+            with _owlrl_isolated():
+                owlrl.DeductiveClosure(semantics).expand(self.graph)
+            for triple in [t for t in self.graph if isinstance(t[0], Literal)]:
+                self.graph.remove(triple)
+            if len(self.graph) == before:
+                break
 
         return len(self.graph) - initial_count
 
