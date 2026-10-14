@@ -128,8 +128,19 @@ def render_validation():
         st.write(f"Current triple count: {current_triples}")
 
         if st.button("Apply Reasoning"):
+            # A pass over a large ontology takes seconds, and the closure
+            # repeats until nothing new appears: say which pass is running.
+            limit = ont.REASONING_MAX_PASSES
+            bar = st.progress(0.0, text="Applying reasoning…")
+
+            def report(pass_number: int, added: int) -> None:
+                bar.progress(
+                    (pass_number - 1) / limit,
+                    text=f"Pass {pass_number}: {added} triples inferred so far…",
+                )
+
             try:
-                new_triples = ont.apply_reasoning(profile=profile[1])
+                new_triples = ont.apply_reasoning(profile=profile[1], progress=report)
                 save_checkpoint("Apply reasoning")
                 request_autosave_flush()
                 show_message(
@@ -139,6 +150,8 @@ def render_validation():
                 st.write(f"New triple count: {len(ont.graph)}")
             except Exception as e:  # noqa: BLE001 - reasoner failure must show as a message, not a traceback
                 show_message(f"Error during reasoning: {e!s}", "error")
+            finally:
+                bar.empty()
 
 
 _PROFILE_LABELS = {

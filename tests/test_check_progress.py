@@ -1,4 +1,4 @@
-"""The quality and SHACL runs say where they are while they run."""
+"""The quality, SHACL and reasoning runs say where they are while they run."""
 
 from streamlit.testing.v1 import AppTest
 
@@ -61,3 +61,12 @@ def test_the_shacl_run_leaves_no_progress_bar_behind():
     assert not at.exception, at.exception
     assert not at.get("progress")
     assert any("(built-in)" in md.value for md in at.markdown)
+
+
+def test_applying_reasoning_leaves_no_progress_bar_behind():
+    at = _page("Reasoning")
+    at.run(timeout=120)
+    next(b for b in at.button if b.label == "Apply Reasoning").click().run()
+    assert not at.exception, at.exception
+    assert not at.get("progress")
+    assert any("New triple count" in md.value for md in at.markdown)
