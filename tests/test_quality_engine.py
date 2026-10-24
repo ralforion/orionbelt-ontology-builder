@@ -385,10 +385,6 @@ def table_messages(at):
 
 def select_first_finding(at, prefix):
     """Select the first row of the findings table whose key starts with prefix."""
-    key = next(
-        k
-        for k in at.session_state.filtered_state
-        if k.startswith(prefix) and "_table_" in k
-    )
+    key = next(k for k in at.session_state if k.startswith(prefix) and "_table_" in k)
     at.session_state[key] = {"selection": {"rows": [0], "columns": [], "cells": []}}
     at.run()
