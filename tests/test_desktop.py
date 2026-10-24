@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import signal
+import subprocess
 import sys
 import threading
 import types
@@ -24,6 +25,26 @@ def test_entry_point_registered():
     ]
     assert eps, "orionbelt-ontology-builder-desktop console script not registered"
     assert eps[0].value == "orionbelt_ontology_builder.desktop:run"
+
+
+def test_importing_the_launcher_does_not_load_the_pages():
+    """The launcher must not import the app's pages at startup.
+
+    The desktop server runs in a spawned child that re-imports this module
+    before Streamlit starts. A component module imported then (``streamlit_ace``
+    from the SPARQL page) declares its component with no script running, so
+    Streamlit never registers it, caches the module, and serves the editor's
+    iframe as a 404 for the whole session.
+    """
+    probe = (
+        "import sys, orionbelt_ontology_builder.desktop; "
+        "print(sorted(m for m in ('streamlit_ace', 'orionbelt_ontology_builder.app')"
+        " if m in sys.modules))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "[]"
 
 
 def test_run_invokes_start_desktop_app(monkeypatch, tmp_path):

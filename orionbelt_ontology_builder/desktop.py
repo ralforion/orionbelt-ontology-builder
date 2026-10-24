@@ -30,8 +30,8 @@ import threading
 import time
 from pathlib import Path
 
-from .app import APP_NAME
 from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, data_dir, resolved_startup_base
+from .ui import APP_NAME
 
 logger = logging.getLogger(__name__)
 
