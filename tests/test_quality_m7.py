@@ -426,9 +426,7 @@ def _select(at, rule_title):
     table = next(f.value for f in at.dataframe if "Message" in f.value.columns)
     row = int(table.index[table["Rule"] == rule_title][0])
     key = next(
-        k
-        for k in at.session_state.filtered_state
-        if k.startswith("quality_") and "_table_" in k
+        k for k in at.session_state if k.startswith("quality_") and "_table_" in k
     )
     at.session_state[key] = {"selection": {"rows": [row], "columns": [], "cells": []}}
     at.run()
