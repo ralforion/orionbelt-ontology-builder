@@ -235,9 +235,7 @@ def test_details_offer_related_resources_to_open():
     table = _table(at)
     row = int(table.index[table["Rule"] == "Redundant subclass edges"][0])
     key = next(
-        k
-        for k in at.session_state.filtered_state
-        if k.startswith("quality_") and "_table_" in k
+        k for k in at.session_state if k.startswith("quality_") and "_table_" in k
     )
     at.session_state[key] = {"selection": {"rows": [row], "columns": [], "cells": []}}
     at.run()
@@ -267,7 +265,7 @@ def test_drawing_the_defaults_does_not_mark_settings_for_saving():
     at.session_state["_quality_configs_restored"] = False
     at.run(timeout=120)
     at.run()
-    assert "_quality_configs_dirty" not in at.session_state.filtered_state
+    assert "_quality_configs_dirty" not in at.session_state
     # A real change still is one.
     next(c for c in at.checkbox if c.label == "Multiple parents").check().run()
     assert at.session_state["_quality_configs_dirty"] is True
