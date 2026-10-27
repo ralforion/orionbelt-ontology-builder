@@ -2548,6 +2548,104 @@ def _viz_node_restore(snap: dict) -> None:
         st.session_state["_viz_settings_dirty"] = True
 
 
+#: What a Node options file says it is, so loading some other JSON file is
+#: refused rather than read as an empty selection (issue #485).
+NODE_OPTIONS_FORMAT = "orionbelt-node-options"
+#: Counts the Node options uploader's resets: a new key empties it once a file
+#: has been read, so the same file can be loaded again later.
+_NODE_FILE_GEN = "_viz_node_file_gen"
+
+
+def node_options_file(filters: dict, focus_targets: dict, ontology_uri: str) -> str:
+    """The Node options panel's state as a file to save (issue #485).
+
+    Both halves of the panel at once, so one file resumes the work whichever
+    mode it is picked up in: what each node filter shows, and the focus (on or
+    off, its depth, its nodes). What is *shown* rather than what is hidden,
+    unlike the per-file state in config.json: the file is a working set the
+    user picked, and loading it should show that set, the way applying a pasted
+    list does. Focus nodes are saved as node ids, not as the labels the picker
+    shows, for the reason :func:`_viz_file_state_payload` gives.
+    """
+    seeds = st.session_state.get("_viz_cfg_focus_seeds") or []
+    return json.dumps(
+        {
+            "format": NODE_OPTIONS_FORMAT,
+            "version": 1,
+            "ontology": ontology_uri,
+            "shown": {
+                key: list(entry["selected_uris"]) for key, entry in filters.items()
+            },
+            "focus": {
+                "on": bool(st.session_state.get("_viz_cfg_focus_mode")),
+                "depth": int(st.session_state.get("_viz_cfg_focus_depth") or 1),
+                "node_ids": [focus_targets[s] for s in seeds if s in focus_targets],
+            },
+        },
+        indent=2,
+    )
+
+
+def node_options_file_key() -> str:
+    """The widget key of the Node options uploader, new after every load."""
+    return f"viz_node_file_{st.session_state.get(_NODE_FILE_GEN, 0)}"
+
+
+def viz_load_node_options(filters: dict, focus_targets: dict, ontology_uri: str):
+    """Apply a saved Node options file (an ``on_change`` callback, issue #485).
+
+    Replaces what the filters show and the focus, as one undoable step, the way
+    applying a pasted list replaces one of them. Entities the file names that
+    this ontology does not have are counted and said, not guessed at, and a
+    file saved for another ontology is still applied as far as it matches.
+    """
+    upload = st.session_state.get(node_options_file_key())
+    if upload is None:
+        return
+    st.session_state[_NODE_FILE_GEN] = st.session_state.get(_NODE_FILE_GEN, 0) + 1
+    try:
+        data = json.loads(upload.getvalue().decode("utf-8"))
+        if not isinstance(data, dict) or data.get("format") != NODE_OPTIONS_FORMAT:
+            raise ValueError("not a Node options file")
+        shown = data.get("shown") or {}
+        focus = data.get("focus") or {}
+        node_ids = [str(i) for i in focus.get("node_ids") or []]
+        depth = int(focus.get("depth") or 1)
+    except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as e:
+        st.toast(f"Could not load {upload.name}: {e}.", icon="⚠️")
+        return
+    viz_node_undo_checkpoint()
+    missing = 0
+    for key, entry in filters.items():
+        if key not in shown:
+            continue
+        known = set(entry["uris"])
+        wanted = [str(u) for u in shown[key] or []]
+        st.session_state[f"_viz_cfg_selected_{key}_uris"] = [
+            u for u in wanted if u in known
+        ]
+        missing += sum(1 for u in wanted if u not in known)
+    label_by_id = {node_id: label for label, node_id in focus_targets.items()}
+    seeds = [label_by_id[i] for i in node_ids if i in label_by_id]
+    missing += len(node_ids) - len(seeds)
+    st.session_state["_viz_cfg_focus_seed_ids_by_label"] = {
+        label: focus_targets[label] for label in seeds
+    }
+    viz_set_focus_seeds(seeds)
+    # On only with something to focus on: focus mode with no seeds backfills an
+    # arbitrary node (see viz_focus_on_path).
+    st.session_state["_viz_cfg_focus_mode"] = bool(focus.get("on") and seeds)
+    st.session_state["_viz_cfg_focus_depth"] = min(max(depth, 1), 5)
+    st.session_state["_viz_settings_dirty"] = True
+    note = f"Loaded {upload.name}."
+    if missing:
+        note += f" {missing} saved entit{'y is' if missing == 1 else 'ies are'} "
+        note += "not in this ontology, or of a type switched off, and left out."
+    if data.get("ontology") and data["ontology"] != ontology_uri:
+        note += f" It was saved for {data['ontology']}."
+    st.toast(note, icon="📂")
+
+
 def viz_node_history_follow_renames(renames, uris_by_kind, focus_targets) -> None:
     """Carry renames into the undo and redo steps (issue #491).
 

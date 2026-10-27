@@ -262,6 +262,7 @@ from .ui import (  # noqa: F401
     viz_hidden_caption,
     viz_hidden_note_style,
     viz_leave_empty_focus,
+    viz_load_node_options,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_history_follow_renames,

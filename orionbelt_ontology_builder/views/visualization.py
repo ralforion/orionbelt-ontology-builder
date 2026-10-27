@@ -33,6 +33,7 @@ from ..ui import (
     VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
+    _download_or_save,
     _edge_id,
     _edge_id_parts,
     _fmt_unknown,
@@ -70,6 +71,8 @@ from ..ui import (
     local_store,
     log_error,
     newly_hidden_uris,
+    node_options_file,
+    node_options_file_key,
     option_sort_key,
     panel_heading_html,
     panel_subject_uri,
@@ -98,6 +101,7 @@ from ..ui import (
     viz_hidden_caption,
     viz_hidden_note_style,
     viz_leave_empty_focus,
+    viz_load_node_options,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_history_follow_renames,
@@ -174,6 +178,37 @@ def _node_undo_buttons() -> None:
         disabled=not viz_node_redo_available(),
         use_container_width=True,
         help="Put back the change Undo just took back.",
+    )
+
+
+def _node_options_file_controls(where: str, filters, focus_targets, ont) -> None:
+    """Save and load the Node options panel as a file (issue #485).
+
+    Drawn in both Paste / copy boxes, since the file holds both halves of the
+    panel and is wanted from whichever mode the user is in. Saving goes through
+    _download_or_save, a download on the web and a path on the desktop, where
+    the webview cannot download; loading is an upload, which works in both.
+    """
+    st.divider()
+    st.caption(
+        "Or keep both the shown entities and the focus in a file, to load later."
+    )
+    ontology_uri = str(ont.ontology_uri)
+    _download_or_save(
+        "Download node options",
+        node_options_file(filters, focus_targets, ontology_uri),
+        "node-options.json",
+        mime="application/json",
+        key=f"viz_node_file_save_{where}",
+    )
+    st.file_uploader(
+        "Load node options",
+        type=["json"],
+        key=node_options_file_key(),
+        on_change=viz_load_node_options,
+        args=(filters, focus_targets, ontology_uri),
+        help="Replaces what is shown and the focus with the file's. Undo "
+        "takes it back.",
     )
 
 
@@ -1507,6 +1542,7 @@ def render_visualization():
                             language=None,
                             wrap_lines=True,
                         )
+                    _node_options_file_controls("focus", filters, focus_targets, ont)
                 focus_seed_ids = [
                     focus_targets[s] for s in focus_seeds if s in focus_targets
                 ]
@@ -1698,6 +1734,9 @@ def render_visualization():
                                 language=None,
                                 wrap_lines=True,
                             )
+                        _node_options_file_controls(
+                            "filter", filters, focus_targets, ont
+                        )
                     # Which behaviour a narrowed filter should have is a
                     # property of the ontology you are working on, so it is a
                     # setting rather than a fixed rule (issue #326). It sits
