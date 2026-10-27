@@ -1173,6 +1173,7 @@ _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 #: Widget keys of the Property colours popover on the graph page.
 VIZ_PROPERTY_COLOR_PICK = "viz_property_color_pick"
 VIZ_PROPERTY_COLOR_VALUE = "viz_property_color_value"
+VIZ_PROPERTY_SHOW_SEQ = "_viz_property_show_seq"
 
 
 def clean_property_colors(value) -> dict[str, str]:
@@ -1222,7 +1223,15 @@ def viz_reset_property_color(uri: str) -> None:
 
 
 def viz_property_color_picked() -> None:
-    """Show the picked property's own colour in the picker, if it has one."""
+    """Show the picked property on the graph, and its colour in the picker.
+
+    The graph selects its edges and zooms to them on a fresh pick, which the
+    bumped sequence number tells it: a property can be drawn as one loop in a
+    cluster of hundreds of nodes, and colouring what one cannot find is no use.
+    """
+    st.session_state[VIZ_PROPERTY_SHOW_SEQ] = (
+        st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0) + 1
+    )
     uri = st.session_state.get(VIZ_PROPERTY_COLOR_PICK)
     current = property_colors().get(uri) if uri else None
     if current:

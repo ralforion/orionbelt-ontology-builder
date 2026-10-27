@@ -10,6 +10,7 @@ because ``AppTest.from_function`` runs the script without the test's closures.
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -241,3 +242,45 @@ def test_an_assertion_row_names_its_property(om):
     (ind,) = [i for i in om.get_individuals() if i["name"] == "a1"]
     (row,) = [r for r in ind["properties"] if r["property"] == "knows"]
     assert row["property_uri"] == str(om.namespace) + "knows"
+
+
+def test_each_pick_tells_the_graph_to_show_the_property_again(monkeypatch):
+    """A property can be one loop among hundreds of nodes: picking it zooms the
+    graph to its edges, on every pick, and only on a pick."""
+    state: dict = {ui.VIZ_PROPERTY_COLOR_PICK: NS + "hasPart"}
+    monkeypatch.setattr(ui.st, "session_state", state)
+    ui.viz_property_color_picked()
+    ui.viz_property_color_picked()
+    assert state[ui.VIZ_PROPERTY_SHOW_SEQ] == 2
+
+
+def test_the_viewer_selects_and_zooms_to_the_picked_property():
+    """Pinned at the source level, like the other viewer invariants: the edges
+    are matched by property URI, zoomed to with a cap, and a pick is consumed
+    once, so a rerun leaves the camera where the user put it."""
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "orionbelt_ontology_builder"
+        / "lib"
+        / "graph_viewer"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    body = src[src.index("function showPickedProperty") :]
+    body = body[: body.index("\n}\n")]
+    assert "e.puri !== args.show_property" in body
+    assert "maxZoomLevel" in body
+    assert "sessionStorage.setItem('viz_prop'" in body
+    # The same-data rerun (a pick changes no data) and both rebuild paths.
+    calls = src.count("showPickedProperty(args, true)")
+    assert calls + src.count("showPickedProperty(args, false)") == 3
+
+
+def test_the_graph_is_handed_the_picked_property():
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "orionbelt_ontology_builder"
+        / "views"
+        / "visualization.py"
+    ).read_text(encoding="utf-8")
+    assert "show_property=st.session_state.get(VIZ_PROPERTY_COLOR_PICK)" in src
+    assert "show_property_seq=st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0)" in src

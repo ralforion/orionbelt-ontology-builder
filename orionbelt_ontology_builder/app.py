@@ -69,6 +69,7 @@ from .ui import (  # noqa: F401
     VIZ_PARKED_SEEDS_KEY,
     VIZ_PROPERTY_COLOR_PICK,
     VIZ_PROPERTY_COLOR_VALUE,
+    VIZ_PROPERTY_SHOW_SEQ,
     VIZ_SETTINGS_KEY,
     _apply_annotation_edit,
     _apply_class_edit,

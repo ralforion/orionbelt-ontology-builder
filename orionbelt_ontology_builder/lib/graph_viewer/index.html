@@ -341,6 +341,40 @@ function sendFindSelection(id) {
     } catch (e) {}
 }
 
+// Show where a property is drawn (issue #160): a fresh pick in the colours
+// popover selects its edges and zooms to their ends. Only a new pick does
+// (show_property_seq bumps on one), kept in sessionStorage like the Find state,
+// so a rerun or a rebuild leaves the camera where the user put it. A self-loop
+// or a single short edge would otherwise zoom in as far as vis goes.
+// Returns whether it moved the camera.
+function showPickedProperty(args, animate) {
+    var seq = args.show_property_seq || 0;
+    var done = null;
+    try { done = sessionStorage.getItem('viz_prop'); } catch (e) {}
+    if (String(seq) === done) return false;
+    try { sessionStorage.setItem('viz_prop', String(seq)); } catch (e) {}
+    var ds = network && network.body && network.body.data && network.body.data.edges;
+    if (!ds || !args.show_property) return false;
+    var ids = [], ends = {};
+    ds.forEach(function(e) {
+        if (e.puri !== args.show_property) return;
+        ids.push(e.id);
+        ends[e.from] = true;
+        ends[e.to] = true;
+    });
+    if (!ids.length) return false;
+    clearNeighbourHighlight();
+    try { network.setSelection({nodes: [], edges: ids}); } catch (e) {}
+    try {
+        network.fit({
+            nodes: Object.keys(ends),
+            maxZoomLevel: 1.1,
+            animation: animate ? {duration: 600, easingFunction: 'easeInOutQuad'} : false
+        });
+    } catch (e) {}
+    return true;
+}
+
 var visLoaded = false;
 var pendingArgs = null;
 var network = null;
@@ -1107,6 +1141,7 @@ function renderGraph(args) {
                     {seq: args.focus_seq, released: false, centred: !!_spin}));
             } catch (e) {}
         }
+        showPickedProperty(args, true);
         return;
     }
     lastSeq = args.seq;
@@ -1412,6 +1447,11 @@ function renderGraph(args) {
         _find.centred = true;
     }
     try { sessionStorage.setItem('viz_find', JSON.stringify(_find)); } catch (e) {}
+    // A property picked while the graph was rebuilding: shown now when the
+    // layout is final, or once physics has placed the nodes.
+    var _propPending = false;
+    if (usedSaved) showPickedProperty(args, false);
+    else _propPending = true;
     // Release the pin the moment the user takes control (click or drag), so we
     // never fight their navigation; a fresh Find pick (new seq) re-arms it.
     function _releaseFindPin() {
@@ -1491,7 +1531,9 @@ function renderGraph(args) {
                 // centring now would yank the camera back off whatever they
                 // just navigated to. Cache the viewport only once the camera
                 // animation has finished, or we'd store a mid-flight frame.
-                if (_pin && _findPinLive()) {
+                if (_propPending && showPickedProperty(args, true)) {
+                    setTimeout(savePositions, 700);
+                } else if (_pin && _findPinLive()) {
                     try {
                         network.focus(_pin, {
                             scale: 1.1,

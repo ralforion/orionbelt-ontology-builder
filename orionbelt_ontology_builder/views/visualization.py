@@ -32,6 +32,7 @@ from ..ui import (
     VIZ_PARKED_SEEDS_KEY,
     VIZ_PROPERTY_COLOR_PICK,
     VIZ_PROPERTY_COLOR_VALUE,
+    VIZ_PROPERTY_SHOW_SEQ,
     VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
@@ -3682,6 +3683,11 @@ def render_visualization():
                     # re-centres only on a fresh pick (issue #144).
                     focus_node=_find_id,
                     focus_seq=st.session_state.get("_viz_find_seq", 0),
+                    # The property picked in the colours popover, and a seq
+                    # that bumps on a fresh pick: its edges are selected and
+                    # zoomed to (issue #160).
+                    show_property=st.session_state.get(VIZ_PROPERTY_COLOR_PICK),
+                    show_property_seq=st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0),
                     # On desktop the webview can't download; the component sends
                     # the PNG back for us to save instead (#86).
                     web_download=not local_store.local_persist_enabled(),
