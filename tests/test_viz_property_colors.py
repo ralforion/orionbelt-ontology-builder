@@ -252,6 +252,7 @@ def test_each_pick_tells_the_graph_to_show_the_property_again(monkeypatch):
     ui.viz_property_color_picked()
     ui.viz_property_color_picked()
     assert state[ui.VIZ_PROPERTY_SHOW_SEQ] == 2
+    assert state[ui.VIZ_SHOW_PROPERTY] == NS + "hasPart"
 
 
 def test_the_viewer_selects_and_zooms_to_the_picked_property():
@@ -282,7 +283,7 @@ def test_the_graph_is_handed_the_picked_property():
         / "views"
         / "visualization.py"
     ).read_text(encoding="utf-8")
-    assert "show_property=st.session_state.get(VIZ_PROPERTY_COLOR_PICK)" in src
+    assert "show_property=st.session_state.get(VIZ_SHOW_PROPERTY)" in src
     assert "show_property_seq=st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0)" in src
 
 
