@@ -30,6 +30,8 @@ from ..ui import (
     VIZ_NODE_REDO_KEY,
     VIZ_NODE_UNDO_KEY,
     VIZ_PARKED_SEEDS_KEY,
+    VIZ_PROPERTY_COLOR_PICK,
+    VIZ_PROPERTY_COLOR_VALUE,
     VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
@@ -85,6 +87,7 @@ from ..ui import (
     path_nodes,
     picker_option_caption,
     prioritise_pinned,
+    property_colors,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
@@ -114,10 +117,13 @@ from ..ui import (
     viz_node_undo_available,
     viz_node_undo_checkpoint,
     viz_ontology_was_replaced,
+    viz_property_color_picked,
     viz_rename_map,
+    viz_reset_property_color,
     viz_route_changed,
     viz_route_key,
     viz_set_focus_seeds,
+    viz_set_property_color,
     viz_show_kind_toggled,
     viz_sparql_note,
     viz_sync,
@@ -509,6 +515,80 @@ def graph_space_css(find_row_open: bool) -> str:
     </style>"""
 
 
+def _edge_color(property_uri, default: str, label: str) -> dict:
+    """The colour arguments for an edge standing for ``property_uri``.
+
+    The property's own colour when the user gave it one (issue #160), tagged
+    with its label so the legend can name it; otherwise the edge kind's.
+    """
+    color = property_colors().get(property_uri) if property_uri else None
+    if color is None:
+        return {"color": default}
+    return {"color": color, "pcolor": label}
+
+
+def _property_colors_popover(ont, object_props) -> None:
+    """Give a property's edges a colour of their own (issue #160).
+
+    Every kind of edge has one colour, so two object properties, or two
+    custom relations, look alike on the graph. Offered here are the
+    properties that are drawn as edges: object properties (their domain and
+    range edges, the restrictions on them, and what individuals assert with
+    them) and the custom relation types. The colours are a display setting
+    kept with the others, by URI, rather than written into the ontology.
+    """
+    names = {p["uri"]: (p["label"] or p["name"]) for p in object_props if p.get("uri")}
+    for t in ont.get_custom_relation_types():
+        names.setdefault(t["uri"], t["display"])
+    options = sorted(names, key=lambda u: option_sort_key(names[u]))
+    colors = property_colors()
+    # One label whatever is set: a label that changed with a count of the
+    # colours closed the popover on the pass that set the first one.
+    with st.popover(
+        "Colours",
+        help="Draw a property's edges in a colour of your own.",
+    ):
+        if not options:
+            st.caption("No object properties or custom relations to colour.")
+            return
+        picked = case_selectbox(
+            "Property",
+            options,
+            key=VIZ_PROPERTY_COLOR_PICK,
+            format_func=lambda u: names.get(u, u),
+            placeholder="Choose a property",
+            on_change=viz_property_color_picked,
+        )
+        st.session_state.setdefault(VIZ_PROPERTY_COLOR_VALUE, "#2196F3")
+        col_pick, col_set = st.columns([1, 1], vertical_alignment="bottom")
+        with col_pick:
+            st.color_picker("Colour", key=VIZ_PROPERTY_COLOR_VALUE)
+        with col_set:
+            st.button(
+                "Set colour",
+                key="viz_property_color_set",
+                disabled=picked is None,
+                on_click=viz_set_property_color,
+                use_container_width=True,
+            )
+        shown = [u for u in colors if u in names]
+        for uri in sorted(shown, key=lambda u: option_sort_key(names[u])):
+            col_name, col_reset = st.columns([4, 1], vertical_alignment="center")
+            col_name.markdown(
+                f'<span style="display:inline-block;width:0.9em;height:0.9em;'
+                f"border-radius:2px;vertical-align:middle;margin-right:0.4em;"
+                f'background:{colors[uri]}"></span>{html.escape(names[uri])}',
+                unsafe_allow_html=True,
+            )
+            col_reset.button(
+                "✕",
+                key=f"viz_property_color_reset_{_uid(uri)}",
+                help="Back to the colour of its kind",
+                on_click=viz_reset_property_color,
+                args=(uri,),
+            )
+
+
 def graph_fullscreen_css(dark: bool) -> str:
     """CSS for fullscreen: the graph keeps its controls, the app loses its chrome.
 
@@ -753,6 +833,9 @@ def render_visualization():
             # straight past that (see edges_are_curved). "curved" and "straight"
             # are the user overriding it (issue #425).
             "edge_curves": "auto",
+            # {property URI: "#rrggbb"}: edges for a property drawn in a colour
+            # of the user's own rather than their kind's (issue #160).
+            "property_colors": {},
         }
         # Bring back settings saved in a previous session before applying
         # defaults, so a returning user opens with their own preferences (#142).
@@ -945,12 +1028,19 @@ def render_visualization():
                     ),
                 )
             with col3:
-                st.checkbox(
-                    "Highlight Issues",
-                    key="viz_highlight_issues",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
+                # Side by side, so the colours cost the band no extra row.
+                _issues_col, _colors_col = st.columns(
+                    [1.6, 1], vertical_alignment="center"
                 )
+                with _issues_col:
+                    st.checkbox(
+                        "Highlight Issues",
+                        key="viz_highlight_issues",
+                        on_change=viz_sync,
+                        args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
+                    )
+                with _colors_col:
+                    _property_colors_popover(ont, object_props)
 
         # Read the settings from the persisted config rather than from the
         # widgets' return values: collapsed, the widgets do not render at all,
@@ -2398,10 +2488,10 @@ def render_visualization():
                             _uid(rng_uri),
                             label=label,
                             title=title,
-                            color="#2196F3",
                             arrows="to",
                             ntype="Object Property",
                             ename=prop_node_id,
+                            **_edge_color(prop["uri"], "#2196F3", label),
                         )
 
             # Add reused-property links (link_classes) as edges. These live as
@@ -2430,10 +2520,12 @@ def render_visualization():
                                 f"\nProperty: {rest['property']}"
                                 f"\nValue: {rest['value']}"
                             ),
-                            color="#2196F3",
                             arrows="to",
                             dashes=True,
                             ntype="Restriction",
+                            **_edge_color(
+                                rest.get("property_uri"), "#2196F3", rest["property"]
+                            ),
                             ename=_edge_id(
                                 src_uri,
                                 rest.get("property_uri") or rest["property"],
@@ -2606,8 +2698,12 @@ def render_visualization():
                                     tgt_node,
                                     label=prop["property"],
                                     title=f"{prop['property']}:\n{ind['name']} → {prop['value']}",
-                                    color="#FF9800",
                                     arrows="to",
+                                    **_edge_color(
+                                        prop.get("property_uri"),
+                                        "#FF9800",
+                                        prop["property"],
+                                    ),
                                 )
 
             # Add class relations (only if both nodes exist) — URI-keyed
@@ -2679,9 +2775,11 @@ def render_visualization():
                         f"Custom relation: {rel['relation']}"
                         f"\n{rel['subject']} → {rel['object']}"
                     ),
-                    color=CUSTOM_RELATION_COLOR,
                     arrows="to",
                     ntype="Custom Relation",
+                    **_edge_color(
+                        rel["relation_uri"], CUSTOM_RELATION_COLOR, rel["relation"]
+                    ),
                     ename=_edge_id(
                         rel["subject_uri"], rel["relation_uri"], rel["object_uri"]
                     ),

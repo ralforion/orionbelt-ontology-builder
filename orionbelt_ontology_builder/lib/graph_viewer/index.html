@@ -1583,6 +1583,26 @@ function renderGraph(args) {
         }
     });
 
+    // A property given a colour of its own (issue #160) is named in the legend
+    // by that colour, once per property, after the kinds above.
+    var escapeText = function(text) {
+        var span = document.createElement('span');
+        span.textContent = text;
+        return span.innerHTML;
+    };
+    var ownColors = {};
+    edges.forEach(function(e) {
+        if (!e.pcolor) return;
+        var c = typeof e.color === 'string' ? e.color : (e.color && e.color.color) || '';
+        var key = c.toUpperCase() + '|' + e.pcolor;
+        if (c && !ownColors[key]) ownColors[key] = {color: c, label: e.pcolor};
+    });
+    Object.keys(ownColors).forEach(function(key) {
+        var item = ownColors[key];
+        edgeLegend += '<span class="line solid" style="border-color:' + item.color + ';"></span> ' +
+            escapeText(item.label) + ' &nbsp;';
+    });
+
     var legendEl = document.getElementById('legend');
     legendEl.style.background = theme.panel;
     legendEl.style.color = theme.text;
