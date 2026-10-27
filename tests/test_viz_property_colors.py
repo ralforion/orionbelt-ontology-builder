@@ -331,5 +331,8 @@ def test_a_property_pick_takes_the_selection_and_the_camera():
     assert "isEdge: true" in body and "sendSelection(" in body
     assert "f.released = true" in body
     assert "sessionStorage.setItem('viz_find'" in body
-    # And the viewport it zoomed to is the one a rebuild restores.
-    assert "saveViewportNow()" in body
+    # And the viewport it zooms to is cached before the animation runs, so a
+    # rebuild straight after (Set colour pressed at once) restores it.
+    assert "holdCachedView(to)" in body
+    assert body.index("holdCachedView(to)") < body.index("animation: {duration")
+    assert "setTimeout" not in body

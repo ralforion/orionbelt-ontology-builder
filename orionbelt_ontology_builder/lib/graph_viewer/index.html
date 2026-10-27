@@ -378,17 +378,38 @@ function showPickedProperty(args, animate) {
         f.released = true;
         sessionStorage.setItem('viz_find', JSON.stringify(f));
     } catch (e) {}
+    // Where the camera is going is worked out first, by an instant fit, and
+    // cached as the viewport straight away: a fit fires no zoom event, so the
+    // cache still held the view before it, and Set colour pressed at once
+    // rebuilds from the cache, mid-animation or not. Saving once the animation
+    // was over came too late for that, and then saved the rebuilt view.
     try {
-        network.fit({
-            nodes: Object.keys(ends),
-            maxZoomLevel: 1.1,
-            animation: animate ? {duration: 600, easingFunction: 'easeInOutQuad'} : false
-        });
+        var from = {scale: network.getScale(), position: network.getViewPosition()};
+        network.fit({nodes: Object.keys(ends), maxZoomLevel: 1.1, animation: false});
+        var to = {scale: network.getScale(), position: network.getViewPosition()};
+        holdCachedView(to);
+        if (animate) {
+            network.moveTo(from);
+            network.moveTo({
+                scale: to.scale,
+                position: to.position,
+                animation: {duration: 600, easingFunction: 'easeInOutQuad'}
+            });
+        }
     } catch (e) {}
-    // A fit fires no zoom event, so the cached viewport would still be the one
-    // before it, and the rebuild that setting the colour causes restored that.
-    setTimeout(function () { if (saveViewportNow) saveViewportNow(); }, animate ? 700 : 0);
     return true;
+}
+
+// Point the cached viewport (see savePositions) at `view`, keeping the cached
+// layout it belongs to. Nothing cached yet means the layout is still settling,
+// and its own save comes after.
+function holdCachedView(view) {
+    try {
+        var raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null');
+        if (!raw) return;
+        raw.view = view;
+        sessionStorage.setItem('viz_pos', JSON.stringify(raw));
+    } catch (e) {}
 }
 
 var visLoaded = false;
@@ -1547,8 +1568,11 @@ function renderGraph(args) {
                 // centring now would yank the camera back off whatever they
                 // just navigated to. Cache the viewport only once the camera
                 // animation has finished, or we'd store a mid-flight frame.
+                // Positions cached first: the pick points the cached view at
+                // where it is going, and needs the layout cached to do that.
+                if (_propPending) savePositions();
                 if (_propPending && showPickedProperty(args, true)) {
-                    setTimeout(savePositions, 700);
+                    // Cached already, by the pick.
                 } else if (_pin && _findPinLive()) {
                     try {
                         network.focus(_pin, {
