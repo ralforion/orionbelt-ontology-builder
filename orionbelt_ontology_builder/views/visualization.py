@@ -29,6 +29,7 @@ from ..ui import (
     VIZ_NODE_REDO_KEY,
     VIZ_NODE_UNDO_KEY,
     VIZ_PARKED_SEEDS_KEY,
+    VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
     _edge_id,
@@ -104,6 +105,8 @@ from ..ui import (
     viz_node_undo_checkpoint,
     viz_ontology_was_replaced,
     viz_rename_map,
+    viz_route_changed,
+    viz_route_key,
     viz_set_focus_seeds,
     viz_show_kind_toggled,
     viz_sync,
@@ -167,27 +170,6 @@ def _node_undo_buttons() -> None:
         use_container_width=True,
         help="Put back the change Undo just took back.",
     )
-
-
-def _route_key() -> str:
-    """The widget key of the path finder's Route picker (issue #353).
-
-    A new one for every list of routes. The same key kept across a change of
-    options left the browser showing no route picked while the script went on
-    with the first, and clearing the widget's state did not reach it; a picker
-    of its own starts at the shortest route and shows it. It replaces the old
-    one in place, so nothing below it in the panel moves (issue #189).
-    """
-    return f"viz_path_route_{st.session_state.get('_viz_path_route_gen', 0)}"
-
-
-#: The route picked in the path finder, kept apart from the picker's own state
-#: (see the Route picker on the Visualization page).
-_ROUTE_PICK = "_viz_path_route_pick"
-
-
-def _keep_route_pick() -> None:
-    st.session_state[_ROUTE_PICK] = st.session_state.get(_route_key(), 0)
 
 
 def status_bar_copy_html(text: str) -> str:
@@ -1851,8 +1833,8 @@ def render_visualization():
                         # A new pair, or a changed ontology: its routes are a
                         # new list, so the pick starts again at the shortest,
                         # in a picker of its own (see _route_key below).
-                        st.session_state.pop(_route_key(), None)
-                        st.session_state.pop(_ROUTE_PICK, None)
+                        st.session_state.pop(viz_route_key(), None)
+                        st.session_state.pop(VIZ_ROUTE_PICK, None)
                         st.session_state["_viz_path_route_gen"] = (
                             st.session_state.get("_viz_path_route_gen", 0) + 1
                         )
@@ -1903,17 +1885,17 @@ def render_visualization():
                     # state on a run that does not draw it, so it is kept apart
                     # and handed back as the default (PR #532 review).
                     index=min(
-                        st.session_state.get(_ROUTE_PICK, 0),
+                        st.session_state.get(VIZ_ROUTE_PICK, 0),
                         max(_route_count - 1, 0),
                     ),
-                    on_change=_keep_route_pick,
+                    on_change=viz_route_changed,
                     format_func=lambda i: (
                         f"{i + 1} · {len(path_routes[i])} hop"
                         f"{'s' if len(path_routes[i]) != 1 else ''}"
                         if path_routes and path_routes[i]
                         else "—"
                     ),
-                    key=_route_key(),
+                    key=viz_route_key(),
                     horizontal=True,
                     disabled=_route_count < 2,
                     help="The shortest route first, then the next-best ones, up "

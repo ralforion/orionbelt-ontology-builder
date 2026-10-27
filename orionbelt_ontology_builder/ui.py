@@ -2596,6 +2596,31 @@ def viz_find_changed():
     st.session_state["_viz_find_seq"] = st.session_state.get("_viz_find_seq", 0) + 1
 
 
+#: The route picked in the path finder, kept apart from the Route picker's own
+#: state (issue #353): Streamlit drops a widget's state on a run that does not
+#: draw it, and the pick has to outlive the panel being switched off and on,
+#: as the pair does (issue #360).
+VIZ_ROUTE_PICK = "_viz_path_route_pick"
+
+
+def viz_route_key() -> str:
+    """The widget key of the path finder's Route picker (issue #353).
+
+    A new one for every list of routes. The same key kept across a change of
+    options left the browser showing no route picked while the script went on
+    with the first, and clearing the widget's state did not reach it; a picker
+    of its own starts at the route it is handed and shows it. It replaces the
+    old one in place, so nothing below it in the panel moves (issue #189).
+    """
+    return f"viz_path_route_{st.session_state.get('_viz_path_route_gen', 0)}"
+
+
+def viz_route_changed() -> None:
+    """Keep the route just picked where the picker's state going away (a run
+    without the panel) cannot take it along."""
+    st.session_state[VIZ_ROUTE_PICK] = st.session_state.get(viz_route_key(), 0)
+
+
 def prune_reused_focus_seeds(seeds, seen_ids_by_label, focus_targets):
     """Drop seeds whose label has come to name a different entity.
 
