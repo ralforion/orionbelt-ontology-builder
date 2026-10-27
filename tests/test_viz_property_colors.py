@@ -223,7 +223,7 @@ def test_the_colours_are_saved_and_restored_with_the_graph_settings(
     monkeypatch.setattr(ui.st, "session_state", saving)
     ui._persist_viz_settings()
     stored = json.loads(cfg_file.read_text())["viz_settings"]
-    assert stored["property_colors"] == {NS + "hasPart": RED}
+    assert stored["property_colors"] == [[NS + "hasPart", RED]]
 
     restored: dict = {}
     monkeypatch.setattr(ui.st, "session_state", restored)
@@ -284,3 +284,52 @@ def test_the_graph_is_handed_the_picked_property():
     ).read_text(encoding="utf-8")
     assert "show_property=st.session_state.get(VIZ_PROPERTY_COLOR_PICK)" in src
     assert "show_property_seq=st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0)" in src
+
+
+def test_the_oldest_colour_is_still_the_oldest_after_a_reload(monkeypatch, tmp_path):
+    """The saved settings are written with sorted keys: kept as a map, the
+    colours came back in URI order, and the cap then evicted the
+    alphabetically first URI rather than the oldest colour."""
+    cfg_file = tmp_path / "config.json"
+    monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
+    monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
+    # Oldest first, in reverse alphabetical order.
+    colors = {f"{NS}p{i:03d}": RED for i in range(ui.PROPERTY_COLOR_MAX - 1, -1, -1)}
+    saving: dict = {"_viz_settings_dirty": True, "_viz_cfg_property_colors": colors}
+    monkeypatch.setattr(ui.st, "session_state", saving)
+    ui._persist_viz_settings()
+
+    restored: dict = {}
+    monkeypatch.setattr(ui.st, "session_state", restored)
+    stored = json.loads(cfg_file.read_text())["viz_settings"]
+    ui._apply_viz_settings(stored, {"property_colors": {}})
+    assert list(restored["_viz_cfg_property_colors"]) == list(colors)
+
+    restored[ui.VIZ_PROPERTY_COLOR_PICK] = NS + "newest"
+    restored[ui.VIZ_PROPERTY_COLOR_VALUE] = BLUE
+    ui.viz_set_property_color()
+    kept = restored["_viz_cfg_property_colors"]
+    oldest = f"{NS}p{ui.PROPERTY_COLOR_MAX - 1:03d}"
+    assert oldest not in kept
+    assert f"{NS}p000" in kept and NS + "newest" in kept
+
+
+def test_a_property_pick_takes_the_selection_and_the_camera():
+    """setSelection fires no select event, so the pick has to tell the details
+    panel and the copy button itself; and it releases a Find pin, or the
+    rebuild that setting the colour causes took the camera back to it."""
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "orionbelt_ontology_builder"
+        / "lib"
+        / "graph_viewer"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    body = src[src.index("function showPickedProperty") :]
+    body = body[: body.index("\n}\n")]
+    assert "setCopyTarget(selectionText(ed))" in body
+    assert "isEdge: true" in body and "sendSelection(" in body
+    assert "f.released = true" in body
+    assert "sessionStorage.setItem('viz_find'" in body
+    # And the viewport it zoomed to is the one a rebuild restores.
+    assert "saveViewportNow()" in body

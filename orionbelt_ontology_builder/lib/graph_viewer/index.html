@@ -365,6 +365,19 @@ function showPickedProperty(args, animate) {
     if (!ids.length) return false;
     clearNeighbourHighlight();
     try { network.setSelection({nodes: [], edges: ids}); } catch (e) {}
+    // setSelection fires no select event, so the details panel and the copy
+    // button are told here, as an edge click would tell them; otherwise they
+    // went on naming the node selected before.
+    var ed = ds.get(ids[0]);
+    setCopyTarget(selectionText(ed));
+    sendSelection({ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true});
+    // The camera is the property's now. An earlier Find pick left pinned would
+    // take it back on the next rebuild, which setting the colour is.
+    try {
+        var f = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {};
+        f.released = true;
+        sessionStorage.setItem('viz_find', JSON.stringify(f));
+    } catch (e) {}
     try {
         network.fit({
             nodes: Object.keys(ends),
@@ -372,6 +385,9 @@ function showPickedProperty(args, animate) {
             animation: animate ? {duration: 600, easingFunction: 'easeInOutQuad'} : false
         });
     } catch (e) {}
+    // A fit fires no zoom event, so the cached viewport would still be the one
+    // before it, and the rebuild that setting the colour causes restored that.
+    setTimeout(function () { if (saveViewportNow) saveViewportNow(); }, animate ? 700 : 0);
     return true;
 }
 

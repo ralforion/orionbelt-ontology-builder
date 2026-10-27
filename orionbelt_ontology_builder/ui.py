@@ -1177,12 +1177,21 @@ VIZ_PROPERTY_SHOW_SEQ = "_viz_property_show_seq"
 
 
 def clean_property_colors(value) -> dict[str, str]:
-    """A stored ``{property URI: "#rrggbb"}`` map, minus anything else."""
-    if not isinstance(value, dict):
+    """A stored ``{property URI: "#rrggbb"}`` map, minus anything else.
+
+    Also read as ``[[URI, colour], ...]``, the form it is saved in: the saved
+    settings are written with sorted keys, and a map would come back in URI
+    order rather than oldest first, which is the order the cap evicts by.
+    """
+    if isinstance(value, dict):
+        pairs = list(value.items())
+    elif isinstance(value, list):
+        pairs = [tuple(p) for p in value if isinstance(p, list | tuple) and len(p) == 2]
+    else:
         return {}
     clean = {
         uri: color.lower()
-        for uri, color in value.items()
+        for uri, color in pairs
         if isinstance(uri, str)
         and uri
         and isinstance(color, str)
@@ -1245,6 +1254,12 @@ def _viz_settings_payload() -> str:
         for k in _VIZ_PERSIST_KEYS
         if f"_viz_cfg_{k}" in st.session_state
     }
+    # Pairs, not a map: sort_keys would put the colours in URI order and lose
+    # which is oldest (see clean_property_colors).
+    if "property_colors" in data:
+        data["property_colors"] = [
+            list(p) for p in clean_property_colors(data["property_colors"]).items()
+        ]
     return json.dumps(data, sort_keys=True)
 
 
