@@ -1915,10 +1915,11 @@ def render_visualization():
                     "Focus on this path",
                     key="viz_path_focus",
                     disabled=not path_hops,
-                    help="Makes the path the focus, so all of it is drawn even when "
-                    "the full graph is too large to show. It is an ordinary focus "
-                    "from there: the depth slider decides how much of what "
-                    "surrounds the path comes with it.",
+                    help="Makes the path the focus, in place of the current focus "
+                    "nodes. The path is drawn without this too, focus or not; "
+                    "use it to narrow the graph down to the path. It is an "
+                    "ordinary focus from there: the depth slider decides how "
+                    "much of what surrounds the path comes with it.",
                 ):
                     viz_focus_on_path(
                         [
@@ -2811,7 +2812,14 @@ def render_visualization():
                         adj.setdefault(edge["from"], set()).add(edge["to"])
                         adj.setdefault(edge["to"], set()).add(edge["from"])
 
-                    def _grow(from_ids, keep, budget, _adj=adj, _depth=focus_depth):
+                    def _grow(
+                        from_ids,
+                        keep,
+                        budget,
+                        through=frozenset(),
+                        _adj=adj,
+                        _depth=focus_depth,
+                    ):
                         """Ring by ring from *from_ids*, into *keep*.
 
                         Never past *budget* nodes — the assembly was allowed over
@@ -2820,20 +2828,29 @@ def render_visualization():
                         every selected class. Truncating mid-ring keeps the
                         nearer hops, which are the ones that were asked for.
                         Returns the keep set and whether it had to stop short.
+
+                        What *keep* already holds stops the walk, except the
+                        nodes in *through*: those are in *keep* to be counted
+                        against the budget once, not because a walk reached
+                        them, so a walk still runs on past them (issue #362,
+                        the path pinned before the focus is grown).
                         """
-                        ring = set(from_ids) - keep
+                        seen = (keep - through) | set(from_ids)
+                        ring = set(from_ids) - (keep - through)
                         for _ in range(_depth + 1):
                             if not ring:
                                 break
+                            new = ring - keep
                             room = budget - len(keep)
-                            if len(ring) > room:
-                                keep |= set(sorted(ring)[:room])
+                            if len(new) > room:
+                                keep |= set(sorted(new)[: max(room, 0)])
                                 return keep, True
-                            keep |= ring
+                            keep |= new
                             nxt: set = set()
                             for nid in ring:
                                 nxt |= _adj.get(nid, set())
-                            ring = nxt - keep
+                            ring = nxt - seen
+                            seen |= ring
                         return keep, False
 
                     _cap_line = (
@@ -2843,7 +2860,18 @@ def render_visualization():
                         f"see it in full."
                     )
                     _pin_find = bool(_find_id and _find_id in present_ids)
-                    keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES)
+                    # The path picked in Path finder (issue #362): kept as it
+                    # is, so it is drawn whatever the focus is on and the focus
+                    # seeds are left alone. It goes into keep before the walks,
+                    # so a node it shares with the focus is counted once, and as
+                    # `through`, so the walks still run on past it. It is not
+                    # grown from itself: the path is the answer, and the ring
+                    # around each of its entities would bury it. The builder
+                    # pins it past the cap (see _pinned_ids), and so does this.
+                    _pin_path = frozenset(i for i in path_node_ids if i in present_ids)
+                    keep, _cut_short = _grow(
+                        seeds, set(_pin_path), GRAPH_MAX_NODES, _pin_path
+                    )
 
                     # The Find target, but only when the focus does not already
                     # hold it. It is the last gate that used to drop the entity
@@ -2880,9 +2908,19 @@ def render_visualization():
                         # target: charging it always left a capped focus one node
                         # short of what it can draw for a pick already on the
                         # canvas (PR #428 review).
+                        #
+                        # A path that fills the cap on its own still leaves the
+                        # target its one node, past the cap as the path is.
                         if len(keep) >= GRAPH_MAX_NODES:
-                            keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES - 1)
-                        keep, _find_cut = _grow({_find_id}, keep, GRAPH_MAX_NODES)
+                            keep, _cut_short = _grow(
+                                seeds, set(_pin_path), GRAPH_MAX_NODES - 1, _pin_path
+                            )
+                        keep, _find_cut = _grow(
+                            {_find_id},
+                            keep,
+                            max(GRAPH_MAX_NODES, len(keep) + 1),
+                            _pin_path,
+                        )
                         focus_find_kept = _find_id in keep
                         _cut_short = _cut_short or _find_cut
                     if _cut_short:

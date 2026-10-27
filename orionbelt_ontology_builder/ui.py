@@ -2302,12 +2302,10 @@ def viz_set_focus_seeds(seeds) -> None:
 def viz_focus_on_path(labels) -> None:
     """Focus the graph on exactly the entities a shortest path runs through.
 
-    The path search runs over the whole ontology while the canvas assembles at
-    most :data:`GRAPH_MAX_NODES` of it, so a path can name entities the current
-    view has no node for — and the highlight then has nothing to paint. Making
-    the path the focus is the way back: focus mode assembles past the render cap
-    and prunes to its seeds, so the whole path is drawn whatever the graph
-    happened to be showing.
+    The path is drawn without this, focus or not: the builder pins it past the
+    cap (issue #378) and the focus prune keeps it (issue #362). This is the
+    deliberate step of replacing the focus with the path, to narrow the graph
+    down to it.
 
     Mode and seeds are written together for the reason
     :func:`viz_apply_focus_click` writes them together: focus mode with no seeds
