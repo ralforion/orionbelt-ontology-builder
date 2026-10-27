@@ -2211,8 +2211,11 @@ def render_visualization():
         # (issue #234). Without it the usual order of events defeats the whole
         # thing — the page builds and caches a graph with no target, then picking
         # one changes nothing the key can see, so no rebuild happens and the
-        # cached payload still lacks the entity that was asked for.
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}_{'-'.join(sparql_node_ids)}_{hash(frozenset(sparql_pairs))}"
+        # cached payload still lacks the entity that was asked for. The property
+        # colours are in it for the same reason: a colour set in the popover
+        # changed nothing the key could see, so the graph kept the old one
+        # until something else rebuilt it (issue #160).
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}_{'-'.join(sparql_node_ids)}_{hash(frozenset(sparql_pairs))}_{hash(frozenset(property_colors().items()))}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None

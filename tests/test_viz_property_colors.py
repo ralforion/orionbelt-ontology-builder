@@ -94,6 +94,24 @@ def test_the_other_edges_keep_the_colour_of_their_kind(edges):
     assert "pcolor" not in other
 
 
+def test_a_new_colour_redraws_the_graph_at_once():
+    """The graph is cached by a key; a colour has to be part of it, or setting
+    one left the graph as it was until something else rebuilt it."""
+    os.environ["PCOLOR_MAP"] = json.dumps({})
+    at = AppTest.from_function(_script)
+    at.run(timeout=120)
+    first = json.loads(at.session_state["last_graph_data"]["edges"])
+    (prop,) = _by(first, "Object Property", "touches")
+    assert prop["color"] == "#2196F3"
+
+    at.session_state["_viz_cfg_property_colors"] = {NS + "touches": RED}
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    second = json.loads(at.session_state["last_graph_data"]["edges"])
+    (prop,) = _by(second, "Object Property", "touches")
+    assert prop["color"] == RED
+
+
 # --- the setting -------------------------------------------------------------
 
 
