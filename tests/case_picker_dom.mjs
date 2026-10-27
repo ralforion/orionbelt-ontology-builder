@@ -133,6 +133,7 @@ for (const step of JSON.parse(scenarioJson)) {
       clear: !clear.hidden,
       open: !list.hidden,
       rows: list.children.map((li) => li.textContent),
+      active: (list.children.find((li) => li.classList.contains("cp-active")) || {}).textContent,
       chips: chips.children.map((chip) => chip.textContent),
       reports: [...reports],
     });
