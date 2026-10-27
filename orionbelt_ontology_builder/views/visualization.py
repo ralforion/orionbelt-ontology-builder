@@ -25,6 +25,7 @@ from ..ui import (
     PATH_HIGHLIGHT_BORDER,
     PATH_HIGHLIGHT_COLOR,
     PKG_DIR,
+    SPARQL_HIGHLIGHT_COLOR,
     VIZ_NODE_PANEL,
     VIZ_NODE_REDO_KEY,
     VIZ_NODE_UNDO_KEY,
@@ -83,9 +84,12 @@ from ..ui import (
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
+    sparql_highlight,
+    sparql_highlight_for,
     theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
+    viz_clear_sparql_highlight,
     viz_filter_changed,
     viz_find_changed,
     viz_focus_on_path,
@@ -109,6 +113,7 @@ from ..ui import (
     viz_route_key,
     viz_set_focus_seeds,
     viz_show_kind_toggled,
+    viz_sparql_note,
     viz_sync,
 )
 
@@ -1993,6 +1998,42 @@ def render_visualization():
                     )
                     st.rerun()
 
+        # ---- A SPARQL result shown on the graph (issue #395) -----------------
+        #
+        # Left here by "Show on graph" on the SPARQL page, as the URIs of each
+        # row; which of them are nodes depends on the toggles above, so it is
+        # worked out on every render. Ringed like a path and pinned like one,
+        # past the node filter, the cap and the focus prune, so it is drawn
+        # whatever the graph happened to be showing.
+        sparql_node_ids: list[str] = []
+        sparql_pairs: set = set()
+        _sparql_hl = sparql_highlight_for(ont)
+        if _sparql_hl:
+            _hl = sparql_highlight(
+                _sparql_hl.get("row_uris") or [],
+                {
+                    r["uri"]: focus_targets[r["label"]]
+                    for r in focus_records
+                    if r["uri"]
+                },
+            )
+            sparql_node_ids, sparql_pairs = _hl["node_ids"], _hl["pairs"]
+            # This line comes and goes, unlike the path panel's elements (see
+            # the note at its top), but only on a click: the "Show on graph"
+            # that brought the reader here from another page, or Clear. So the
+            # iframe it re-creates is one the user asked for (issue #189).
+            _note_col, _clear_col = st.columns([8, 1], vertical_alignment="center")
+            with _note_col:
+                st.caption(viz_sparql_note(_hl, _sparql_hl))
+            with _clear_col:
+                st.button(
+                    "Clear",
+                    key="viz_sparql_clear",
+                    on_click=viz_clear_sparql_highlight,
+                    use_container_width=True,
+                    help="Stop showing the SPARQL result on the graph.",
+                )
+
         # Store graph settings in session state for caching
         selected_classes_key = (
             "_".join(sorted(selected_classes)) if selected_classes else "none"
@@ -2035,7 +2076,7 @@ def render_visualization():
         # thing — the page builds and caches a graph with no target, then picking
         # one changes nothing the key can see, so no rebuild happens and the
         # cached payload still lacks the entity that was asked for.
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}"
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}_{'-'.join(sparql_node_ids)}_{hash(frozenset(sparql_pairs))}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -2157,7 +2198,7 @@ def render_visualization():
             # drawn — so the graph has to hold them whatever else it holds. They
             # are pinned as node ids, which is what the builder deals in and what
             # carries the entity's kind as a prefix.
-            _pinned_ids = {i for i in (_find_id, *path_node_ids) if i}
+            _pinned_ids = {i for i in (_find_id, *path_node_ids, *sparql_node_ids) if i}
 
             def _pinned_kind_is(prefix: str, _pins=_pinned_ids) -> bool:
                 """Is anything pinned one of *this* kind of node?
@@ -2931,7 +2972,14 @@ def render_visualization():
                     # grown from itself: the path is the answer, and the ring
                     # around each of its entities would bury it. The builder
                     # pins it past the cap (see _pinned_ids), and so does this.
-                    _pin_path = frozenset(i for i in path_node_ids if i in present_ids)
+                    #
+                    # A SPARQL result shown on the graph (issue #395) is kept
+                    # the same way, for the same reason.
+                    _pin_path = frozenset(
+                        i
+                        for i in (*path_node_ids, *sparql_node_ids)
+                        if i in present_ids
+                    )
                     keep, _cut_short = _grow(
                         seeds, set(_pin_path), GRAPH_MAX_NODES, _pin_path
                     )
@@ -3116,6 +3164,31 @@ def render_visualization():
                         f"path are not drawn, so the highlight is broken into "
                         f"pieces. Use “Focus on this path” to see all of it."
                     )
+
+            # Ring a SPARQL result the same way (issue #395), in its own colour.
+            # After the path, which keeps its ring where the two meet: it is
+            # the one being worked with on this page.
+            if sparql_node_ids:
+                _sparql_ids = set(sparql_node_ids)
+                for edge in net.edges:
+                    if not edge.get("pathhl") and (
+                        frozenset((edge["from"], edge["to"])) in sparql_pairs
+                    ):
+                        edge["pathhl"] = {
+                            "color": SPARQL_HIGHLIGHT_COLOR,
+                            "border": PATH_HIGHLIGHT_BORDER,
+                        }
+                for node in net.nodes:
+                    if (
+                        node["id"] in _sparql_ids
+                        and isinstance(node.get("color"), dict)
+                        and node["color"].get("border") != PATH_HIGHLIGHT_COLOR
+                    ):
+                        node["color"] = {
+                            **node["color"],
+                            "border": SPARQL_HIGHLIGHT_COLOR,
+                        }
+                        node["borderWidth"] = PATH_HIGHLIGHT_BORDER
 
             # Spread parallel edges so they don't overlap
             from collections import defaultdict as _defaultdict

@@ -406,6 +406,14 @@ class QueryResult:
     rows: list[list[str]] = field(default_factory=list)
     ask: bool | None = None
     graph: Graph | None = None
+    #: The URIs each row names, in column order and once each, for showing a
+    #: result on the graph (issue #395). Kept beside ``rows`` because those are
+    #: display text: a prefixed name cannot be matched back to a node.
+    row_uris: list[list[str]] = field(default_factory=list)
+    #: The identifier of the graph the query ran against, so a result kept on
+    #: the page can be told apart from the ontology that replaced its source
+    #: (issue #395). Taken when the query runs, not when the result is used.
+    source_graph: str = ""
     truncated: bool = False
     timed_out: bool = False
     elapsed: float = 0.0
@@ -413,6 +421,11 @@ class QueryResult:
     @property
     def row_count(self) -> int:
         return len(self.rows)
+
+
+def _uris_in(terms) -> list[str]:
+    """The URIs among ``terms``, in order and once each."""
+    return list(dict.fromkeys(str(t) for t in terms if isinstance(t, URIRef)))
 
 
 def run_query(
@@ -445,7 +458,7 @@ def run_query(
         store=_DeadlineStore(graph.store, deadline), identifier=graph.identifier
     )
 
-    result = QueryResult(form=form)
+    result = QueryResult(form=form, source_graph=str(graph.identifier))
     try:
         answer = bounded.query(query)
         if form == "ASK":
@@ -464,6 +477,7 @@ def run_query(
                     break
                 built.add(triple)
                 result.rows.append([format_term(t, prefixes) for t in triple])
+                result.row_uris.append(_uris_in(triple))
             result.graph = built
         else:
             # Stable column order: rdflib derives SELECT * from a set, so the
@@ -485,6 +499,7 @@ def run_query(
                 result.rows.append(
                     [format_term(bindings[v], prefixes) for v in columns]
                 )
+                result.row_uris.append(_uris_in(bindings[v] for v in columns))
     except QueryTimeout:
         result.timed_out = True
     except QueryError:
