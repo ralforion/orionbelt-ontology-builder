@@ -726,3 +726,69 @@ def test_an_empty_path_does_not_start_a_focus_with_nothing_in_it(session):
     jump somewhere nobody picked (issue #328)."""
     ui.viz_focus_on_path([])
     assert "_viz_cfg_focus_mode" not in session
+
+
+# --- a SPARQL result on the graph (issue #395) -------------------------------
+
+
+def _with_sparql(at, *names_by_row, focus_on=None):
+    """Rerun ``at`` with a SPARQL result naming the classes in each row."""
+    uri = {c["name"]: c["uri"] for c in at.session_state.ontology.get_classes()}
+    at.session_state[ui.VIZ_SPARQL_HIGHLIGHT] = {
+        "row_uris": [[uri[n] for n in row] for row in names_by_row],
+        "rows": len(names_by_row),
+        "truncated": False,
+    }
+    if focus_on:
+        at.session_state["_viz_cfg_focus_mode"] = True
+        at.session_state["_viz_cfg_focus_seeds"] = [focus_on]
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return at
+
+
+def _cyan(nodes, edges):
+    ringed_nodes = {
+        n["label"]
+        for n in nodes
+        if (n.get("color") or {}).get("border") == ui.SPARQL_HIGHLIGHT_COLOR
+    }
+    ringed_links = {
+        frozenset((_label_of(nodes, e["from"]), _label_of(nodes, e["to"])))
+        for e in edges
+        if (e.get("pathhl") or {}).get("color") == ui.SPARQL_HIGHLIGHT_COLOR
+    }
+    return ringed_nodes, ringed_links
+
+
+def test_a_sparql_result_rings_its_entities_and_the_links_in_a_row():
+    at = _with_sparql(_render(panel=False), ["B", "A"], ["D"])
+    nodes, links = _cyan(*_graph(at))
+    assert nodes == {"A", "B", "D"}
+    # A and B share a row and are linked; D is alone in its row.
+    assert links == {frozenset("AB")}
+
+
+def test_a_sparql_result_is_drawn_through_a_focus_on_something_else():
+    """Kept by the focus prune the way a path is (issue #362), so showing a
+    result does not mean losing the focus."""
+    at = _with_sparql(_render(panel=False), ["A", "C"], focus_on="Class: D")
+    nodes, _ = _graph(at)
+    assert {"A", "C", "D"} <= {n["label"] for n in nodes}
+    assert at.session_state["_viz_cfg_focus_seeds"] == ["Class: D"]
+
+
+def test_the_path_keeps_its_ring_where_it_meets_a_sparql_result():
+    at = _with_sparql(_render("Class: A", "Class: C"), ["A", "B"])
+    nodes, _ = _graph(at)
+    border = {n["label"]: n["color"]["border"] for n in nodes}
+    assert border["A"] == border["B"] == PATH_HIGHLIGHT_COLOR
+
+
+def test_the_graph_says_what_it_shows_and_clear_stops_it():
+    at = _with_sparql(_render(panel=False), ["A", "B"])
+    assert any("from a SPARQL result (1 row)" in c.value for c in at.caption)
+    at.button(key="viz_sparql_clear").click().run(timeout=300)
+    assert not at.exception, at.exception
+    assert ui.VIZ_SPARQL_HIGHLIGHT not in at.session_state
+    assert _cyan(*_graph(at)) == (set(), set())

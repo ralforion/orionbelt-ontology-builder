@@ -160,6 +160,44 @@ def test_construct_returns_a_graph(populated_om):
     assert result.columns == ["subject", "predicate", "object"]
 
 
+def test_each_row_carries_the_uris_it_names(populated_om):
+    """For "Show on graph" (issue #395): the rows are display text, so the URIs
+    are kept beside them, in column order, without literals or blanks."""
+    result = sparql.run_query(
+        populated_om.graph,
+        "SELECT ?c ?parent ?label WHERE { ?c rdfs:subClassOf ?parent ; "
+        "rdfs:label ?label }",
+    )
+    ont = "http://test.org/ont#"
+    assert result.row_uris == [[f"{ont}Employee", f"{ont}Person"]]
+
+
+def test_an_unbound_column_names_nothing(populated_om):
+    result = sparql.run_query(
+        populated_om.graph,
+        "SELECT ?c ?parent WHERE { ?c a owl:Class "
+        "OPTIONAL { ?c rdfs:subClassOf ?parent } } ORDER BY ?c",
+    )
+    ont = "http://test.org/ont#"
+    assert [f"{ont}Organization"] in result.row_uris
+    assert len(result.row_uris) == len(result.rows)
+
+
+def test_a_constructed_triple_names_its_subject_predicate_and_object(populated_om):
+    result = sparql.run_query(
+        populated_om.graph,
+        "CONSTRUCT { ?c rdfs:subClassOf ?p } WHERE { ?c rdfs:subClassOf ?p }",
+    )
+    ont = "http://test.org/ont#"
+    assert result.row_uris == [
+        [
+            f"{ont}Employee",
+            "http://www.w3.org/2000/01/rdf-schema#subClassOf",
+            f"{ont}Person",
+        ]
+    ]
+
+
 def test_ontology_prefixes_resolve_without_a_prefix_clause(populated_om):
     """The ontology's own bindings are offered to the parser, so a user can
     write ``owl:Class`` without redeclaring it."""

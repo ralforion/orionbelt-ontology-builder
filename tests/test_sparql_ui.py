@@ -11,6 +11,7 @@ import os
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from orionbelt_ontology_builder import ui
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
 from orionbelt_ontology_builder.views.sparql import EXAMPLE_QUERIES, _prefix_rows
 
@@ -508,3 +509,63 @@ def test_the_custom_relation_examples_follow_the_links():
         ("Pnt", "Step1"),
         ("Step1", "Step2"),
     }
+
+
+# --- "Show on graph" (issue #395) ---------------------------------------------
+
+
+def test_show_on_graph_is_offered_with_a_result_that_names_entities():
+    at = _run("SELECT ?c WHERE { ?c a owl:Class }")
+    button = at.button(key="sparql_show_on_graph")
+    assert not button.disabled
+
+
+def test_show_on_graph_is_disabled_when_nothing_is_named():
+    at = _run('SELECT ?x WHERE { VALUES ?x { "only a literal" } }')
+    assert at.button(key="sparql_show_on_graph").disabled
+
+
+def test_show_on_graph_hands_the_rows_over_and_opens_the_graph():
+    at = _run("SELECT ?c WHERE { ?c a owl:Class }")
+    at.button(key="sparql_show_on_graph").click().run(timeout=60)
+    assert not at.exception, at.exception
+    handed = at.session_state[ui.VIZ_SPARQL_HIGHLIGHT]
+    assert handed["rows"] == len(handed["row_uris"]) > 0
+    assert not handed["truncated"]
+
+
+def test_the_highlight_keeps_the_result_s_order_and_its_links():
+    hl = ui.sparql_highlight(
+        [["u:a", "u:b"], ["u:b", "u:c", "u:prop"], ["u:a"]],
+        {"u:a": "A", "u:b": "B", "u:c": "C"},
+    )
+    assert hl["node_ids"] == ["A", "B", "C"]
+    assert hl["pairs"] == {frozenset("AB"), frozenset("BC")}
+    assert hl["unmatched"] == 1
+    assert hl["left_out"] == 0
+
+
+def test_the_highlight_stops_at_its_limit_and_says_how_many_it_left_out():
+    hl = ui.sparql_highlight(
+        [["u:a", "u:b"], ["u:c", "u:d"]],
+        {"u:a": "A", "u:b": "B", "u:c": "C", "u:d": "D"},
+        limit=3,
+    )
+    assert hl["node_ids"] == ["A", "B", "C"]
+    # D is not ringed, so no link to it is either.
+    assert hl["pairs"] == {frozenset("AB")}
+    assert hl["left_out"] == 1
+
+
+def test_the_note_counts_what_it_leaves_out():
+    hl = {"node_ids": ["A", "B"], "pairs": set(), "left_out": 3, "unmatched": 1}
+    note = ui.viz_sparql_note(hl, {"rows": 4, "truncated": True})
+    assert note.startswith("2 entities from a SPARQL result (4 rows) ringed")
+    assert "3 more are not" in note
+    assert "1 other resource(s)" in note
+    assert "cut short" in note
+
+
+def test_the_note_says_so_when_nothing_is_a_node():
+    hl = {"node_ids": [], "pairs": set(), "left_out": 0, "unmatched": 2}
+    assert ui.viz_sparql_note(hl, {"rows": 1}).startswith("Nothing in a SPARQL")

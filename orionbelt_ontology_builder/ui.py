@@ -21,8 +21,9 @@ import re
 import time
 import traceback
 from datetime import datetime
-from itertools import pairwise
+from itertools import combinations, pairwise
 from pathlib import Path as _Path
+from typing import Any
 
 import streamlit as st
 
@@ -2678,6 +2679,99 @@ CUSTOM_RELATION_COLOR = "#E91E63"
 #: was drawn, fill and line alike: that is what says which kind of entity or
 #: link it is, and it is what the graph is scanned by (issue #357).
 PATH_HIGHLIGHT_BORDER = 3
+
+#: The colour a SPARQL result is ringed in on the graph (issue #395), the same
+#: way a path is, and for the same reason outside the palette relation types
+#: use: cyan, which nothing else draws in, so the two highlights can be told
+#: apart when both are on.
+SPARQL_HIGHLIGHT_COLOR = "#00B8D4"
+#: How many entities one SPARQL result rings and pins on the graph. They are
+#: drawn past the node filter and the cap, like a path, so the number has to be
+#: held well under the cap rather than left to the query's row limit.
+SPARQL_HIGHLIGHT_MAX = 200
+#: Where the SPARQL page leaves a result for the graph to show: its rows' URIs
+#: and a few words saying what it was (see sparql_highlight).
+VIZ_SPARQL_HIGHLIGHT = "_viz_sparql_highlight"
+
+
+def sparql_highlight(
+    row_uris: list[list[str]],
+    node_id_by_uri: dict[str, str],
+    limit: int = SPARQL_HIGHLIGHT_MAX,
+) -> dict[str, Any]:
+    """What of a SPARQL result the graph rings (issue #395).
+
+    ``row_uris`` is :attr:`sparql.QueryResult.row_uris`; ``node_id_by_uri`` the
+    entities the graph can draw. Returns the node ids, in the order the result
+    first names them and at most ``limit`` of them, and the links to ring: each
+    pair of entities named in the same row, which is the connection a row
+    states (a subject and its object, a class and its parent). A URI that is no
+    node (a property, or an entity of a type switched off) is counted, not
+    guessed at.
+    """
+    node_ids: dict[str, None] = {}
+    pairs: set[frozenset[str]] = set()
+    drawable: set[str] = set()
+    unmatched: set[str] = set()
+    for row in row_uris:
+        ids: list[str] = []
+        for uri in row:
+            node_id = node_id_by_uri.get(uri)
+            if node_id is None:
+                unmatched.add(uri)
+                continue
+            drawable.add(node_id)
+            if node_id not in node_ids and len(node_ids) < limit:
+                node_ids[node_id] = None
+            if node_id in node_ids and node_id not in ids:
+                ids.append(node_id)
+        pairs.update(frozenset(pair) for pair in combinations(ids, 2))
+    return {
+        "node_ids": list(node_ids),
+        "pairs": pairs,
+        "left_out": len(drawable) - len(node_ids),
+        "unmatched": len(unmatched),
+    }
+
+
+def viz_sparql_note(highlight: dict[str, Any], stored: dict[str, Any]) -> str:
+    """The line above the graph that says what of a SPARQL result it shows.
+
+    ``highlight`` is :func:`sparql_highlight`'s answer, ``stored`` what the
+    SPARQL page left (see :data:`VIZ_SPARQL_HIGHLIGHT`). Everything left out is
+    counted, so a ring on three nodes is never read as the whole answer.
+    """
+    rows = stored.get("rows", 0)
+    source = f"a SPARQL result ({rows} row{'' if rows == 1 else 's'})"
+    shown = len(highlight["node_ids"])
+    if not shown:
+        note = (
+            f"Nothing in {source} is drawn as a node here: what it names is "
+            f"properties or literals, or entities of a type switched off above."
+        )
+    else:
+        note = (
+            f"{shown} entit{'y' if shown == 1 else 'ies'} from {source} "
+            f"ringed in cyan, with the links between the ones that share a row."
+        )
+        if highlight["left_out"]:
+            note += (
+                f" Only the first {shown} are shown; {highlight['left_out']} "
+                f"more are not."
+            )
+        if highlight["unmatched"]:
+            note += (
+                f" {highlight['unmatched']} other resource(s) in it are not nodes here."
+            )
+    if stored.get("truncated"):
+        note += " The result was cut short, so it may name more."
+    return note
+
+
+def viz_clear_sparql_highlight() -> None:
+    """Stop showing a SPARQL result on the graph (issue #395)."""
+    st.session_state.pop(VIZ_SPARQL_HIGHLIGHT, None)
+
 
 #: How far a selected node's fill moves away from its own label at the least,
 #: 0-1. Enough to read as a state change at a glance, and applied even where the

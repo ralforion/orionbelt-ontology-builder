@@ -252,6 +252,7 @@ from .ui import (  # noqa: F401
     theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
+    viz_clear_sparql_highlight,
     viz_drop_focus_seeds,
     viz_filter_changed,
     viz_find_changed,

@@ -11,6 +11,7 @@ from .. import sparql
 from ..ui import (
     SPARQL_PLAIN_KEY,
     SPARQL_QUERY_KEY,
+    VIZ_SPARQL_HIGHLIGHT,
     _download_or_save,
     log_error,
     persist_sparql_state,
@@ -449,6 +450,34 @@ def _matched_nothing() -> None:
     )
 
 
+def _show_on_graph(result: sparql.QueryResult) -> None:
+    """Hand the result to the Visualization page and go there (issue #395).
+
+    The URIs are handed over rather than node ids: which of them the graph can
+    draw depends on its own display toggles, so it is worked out there, on
+    every render, and a result shown before a toggle is flipped still lines up.
+    """
+    st.session_state[VIZ_SPARQL_HIGHLIGHT] = {
+        "row_uris": result.row_uris,
+        "rows": result.row_count,
+        "truncated": result.truncated or result.timed_out,
+    }
+    st.session_state.search_navigate_to = "Visualization"
+
+
+def _show_on_graph_button(result: sparql.QueryResult) -> None:
+    st.button(
+        "Show on graph",
+        key="sparql_show_on_graph",
+        on_click=_show_on_graph,
+        args=(result,),
+        disabled=not any(getattr(result, "row_uris", ())),
+        help="Opens the Visualization page with the entities this result names "
+        "ringed, and the links between the ones that share a row. Literals and "
+        "properties are not nodes there, so they are left out.",
+    )
+
+
 def _render_select_result(result: sparql.QueryResult) -> None:
     if not result.rows:
         # Only an empty result that actually finished matched nothing. A query
@@ -469,6 +498,7 @@ def _render_select_result(result: sparql.QueryResult) -> None:
         mime="text/csv",
         key="sparql_csv",
     )
+    _show_on_graph_button(result)
 
 
 def _render_graph_result(result: sparql.QueryResult) -> None:
@@ -489,6 +519,7 @@ def _render_graph_result(result: sparql.QueryResult) -> None:
         mime="text/turtle",
         key="sparql_ttl",
     )
+    _show_on_graph_button(result)
 
 
 def _render_result(result: sparql.QueryResult) -> None:
