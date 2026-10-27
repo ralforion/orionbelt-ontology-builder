@@ -34,6 +34,7 @@ from ..ui import (
     VIZ_PROPERTY_COLOR_VALUE,
     VIZ_PROPERTY_SHOW_SEQ,
     VIZ_ROUTE_PICK,
+    VIZ_SHOW_PROPERTY,
     _build_name_collision_set,
     _disambiguated_name,
     _download_or_save,
@@ -55,6 +56,7 @@ from ..ui import (
     _render_panel_entity_editor,
     _restore_viz_file_state,
     _restore_viz_settings,
+    _search_match_hint,
     _str_list,
     _uid,
     _viz_live_selection,
@@ -71,6 +73,7 @@ from ..ui import (
     follow_focus_seed_renames,
     follow_renamed_node_ids,
     graph_node_cap,
+    language_pack_picker,
     local_store,
     log_error,
     newly_hidden_uris,
@@ -91,10 +94,12 @@ from ..ui import (
     property_colors,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
+    redo_last_change,
     seed_filter_from_saved,
     sparql_highlight,
     sparql_highlight_for,
     theme_is_dark,
+    undo_last_change,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_clear_sparql_highlight,
@@ -123,6 +128,7 @@ from ..ui import (
     viz_reset_property_color,
     viz_route_changed,
     viz_route_key,
+    viz_search_picked,
     viz_set_focus_seeds,
     viz_set_property_color,
     viz_show_kind_toggled,
@@ -338,6 +344,12 @@ BAND_SWITCH_CSS = """<style>
 .st-key-viz_band_switches > [data-testid="stElementContainer"] {
     min-height: 24px;
 }
+/* What the sidebar holds that is wanted on the graph too (issue #452): drawn
+   on every pass, shown only in fullscreen, where the sidebar is hidden (see
+   graph_fullscreen_css). Outside it they would be on screen twice. */
+.st-key-viz_fs_tools {
+    display: none !important;
+}
 </style>"""
 
 #: The "not everything is drawn" line above the canvas, and its dismiss button.
@@ -549,6 +561,147 @@ def _property_colors_popover():
     )
 
 
+#: The language-pack picker the graph shows in fullscreen (issue #452).
+VIZ_LANG_PACK_KEY = "viz_fs_language_pack"
+#: The search type of a result, as the kind word Find's options carry.
+_FIND_KIND_BY_SEARCH_TYPE = {
+    "Class": "Class",
+    "Individual": "Individual",
+    "Data Property": "Data Property",
+    "SKOS Concept": "Concept",
+}
+
+
+def _fullscreen_tools():
+    """The sidebar's Undo, Redo, search and language pack, for fullscreen.
+
+    Fullscreen hides the sidebar, and with it four things still wanted while
+    working on the graph (issue #452). Drawn here on every pass and shown by
+    CSS only in fullscreen, so nothing above the canvas moves when it is
+    entered (issue #189). Returns the search popover, filled once the graph is
+    built (:func:`_fill_graph_search`), since what a result can do depends on
+    what the graph draws.
+    """
+    um = st.session_state.get("undo_manager")
+    with st.container(
+        key="viz_fs_tools", horizontal=True, vertical_alignment="center", gap="small"
+    ):
+        st.button(
+            "",
+            icon=":material/undo:",
+            key="viz_fs_undo",
+            disabled=not (um and um.can_undo()),
+            on_click=undo_last_change,
+            kwargs={"toast": True},
+            help="Undo the last change to the ontology.",
+        )
+        st.button(
+            "",
+            icon=":material/redo:",
+            key="viz_fs_redo",
+            disabled=not (um and um.can_redo()),
+            on_click=redo_last_change,
+            kwargs={"toast": True},
+            help="Redo the change Undo took back.",
+        )
+        box = st.popover(
+            "",
+            icon=":material/search:",
+            help="Search resources by name, label, comment or annotation, and "
+            "find them on the graph.",
+        )
+        language_pack_picker(
+            VIZ_LANG_PACK_KEY,
+            label_visibility="collapsed",
+            width=180,
+        )
+    return box
+
+
+#: Puts the cursor in the search box when its popover opens (issue #452): a
+#: popover has no autofocus, and the box is the only thing in it to use.
+#: Installed once per page, as a listener on the document, so it holds across
+#: reruns; a click inside the popover is not the button, so typing there is
+#: never interrupted. Tried for a few frames, since the popover's body is
+#: mounted after the click.
+_SEARCH_FOCUS_JS = """
+export default function () {
+  if (window.__orionbeltSearchFocus) return;
+  window.__orionbeltSearchFocus = true;
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest(
+      ".st-key-viz_fs_tools [data-testid='stPopoverButton']",
+    );
+    if (!button) return;
+    let tries = 20;
+    const focus = () => {
+      const input = document.querySelector(".st-key-viz_fs_search input");
+      if (input && input.offsetParent !== null) input.focus();
+      else if (--tries > 0) requestAnimationFrame(focus);
+    };
+    requestAnimationFrame(focus);
+  });
+}
+"""
+
+
+def _fill_graph_search(box, focus_records, gdata) -> None:
+    """Search the ontology from the graph, and find the results on it.
+
+    The sidebar's search, with what a click does changed (see
+    :func:`viz_search_picked`): a result is found on the graph, or its edges
+    shown, and opened on its page only when the graph cannot show it.
+    """
+    with st.sidebar:
+        # In the sidebar so it takes no room on the page; it draws nothing.
+        st.components.v2.component("orionbelt_search_focus", js=_SEARCH_FOCUS_JS)(
+            key="viz_search_focus"
+        )
+    with box:
+        query = st.text_input(
+            "Search",
+            key="viz_fs_search",
+            placeholder="Search resources...",
+            label_visibility="collapsed",
+        )
+        if not query:
+            return
+        results = st.session_state.ontology.search(query)
+        if not results:
+            st.caption("No results found.")
+            return
+        find_labels = {
+            (r["uri"], r["kind"]): r["label"] for r in focus_records if r["uri"]
+        }
+        drawn = _drawn_properties(gdata)
+        grouped: dict[str, list] = {}
+        for r in results[:20]:
+            grouped.setdefault(r["type"], []).append(r)
+        for type_label, items in grouped.items():
+            st.caption(type_label)
+            collisions = _build_name_collision_set(items)
+            for r in items:
+                uri = r.get("uri", r["name"])
+                find_label = find_labels.get(
+                    (uri, _FIND_KIND_BY_SEARCH_TYPE.get(type_label))
+                )
+                show_edges = type_label == "Object Property" and uri in drawn
+                hint = _search_match_hint(r)
+                if not (find_label or show_edges):
+                    note = "Not on the graph: opens its page."
+                    hint = f"{hint}\n\n{note}" if hint else note
+                label = r["label"]
+                st.button(
+                    _disambiguated_name(r, collisions)
+                    + (f" ({label})" if label and label != r["name"] else ""),
+                    key=f"viz_fs_search_{type_label}_{_uid(uri)}",
+                    use_container_width=True,
+                    help=hint,
+                    on_click=viz_search_picked,
+                    args=(type_label, uri, find_label, show_edges),
+                )
+
+
 def _drawn_properties(gdata) -> dict[str, str]:
     """``{property URI: label}`` of the properties drawn as edges in ``gdata``.
 
@@ -674,6 +827,11 @@ def graph_fullscreen_css(dark: bool) -> str:
     body.{GRAPH_FS_CLASS} .stMainBlockContainer > [data-testid="stVerticalBlock"]
         > *:has(~ .st-key-viz_band_switches) {{
         display: none !important;
+    }}
+    /* The sidebar's Undo, Redo, search and language pack, in the gap before
+       Render (issue #452). Hidden outside fullscreen by BAND_SWITCH_CSS. */
+    body.{GRAPH_FS_CLASS} .st-key-viz_fs_tools {{
+        display: flex !important;
     }}
     body.{GRAPH_FS_CLASS} .stMainBlockContainer {{
         padding: 0.5rem 1rem 0 !important;
@@ -904,7 +1062,7 @@ def render_visualization():
         st.html(BAND_SWITCH_CSS)
         # The last column is wide enough for the button at the widths the app
         # is actually used at; the spare width sits in the gap between the two.
-        _switch_col, _, _render_col = st.columns(
+        _switch_col, _fs_col, _render_col = st.columns(
             [3.6, 1.4, 1.0], vertical_alignment="center"
         )
         with _switch_col.container(key="viz_band_switches"):
@@ -933,6 +1091,8 @@ def render_visualization():
                 "individuals or SKOS concepts, and highlight it in the graph. "
                 "Off, the panel takes no room and nothing is highlighted.",
             )
+        with _fs_col:
+            _search_box = _fullscreen_tools()
         with _render_col:
             # Sized to its label, not to its column: stretched across a third of
             # the row it was the largest thing above the canvas, for a button
@@ -3484,6 +3644,7 @@ def render_visualization():
         gdata = st.session_state.get("last_graph_data")
         if _colors_box is not None:
             _fill_property_colors(_colors_box, gdata)
+        _fill_graph_search(_search_box, focus_records, gdata)
         # Why the graph is smaller than the ontology, in the slot the build
         # status used. Written on every render, not only on a rebuild: the slot
         # is reserved either way (issue #189), and the reason still holds while
@@ -3683,10 +3844,10 @@ def render_visualization():
                     # re-centres only on a fresh pick (issue #144).
                     focus_node=_find_id,
                     focus_seq=st.session_state.get("_viz_find_seq", 0),
-                    # The property picked in the colours popover, and a seq
-                    # that bumps on a fresh pick: its edges are selected and
-                    # zoomed to (issue #160).
-                    show_property=st.session_state.get(VIZ_PROPERTY_COLOR_PICK),
+                    # The property picked in the colours popover or found
+                    # with the search, and a seq that bumps on a fresh pick:
+                    # its edges are selected and zoomed to (issues #160, #452).
+                    show_property=st.session_state.get(VIZ_SHOW_PROPERTY),
                     show_property_seq=st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0),
                     # On desktop the webview can't download; the component sends
                     # the PNG back for us to save instead (#86).

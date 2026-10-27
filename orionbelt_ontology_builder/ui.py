@@ -1174,6 +1174,9 @@ _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 VIZ_PROPERTY_COLOR_PICK = "viz_property_color_pick"
 VIZ_PROPERTY_COLOR_VALUE = "viz_property_color_value"
 VIZ_PROPERTY_SHOW_SEQ = "_viz_property_show_seq"
+#: The property whose edges the graph is asked to show: picked in the colours
+#: popover, or found with the graph's search (issue #452).
+VIZ_SHOW_PROPERTY = "_viz_show_property"
 
 
 def clean_property_colors(value) -> dict[str, str]:
@@ -1238,13 +1241,47 @@ def viz_property_color_picked() -> None:
     bumped sequence number tells it: a property can be drawn as one loop in a
     cluster of hundreds of nodes, and colouring what one cannot find is no use.
     """
-    st.session_state[VIZ_PROPERTY_SHOW_SEQ] = (
-        st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0) + 1
-    )
     uri = st.session_state.get(VIZ_PROPERTY_COLOR_PICK)
+    viz_show_property(uri)
     current = property_colors().get(uri) if uri else None
     if current:
         st.session_state[VIZ_PROPERTY_COLOR_VALUE] = current
+
+
+def viz_show_property(uri: str | None) -> None:
+    """Ask the graph to select ``uri``'s edges and zoom to them, once."""
+    st.session_state[VIZ_SHOW_PROPERTY] = uri
+    st.session_state[VIZ_PROPERTY_SHOW_SEQ] = (
+        st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0) + 1
+    )
+
+
+def open_search_result(type_label: str, uri: str) -> None:
+    """Open a search result's card on its own page."""
+    st.session_state.search_navigate_to = _PAGE_BY_TYPE.get(type_label, "Dashboard")
+    _nav_open_entity(type_label, _uid(uri), uri)
+
+
+def viz_search_picked(
+    type_label: str, uri: str, find_label: str | None, show_edges: bool
+) -> None:
+    """A result of the graph's own search was clicked (issue #452).
+
+    Found on the graph rather than opened on its page, which is what the
+    sidebar's search does: this one is there for fullscreen, and leaving the
+    page leaves fullscreen. An entity the graph draws as a node is picked in
+    Find, so it is centred, selected and shown in the details panel; a
+    property drawn as edges has its edges shown, as the colours popover does.
+    Anything the graph cannot show (its kind is switched off, say) still opens
+    on its page.
+    """
+    if find_label:
+        st.session_state["viz_find_entity"] = find_label
+        viz_find_changed()
+    elif show_edges:
+        viz_show_property(uri)
+    else:
+        open_search_result(type_label, uri)
 
 
 def _viz_settings_payload() -> str:
@@ -1804,18 +1841,32 @@ def render_language_pack_sidebar() -> None:
     tab's picker is this same choice seen from there (issue #293).
     """
     restore_language_packs()
+    language_pack_picker(LANG_PACK_SIDEBAR_KEY, st.sidebar)
+    persist_language_packs()
+
+
+def language_pack_picker(widget_key: str, where=st, **kwargs) -> None:
+    """One picker of the pack in use, drawn ``where`` (``st`` or a container).
+
+    The sidebar's, and the one the graph shows in fullscreen, where the
+    sidebar is hidden (issue #452). The packs keep the order they are listed
+    in, built-ins first, which is why this is a plain selectbox.
+    """
     names = language_pack_names()
-    seed_language_pack_picker(LANG_PACK_SIDEBAR_KEY)
-    st.sidebar.selectbox(
-        "Language pack",
-        names,
-        key=LANG_PACK_SIDEBAR_KEY,
-        on_change=_language_pack_picked,
-        args=(LANG_PACK_SIDEBAR_KEY,),
-        help="Which codes the Language fields offer. Build your own under "
+    seed_language_pack_picker(widget_key)
+    kwargs.setdefault(
+        "help",
+        "Which codes the Language fields offer. Build your own under "
         "Annotations → Language Packs, which switches packs too.",
     )
-    persist_language_packs()
+    where.selectbox(
+        "Language pack",
+        names,
+        key=widget_key,
+        on_change=_language_pack_picked,
+        args=(widget_key,),
+        **kwargs,
+    )
 
 
 def text_size() -> int:
@@ -3898,6 +3949,31 @@ def note_undo_redo() -> None:
         st.session_state.get("_ont_mutation_count", 0) + 1
     )
     st.session_state["_ont_edit_count"] = st.session_state.get("_ont_edit_count", 0) + 1
+
+
+def undo_last_change(toast: bool = False) -> None:
+    """Take back the last change to the ontology, and say what is back.
+
+    Shared by the sidebar's Undo and the one the graph shows in fullscreen
+    (issue #452), which asks for a toast: the banner is drawn above the
+    switch row, which fullscreen hides.
+    """
+    um = st.session_state.get("undo_manager")
+    if not um or not um.can_undo():
+        return
+    label = um.undo()
+    note_undo_redo()
+    set_flash_message(f"Undid: {label}", "info", toast=toast)
+
+
+def redo_last_change(toast: bool = False) -> None:
+    """Put back the change the last Undo took back (see undo_last_change)."""
+    um = st.session_state.get("undo_manager")
+    if not um or not um.can_redo():
+        return
+    label = um.redo()
+    note_undo_redo()
+    set_flash_message(f"Redid: {label}", "info", toast=toast)
 
 
 def save_checkpoint(label: str = "Edit"):

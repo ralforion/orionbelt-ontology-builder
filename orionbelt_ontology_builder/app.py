@@ -71,6 +71,7 @@ from .ui import (  # noqa: F401
     VIZ_PROPERTY_COLOR_VALUE,
     VIZ_PROPERTY_SHOW_SEQ,
     VIZ_SETTINGS_KEY,
+    VIZ_SHOW_PROPERTY,
     _apply_annotation_edit,
     _apply_class_edit,
     _apply_class_relation_add,
@@ -209,6 +210,7 @@ from .ui import (  # noqa: F401
     newly_hidden_uris,
     note_undo_redo,
     ontology_display_name,
+    open_search_result,
     option_sort_key,
     panel_heading_html,
     panel_subject_uri,
@@ -229,6 +231,7 @@ from .ui import (  # noqa: F401
     property_colors,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
+    redo_last_change,
     render_add_annotation,
     render_add_class_form,
     render_add_restriction,
@@ -264,6 +267,7 @@ from .ui import (  # noqa: F401
     text_size,
     text_size_changed,
     theme_is_dark,
+    undo_last_change,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
     viz_clear_sparql_highlight,
@@ -295,9 +299,11 @@ from .ui import (  # noqa: F401
     viz_reset_property_color,
     viz_route_changed,
     viz_route_key,
+    viz_search_picked,
     viz_set_focus_seeds,
     viz_set_property_color,
     viz_show_kind_toggled,
+    viz_show_property,
     viz_sync,
     viz_unpark_focus_seeds,
 )
@@ -585,9 +591,7 @@ def main():
                 use_container_width=True,
                 key="btn_undo",
             ):
-                label = um.undo()
-                note_undo_redo()
-                set_flash_message(f"Undid: {label}", "info")
+                undo_last_change()
                 st.rerun()
         with redo_col:
             if st.button(
@@ -596,9 +600,7 @@ def main():
                 use_container_width=True,
                 key="btn_redo",
             ):
-                label = um.redo()
-                note_undo_redo()
-                set_flash_message(f"Redid: {label}", "info")
+                redo_last_change()
                 st.rerun()
 
     render_autosave_sidebar()
@@ -606,13 +608,6 @@ def main():
     st.sidebar.divider()
 
     # Global search
-    type_to_page = {
-        "Class": "Classes",
-        "Object Property": "Properties",
-        "Data Property": "Properties",
-        "Individual": "Individuals",
-        "SKOS Concept": "SKOS Vocabulary",
-    }
     search_query = st.sidebar.text_input(
         "Search", placeholder="Search resources...", key="global_search"
     )
@@ -625,7 +620,6 @@ def main():
                 grouped.setdefault(r["type"], []).append(r)
             for type_label, items in grouped.items():
                 st.sidebar.caption(type_label)
-                page = type_to_page.get(type_label, "Dashboard")
                 # Tag the namespace when the same local name appears under more
                 # than one URI in these results, so duplicates don't render as
                 # identical entries (e.g. `Dog` and `Dog (other)`). This is the
@@ -649,11 +643,9 @@ def main():
                         use_container_width=True,
                         help=_search_match_hint(r),
                     ):
-                        st.session_state.search_navigate_to = page
-                        # Open the view pane keyed by URI hash so we navigate
-                        # to the *exact* resource, not whichever shares the
-                        # same local name.
-                        _nav_open_entity(type_label, r_uid, r_uri)
+                        # Opened by URI hash so we navigate to the *exact*
+                        # resource, not whichever shares the same local name.
+                        open_search_result(type_label, r_uri)
                         st.rerun()
         else:
             st.sidebar.caption("No results found.")
