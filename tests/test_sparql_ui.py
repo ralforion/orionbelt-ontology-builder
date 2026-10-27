@@ -570,3 +570,27 @@ def test_the_note_counts_what_it_leaves_out():
 def test_the_note_says_so_when_nothing_is_a_node():
     hl = {"node_ids": [], "pairs": set(), "left_out": 0, "unmatched": 2}
     assert ui.viz_sparql_note(hl, {"rows": 1}).startswith("Nothing in a SPARQL")
+
+
+def test_a_result_kept_across_a_replacement_is_not_handed_over_as_the_new_one():
+    """Stamped with the graph it ran against, not the one loaded when Show on
+    graph is clicked: otherwise a result kept on the page passed the graph's
+    replacement check (Codex review of PR #533)."""
+    at = _run("SELECT ?c WHERE { ?c a owl:Class }")
+    ran_against = str(at.session_state.ontology.graph.identifier)
+    at.session_state.ontology.load_from_string(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "<http://example.org/other#X> a owl:Class .\n"
+    )
+    at.button(key="sparql_show_on_graph").click().run(timeout=60)
+    assert not at.exception, at.exception
+    handed = at.session_state[ui.VIZ_SPARQL_HIGHLIGHT]
+    assert handed["graph"] == ran_against
+    assert handed["graph"] != str(at.session_state.ontology.graph.identifier)
+
+
+def test_the_engine_names_the_graph_a_query_ran_against(populated_om):
+    from orionbelt_ontology_builder import sparql
+
+    result = sparql.run_query(populated_om.graph, "SELECT ?s WHERE { ?s ?p ?o }")
+    assert result.source_graph == str(populated_om.graph.identifier)

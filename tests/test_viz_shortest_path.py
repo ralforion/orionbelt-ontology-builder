@@ -831,3 +831,12 @@ def test_a_new_ontology_drops_it_too():
     at.run(timeout=300)
     assert not at.exception, at.exception
     assert ui.VIZ_SPARQL_HIGHLIGHT not in at.session_state
+
+
+def test_a_result_with_the_same_entities_but_other_rows_rings_its_own_links():
+    """The cached graph was keyed by the entities alone, so [[A, B], [C]]
+    followed by [[A], [B, C]] kept the A-B ring (Codex review of PR #533)."""
+    at = _with_sparql(_render(panel=False), ["A", "B"], ["C"])
+    assert _cyan(*_graph(at))[1] == {frozenset("AB")}
+    at = _with_sparql(at, ["A"], ["B", "C"])
+    assert _cyan(*_graph(at))[1] == {frozenset("BC")}

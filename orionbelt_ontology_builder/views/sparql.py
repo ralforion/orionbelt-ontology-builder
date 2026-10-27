@@ -462,8 +462,11 @@ def _show_on_graph(result: sparql.QueryResult) -> None:
         "rows": result.row_count,
         "truncated": result.truncated or result.timed_out,
         # Which ontology the result came from, so the graph can let go of it
-        # once that one is replaced (see sparql_highlight_for).
-        "graph": str(st.session_state.ontology.graph.identifier),
+        # once that one is replaced (see sparql_highlight_for). The one it ran
+        # against, not the one loaded now: a result kept on this page across a
+        # replacement must not be handed over as the new ontology's (Codex
+        # review of PR #533).
+        "graph": getattr(result, "source_graph", ""),
     }
     st.session_state.search_navigate_to = "Visualization"
 

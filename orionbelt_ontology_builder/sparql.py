@@ -410,6 +410,10 @@ class QueryResult:
     #: result on the graph (issue #395). Kept beside ``rows`` because those are
     #: display text: a prefixed name cannot be matched back to a node.
     row_uris: list[list[str]] = field(default_factory=list)
+    #: The identifier of the graph the query ran against, so a result kept on
+    #: the page can be told apart from the ontology that replaced its source
+    #: (issue #395). Taken when the query runs, not when the result is used.
+    source_graph: str = ""
     truncated: bool = False
     timed_out: bool = False
     elapsed: float = 0.0
@@ -454,7 +458,7 @@ def run_query(
         store=_DeadlineStore(graph.store, deadline), identifier=graph.identifier
     )
 
-    result = QueryResult(form=form)
+    result = QueryResult(form=form, source_graph=str(graph.identifier))
     try:
         answer = bounded.query(query)
         if form == "ASK":
