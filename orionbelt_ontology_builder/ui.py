@@ -321,7 +321,7 @@ _CUSTOM_CSS = """
     [data-testid="stSidebar"] h1 {
         padding-top: 0 !important;
         padding-bottom: 0 !important;
-        margin-bottom: 0.2rem !important;
+        margin-bottom: 0.9rem !important;
     }
 </style>
 """

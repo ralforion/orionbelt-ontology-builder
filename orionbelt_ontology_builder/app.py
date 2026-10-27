@@ -485,10 +485,14 @@ def main():
     _logo_path = PKG_DIR / "assets" / _logo_file
     st.sidebar.image(str(_logo_path), width=200)
     st.sidebar.markdown("# Ontology Builder")
-    # The company name without "d.o.o.", which wrapped onto a line of its own
-    # at the larger text sizes (issue #387). LICENSE and README carry it in
-    # full.
-    st.sidebar.markdown("\u00a9 2025\u20132026 [RALFORION](https://ralforion.com)")
+    # The company name without "d.o.o.", and as small as the version line
+    # below: at the larger text sizes it wrapped onto a line of its own (issue
+    # #387). LICENSE and README carry the name in full.
+    st.sidebar.markdown(
+        '<small>\u00a9 2025\u20132026 <a href="https://ralforion.com">RALFORION</a>'
+        "</small>",
+        unsafe_allow_html=True,
+    )
     _gh_repo = GITHUB_ISSUES_URL.rsplit("/", 1)[0]
     st.sidebar.markdown(
         f"<small>v{APP_VERSION} · "
