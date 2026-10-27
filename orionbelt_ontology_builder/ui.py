@@ -2005,6 +2005,21 @@ def viz_sync(cfg_key, wid_key):
         st.session_state["_viz_settings_dirty"] = True
 
 
+def viz_focus_depth_changed() -> None:
+    """The focus depth slider moved (an ``on_change`` callback).
+
+    A Node options change like the others, so it takes an undo step first: the
+    depth is in the undo snapshot (issue #485), and a move the history did not
+    know about would otherwise be reverted by the next Undo along with the
+    change that Undo is for. The checkpoint reads the config key, which still
+    holds the old depth here, before viz_sync copies the new one in.
+    """
+    if _viz_widget_missing("viz_focus_depth"):
+        return
+    viz_node_undo_checkpoint()
+    viz_sync("_viz_cfg_focus_depth", "viz_focus_depth")
+
+
 def viz_filter_changed(kind_key, uri_by_display):
     """Persist a node filter by URI. The widget holds display labels, which gain
     a namespace tag as soon as a second entity takes the same local name —
@@ -2417,6 +2432,9 @@ def _viz_node_options_state() -> dict:
             st.session_state.get("_viz_cfg_focus_seed_ids_by_label") or {}
         ),
         "focus_mode": bool(st.session_state.get("_viz_cfg_focus_mode")),
+        # Part of the focus as much as its nodes are, and a Node options file
+        # sets it (issue #485), so an undo has to put it back too.
+        "focus_depth": st.session_state.get("_viz_cfg_focus_depth"),
     }
 
 
@@ -2427,7 +2445,13 @@ def _copy_or_none(value):
 
 def _viz_node_options_view(state: dict) -> tuple:
     """The part of a snapshot the user sees, for telling two of them apart."""
-    return (state["selected"], state["focus_seeds"], state["focus_mode"])
+    # .get: a snapshot taken before the depth was part of one has none.
+    return (
+        state["selected"],
+        state["focus_seeds"],
+        state["focus_mode"],
+        state.get("focus_depth"),
+    )
 
 
 def viz_node_undo_checkpoint() -> None:
@@ -2546,6 +2570,169 @@ def _viz_node_restore(snap: dict) -> None:
         # the checkbox's widget key. focus_mode is a persisted setting (#142).
         st.session_state["_viz_cfg_focus_mode"] = snap["focus_mode"]
         st.session_state["_viz_settings_dirty"] = True
+    depth = snap.get("focus_depth")
+    if depth is not None and depth != st.session_state.get("_viz_cfg_focus_depth"):
+        # The same way as the mode: the page copies it into the slider's key.
+        st.session_state["_viz_cfg_focus_depth"] = depth
+        st.session_state["_viz_settings_dirty"] = True
+
+
+#: What a Node options file says it is, so loading some other JSON file is
+#: refused rather than read as an empty selection (issue #485).
+NODE_OPTIONS_FORMAT = "orionbelt-node-options"
+#: Counts the Node options uploader's resets: a new key empties it once a file
+#: has been read, so the same file can be loaded again later.
+_NODE_FILE_GEN = "_viz_node_file_gen"
+
+
+def ontology_display_name(ont) -> str:
+    """What the app calls an ontology: its rdfs:label, else the last segment of
+    its base URI, else ``""``. The browser tab's title (issue #90) and the
+    names of files saved for one ontology (issue #485) both use it."""
+    try:
+        name = (ont.get_ontology_metadata().get("label") or "").strip()
+    except Exception:  # noqa: BLE001 - best-effort label read; falls back to the URI
+        name = ""
+    if not name:
+        base = ont.base_uri.rstrip("#/")
+        name = base.split("/")[-1].split("#")[-1]
+    return name
+
+
+def node_options_file_name(ont) -> str:
+    """The name a Node options file is offered under, led by the ontology's.
+
+    A file only makes sense for the ontology it was saved from, and under one
+    fixed name the files of several pile up as ``node-options (1).json`` in a
+    download folder, or overwrite each other on the desktop, which saves to a
+    path. Only letters, digits, dot, dash and underscore are kept, so the name
+    is a valid file name everywhere.
+    """
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", ontology_display_name(ont))
+    stem = stem.strip("-._")[:60].rstrip("-._")
+    return f"{stem}-node-options.json" if stem else "node-options.json"
+
+
+def node_options_file(filters: dict, focus_targets: dict, ontology_uri: str) -> str:
+    """The Node options panel's state as a file to save (issue #485).
+
+    Both halves of the panel at once, so one file resumes the work whichever
+    mode it is picked up in: what each node filter shows, and the focus (on or
+    off, its depth, its nodes). What is *shown* rather than what is hidden,
+    unlike the per-file state in config.json: the file is a working set the
+    user picked, and loading it should show that set, the way applying a pasted
+    list does. Focus nodes are saved as node ids, not as the labels the picker
+    shows, for the reason :func:`_viz_file_state_payload` gives.
+    """
+    seeds = st.session_state.get("_viz_cfg_focus_seeds") or []
+    return json.dumps(
+        {
+            "format": NODE_OPTIONS_FORMAT,
+            "version": 1,
+            "ontology": ontology_uri,
+            "shown": {
+                key: list(entry["selected_uris"]) for key, entry in filters.items()
+            },
+            "focus": {
+                "on": bool(st.session_state.get("_viz_cfg_focus_mode")),
+                "depth": int(st.session_state.get("_viz_cfg_focus_depth") or 1),
+                "node_ids": [focus_targets[s] for s in seeds if s in focus_targets],
+            },
+        },
+        indent=2,
+    )
+
+
+def node_options_file_key() -> str:
+    """The widget key of the Node options uploader, new after every load."""
+    return f"viz_node_file_{st.session_state.get(_NODE_FILE_GEN, 0)}"
+
+
+def _str_list_field(value, where: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise TypeError(f"{where} is not a list of names")
+    return value
+
+
+def _read_node_options_file(data) -> tuple[dict[str, list[str]], bool, int, list]:
+    """Check a Node options file through and through, before any of it is used.
+
+    Returns ``(shown, focus_on, depth, node_ids)``. Raises ``ValueError`` or
+    ``TypeError`` for anything that is not the shape :func:`node_options_file` writes, so a
+    damaged file is refused whole rather than applied up to the field that
+    breaks: one that set the class filter and then failed on the individuals
+    left the panel half loaded, with no undo step for it (Codex review of PR
+    #534).
+    """
+    if not isinstance(data, dict) or data.get("format") != NODE_OPTIONS_FORMAT:
+        raise ValueError("not a Node options file")
+    shown = data.get("shown", {})
+    focus = data.get("focus", {})
+    if not isinstance(shown, dict) or not isinstance(focus, dict):
+        raise TypeError("not a Node options file")
+    shown = {
+        str(key): _str_list_field(uris, f"the {key} list")
+        for key, uris in shown.items()
+    }
+    node_ids = _str_list_field(focus.get("node_ids", []), "the focus list")
+    depth = focus.get("depth", 1)
+    focus_on = focus.get("on", False)
+    if isinstance(depth, bool) or not isinstance(depth, int):
+        raise TypeError("the focus depth is not a number")
+    if not isinstance(focus_on, bool):
+        raise TypeError("the focus switch is not on or off")
+    return shown, focus_on, depth, node_ids
+
+
+def viz_load_node_options(filters: dict, focus_targets: dict, ontology_uri: str):
+    """Apply a saved Node options file (an ``on_change`` callback, issue #485).
+
+    Replaces what the filters show and the focus, as one undoable step, the way
+    applying a pasted list replaces one of them. Entities the file names that
+    this ontology does not have are counted and said, not guessed at, and a
+    file saved for another ontology is still applied as far as it matches.
+    """
+    upload = st.session_state.get(node_options_file_key())
+    if upload is None:
+        return
+    st.session_state[_NODE_FILE_GEN] = st.session_state.get(_NODE_FILE_GEN, 0) + 1
+    try:
+        data = json.loads(upload.getvalue().decode("utf-8"))
+        shown, focus_on, depth, node_ids = _read_node_options_file(data)
+    except (ValueError, TypeError) as e:
+        # UnicodeDecodeError and json's own error are ValueErrors.
+        st.toast(f"Could not load {upload.name}: {e}.", icon="⚠️")
+        return
+    viz_node_undo_checkpoint()
+    missing = 0
+    for key, entry in filters.items():
+        if key not in shown:
+            continue
+        known = set(entry["uris"])
+        wanted = shown[key]
+        st.session_state[f"_viz_cfg_selected_{key}_uris"] = [
+            u for u in wanted if u in known
+        ]
+        missing += sum(1 for u in wanted if u not in known)
+    label_by_id = {node_id: label for label, node_id in focus_targets.items()}
+    seeds = [label_by_id[i] for i in node_ids if i in label_by_id]
+    missing += len(node_ids) - len(seeds)
+    st.session_state["_viz_cfg_focus_seed_ids_by_label"] = {
+        label: focus_targets[label] for label in seeds
+    }
+    viz_set_focus_seeds(seeds)
+    # On only with something to focus on: focus mode with no seeds backfills an
+    # arbitrary node (see viz_focus_on_path).
+    st.session_state["_viz_cfg_focus_mode"] = focus_on and bool(seeds)
+    st.session_state["_viz_cfg_focus_depth"] = min(max(depth, 1), 5)
+    st.session_state["_viz_settings_dirty"] = True
+    note = f"Loaded {upload.name}."
+    if missing:
+        note += f" {missing} saved entit{'y is' if missing == 1 else 'ies are'} "
+        note += "not in this ontology, or of a type switched off, and left out."
+    if data.get("ontology") and data["ontology"] != ontology_uri:
+        note += f" It was saved for {data['ontology']}."
+    st.toast(note, icon="📂")
 
 
 def viz_node_history_follow_renames(renames, uris_by_kind, focus_targets) -> None:
@@ -5763,11 +5950,20 @@ def _download_or_save(label, data, file_name, mime="text/plain", key=None):
             label=label, data=data, file_name=file_name, mime=mime, key=f"dl_{_k}"
         )
         return
-    path = st.text_input(
-        "Save to file",
-        value=str(_Path.home() / "Downloads" / file_name),
-        key=f"savepath_{_k}",
-    )
+    # The default path follows the file name, which can change under a fixed
+    # key: the Node options file is named after the ontology, and loading
+    # another one kept the first one's path, so saving overwrote its file
+    # (review of PR #534). A path still at its old default moves to the new
+    # one; a path the user typed is theirs and stays.
+    default = str(_Path.home() / "Downloads" / file_name)
+    path_key, default_key = f"savepath_{_k}", f"_savepath_default_{_k}"
+    previous = st.session_state.get(default_key)
+    if path_key not in st.session_state or (
+        previous != default and st.session_state[path_key] == previous
+    ):
+        st.session_state[path_key] = default
+    st.session_state[default_key] = default
+    path = st.text_input("Save to file", key=path_key)
     save_label = label.replace("Download", "Save") if "Download" in label else label
     if st.button(f"💾 {save_label}", key=f"savebtn_{_k}"):
         try:

@@ -33,6 +33,7 @@ from ..ui import (
     VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
+    _download_or_save,
     _edge_id,
     _edge_id_parts,
     _fmt_unknown,
@@ -70,6 +71,9 @@ from ..ui import (
     local_store,
     log_error,
     newly_hidden_uris,
+    node_options_file,
+    node_options_file_key,
+    node_options_file_name,
     option_sort_key,
     panel_heading_html,
     panel_subject_uri,
@@ -92,12 +96,14 @@ from ..ui import (
     viz_clear_sparql_highlight,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_depth_changed,
     viz_focus_on_path,
     viz_focus_seeds_changed,
     viz_focus_toggle,
     viz_hidden_caption,
     viz_hidden_note_style,
     viz_leave_empty_focus,
+    viz_load_node_options,
     viz_mark_ontology_seen,
     viz_new_hidden_message,
     viz_node_history_follow_renames,
@@ -175,6 +181,41 @@ def _node_undo_buttons() -> None:
         use_container_width=True,
         help="Put back the change Undo just took back.",
     )
+
+
+def _node_options_file_controls(where: str, filters, focus_targets, ont) -> None:
+    """Save and load the Node options panel as a file (issue #485).
+
+    A popover of its own beside Paste / copy, in both modes, since the file
+    holds both halves of the panel and is wanted from whichever mode the user
+    is in. Its own rather than inside Paste / copy, which it made too tall to
+    open on a large screen. Saving goes through _download_or_save, a download
+    on the web and a path on the desktop, where the webview cannot download;
+    loading is an upload, which works in both.
+    """
+    with st.popover(
+        "File",
+        use_container_width=True,
+        help="Save the shown entities and the focus to a file, or load one.",
+    ):
+        st.caption("Both the shown entities and the focus, in one file.")
+        ontology_uri = str(ont.ontology_uri)
+        _download_or_save(
+            "Download node options",
+            node_options_file(filters, focus_targets, ontology_uri),
+            node_options_file_name(ont),
+            mime="application/json",
+            key=f"viz_node_file_save_{where}",
+        )
+        st.file_uploader(
+            "Load node options",
+            type=["json"],
+            key=node_options_file_key(),
+            on_change=viz_load_node_options,
+            args=(filters, focus_targets, ontology_uri),
+            help="Replaces what is shown and the focus with the file's. Undo "
+            "takes it back.",
+        )
 
 
 def status_bar_copy_html(text: str) -> str:
@@ -1445,8 +1486,7 @@ def render_visualization():
                         1,
                         5,
                         key="viz_focus_depth",
-                        on_change=viz_sync,
-                        args=("_viz_cfg_focus_depth", "viz_focus_depth"),
+                        on_change=viz_focus_depth_changed,
                         help="1 = direct neighbours only; higher pulls in further links.",
                     )
                 # Picking seeds out of a long list is slow and a focus worth
@@ -1458,7 +1498,7 @@ def render_visualization():
                 # Parsing answers in the picker's own labels: those are the
                 # entries' identity, since one IRI can be two focus targets.
                 _focus_entries, _focus_tokens = build_focus_seed_entries(focus_records)
-                _fundo_col, _fpaste_col = st.columns([1, 1])
+                _fundo_col, _fpaste_col, _ffile_col = st.columns([2, 1, 1])
                 with _fundo_col:
                     _node_undo_buttons()
                 with _fpaste_col.popover("Paste / copy", use_container_width=True):
@@ -1507,6 +1547,8 @@ def render_visualization():
                             language=None,
                             wrap_lines=True,
                         )
+                with _ffile_col:
+                    _node_options_file_controls("focus", filters, focus_targets, ont)
                 focus_seed_ids = [
                     focus_targets[s] for s in focus_seeds if s in focus_targets
                 ]
@@ -1590,13 +1632,13 @@ def render_visualization():
                     _narrowed = len(_picked_uris) != len(_entries)
                     # Entities created since the filter was narrowed, which the
                     # view is therefore holding back (issue #194). The button
-                    # only exists while there are some, so the usual two-button
-                    # row is unchanged for everyone else.
+                    # only exists while there are some, so the usual row is
+                    # unchanged for everyone else.
                     _new_hidden = st.session_state.get(f"_viz_new_hidden_{_key}") or []
                     if _new_hidden:
-                        _bcol1, _bcol_new, _bcol2 = st.columns([1, 1, 1])
+                        _bcol1, _bcol_new, _bcol2, _bcol_file = st.columns([1, 1, 1, 1])
                     else:
-                        _bcol1, _bcol2 = st.columns([1, 1])
+                        _bcol1, _bcol2, _bcol_file = st.columns([2, 1, 1])
                         _bcol_new = None
                     # An empty (or narrowed) filter hides nodes and there is no
                     # native way back — offer a one-click restore (issue B3).
@@ -1698,6 +1740,10 @@ def render_visualization():
                                 language=None,
                                 wrap_lines=True,
                             )
+                    with _bcol_file:
+                        _node_options_file_controls(
+                            "filter", filters, focus_targets, ont
+                        )
                     # Which behaviour a narrowed filter should have is a
                     # property of the ontology you are working on, so it is a
                     # setting rather than a fixed rule (issue #326). It sits
