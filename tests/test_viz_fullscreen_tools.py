@@ -109,3 +109,44 @@ def test_opening_the_search_puts_the_cursor_in_its_box():
     assert ".st-key-viz_fs_tools [data-testid='stPopoverButton']" in js
     assert ".st-key-viz_fs_search input" in js
     assert "window.__orionbeltSearchFocus" in js
+
+
+def _two_ages_script():
+    import streamlit as st
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager(base_uri="http://example.org/one#")
+        om.add_class("Person")
+        om.add_data_property("age", domain="Person", range_="integer")
+        om.add_data_property(
+            "age", range_="integer", namespace="http://example.org/two#"
+        )
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+        st.session_state["_viz_settings_restored"] = True
+        st.session_state["_viz_cfg_show_data_props"] = True
+    app.render_visualization()
+
+
+def test_two_data_properties_sharing_a_name_are_found_apart():
+    """Find keyed a data property by its bare name, so the second ``age``
+    took the first one's option: picking either, in Find or from the
+    graph's search, went to the same node."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_two_ages_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    at.text_input(key="viz_fs_search").set_value("age").run(timeout=120)
+    one, two = "http://example.org/one#age", "http://example.org/two#age"
+    picked = {}
+    for uri in (one, two):
+        at.button(key=f"viz_fs_search_Data Property_{ui._uid(uri)}").click()
+        at.run(timeout=120)
+        assert not at.exception, at.exception
+        picked[uri] = at.session_state["viz_find_entity"]
+    assert picked[one] != picked[two], picked
+    assert all(label.startswith("Data Property: age") for label in picked.values())

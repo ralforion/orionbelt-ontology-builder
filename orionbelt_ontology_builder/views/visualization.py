@@ -1473,10 +1473,15 @@ def render_visualization():
                     _ind_label_by_uri.get(e["uri"], ""),
                 )
         if show_data_props:
+            # Tagged for their namespace when two share a local name, as the
+            # class and individual displays are: keyed by the bare name, the
+            # second took the first one's option, and picking either (in Find,
+            # or from the graph's search) went to the same node.
+            _dprop_clash = _build_name_collision_set(data_props)
             for prop in data_props:
                 _focus_target(
                     "Data Property",
-                    prop["name"],
+                    _disambiguated_name(prop, _dprop_clash),
                     "property",
                     prop["uri"],
                     prop["uri"],
