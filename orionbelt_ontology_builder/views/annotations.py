@@ -26,6 +26,7 @@ from ..ui import (
     set_active_language_pack,
     set_flash_message,
     show_message,
+    sized_table,
 )
 
 
@@ -196,28 +197,30 @@ def render_language_packs():
             f"{len(entries)} codes. Built-in packs can't be edited — copy one "
             "below to make a version of your own."
         )
-        st.dataframe(frame, hide_index=True, width="stretch")
+        with sized_table():
+            st.dataframe(frame, hide_index=True, width="stretch")
     else:
-        edited = st.data_editor(
-            frame,
-            num_rows="dynamic",
-            hide_index=True,
-            column_config={
-                "Code": st.column_config.TextColumn(
-                    "Code",
-                    help="The tag written into the ontology: letters, "
-                    "optionally '-' and more letters or digits. For a language "
-                    "no standard names, use 'x-yourcode' or one of "
-                    "'qaa'–'qtz'.",
-                    required=True,
-                ),
-                "Language": st.column_config.TextColumn(
-                    "Language", help="Shown beside the code, e.g. 'Old Norse'."
-                ),
-            },
-            key=f"lang_pack_rows_{pack_key}",
-            width="stretch",
-        )
+        with sized_table():
+            edited = st.data_editor(
+                frame,
+                num_rows="dynamic",
+                hide_index=True,
+                column_config={
+                    "Code": st.column_config.TextColumn(
+                        "Code",
+                        help="The tag written into the ontology: letters, "
+                        "optionally '-' and more letters or digits. For a language "
+                        "no standard names, use 'x-yourcode' or one of "
+                        "'qaa'–'qtz'.",
+                        required=True,
+                    ),
+                    "Language": st.column_config.TextColumn(
+                        "Language", help="Shown beside the code, e.g. 'Old Norse'."
+                    ),
+                },
+                key=f"lang_pack_rows_{pack_key}",
+                width="stretch",
+            )
         save_col, del_col = st.columns(2)
         with save_col:
             if st.button(
@@ -683,19 +686,20 @@ def render_annotations():
                 columns=["Resource", "Predicate", "Value", "Language", "Action"]
             )
 
-        edited_df = st.data_editor(
-            df,
-            num_rows="dynamic",
-            column_config={
-                "Action": st.column_config.SelectboxColumn(
-                    "Action",
-                    options=["keep", "add", "delete"],
-                    default="add",
-                ),
-            },
-            key="bulk_annotations_editor",
-            width="stretch",
-        )
+        with sized_table():
+            edited_df = st.data_editor(
+                df,
+                num_rows="dynamic",
+                column_config={
+                    "Action": st.column_config.SelectboxColumn(
+                        "Action",
+                        options=["keep", "add", "delete"],
+                        default="add",
+                    ),
+                },
+                key="bulk_annotations_editor",
+                width="stretch",
+            )
 
         if st.button("Apply Changes", type="primary", key="bulk_apply_annotations"):
             updates, ambiguous = bulk_annotation_updates(edited_df, uris_by_name)

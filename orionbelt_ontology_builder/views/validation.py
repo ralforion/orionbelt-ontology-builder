@@ -46,6 +46,7 @@ from ..ui import (
     save_checkpoint,
     set_flash_message,
     show_message,
+    sized_table,
 )
 from .findings import SEVERITY_ICONS as _SEVERITY_ICONS
 from .findings import render_findings_table
@@ -452,7 +453,7 @@ def _render_quality(ont) -> None:
     if suppressed:
         _render_suppressed(suppressed, iri=iri, scope=scope, name_of=ctx.name)
 
-    with st.expander("Rule coverage", expanded=False):
+    with st.expander("Rule coverage", expanded=False), sized_table():
         st.dataframe(
             [
                 {
@@ -490,20 +491,21 @@ def _render_quality(ont) -> None:
 def _render_suppressed(suppressed, *, iri: str, scope: str, name_of) -> None:
     """The findings marked as fine, why, and a way to show one again."""
     with st.expander(f"Suppressed findings ({len(suppressed)})", expanded=False):
-        st.dataframe(
-            [
-                {
-                    "Rule": RULES[f.rule_id].title,
-                    "Resource": name_of(f.resource),
-                    "Why": s.justification,
-                    "By": s.author,
-                    "Date": s.date,
-                }
-                for f, s in suppressed
-            ],
-            hide_index=True,
-            width="stretch",
-        )
+        with sized_table():
+            st.dataframe(
+                [
+                    {
+                        "Rule": RULES[f.rule_id].title,
+                        "Resource": name_of(f.resource),
+                        "Why": s.justification,
+                        "By": s.author,
+                        "Date": s.date,
+                    }
+                    for f, s in suppressed
+                ],
+                hide_index=True,
+                width="stretch",
+            )
         pick_col, lift_col = st.columns([5, 1])
         index = pick_col.selectbox(
             "Show again",

@@ -30,6 +30,7 @@ from ..ui import (
     scroll_anchor,
     set_flash_message,
     show_message,
+    sized_table,
     viz_note_rename,
 )
 
@@ -237,7 +238,8 @@ def render_classes():
                         else c["comment"],
                     }
                 )
-            st.dataframe(class_data, width="stretch")
+            with sized_table():
+                st.dataframe(class_data, width="stretch")
 
     if _cls_tab == "Add Class":
         st.subheader("Add New Class")
@@ -397,7 +399,8 @@ def render_classes():
                     bulk_text, default_columns=["name", "label", "parent"]
                 )
                 if entries:
-                    st.dataframe(pd.DataFrame(entries), width="stretch")
+                    with sized_table():
+                        st.dataframe(pd.DataFrame(entries), width="stretch")
                     if st.button(
                         "Create All Classes", type="primary", key="bulk_create_classes"
                     ):
@@ -423,12 +426,13 @@ def render_classes():
                     for c in classes
                 ]
                 df = pd.DataFrame(edit_data)
-                edited_df = st.data_editor(
-                    df,
-                    key="bulk_edit_classes_editor",
-                    width="stretch",
-                    disabled=["Name"],
-                )
+                with sized_table():
+                    edited_df = st.data_editor(
+                        df,
+                        key="bulk_edit_classes_editor",
+                        width="stretch",
+                        disabled=["Name"],
+                    )
                 if st.button("Apply Changes", type="primary", key="bulk_apply_classes"):
                     changes = 0
                     for _, row in edited_df.iterrows():

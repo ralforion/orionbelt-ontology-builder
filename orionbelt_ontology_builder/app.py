@@ -200,6 +200,7 @@ from .ui import (  # noqa: F401
     log_error,
     maybe_restore_autosave,
     missing_required,
+    new_table_run,
     newly_hidden_uris,
     note_undo_redo,
     ontology_display_name,
@@ -217,6 +218,7 @@ from .ui import (  # noqa: F401
     persist_autosave,
     persist_language_packs,
     persist_sparql_state,
+    persist_text_size,
     picker_option_caption,
     prioritise_pinned,
     prune_reused_focus_seeds,
@@ -232,12 +234,14 @@ from .ui import (  # noqa: F401
     render_restriction_editor,
     render_restriction_form,
     render_restriction_row,
+    render_text_size_sidebar,
     request_autosave_flush,
     required_selectbox,
     resolve_annotation_predicate_choice,
     resolve_picked_object,
     restore_language_packs,
     restore_sparql_state,
+    restore_text_size,
     restriction_references_class,
     restriction_takes_on_class,
     restriction_value_is_class,
@@ -248,8 +252,11 @@ from .ui import (  # noqa: F401
     set_active_language_pack,
     set_flash_message,
     show_message,
+    sized_table,
     sparql_state_changed,
     start_help_capture,
+    text_size,
+    text_size_changed,
     theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
@@ -419,6 +426,7 @@ def main():
     _configure_page()
     # Counted before any picker draws, so each can tell a return from a rerun.
     case_picker.new_run()
+    new_table_run()
     # Before anything renders: the widgets are wrapped so their help text is
     # collected on the way past, and this render starts with none of it
     # (issue #383). render_page_shims() at the end puts it where a keyboard
@@ -477,10 +485,16 @@ def main():
         _dark_mode = _theme_type == "dark"
     _logo_file = "ORIONBELT Logo w.png" if _dark_mode else "ORIONBELT_Logo.png"
     _logo_path = PKG_DIR / "assets" / _logo_file
-    st.sidebar.image(str(_logo_path), width=200)
+    with st.sidebar.container(key="sidebar_logo"):
+        st.image(str(_logo_path), width=200)
     st.sidebar.markdown("# Ontology Builder")
+    # The company name without "d.o.o.", and as small as the version line
+    # below: at the larger text sizes it wrapped onto a line of its own (issue
+    # #387). LICENSE and README carry the name in full.
     st.sidebar.markdown(
-        "\u00a9 2025\u20132026 [RALFORION d.o.o.](https://ralforion.com)"
+        '<small>\u00a9 2025\u20132026 <a href="https://ralforion.com">RALFORION</a>'
+        "</small>",
+        unsafe_allow_html=True,
     )
     _gh_repo = GITHUB_ISSUES_URL.rsplit("/", 1)[0]
     st.sidebar.markdown(
@@ -641,6 +655,9 @@ def main():
     # the sidebar because those fields are on three pages and in the graph
     # panel, and one pack is meant to hold for all of them.
     render_language_pack_sidebar()
+    # The app's text size (issue #387), with the language pack as the other
+    # setting that holds for every page.
+    render_text_size_sidebar()
 
     st.sidebar.divider()
 

@@ -6,6 +6,7 @@ from ..ui import (
     save_checkpoint,
     set_flash_message,
     show_message,
+    sized_table,
 )
 
 
@@ -91,7 +92,8 @@ def render_dashboard():
             prefix_data["Prefix"].append(p["prefix"])
             prefix_data["Namespace"].append(p["namespace"])
             prefix_data["Source"].append(p["source"])
-        st.dataframe(prefix_data, width="stretch", hide_index=True)
+        with sized_table():
+            st.dataframe(prefix_data, width="stretch", hide_index=True)
     else:
         st.info("No prefixes defined.")
 

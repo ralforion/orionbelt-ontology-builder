@@ -11,6 +11,7 @@ from ..ui import (
     save_checkpoint,
     set_flash_message,
     show_message,
+    sized_table,
 )
 
 
@@ -310,7 +311,8 @@ def render_import_export():
                         ],
                         "Incoming Value": [c["incoming_value"] for c in conflicts],
                     }
-                    st.dataframe(conflict_data, width="stretch", hide_index=True)
+                    with sized_table():
+                        st.dataframe(conflict_data, width="stretch", hide_index=True)
 
             # Prefix conflicts
             prefix_conflicts = preview.get("prefix_conflicts", [])
@@ -325,7 +327,8 @@ def render_import_export():
                             c["incoming_namespace"] for c in prefix_conflicts
                         ],
                     }
-                    st.dataframe(pfx_data, width="stretch", hide_index=True)
+                    with sized_table():
+                        st.dataframe(pfx_data, width="stretch", hide_index=True)
 
             # Change report download
             report = ont.format_diff_report(diff, report_format="markdown")
