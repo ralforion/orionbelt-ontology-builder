@@ -1915,10 +1915,11 @@ def render_visualization():
                     "Focus on this path",
                     key="viz_path_focus",
                     disabled=not path_hops,
-                    help="Makes the path the focus, so all of it is drawn even when "
-                    "the full graph is too large to show. It is an ordinary focus "
-                    "from there: the depth slider decides how much of what "
-                    "surrounds the path comes with it.",
+                    help="Makes the path the focus, in place of the current focus "
+                    "nodes. The path is drawn without this too, focus or not; "
+                    "use it to narrow the graph down to the path. It is an "
+                    "ordinary focus from there: the depth slider decides how "
+                    "much of what surrounds the path comes with it.",
                 ):
                     viz_focus_on_path(
                         [
@@ -2862,6 +2863,21 @@ def render_visualization():
                     # Only alongside seeds that are actually present: with none,
                     # the prune does not run at all, and a Find pick is not a
                     # reason to start narrowing a graph that was not narrowed.
+                    #
+                    # The path picked in Path finder goes the same way (issue
+                    # #362): kept as it is, so it is drawn whatever the focus
+                    # is on, and the focus seeds are left alone. Unlike the Find
+                    # target it is not grown from: the path is the answer, and
+                    # the ring around each of its entities would bury it. The
+                    # builder pins it past the cap (see _pinned_ids), so here
+                    # the focus makes room for it rather than the other way
+                    # round, and only when the two do not fit together.
+                    _pin_path = {i for i in path_node_ids if i in present_ids}
+                    if len(keep | _pin_path) > GRAPH_MAX_NODES:
+                        keep, _cut_short = _grow(
+                            seeds, set(), max(GRAPH_MAX_NODES - len(_pin_path), 0)
+                        )
+                    keep |= _pin_path
                     focus_find_kept = False
                     if _pin_find and _find_id not in keep:
                         # A focus that fills the cap on its own leaves the pin
@@ -2881,7 +2897,12 @@ def render_visualization():
                         # short of what it can draw for a pick already on the
                         # canvas (PR #428 review).
                         if len(keep) >= GRAPH_MAX_NODES:
-                            keep, _cut_short = _grow(seeds, set(), GRAPH_MAX_NODES - 1)
+                            keep, _cut_short = _grow(
+                                seeds,
+                                set(),
+                                max(GRAPH_MAX_NODES - 1 - len(_pin_path), 0),
+                            )
+                            keep |= _pin_path
                         keep, _find_cut = _grow({_find_id}, keep, GRAPH_MAX_NODES)
                         focus_find_kept = _find_id in keep
                         _cut_short = _cut_short or _find_cut

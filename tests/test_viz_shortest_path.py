@@ -242,14 +242,11 @@ def test_a_pinned_path_does_not_lift_the_cap_for_everything_else(patch_ui):
     assert "D" not in labels
 
 
-def test_a_path_the_view_cannot_draw_says_so():
-    """A path drawn in pieces with nothing accounting for it reads as a broken
-    highlight rather than as a view that does not hold all of it, and this is
-    the only line that names the way out.
-
-    Focused elsewhere, because since #378 the node cap cannot do this: the
-    entities on a path are pinned past it. The focus prune runs after the build
-    and takes them out again, which is what is left.
+def test_a_path_is_drawn_through_a_focus_on_something_else():
+    """Issue #362: the path finder works like Find. Focused elsewhere, the path
+    is still drawn in full and ringed, and the focus is left as it was rather
+    than replaced by the path. The prune used to take the path back out, and
+    "Focus on this path" was the only way to see it, at the cost of the seeds.
     """
     at = _render("Class: A", "Class: C")
     at.session_state["_viz_cfg_focus_mode"] = True
@@ -257,10 +254,43 @@ def test_a_path_the_view_cannot_draw_says_so():
     at.run(timeout=300)
     assert not at.exception, at.exception
 
+    nodes, edges = _graph(at)
+    assert {n["label"] for n in nodes} == {"A", "B", "C", "D"}
+    assert len(_highlighted_edges(edges)) == 2
+    assert at.session_state["_viz_cfg_focus_seeds"] == ["Class: D"]
     notice = at.session_state["last_graph_data"]["notice"]
-    assert "entities on this path are not drawn" in notice
-    # Here the advice is the right advice: they are focused on something else.
-    assert "Focus on this path" in notice
+    assert "entities on this path" not in notice
+
+
+def test_a_path_through_a_focus_is_not_grown_from():
+    """The path is kept as it is; the focus depth applies to the seeds only.
+    E hangs one hop off C, so growing from the path would bring it in."""
+    at = _render("Class: A", "Class: C")
+    at.session_state.ontology.add_class("E", parent="C")
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: D"]
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    nodes, _ = _graph(at)
+    assert "E" not in {n["label"] for n in nodes}
+
+
+def test_a_path_through_a_full_focus_stays_within_the_cap(patch_ui):
+    """When the focus and the path do not fit together the focus makes room:
+    the path is what was just asked for, and the browser still gets no more
+    than the cap."""
+    patch_ui("GRAPH_MAX_NODES", 3)
+    at = _render("Class: A", "Class: C")
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = ["Class: D"]
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+
+    nodes, edges = _graph(at)
+    assert {"A", "B", "C"} <= {n["label"] for n in nodes}
+    assert len(nodes) <= 3
+    assert len(_highlighted_edges(edges)) == 2
 
 
 def test_a_focus_keeps_its_own_advice_when_the_path_is_half_drawn(patch_ui):
