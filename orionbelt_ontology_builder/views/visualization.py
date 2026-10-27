@@ -31,7 +31,6 @@ from ..ui import (
     VIZ_NODE_UNDO_KEY,
     VIZ_PARKED_SEEDS_KEY,
     VIZ_ROUTE_PICK,
-    VIZ_SPARQL_HIGHLIGHT,
     _build_name_collision_set,
     _disambiguated_name,
     _edge_id,
@@ -86,6 +85,7 @@ from ..ui import (
     reconcile_filter_selection,
     seed_filter_from_saved,
     sparql_highlight,
+    sparql_highlight_for,
     theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
@@ -2007,7 +2007,7 @@ def render_visualization():
         # whatever the graph happened to be showing.
         sparql_node_ids: list[str] = []
         sparql_pairs: set = set()
-        _sparql_hl = st.session_state.get(VIZ_SPARQL_HIGHLIGHT)
+        _sparql_hl = sparql_highlight_for(ont)
         if _sparql_hl:
             _hl = sparql_highlight(
                 _sparql_hl.get("row_uris") or [],

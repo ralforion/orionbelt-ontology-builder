@@ -461,6 +461,9 @@ def _show_on_graph(result: sparql.QueryResult) -> None:
         "row_uris": result.row_uris,
         "rows": result.row_count,
         "truncated": result.truncated or result.timed_out,
+        # Which ontology the result came from, so the graph can let go of it
+        # once that one is replaced (see sparql_highlight_for).
+        "graph": str(st.session_state.ontology.graph.identifier),
     }
     st.session_state.search_navigate_to = "Visualization"
 

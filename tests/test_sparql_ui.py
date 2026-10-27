@@ -532,6 +532,7 @@ def test_show_on_graph_hands_the_rows_over_and_opens_the_graph():
     handed = at.session_state[ui.VIZ_SPARQL_HIGHLIGHT]
     assert handed["rows"] == len(handed["row_uris"]) > 0
     assert not handed["truncated"]
+    assert handed["graph"] == str(at.session_state.ontology.graph.identifier)
 
 
 def test_the_highlight_keeps_the_result_s_order_and_its_links():

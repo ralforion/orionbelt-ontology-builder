@@ -2734,6 +2734,25 @@ def sparql_highlight(
     }
 
 
+def sparql_highlight_for(ont) -> dict[str, Any] | None:
+    """The SPARQL result to show on the graph of ``ont``, if there is one.
+
+    A result belongs to the ontology it was run against. Loading a file, an
+    import that replaces, a new or cleared ontology, a template: each gives the
+    graph a fresh identifier (``OntologyManager._install_graph``, or a new
+    manager), and a result held across that is dropped here rather than left
+    to match nothing under a note that still talks about it. Edits keep the
+    identifier, so a result outlives them and is matched afresh.
+    """
+    stored = st.session_state.get(VIZ_SPARQL_HIGHLIGHT)
+    if not stored:
+        return None
+    if stored.get("graph") != str(ont.graph.identifier):
+        st.session_state.pop(VIZ_SPARQL_HIGHLIGHT, None)
+        return None
+    return stored
+
+
 def viz_sparql_note(highlight: dict[str, Any], stored: dict[str, Any]) -> str:
     """The line above the graph that says what of a SPARQL result it shows.
 

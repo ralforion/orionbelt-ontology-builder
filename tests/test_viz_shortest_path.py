@@ -738,6 +738,7 @@ def _with_sparql(at, *names_by_row, focus_on=None):
         "row_uris": [[uri[n] for n in row] for row in names_by_row],
         "rows": len(names_by_row),
         "truncated": False,
+        "graph": str(at.session_state.ontology.graph.identifier),
     }
     if focus_on:
         at.session_state["_viz_cfg_focus_mode"] = True
@@ -792,3 +793,41 @@ def test_the_graph_says_what_it_shows_and_clear_stops_it():
     assert not at.exception, at.exception
     assert ui.VIZ_SPARQL_HIGHLIGHT not in at.session_state
     assert _cyan(*_graph(at)) == (set(), set())
+
+
+def test_a_sparql_result_outlives_an_edit():
+    """An edit keeps the ontology, so the result is matched against it again."""
+    at = _with_sparql(_render(panel=False), ["A", "B"])
+    at.session_state.ontology.add_class("E", parent="A")
+    at.session_state["_ont_mutation_count"] = 1
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    assert _cyan(*_graph(at))[0] == {"A", "B"}
+
+
+def test_a_sparql_result_is_dropped_when_the_ontology_is_replaced():
+    """It belongs to the ontology it was run against; replaced, it would match
+    nothing under a note that still talks about it."""
+    at = _with_sparql(_render(panel=False), ["A", "B"])
+    at.session_state.ontology.load_from_string(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "<http://example.org/other#X> a owl:Class .\n"
+    )
+    at.session_state["_ont_mutation_count"] = 1
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    assert ui.VIZ_SPARQL_HIGHLIGHT not in at.session_state
+    assert not any("SPARQL" in c.value for c in at.caption)
+
+
+def test_a_new_ontology_drops_it_too():
+    at = _with_sparql(_render(panel=False), ["A", "B"])
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    fresh = OntologyManager()
+    # With a class, so the page draws a graph rather than its empty state.
+    fresh.add_class("A")
+    at.session_state.ontology = fresh
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    assert ui.VIZ_SPARQL_HIGHLIGHT not in at.session_state
