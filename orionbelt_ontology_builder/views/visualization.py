@@ -519,37 +519,77 @@ def _edge_color(property_uri, default: str, label: str) -> dict:
     """The colour arguments for an edge standing for ``property_uri``.
 
     The property's own colour when the user gave it one (issue #160), tagged
-    with its label so the legend can name it; otherwise the edge kind's.
+    with its label so the legend can name it; otherwise the edge kind's. The
+    URI goes along either way: the colours popover offers the properties the
+    graph actually draws, and reads them off the edges.
     """
-    color = property_colors().get(property_uri) if property_uri else None
-    if color is None:
+    # A blank node (a restriction on an inverse, say) is no property one can
+    # name, and its id changes on every load, so a colour could not stay on it.
+    if not property_uri or ":" not in property_uri:
         return {"color": default}
-    return {"color": color, "pcolor": label}
+    color = property_colors().get(property_uri)
+    if color is None:
+        return {"color": default, "puri": property_uri}
+    return {"color": color, "pcolor": label, "puri": property_uri}
 
 
-def _property_colors_popover(ont, object_props) -> None:
+def _property_colors_popover():
+    """The button of the colours popover, filled in once the graph is built.
+
+    Drawn here, in the band, so it sits beside Highlight Issues; filled by
+    :func:`_fill_property_colors` below the build, because what it offers is
+    what the graph draws.
+    """
+    # One label whatever is set: a label that changed with a count of the
+    # colours closed the popover on the pass that set the first one.
+    return st.popover(
+        "Colours",
+        help="Draw a property's edges in a colour of your own.",
+    )
+
+
+def _drawn_properties(gdata) -> dict[str, str]:
+    """``{property URI: label}`` of the properties drawn as edges in ``gdata``.
+
+    The object property's own edge names it best (by its label); the other
+    kinds name it by local name, and are taken only when nothing better came.
+    """
+    try:
+        edges = json.loads((gdata or {}).get("edges") or "[]")
+    except (TypeError, ValueError):
+        return {}
+    names: dict[str, str] = {}
+    for edge in edges:
+        uri = edge.get("puri") if isinstance(edge, dict) else None
+        if not uri:
+            continue
+        label = str(edge.get("label") or uri)
+        if edge.get("ntype") == "Object Property" or uri not in names:
+            names[uri] = label
+    return names
+
+
+def _fill_property_colors(box, gdata) -> None:
     """Give a property's edges a colour of their own (issue #160).
 
     Every kind of edge has one colour, so two object properties, or two
-    custom relations, look alike on the graph. Offered here are the
-    properties that are drawn as edges: object properties (their domain and
-    range edges, the restrictions on them, and what individuals assert with
-    them) and the custom relation types. The colours are a display setting
-    kept with the others, by URI, rather than written into the ontology.
+    custom relations, look alike on the graph. Offered are the properties the
+    graph draws right now, read off its edges: an object property's domain
+    and range edge, the restrictions on it, what individuals assert with it,
+    and the custom relations. A property that is not drawn was offered once,
+    and colouring it changed nothing anyone could see. The colours are a
+    display setting kept with the others, by URI, not written into the
+    ontology.
     """
-    names = {p["uri"]: (p["label"] or p["name"]) for p in object_props if p.get("uri")}
-    for t in ont.get_custom_relation_types():
-        names.setdefault(t["uri"], t["display"])
+    names = _drawn_properties(gdata)
     options = sorted(names, key=lambda u: option_sort_key(names[u]))
     colors = property_colors()
-    # One label whatever is set: a label that changed with a count of the
-    # colours closed the popover on the pass that set the first one.
-    with st.popover(
-        "Colours",
-        help="Draw a property's edges in a colour of your own.",
-    ):
+    with box:
         if not options:
-            st.caption("No object properties or custom relations to colour.")
+            st.caption(
+                "No property is drawn as an edge on the graph right now. Turn "
+                "on Obj Props, or show the classes at both ends of one."
+            )
             return
         picked = case_selectbox(
             "Property",
@@ -906,6 +946,8 @@ def render_visualization():
                 'whole graph" on the canvas.',
             )
 
+        # The colours popover, if the band is open; filled below the build.
+        _colors_box = None
         if options_open:
             _cols = (
                 st.columns([1, 1, 1, 1, 1, 1, 1, 1])
@@ -1040,7 +1082,7 @@ def render_visualization():
                         args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
                     )
                 with _colors_col:
-                    _property_colors_popover(ont, object_props)
+                    _colors_box = _property_colors_popover()
 
         # Read the settings from the persisted config rather than from the
         # widgets' return values: collapsed, the widgets do not render at all,
@@ -3439,6 +3481,8 @@ def render_visualization():
 
         # Always display the graph component (even on rerun after selection)
         gdata = st.session_state.get("last_graph_data")
+        if _colors_box is not None:
+            _fill_property_colors(_colors_box, gdata)
         # Why the graph is smaller than the ontology, in the slot the build
         # status used. Written on every render, not only on a rebuild: the slot
         # is reserved either way (issue #189), and the reason still holds while

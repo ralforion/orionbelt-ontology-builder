@@ -35,6 +35,8 @@ def _script():
             om.add_class(name)
         om.add_object_property("hasPart", domain="A", range_="B")
         om.add_object_property("touches", domain="B", range_="C")
+        # Declared, but with no domain or range there is no edge to draw.
+        om.add_object_property("unused")
         om.add_restriction("C", "hasPart", "someValuesFrom", "A")
         om.add_individual("a1", "A")
         om.add_individual("b1", "B")
@@ -52,14 +54,19 @@ def _script():
 
 
 @pytest.fixture(scope="module")
-def edges():
+def graph_data():
     os.environ["PCOLOR_MAP"] = json.dumps(
         {NS + "hasPart": RED, NS + "nextItem": GREEN, NS + "elsewhere": BLUE}
     )
     at = AppTest.from_function(_script)
     at.run(timeout=120)
     assert not at.exception, at.exception
-    return json.loads(at.session_state["last_graph_data"]["edges"])
+    return at.session_state["last_graph_data"]
+
+
+@pytest.fixture(scope="module")
+def edges(graph_data):
+    return json.loads(graph_data["edges"])
 
 
 def _by(edges, ntype=None, label=None):
@@ -92,6 +99,31 @@ def test_the_other_edges_keep_the_colour_of_their_kind(edges):
     (other,) = _by(edges, "Object Property", "touches")
     assert other["color"] == "#2196F3"
     assert "pcolor" not in other
+
+
+def test_the_popover_offers_what_the_graph_draws(graph_data):
+    """Offering every property in the ontology let one be coloured that had no
+    edge on screen, and the colour then changed nothing anyone could see."""
+    from orionbelt_ontology_builder.views import visualization
+
+    offered = visualization._drawn_properties(graph_data)
+    assert offered == {
+        NS + "hasPart": "hasPart",
+        NS + "touches": "touches",
+        NS + "nextItem": "nextItem",
+    }
+    assert NS + "unused" not in offered
+
+
+def test_a_blank_node_property_is_not_offered():
+    """gist restricts inverse properties, whose property is a blank node: its
+    id is no name, and it changes on every load."""
+    from orionbelt_ontology_builder.views import visualization
+
+    assert visualization._edge_color("n52930c0afb", "#2196F3", "x") == {
+        "color": "#2196F3"
+    }
+    assert visualization._edge_color(NS + "p", "#2196F3", "p")["puri"] == NS + "p"
 
 
 def test_a_new_colour_redraws_the_graph_at_once():
