@@ -1,5 +1,7 @@
 """Tests for the shortest-path search between two entities (issue #176)."""
 
+from itertools import pairwise
+
 import pytest
 
 from ontology_manager import (
@@ -8,6 +10,7 @@ from ontology_manager import (
     OntologyManager,
     PathSearchLimitError,
     bfs_path,
+    k_shortest_paths,
 )
 from orionbelt_ontology_builder.ui import (
     path_chain_text,
@@ -169,6 +172,94 @@ def test_bfs_is_stable_when_several_routes_are_equally_short():
     assert bfs_path(dict(reversed(list(adjacency.items()))), "a", "d") == first
 
 
+# ---- the next-best routes (issue #353) ----------------------------------
+
+# A square a-b-d / a-c-d with a long way round a-e-f-d and a dead end at g.
+SQUARE = {
+    "a": {"b": ("via", True), "c": ("via", True), "e": ("via", True)},
+    "b": {"a": ("via", False), "d": ("via", True)},
+    "c": {"a": ("via", False), "d": ("via", True), "g": ("via", True)},
+    "d": {"b": ("via", False), "c": ("via", False), "f": ("via", False)},
+    "e": {"a": ("via", False), "f": ("via", True)},
+    "f": {"e": ("via", False), "d": ("via", True)},
+    "g": {"c": ("via", False)},
+}
+
+
+def _chains(routes, source="a"):
+    return [[source, *(hop["target"] for hop in route)] for route in routes]
+
+
+def test_the_first_route_is_the_shortest_path():
+    routes, cut = k_shortest_paths(SQUARE, "a", "d")
+    assert routes[0] == bfs_path(SQUARE, "a", "d")
+    assert not cut
+
+
+def test_equally_short_routes_come_together_before_longer_ones():
+    routes, _ = k_shortest_paths(SQUARE, "a", "d")
+    assert _chains(routes) == [
+        ["a", "b", "d"],
+        ["a", "c", "d"],
+        ["a", "e", "f", "d"],
+    ]
+
+
+def test_no_route_visits_an_entity_twice():
+    routes, _ = k_shortest_paths(SQUARE, "a", "d", k=10)
+    for chain in _chains(routes):
+        assert len(chain) == len(set(chain))
+
+
+def test_the_list_stops_at_k():
+    routes, _ = k_shortest_paths(SQUARE, "a", "d", k=2)
+    assert len(routes) == 2
+
+
+def test_the_routes_are_the_same_whatever_order_the_adjacency_is_in():
+    shuffled = dict(reversed(list(SQUARE.items())))
+    assert k_shortest_paths(shuffled, "a", "d") == k_shortest_paths(SQUARE, "a", "d")
+
+
+def test_unconnected_and_same_entity_answer_as_the_single_path_does():
+    assert k_shortest_paths(SQUARE, "a", "zz") == (None, False)
+    assert k_shortest_paths(SQUARE, "a", "a") == ([[]], False)
+
+
+def test_a_budget_hit_on_the_first_route_still_raises():
+    with pytest.raises(PathSearchLimitError):
+        k_shortest_paths(SQUARE, "a", "f", max_visited=1)
+
+
+def test_a_budget_hit_on_a_later_route_keeps_what_was_listed(monkeypatch):
+    """The first route is exact; one search too many for the next-best ends
+    the list there and says so, rather than raising or guessing."""
+    import orionbelt_ontology_builder.ontology_manager as engine
+
+    real = engine._bfs_chain
+    calls = []
+
+    def limited(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1:
+            raise PathSearchLimitError("gave up")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_bfs_chain", limited)
+    routes, cut = engine.k_shortest_paths(SQUARE, "a", "d")
+    assert _chains(routes) == [["a", "b", "d"]]
+    assert cut
+
+
+def test_the_manager_lists_routes_over_the_ontology(path_om):
+    """Person to Organization: up and down through Agent, or across worksFor."""
+    routes, cut = path_om.find_paths(cls("Person"), cls("Organization"))
+    assert not cut
+    assert routes[0] == path_om.find_shortest_path(cls("Person"), cls("Organization"))
+    assert len(routes) >= 2
+    assert all(len(a) <= len(b) for a, b in pairwise(routes))
+
+
 def test_every_declared_edge_kind_builds_an_adjacency(path_om):
     # A kind naming something build_path_graph does not handle would silently
     # walk nothing, and the page would report "no path" for a link on screen.
@@ -271,8 +362,10 @@ def test_the_shim_names_the_path_api_explicitly():
         "PATH_EDGE_KINDS",
         "PATH_ENTITY_KINDS",
         "PATH_MAX_VISITED",
+        "PATH_MAX_ROUTES",
         "PathSearchLimitError",
         "bfs_path",
+        "k_shortest_paths",
     } <= listed
 
 

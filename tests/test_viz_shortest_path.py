@@ -63,7 +63,7 @@ def _script():
             def _broken(*_args, **_kwargs):
                 raise TypeError("unexpected keyword argument")
 
-            om.find_shortest_path = _broken
+            om.find_paths = _broken
         elif os.environ.get("PATH_LIMIT") == "1":
             # Standing in for an ontology too large to search exhaustively,
             # which is otherwise 50,000 entities to build.
@@ -74,7 +74,7 @@ def _script():
             def _over_budget(*_args, **_kwargs):
                 raise PathSearchLimitError("gave up")
 
-            om.find_shortest_path = _over_budget
+            om.find_paths = _over_budget
 
     app.render_visualization()
 
@@ -367,6 +367,65 @@ def test_a_path_drawn_in_full_leaves_the_graph_notice_alone():
     notice = _render("Class: A", "Class: C").session_state["last_graph_data"]["notice"]
 
     assert "entities on this path" not in notice
+
+
+# --- the next-best routes (issue #353) ---------------------------------------
+
+
+def _two_routes():
+    """A to C both through B and through E: two routes of two hops."""
+    at = _render("Class: A", "Class: C")
+    at.session_state.ontology.add_class("E", parent="A")
+    at.session_state.ontology.update_class("C", new_parent="E")
+    # Edited behind the page's back, so the change counter the page bumps on
+    # an edit (unset so far, read as 0) is moved here; the routes are cached
+    # against it.
+    at.session_state["_ont_mutation_count"] = 1
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return at
+
+
+def _ringed_labels(at):
+    nodes, edges = _graph(at)
+    ringed = {e["from"] for e in _highlighted_edges(edges)} | {
+        e["to"] for e in _highlighted_edges(edges)
+    }
+    return frozenset(_label_of(nodes, node_id) for node_id in ringed)
+
+
+def test_the_routes_are_offered_shortest_first():
+    route = _two_routes().radio(key="viz_path_route")
+    assert route.options == ["1 · 2 hops", "2 · 2 hops"]
+    assert not route.disabled
+    assert route.value == 0
+
+
+def test_the_highlight_follows_the_route_picked():
+    at = _two_routes()
+    first = _ringed_labels(at)
+    at.radio(key="viz_path_route").set_value(1).run(timeout=300)
+    assert not at.exception, at.exception
+    second = _ringed_labels(at)
+    assert {first, second} == {frozenset("ABC"), frozenset("AEC")}
+
+
+def test_a_new_pair_starts_again_at_the_shortest_route():
+    at = _two_routes()
+    at.radio(key="viz_path_route").set_value(1).run(timeout=300)
+    at.session_state["viz_path_target"] = "Class: B"
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    assert at.radio(key="viz_path_route").value == 0
+
+
+def test_the_route_picker_is_drawn_but_disabled_with_one_route():
+    """Drawn whatever there is to pick from, so the panel keeps its elements
+    and the graph below it keeps its iframe (issue #189)."""
+    one = _render("Class: A", "Class: C").radio(key="viz_path_route")
+    none = _render("Class: A", "Class: D").radio(key="viz_path_route")
+    assert one.disabled and none.disabled
+    assert none.options == ["—"]
 
 
 # --- what the panel says ----------------------------------------------------
