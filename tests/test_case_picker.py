@@ -386,6 +386,32 @@ def test_select_all_is_only_taken_on_purpose(tmp_path):
     assert every["reports"][-1] == ["apple", "Apple"]
 
 
+def test_the_highlighted_row_is_the_one_enter_takes(tmp_path):
+    """Issue #445: right after typing, the tinted row is the first match, the
+    row Enter takes, not "Select N matches"; the bulk row is one Up away."""
+    multi = _data(
+        multi=True,
+        selectAll=True,
+        value=[],
+        options=["apple", "Apple", "zebra"],
+        captions=["apple", "Apple", "zebra"],
+    )
+    typed, up = _drive(
+        [
+            ["render", multi],
+            ["focus"],
+            ["type", "app"],
+            ["look"],
+            ["key", "ArrowUp"],
+            ["look"],
+        ],
+        tmp_path,
+    )
+    assert typed["rows"][0] == "Select 2 matches"
+    assert typed["active"] == "apple"
+    assert up["active"] == "Select 2 matches"
+
+
 def test_no_results_is_not_a_row_enter_can_take(tmp_path):
     """Clicking the empty state took a whole filter down to one class once."""
     (seen,) = _drive(
