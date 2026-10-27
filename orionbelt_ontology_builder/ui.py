@@ -1735,8 +1735,8 @@ def text_size() -> int:
 # Sets the root font size, which every rem in Streamlit's own styles is a
 # multiple of, so text, widgets and spacing grow together. Reported back only
 # once the browser has laid the page out at the new size: the tables are a
-# canvas that reads the size once, when it is drawn, and the page is drawn
-# afresh on the report (``text_size_applied``). Redrawing on the pass that
+# canvas that reads the size once, when it is drawn, and each is drawn
+# afresh on the report (``sized_table``). Redrawing on the pass that
 # sent the size raced the browser applying it.
 _TEXT_SIZE_JS = """
 export default function ({ data, setStateValue }) {
@@ -1752,6 +1752,32 @@ export default function ({ data, setStateValue }) {
 def text_size_px(size: int) -> float:
     """The root font size for ``size`` percent of Streamlit's 16px."""
     return 16 * size / 100
+
+
+#: Session key counting the tables drawn so far in this run; see sized_table.
+_TABLE_SLOT = "_text_size_table_slot"
+
+
+def new_table_run() -> None:
+    """Start counting tables afresh; ``app.main`` calls it first thing."""
+    st.session_state[_TABLE_SLOT] = 0
+
+
+def sized_table():
+    """A container for one table, drawn afresh when the text size changes.
+
+    The tables are a canvas that reads the root font size once, when drawn,
+    and kept the old size after a change (issue #387). Keying the container by
+    the size the browser reports having applied redraws just the table. The
+    whole page was keyed once, and redrawing it threw away what the custom
+    pickers hold before a form is submitted, and moved the graph page down a
+    level from the selectors that hide its header when maximized (review of
+    PR #535). Numbered in the order the tables are drawn, so two on a page
+    differ; a test keeps every ``st.dataframe`` and ``st.data_editor`` in one.
+    """
+    slot = st.session_state.get(_TABLE_SLOT, 0)
+    st.session_state[_TABLE_SLOT] = slot + 1
+    return st.container(key=f"text_size_table_{slot}_{text_size_applied()}")
 
 
 def text_size_applied() -> int | None:
@@ -1844,8 +1870,8 @@ def render_text_size_sidebar() -> None:
     zoom, and a size chosen here is kept with the app's other settings. The
     size is applied from the sidebar, as is the restore's storage read: the
     main column above the graph must not gain or lose elements between passes
-    (issue #189). The page itself is redrawn once per new size, keyed by
-    :func:`text_size_applied` in ``app.main``.
+    (issue #189). The tables are redrawn once per new size, in
+    :func:`sized_table`.
     """
     restore_text_size()
     st.session_state[TEXT_SIZE_WIDGET] = text_size()

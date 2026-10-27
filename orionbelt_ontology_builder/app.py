@@ -200,6 +200,7 @@ from .ui import (  # noqa: F401
     log_error,
     maybe_restore_autosave,
     missing_required,
+    new_table_run,
     newly_hidden_uris,
     note_undo_redo,
     ontology_display_name,
@@ -251,10 +252,10 @@ from .ui import (  # noqa: F401
     set_active_language_pack,
     set_flash_message,
     show_message,
+    sized_table,
     sparql_state_changed,
     start_help_capture,
     text_size,
-    text_size_applied,
     text_size_changed,
     theme_is_dark,
     viz_apply_focus_click,
@@ -425,6 +426,7 @@ def main():
     _configure_page()
     # Counted before any picker draws, so each can tell a return from a rerun.
     case_picker.new_run()
+    new_table_run()
     # Before anything renders: the widgets are wrapped so their help text is
     # collected on the way past, and this render starts with none of it
     # (issue #383). render_page_shims() at the end puts it where a keyboard
@@ -734,11 +736,7 @@ def main():
 
     # Render selected page
     try:
-        # Keyed by the text size the browser reports having applied, so a new
-        # size draws the page afresh (issue #387): the tables are a canvas that
-        # reads the size once, when it is first drawn, and kept the old one.
-        with st.container(key=f"page_text_size_{text_size_applied()}"):
-            pages[selection]()
+        pages[selection]()
     except Exception as e:  # noqa: BLE001 - a crash in any page must not kill the app
         log_error(e, context=f"Page: {selection}")
         st.error(f"An error occurred: {e}")

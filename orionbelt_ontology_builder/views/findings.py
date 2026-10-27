@@ -16,7 +16,7 @@ from typing import Any
 import streamlit as st
 
 from ..quality import QualityFinding
-from ..ui import _PAGE_BY_TYPE, _nav_open_entity, _uid
+from ..ui import _PAGE_BY_TYPE, _nav_open_entity, _uid, sized_table
 
 SEVERITY_ICONS = {"error": "🔴", "warning": "🟡", "info": "🔵"}
 _SEVERITY_ORDER = ("error", "warning", "info")
@@ -128,15 +128,16 @@ def render_findings_table(
         }
         for f in shown
     ]
-    event = st.dataframe(
-        rows,
-        hide_index=True,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-row",
-        key=table_key(key, shown),
-        column_config={"Message": st.column_config.TextColumn(width="large")},
-    )
+    with sized_table():
+        event = st.dataframe(
+            rows,
+            hide_index=True,
+            width="stretch",
+            on_select="rerun",
+            selection_mode="single-row",
+            key=table_key(key, shown),
+            column_config={"Message": st.column_config.TextColumn(width="large")},
+        )
     selected = list(getattr(getattr(event, "selection", None), "rows", []) or [])
     if selected and selected[0] < len(shown):
         _render_details(

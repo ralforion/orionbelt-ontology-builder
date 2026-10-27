@@ -26,6 +26,7 @@ from ..ui import (
     scroll_anchor,
     set_flash_message,
     show_message,
+    sized_table,
 )
 
 
@@ -403,7 +404,8 @@ def render_individuals():
                     bulk_text, default_columns=["name", "class", "label"]
                 )
                 if entries:
-                    st.dataframe(pd.DataFrame(entries), width="stretch")
+                    with sized_table():
+                        st.dataframe(pd.DataFrame(entries), width="stretch")
                     if st.button(
                         "Create All Individuals",
                         type="primary",
@@ -430,12 +432,13 @@ def render_individuals():
                     for i in individuals
                 ]
                 df = pd.DataFrame(edit_data)
-                edited_df = st.data_editor(
-                    df,
-                    key="bulk_edit_ind_editor",
-                    width="stretch",
-                    disabled=["Name", "Class"],
-                )
+                with sized_table():
+                    edited_df = st.data_editor(
+                        df,
+                        key="bulk_edit_ind_editor",
+                        width="stretch",
+                        disabled=["Name", "Class"],
+                    )
                 if st.button("Apply Changes", type="primary", key="bulk_apply_ind"):
                     changes = 0
                     for _, row in edited_df.iterrows():

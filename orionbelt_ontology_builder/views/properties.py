@@ -30,6 +30,7 @@ from ..ui import (
     scroll_anchor,
     set_flash_message,
     show_message,
+    sized_table,
 )
 
 
@@ -799,7 +800,8 @@ def render_properties():
                     default_columns=["name", "domain", "range", "label"],
                 )
                 if entries:
-                    st.dataframe(pd.DataFrame(entries), width="stretch")
+                    with sized_table():
+                        st.dataframe(pd.DataFrame(entries), width="stretch")
                     ptype = "object" if prop_type == "Object Property" else "data"
                     if st.button(
                         "Create All Properties", type="primary", key="bulk_create_props"
@@ -828,12 +830,13 @@ def render_properties():
                     for p in all_props
                 ]
                 df = pd.DataFrame(edit_data)
-                edited_df = st.data_editor(
-                    df,
-                    key="bulk_edit_props_editor",
-                    width="stretch",
-                    disabled=["Name", "Type"],
-                )
+                with sized_table():
+                    edited_df = st.data_editor(
+                        df,
+                        key="bulk_edit_props_editor",
+                        width="stretch",
+                        disabled=["Name", "Type"],
+                    )
                 if st.button("Apply Changes", type="primary", key="bulk_apply_props"):
                     changes = 0
                     for _, row in edited_df.iterrows():

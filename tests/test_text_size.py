@@ -149,3 +149,52 @@ def test_a_pick_is_sent_to_the_browser_and_saved(monkeypatch, tmp_path):
     saved = json.loads(ui.local_store.config_file().read_text())
     assert saved[ui.TEXT_SIZE_KEY] == {"size": 130}
     assert not at.exception
+
+
+def _table_calls():
+    """Every st.dataframe / st.data_editor call, with whether it is wrapped."""
+    import ast
+    import pathlib
+
+    pkg = pathlib.Path(ui.__file__).resolve().parent
+    for path in sorted(pkg.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("dataframe", "data_editor")
+                and getattr(node.func.value, "id", "") == "st"
+            ):
+                continue
+            wrapped, up = False, parents.get(node)
+            while up is not None and not wrapped:
+                wrapped = isinstance(up, ast.With) and any(
+                    isinstance(item.context_expr, ast.Call)
+                    and getattr(item.context_expr.func, "id", "") == "sized_table"
+                    for item in up.items
+                )
+                up = parents.get(up)
+            yield f"{path.name}:{node.lineno}", wrapped
+
+
+def test_every_table_is_redrawn_for_a_new_size():
+    """A table outside sized_table keeps the size it was first drawn at."""
+    calls = list(_table_calls())
+    assert calls, "the scan found no tables at all"
+    assert not [where for where, wrapped in calls if not wrapped]
+
+
+def test_tables_on_one_page_get_their_own_keys(monkeypatch):
+    keys: list = []
+    monkeypatch.setattr(ui.st, "session_state", {ui.TEXT_SIZE_APPLY: {"applied": 115}})
+    monkeypatch.setattr(ui.st, "container", lambda key: keys.append(key))
+    ui.new_table_run()
+    ui.sized_table()
+    ui.sized_table()
+    assert keys == ["text_size_table_0_115", "text_size_table_1_115"]
+
+    ui.new_table_run()
+    ui.sized_table()
+    assert keys[-1] == keys[0], "the next run numbers them the same way"

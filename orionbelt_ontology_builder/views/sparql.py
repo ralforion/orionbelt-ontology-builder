@@ -16,6 +16,7 @@ from ..ui import (
     log_error,
     persist_sparql_state,
     restore_sparql_state,
+    sized_table,
     sparql_state_changed,
 )
 
@@ -402,7 +403,8 @@ def _render_prefixes(ont) -> None:
     """The namespaces in play, under the editor where a query is being written."""
     with st.expander("Prefixes in this ontology"):
         st.caption(_NAMESPACE_HINT)
-        st.dataframe(_prefix_rows(ont), use_container_width=True, hide_index=True)
+        with sized_table():
+            st.dataframe(_prefix_rows(ont), use_container_width=True, hide_index=True)
         st.caption(
             "`owl:`, `rdf:`, `rdfs:`, `xsd:`, `skos:`, `dc:` and `dcterms:` are "
             "always declared too, along with the prefixes rdflib binds by "
@@ -492,11 +494,12 @@ def _render_select_result(result: sparql.QueryResult) -> None:
         if not result.timed_out:
             _matched_nothing()
         return
-    st.dataframe(
-        [dict(zip(result.columns, row, strict=False)) for row in result.rows],
-        use_container_width=True,
-        hide_index=True,
-    )
+    with sized_table():
+        st.dataframe(
+            [dict(zip(result.columns, row, strict=False)) for row in result.rows],
+            use_container_width=True,
+            hide_index=True,
+        )
     _download_or_save(
         "Download results (CSV)",
         sparql.rows_to_csv(result.columns, result.rows),
