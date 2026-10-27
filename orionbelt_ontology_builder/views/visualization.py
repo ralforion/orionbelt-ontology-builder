@@ -73,6 +73,7 @@ from ..ui import (
     newly_hidden_uris,
     node_options_file,
     node_options_file_key,
+    node_options_file_name,
     option_sort_key,
     panel_heading_html,
     panel_subject_uri,
@@ -202,7 +203,7 @@ def _node_options_file_controls(where: str, filters, focus_targets, ont) -> None
         _download_or_save(
             "Download node options",
             node_options_file(filters, focus_targets, ontology_uri),
-            "node-options.json",
+            node_options_file_name(ont),
             mime="application/json",
             key=f"viz_node_file_save_{where}",
         )

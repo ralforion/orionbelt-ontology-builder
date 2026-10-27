@@ -202,6 +202,7 @@ from .ui import (  # noqa: F401
     missing_required,
     newly_hidden_uris,
     note_undo_redo,
+    ontology_display_name,
     option_sort_key,
     panel_heading_html,
     panel_subject_uri,
@@ -320,17 +321,8 @@ def _page_title() -> str:
     next rerun.
     """
     ont = st.session_state.get("ontology")
-    if ont is not None:
-        try:
-            name = (ont.get_ontology_metadata().get("label") or "").strip()
-        except Exception:  # noqa: BLE001 - best-effort label read; falls back to the URI
-            name = ""
-        if not name:
-            base = ont.base_uri.rstrip("#/")
-            name = base.split("/")[-1].split("#")[-1]
-        if name:
-            return f"{name} · OrionBelt"
-    return APP_NAME
+    name = ontology_display_name(ont) if ont is not None else ""
+    return f"{name} · OrionBelt" if name else APP_NAME
 
 
 def _configure_page() -> None:

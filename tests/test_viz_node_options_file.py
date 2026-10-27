@@ -176,3 +176,38 @@ def test_a_damaged_file_is_refused_whole(session, damage):
     assert st.session_state["_viz_cfg_focus_depth"] == 2
     assert not ui.viz_node_undo_available()
     assert session[-1].startswith("Could not load node-options.json")
+
+
+# --- the file's name -----------------------------------------------------------
+
+
+def _ont(label=None, base="http://example.org/demo#"):
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    ont = OntologyManager(base_uri=base)
+    if label is not None:
+        ont.set_ontology_metadata(label=label)
+    return ont
+
+
+def test_the_file_is_named_after_the_ontology():
+    """Files saved from several ontologies must not all be node-options.json:
+    they pile up as copies in Downloads, or overwrite each other on the
+    desktop, which saves to a path."""
+    assert ui.node_options_file_name(_ont()) == "demo-node-options.json"
+
+
+def test_the_ontology_s_label_comes_first_and_is_made_safe_for_a_file_name():
+    name = ui.node_options_file_name(_ont(label="Wine / Food: v2"))
+    assert name == "Wine-Food-v2-node-options.json"
+
+
+def test_a_nameless_ontology_falls_back_to_the_plain_name():
+    assert ui.node_options_file_name(_ont(label="???")) == "node-options.json"
+
+
+def test_the_tab_title_still_uses_the_same_name(session):
+    st.session_state["ontology"] = _ont(label="Wine")
+    from orionbelt_ontology_builder import app
+
+    assert app._page_title() == "Wine · OrionBelt"

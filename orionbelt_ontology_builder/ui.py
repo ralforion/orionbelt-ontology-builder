@@ -2585,6 +2585,34 @@ NODE_OPTIONS_FORMAT = "orionbelt-node-options"
 _NODE_FILE_GEN = "_viz_node_file_gen"
 
 
+def ontology_display_name(ont) -> str:
+    """What the app calls an ontology: its rdfs:label, else the last segment of
+    its base URI, else ``""``. The browser tab's title (issue #90) and the
+    names of files saved for one ontology (issue #485) both use it."""
+    try:
+        name = (ont.get_ontology_metadata().get("label") or "").strip()
+    except Exception:  # noqa: BLE001 - best-effort label read; falls back to the URI
+        name = ""
+    if not name:
+        base = ont.base_uri.rstrip("#/")
+        name = base.split("/")[-1].split("#")[-1]
+    return name
+
+
+def node_options_file_name(ont) -> str:
+    """The name a Node options file is offered under, led by the ontology's.
+
+    A file only makes sense for the ontology it was saved from, and under one
+    fixed name the files of several pile up as ``node-options (1).json`` in a
+    download folder, or overwrite each other on the desktop, which saves to a
+    path. Only letters, digits, dot, dash and underscore are kept, so the name
+    is a valid file name everywhere.
+    """
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", ontology_display_name(ont))
+    stem = stem.strip("-._")[:60].rstrip("-._")
+    return f"{stem}-node-options.json" if stem else "node-options.json"
+
+
 def node_options_file(filters: dict, focus_targets: dict, ontology_uri: str) -> str:
     """The Node options panel's state as a file to save (issue #485).
 
