@@ -274,6 +274,8 @@ from .ui import (  # noqa: F401
     viz_ontology_was_replaced,
     viz_park_focus_seeds,
     viz_rename_map,
+    viz_route_changed,
+    viz_route_key,
     viz_set_focus_seeds,
     viz_show_kind_toggled,
     viz_sync,

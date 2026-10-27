@@ -9,7 +9,11 @@ import textwrap
 import streamlit as st
 
 from ..case_picker import case_multiselect, case_selectbox
-from ..ontology_manager import PATH_MAX_VISITED, PathSearchLimitError
+from ..ontology_manager import (
+    PATH_MAX_ROUTES,
+    PATH_MAX_VISITED,
+    PathSearchLimitError,
+)
 from ..ui import (
     _FILTER_KINDS,
     _PAGE_BY_TYPE,
@@ -25,6 +29,7 @@ from ..ui import (
     VIZ_NODE_REDO_KEY,
     VIZ_NODE_UNDO_KEY,
     VIZ_PARKED_SEEDS_KEY,
+    VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
     _edge_id,
@@ -100,6 +105,8 @@ from ..ui import (
     viz_node_undo_checkpoint,
     viz_ontology_was_replaced,
     viz_rename_map,
+    viz_route_changed,
+    viz_route_key,
     viz_set_focus_seeds,
     viz_show_kind_toggled,
     viz_sync,
@@ -1747,6 +1754,10 @@ def render_visualization():
                 st.session_state.pop(_pkey, None)
 
         path_hops: list | None = None
+        # Every route listed for the pair, shortest first (issue #353);
+        # path_hops is the one picked from them.
+        path_routes: list | None = None
+        path_more_cut = False
         path_cut_short = False
         path_failed = False
         path_node_ids: list[str] = []
@@ -1814,11 +1825,21 @@ def render_visualization():
                     _cached = st.session_state.get("_viz_path_cache")
                     # Length checked as well as key: a session that outlived a
                     # change to what is cached here holds the older shape.
-                    if len(_cached or ()) == 4 and _cached[0] == _path_cache_key:
-                        path_hops, path_cut_short, path_failed = _cached[1:]
+                    if len(_cached or ()) == 5 and _cached[0] == _path_cache_key:
+                        path_routes, path_more_cut, path_cut_short, path_failed = (
+                            _cached[1:]
+                        )
                     else:
+                        # A new pair, or a changed ontology: its routes are a
+                        # new list, so the pick starts again at the shortest,
+                        # in a picker of its own (see _route_key below).
+                        st.session_state.pop(viz_route_key(), None)
+                        st.session_state.pop(VIZ_ROUTE_PICK, None)
+                        st.session_state["_viz_path_route_gen"] = (
+                            st.session_state.get("_viz_path_route_gen", 0) + 1
+                        )
                         try:
-                            path_hops = ont.find_shortest_path(
+                            path_routes, path_more_cut = ont.find_paths(
                                 _src_key,
                                 _tgt_key,
                                 kinds=_path_kinds,
@@ -1829,7 +1850,7 @@ def render_visualization():
                             # and saying they are unconnected would be a wrong
                             # answer rather than a missing one.
                             path_cut_short = True
-                            path_hops = None
+                            path_routes = None
                         except Exception as _path_error:  # noqa: BLE001 - a failed path must not break the page
                             # A path is a read-only extra; a failure here must not
                             # take the graph page down with it. But it must not be
@@ -1843,13 +1864,46 @@ def render_visualization():
                             # line on the server never arrives there.
                             log_error(_path_error, context="Shortest path search")
                             path_failed = True
-                            path_hops = None
+                            path_routes = None
                         st.session_state["_viz_path_cache"] = (
                             _path_cache_key,
-                            path_hops,
+                            path_routes,
+                            path_more_cut,
                             path_cut_short,
                             path_failed,
                         )
+
+                # Drawn whatever there is to pick from, like everything else in
+                # this panel (see the note at its top): disabled, not withheld,
+                # when there is one route or none.
+                _route_count = len(path_routes or ())
+                _route = st.radio(
+                    "Route",
+                    list(range(max(_route_count, 1))),
+                    # The pick outlives the panel being switched off and on, as
+                    # the pair does (issue #360): Streamlit drops a widget's
+                    # state on a run that does not draw it, so it is kept apart
+                    # and handed back as the default (PR #532 review).
+                    index=min(
+                        st.session_state.get(VIZ_ROUTE_PICK, 0),
+                        max(_route_count - 1, 0),
+                    ),
+                    on_change=viz_route_changed,
+                    format_func=lambda i: (
+                        f"{i + 1} · {len(path_routes[i])} hop"
+                        f"{'s' if len(path_routes[i]) != 1 else ''}"
+                        if path_routes and path_routes[i]
+                        else "—"
+                    ),
+                    key=viz_route_key(),
+                    horizontal=True,
+                    disabled=_route_count < 2,
+                    help="The shortest route first, then the next-best ones, up "
+                    f"to {PATH_MAX_ROUTES}. Routes of the same length are listed "
+                    "together; none visits an entity twice.",
+                )
+                if path_routes:
+                    path_hops = path_routes[_route or 0]
 
                 if path_hops:
                     path_node_ids, path_pairs = path_highlight(path_hops, _src_key)
@@ -1858,6 +1912,15 @@ def render_visualization():
                         f"{'s' if len(path_hops) != 1 else ''}:** "
                         + path_chain_text(path_hops, _src_key, path_labels)
                     )
+                    if path_more_cut:
+                        # The routes listed are right; it is the list that may
+                        # be short, and saying nothing would read as "there are
+                        # no other routes".
+                        _path_message += (
+                            f"\n\nThe search for more routes stopped after "
+                            f"{PATH_MAX_VISITED:,} entities, so there may be "
+                            f"others beyond the ones listed."
+                        )
                 elif path_hops == []:
                     _path_message = (
                         f"**{_path_source}** is the same entity twice. Pick two "
