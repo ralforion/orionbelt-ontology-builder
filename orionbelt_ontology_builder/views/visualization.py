@@ -30,6 +30,9 @@ from ..ui import (
     VIZ_NODE_REDO_KEY,
     VIZ_NODE_UNDO_KEY,
     VIZ_PARKED_SEEDS_KEY,
+    VIZ_PROPERTY_COLOR_PICK,
+    VIZ_PROPERTY_COLOR_VALUE,
+    VIZ_PROPERTY_SHOW_SEQ,
     VIZ_ROUTE_PICK,
     _build_name_collision_set,
     _disambiguated_name,
@@ -85,6 +88,7 @@ from ..ui import (
     path_nodes,
     picker_option_caption,
     prioritise_pinned,
+    property_colors,
     prune_reused_focus_seeds,
     reconcile_filter_selection,
     seed_filter_from_saved,
@@ -114,10 +118,13 @@ from ..ui import (
     viz_node_undo_available,
     viz_node_undo_checkpoint,
     viz_ontology_was_replaced,
+    viz_property_color_picked,
     viz_rename_map,
+    viz_reset_property_color,
     viz_route_changed,
     viz_route_key,
     viz_set_focus_seeds,
+    viz_set_property_color,
     viz_show_kind_toggled,
     viz_sparql_note,
     viz_sync,
@@ -509,6 +516,120 @@ def graph_space_css(find_row_open: bool) -> str:
     </style>"""
 
 
+def _edge_color(property_uri, default: str, label: str) -> dict:
+    """The colour arguments for an edge standing for ``property_uri``.
+
+    The property's own colour when the user gave it one (issue #160), tagged
+    with its label so the legend can name it; otherwise the edge kind's. The
+    URI goes along either way: the colours popover offers the properties the
+    graph actually draws, and reads them off the edges.
+    """
+    # A blank node (a restriction on an inverse, say) is no property one can
+    # name, and its id changes on every load, so a colour could not stay on it.
+    if not property_uri or ":" not in property_uri:
+        return {"color": default}
+    color = property_colors().get(property_uri)
+    if color is None:
+        return {"color": default, "puri": property_uri}
+    return {"color": color, "pcolor": label, "puri": property_uri}
+
+
+def _property_colors_popover():
+    """The button of the colours popover, filled in once the graph is built.
+
+    Drawn here, in the band, so it sits beside Highlight Issues; filled by
+    :func:`_fill_property_colors` below the build, because what it offers is
+    what the graph draws.
+    """
+    # One label whatever is set: a label that changed with a count of the
+    # colours closed the popover on the pass that set the first one.
+    return st.popover(
+        "Colours",
+        help="Draw a property's edges in a colour of your own.",
+    )
+
+
+def _drawn_properties(gdata) -> dict[str, str]:
+    """``{property URI: label}`` of the properties drawn as edges in ``gdata``.
+
+    The object property's own edge names it best (by its label); the other
+    kinds name it by local name, and are taken only when nothing better came.
+    """
+    try:
+        edges = json.loads((gdata or {}).get("edges") or "[]")
+    except (TypeError, ValueError):
+        return {}
+    names: dict[str, str] = {}
+    for edge in edges:
+        uri = edge.get("puri") if isinstance(edge, dict) else None
+        if not uri:
+            continue
+        label = str(edge.get("label") or uri)
+        if edge.get("ntype") == "Object Property" or uri not in names:
+            names[uri] = label
+    return names
+
+
+def _fill_property_colors(box, gdata) -> None:
+    """Give a property's edges a colour of their own (issue #160).
+
+    Every kind of edge has one colour, so two object properties, or two
+    custom relations, look alike on the graph. Offered are the properties the
+    graph draws right now, read off its edges: an object property's domain
+    and range edge, the restrictions on it, what individuals assert with it,
+    and the custom relations. A property that is not drawn was offered once,
+    and colouring it changed nothing anyone could see. The colours are a
+    display setting kept with the others, by URI, not written into the
+    ontology.
+    """
+    names = _drawn_properties(gdata)
+    options = sorted(names, key=lambda u: option_sort_key(names[u]))
+    colors = property_colors()
+    with box:
+        if not options:
+            st.caption(
+                "No property is drawn as an edge on the graph right now. Turn "
+                "on Obj Props, or show the classes at both ends of one."
+            )
+            return
+        picked = case_selectbox(
+            "Property",
+            options,
+            key=VIZ_PROPERTY_COLOR_PICK,
+            format_func=lambda u: names.get(u, u),
+            placeholder="Choose a property",
+            on_change=viz_property_color_picked,
+        )
+        st.session_state.setdefault(VIZ_PROPERTY_COLOR_VALUE, "#2196F3")
+        col_pick, col_set = st.columns([1, 1], vertical_alignment="bottom")
+        with col_pick:
+            st.color_picker("Colour", key=VIZ_PROPERTY_COLOR_VALUE)
+        with col_set:
+            st.button(
+                "Set colour",
+                key="viz_property_color_set",
+                disabled=picked is None,
+                on_click=viz_set_property_color,
+                use_container_width=True,
+            )
+        shown = [u for u in colors if u in names]
+        for uri in sorted(shown, key=lambda u: option_sort_key(names[u])):
+            col_name, col_reset = st.columns([4, 1], vertical_alignment="center")
+            col_name.markdown(
+                f'<span style="display:inline-block;width:0.9em;height:0.9em;'
+                f"border-radius:2px;vertical-align:middle;margin-right:0.4em;"
+                f'background:{colors[uri]}"></span>{html.escape(names[uri])}',
+                unsafe_allow_html=True,
+            )
+            col_reset.button(
+                "✕",
+                key=f"viz_property_color_reset_{_uid(uri)}",
+                help="Back to the colour of its kind",
+                on_click=viz_reset_property_color,
+                args=(uri,),
+            )
+
+
 def graph_fullscreen_css(dark: bool) -> str:
     """CSS for fullscreen: the graph keeps its controls, the app loses its chrome.
 
@@ -753,6 +874,9 @@ def render_visualization():
             # straight past that (see edges_are_curved). "curved" and "straight"
             # are the user overriding it (issue #425).
             "edge_curves": "auto",
+            # {property URI: "#rrggbb"}: edges for a property drawn in a colour
+            # of the user's own rather than their kind's (issue #160).
+            "property_colors": {},
         }
         # Bring back settings saved in a previous session before applying
         # defaults, so a returning user opens with their own preferences (#142).
@@ -823,6 +947,8 @@ def render_visualization():
                 'whole graph" on the canvas.',
             )
 
+        # The colours popover, if the band is open; filled below the build.
+        _colors_box = None
         if options_open:
             _cols = (
                 st.columns([1, 1, 1, 1, 1, 1, 1, 1])
@@ -945,12 +1071,19 @@ def render_visualization():
                     ),
                 )
             with col3:
-                st.checkbox(
-                    "Highlight Issues",
-                    key="viz_highlight_issues",
-                    on_change=viz_sync,
-                    args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
+                # Side by side, so the colours cost the band no extra row.
+                _issues_col, _colors_col = st.columns(
+                    [1.6, 1], vertical_alignment="center"
                 )
+                with _issues_col:
+                    st.checkbox(
+                        "Highlight Issues",
+                        key="viz_highlight_issues",
+                        on_change=viz_sync,
+                        args=("_viz_cfg_highlight_issues", "viz_highlight_issues"),
+                    )
+                with _colors_col:
+                    _colors_box = _property_colors_popover()
 
         # Read the settings from the persisted config rather than from the
         # widgets' return values: collapsed, the widgets do not render at all,
@@ -2121,8 +2254,11 @@ def render_visualization():
         # (issue #234). Without it the usual order of events defeats the whole
         # thing — the page builds and caches a graph with no target, then picking
         # one changes nothing the key can see, so no rebuild happens and the
-        # cached payload still lacks the entity that was asked for.
-        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}_{'-'.join(sparql_node_ids)}_{hash(frozenset(sparql_pairs))}"
+        # cached payload still lacks the entity that was asked for. The property
+        # colours are in it for the same reason: a colour set in the popover
+        # changed nothing the key could see, so the graph kept the old one
+        # until something else rebuilt it (issue #160).
+        graph_key = f"v{_graph_ver}_m{ont_mutation}_{show_classes}_{show_properties}_{show_data_props}_{show_annotations}_{show_individuals}_{show_ind_edges}_{show_skos}_{show_triples}_{node_spacing}_{highlight_issues}_{edge_curves}_{hash(selected_classes_key)}_{hash(selected_inds_key)}_{focus_mode}_{'-'.join(sorted(focus_seed_ids))}_{focus_depth}_{_find_id or ''}_{'-'.join(path_node_ids)}_{'-'.join(sparql_node_ids)}_{hash(frozenset(sparql_pairs))}_{hash(frozenset(property_colors().items()))}"
         if "last_graph_key" not in st.session_state:
             st.session_state.last_graph_key = None
             st.session_state.last_graph_data = None
@@ -2398,10 +2534,10 @@ def render_visualization():
                             _uid(rng_uri),
                             label=label,
                             title=title,
-                            color="#2196F3",
                             arrows="to",
                             ntype="Object Property",
                             ename=prop_node_id,
+                            **_edge_color(prop["uri"], "#2196F3", label),
                         )
 
             # Add reused-property links (link_classes) as edges. These live as
@@ -2430,10 +2566,12 @@ def render_visualization():
                                 f"\nProperty: {rest['property']}"
                                 f"\nValue: {rest['value']}"
                             ),
-                            color="#2196F3",
                             arrows="to",
                             dashes=True,
                             ntype="Restriction",
+                            **_edge_color(
+                                rest.get("property_uri"), "#2196F3", rest["property"]
+                            ),
                             ename=_edge_id(
                                 src_uri,
                                 rest.get("property_uri") or rest["property"],
@@ -2606,8 +2744,12 @@ def render_visualization():
                                     tgt_node,
                                     label=prop["property"],
                                     title=f"{prop['property']}:\n{ind['name']} → {prop['value']}",
-                                    color="#FF9800",
                                     arrows="to",
+                                    **_edge_color(
+                                        prop.get("property_uri"),
+                                        "#FF9800",
+                                        prop["property"],
+                                    ),
                                 )
 
             # Add class relations (only if both nodes exist) — URI-keyed
@@ -2679,9 +2821,11 @@ def render_visualization():
                         f"Custom relation: {rel['relation']}"
                         f"\n{rel['subject']} → {rel['object']}"
                     ),
-                    color=CUSTOM_RELATION_COLOR,
                     arrows="to",
                     ntype="Custom Relation",
+                    **_edge_color(
+                        rel["relation_uri"], CUSTOM_RELATION_COLOR, rel["relation"]
+                    ),
                     ename=_edge_id(
                         rel["subject_uri"], rel["relation_uri"], rel["object_uri"]
                     ),
@@ -3338,6 +3482,8 @@ def render_visualization():
 
         # Always display the graph component (even on rerun after selection)
         gdata = st.session_state.get("last_graph_data")
+        if _colors_box is not None:
+            _fill_property_colors(_colors_box, gdata)
         # Why the graph is smaller than the ontology, in the slot the build
         # status used. Written on every render, not only on a rebuild: the slot
         # is reserved either way (issue #189), and the reason still holds while
@@ -3537,6 +3683,11 @@ def render_visualization():
                     # re-centres only on a fresh pick (issue #144).
                     focus_node=_find_id,
                     focus_seq=st.session_state.get("_viz_find_seq", 0),
+                    # The property picked in the colours popover, and a seq
+                    # that bumps on a fresh pick: its edges are selected and
+                    # zoomed to (issue #160).
+                    show_property=st.session_state.get(VIZ_PROPERTY_COLOR_PICK),
+                    show_property_seq=st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0),
                     # On desktop the webview can't download; the component sends
                     # the PNG back for us to save instead (#86).
                     web_download=not local_store.local_persist_enabled(),

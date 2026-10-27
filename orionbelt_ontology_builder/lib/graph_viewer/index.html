@@ -341,6 +341,77 @@ function sendFindSelection(id) {
     } catch (e) {}
 }
 
+// Show where a property is drawn (issue #160): a fresh pick in the colours
+// popover selects its edges and zooms to their ends. Only a new pick does
+// (show_property_seq bumps on one), kept in sessionStorage like the Find state,
+// so a rerun or a rebuild leaves the camera where the user put it. A self-loop
+// or a single short edge would otherwise zoom in as far as vis goes.
+// Returns whether it moved the camera.
+function showPickedProperty(args, animate) {
+    var seq = args.show_property_seq || 0;
+    var done = null;
+    try { done = sessionStorage.getItem('viz_prop'); } catch (e) {}
+    if (String(seq) === done) return false;
+    try { sessionStorage.setItem('viz_prop', String(seq)); } catch (e) {}
+    var ds = network && network.body && network.body.data && network.body.data.edges;
+    if (!ds || !args.show_property) return false;
+    var ids = [], ends = {};
+    ds.forEach(function(e) {
+        if (e.puri !== args.show_property) return;
+        ids.push(e.id);
+        ends[e.from] = true;
+        ends[e.to] = true;
+    });
+    if (!ids.length) return false;
+    clearNeighbourHighlight();
+    try { network.setSelection({nodes: [], edges: ids}); } catch (e) {}
+    // setSelection fires no select event, so the details panel and the copy
+    // button are told here, as an edge click would tell them; otherwise they
+    // went on naming the node selected before.
+    var ed = ds.get(ids[0]);
+    setCopyTarget(selectionText(ed));
+    sendSelection({ntype: ed.ntype || null, ename: ed.ename || null, label: ed.label || '', title: ed.title || '', selected: true, isEdge: true});
+    // The camera is the property's now. An earlier Find pick left pinned would
+    // take it back on the next rebuild, which setting the colour is.
+    try {
+        var f = JSON.parse(sessionStorage.getItem('viz_find') || '{}') || {};
+        f.released = true;
+        sessionStorage.setItem('viz_find', JSON.stringify(f));
+    } catch (e) {}
+    // Where the camera is going is worked out first, by an instant fit, and
+    // cached as the viewport straight away: a fit fires no zoom event, so the
+    // cache still held the view before it, and Set colour pressed at once
+    // rebuilds from the cache, mid-animation or not. Saving once the animation
+    // was over came too late for that, and then saved the rebuilt view.
+    try {
+        var from = {scale: network.getScale(), position: network.getViewPosition()};
+        network.fit({nodes: Object.keys(ends), maxZoomLevel: 1.1, animation: false});
+        var to = {scale: network.getScale(), position: network.getViewPosition()};
+        holdCachedView(to);
+        if (animate) {
+            network.moveTo(from);
+            network.moveTo({
+                scale: to.scale,
+                position: to.position,
+                animation: {duration: 600, easingFunction: 'easeInOutQuad'}
+            });
+        }
+    } catch (e) {}
+    return true;
+}
+
+// Point the cached viewport (see savePositions) at `view`, keeping the cached
+// layout it belongs to. Nothing cached yet means the layout is still settling,
+// and its own save comes after.
+function holdCachedView(view) {
+    try {
+        var raw = JSON.parse(sessionStorage.getItem('viz_pos') || 'null');
+        if (!raw) return;
+        raw.view = view;
+        sessionStorage.setItem('viz_pos', JSON.stringify(raw));
+    } catch (e) {}
+}
+
 var visLoaded = false;
 var pendingArgs = null;
 var network = null;
@@ -1107,6 +1178,7 @@ function renderGraph(args) {
                     {seq: args.focus_seq, released: false, centred: !!_spin}));
             } catch (e) {}
         }
+        showPickedProperty(args, true);
         return;
     }
     lastSeq = args.seq;
@@ -1412,6 +1484,11 @@ function renderGraph(args) {
         _find.centred = true;
     }
     try { sessionStorage.setItem('viz_find', JSON.stringify(_find)); } catch (e) {}
+    // A property picked while the graph was rebuilding: shown now when the
+    // layout is final, or once physics has placed the nodes.
+    var _propPending = false;
+    if (usedSaved) showPickedProperty(args, false);
+    else _propPending = true;
     // Release the pin the moment the user takes control (click or drag), so we
     // never fight their navigation; a fresh Find pick (new seq) re-arms it.
     function _releaseFindPin() {
@@ -1491,7 +1568,12 @@ function renderGraph(args) {
                 // centring now would yank the camera back off whatever they
                 // just navigated to. Cache the viewport only once the camera
                 // animation has finished, or we'd store a mid-flight frame.
-                if (_pin && _findPinLive()) {
+                // Positions cached first: the pick points the cached view at
+                // where it is going, and needs the layout cached to do that.
+                if (_propPending) savePositions();
+                if (_propPending && showPickedProperty(args, true)) {
+                    // Cached already, by the pick.
+                } else if (_pin && _findPinLive()) {
                     try {
                         network.focus(_pin, {
                             scale: 1.1,
@@ -1581,6 +1663,26 @@ function renderGraph(args) {
             var cls = item.dashed ? 'line dashed' : 'line solid';
             edgeLegend += '<span class="' + cls + '" style="border-color:' + item.color + ';"></span> ' + item.label + ' &nbsp;';
         }
+    });
+
+    // A property given a colour of its own (issue #160) is named in the legend
+    // by that colour, once per property, after the kinds above.
+    var escapeText = function(text) {
+        var span = document.createElement('span');
+        span.textContent = text;
+        return span.innerHTML;
+    };
+    var ownColors = {};
+    edges.forEach(function(e) {
+        if (!e.pcolor) return;
+        var c = typeof e.color === 'string' ? e.color : (e.color && e.color.color) || '';
+        var key = c.toUpperCase() + '|' + e.pcolor;
+        if (c && !ownColors[key]) ownColors[key] = {color: c, label: e.pcolor};
+    });
+    Object.keys(ownColors).forEach(function(key) {
+        var item = ownColors[key];
+        edgeLegend += '<span class="line solid" style="border-color:' + item.color + ';"></span> ' +
+            escapeText(item.label) + ' &nbsp;';
     });
 
     var legendEl = document.getElementById('legend');

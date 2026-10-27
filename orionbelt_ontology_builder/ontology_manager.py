@@ -2451,6 +2451,7 @@ class OntologyManager:
                     ind_info["properties"].append(
                         {
                             "property": prop_name,
+                            "property_uri": str(pred),
                             "value": value,
                             "value_uri": str(obj) if is_ref else "",
                         }

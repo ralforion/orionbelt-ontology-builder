@@ -60,6 +60,7 @@ _VIZ_PERSIST_KEYS = (
     "path_panel",
     "find_row_open",
     "edge_curves",
+    "property_colors",
 )
 _VIZ_INT_RANGES = {
     "node_spacing": (50, 300),
@@ -1159,6 +1160,91 @@ def _apply_viz_settings(data, defaults) -> None:
             st.session_state[f"_viz_cfg_{k}"] = max(lo, min(hi, v))
         elif isinstance(default, str) and v in _VIZ_CHOICES.get(k, ()):
             st.session_state[f"_viz_cfg_{k}"] = v
+        elif k == "property_colors":
+            st.session_state[f"_viz_cfg_{k}"] = clean_property_colors(v)
+
+
+#: The most property colours kept (issue #160). They are a display setting
+#: keyed by URI, so they outlive the ontology they were picked in; past this
+#: the oldest go first, and the store the ontology's autosave shares stays
+#: small.
+PROPERTY_COLOR_MAX = 500
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+#: Widget keys of the Property colours popover on the graph page.
+VIZ_PROPERTY_COLOR_PICK = "viz_property_color_pick"
+VIZ_PROPERTY_COLOR_VALUE = "viz_property_color_value"
+VIZ_PROPERTY_SHOW_SEQ = "_viz_property_show_seq"
+
+
+def clean_property_colors(value) -> dict[str, str]:
+    """A stored ``{property URI: "#rrggbb"}`` map, minus anything else.
+
+    Also read as ``[[URI, colour], ...]``, the form it is saved in: the saved
+    settings are written with sorted keys, and a map would come back in URI
+    order rather than oldest first, which is the order the cap evicts by.
+    """
+    if isinstance(value, dict):
+        pairs = list(value.items())
+    elif isinstance(value, list):
+        pairs = [tuple(p) for p in value if isinstance(p, list | tuple) and len(p) == 2]
+    else:
+        return {}
+    clean = {
+        uri: color.lower()
+        for uri, color in pairs
+        if isinstance(uri, str)
+        and uri
+        and isinstance(color, str)
+        and _HEX_COLOR.match(color)
+    }
+    return dict(list(clean.items())[-PROPERTY_COLOR_MAX:])
+
+
+def property_colors() -> dict[str, str]:
+    """The colours the user gave properties on the graph, by property URI."""
+    return clean_property_colors(st.session_state.get("_viz_cfg_property_colors"))
+
+
+def _store_property_colors(colors: dict[str, str]) -> None:
+    st.session_state["_viz_cfg_property_colors"] = clean_property_colors(colors)
+    st.session_state["_viz_settings_dirty"] = True
+
+
+def viz_set_property_color() -> None:
+    """Give the picked property the picked colour (issue #160)."""
+    uri = st.session_state.get(VIZ_PROPERTY_COLOR_PICK)
+    color = st.session_state.get(VIZ_PROPERTY_COLOR_VALUE)
+    if not uri or not isinstance(color, str) or not _HEX_COLOR.match(color):
+        return
+    colors = property_colors()
+    # Re-inserted rather than updated, so a colour just set is the newest and
+    # the last to go when the cap is reached.
+    colors.pop(uri, None)
+    colors[uri] = color
+    _store_property_colors(colors)
+
+
+def viz_reset_property_color(uri: str) -> None:
+    """Give a property back the colour of its kind."""
+    colors = property_colors()
+    if colors.pop(uri, None) is not None:
+        _store_property_colors(colors)
+
+
+def viz_property_color_picked() -> None:
+    """Show the picked property on the graph, and its colour in the picker.
+
+    The graph selects its edges and zooms to them on a fresh pick, which the
+    bumped sequence number tells it: a property can be drawn as one loop in a
+    cluster of hundreds of nodes, and colouring what one cannot find is no use.
+    """
+    st.session_state[VIZ_PROPERTY_SHOW_SEQ] = (
+        st.session_state.get(VIZ_PROPERTY_SHOW_SEQ, 0) + 1
+    )
+    uri = st.session_state.get(VIZ_PROPERTY_COLOR_PICK)
+    current = property_colors().get(uri) if uri else None
+    if current:
+        st.session_state[VIZ_PROPERTY_COLOR_VALUE] = current
 
 
 def _viz_settings_payload() -> str:
@@ -1168,6 +1254,12 @@ def _viz_settings_payload() -> str:
         for k in _VIZ_PERSIST_KEYS
         if f"_viz_cfg_{k}" in st.session_state
     }
+    # Pairs, not a map: sort_keys would put the colours in URI order and lose
+    # which is oldest (see clean_property_colors).
+    if "property_colors" in data:
+        data["property_colors"] = [
+            list(p) for p in clean_property_colors(data["property_colors"]).items()
+        ]
     return json.dumps(data, sort_keys=True)
 
 
