@@ -318,6 +318,11 @@ _CUSTOM_CSS = """
         margin-top: 0.4rem !important;
         margin-bottom: 0.4rem !important;
     }
+    /* The logo PNG has 20px of transparent margin on the left of its 760,
+       which at the 200px it is drawn at left it 5px in from the title below. */
+    .st-key-sidebar_logo img {
+        margin-left: calc(-200px * 20 / 760) !important;
+    }
     [data-testid="stSidebar"] h1 {
         padding-top: 0 !important;
         padding-bottom: 0 !important;

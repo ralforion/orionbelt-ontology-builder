@@ -483,7 +483,8 @@ def main():
         _dark_mode = _theme_type == "dark"
     _logo_file = "ORIONBELT Logo w.png" if _dark_mode else "ORIONBELT_Logo.png"
     _logo_path = PKG_DIR / "assets" / _logo_file
-    st.sidebar.image(str(_logo_path), width=200)
+    with st.sidebar.container(key="sidebar_logo"):
+        st.image(str(_logo_path), width=200)
     st.sidebar.markdown("# Ontology Builder")
     # The company name without "d.o.o.", and as small as the version line
     # below: at the larger text sizes it wrapped onto a line of its own (issue
