@@ -2005,6 +2005,21 @@ def viz_sync(cfg_key, wid_key):
         st.session_state["_viz_settings_dirty"] = True
 
 
+def viz_focus_depth_changed() -> None:
+    """The focus depth slider moved (an ``on_change`` callback).
+
+    A Node options change like the others, so it takes an undo step first: the
+    depth is in the undo snapshot (issue #485), and a move the history did not
+    know about would otherwise be reverted by the next Undo along with the
+    change that Undo is for. The checkpoint reads the config key, which still
+    holds the old depth here, before viz_sync copies the new one in.
+    """
+    if _viz_widget_missing("viz_focus_depth"):
+        return
+    viz_node_undo_checkpoint()
+    viz_sync("_viz_cfg_focus_depth", "viz_focus_depth")
+
+
 def viz_filter_changed(kind_key, uri_by_display):
     """Persist a node filter by URI. The widget holds display labels, which gain
     a namespace tag as soon as a second entity takes the same local name —
@@ -2417,6 +2432,9 @@ def _viz_node_options_state() -> dict:
             st.session_state.get("_viz_cfg_focus_seed_ids_by_label") or {}
         ),
         "focus_mode": bool(st.session_state.get("_viz_cfg_focus_mode")),
+        # Part of the focus as much as its nodes are, and a Node options file
+        # sets it (issue #485), so an undo has to put it back too.
+        "focus_depth": st.session_state.get("_viz_cfg_focus_depth"),
     }
 
 
@@ -2427,7 +2445,13 @@ def _copy_or_none(value):
 
 def _viz_node_options_view(state: dict) -> tuple:
     """The part of a snapshot the user sees, for telling two of them apart."""
-    return (state["selected"], state["focus_seeds"], state["focus_mode"])
+    # .get: a snapshot taken before the depth was part of one has none.
+    return (
+        state["selected"],
+        state["focus_seeds"],
+        state["focus_mode"],
+        state.get("focus_depth"),
+    )
 
 
 def viz_node_undo_checkpoint() -> None:
@@ -2546,6 +2570,11 @@ def _viz_node_restore(snap: dict) -> None:
         # the checkbox's widget key. focus_mode is a persisted setting (#142).
         st.session_state["_viz_cfg_focus_mode"] = snap["focus_mode"]
         st.session_state["_viz_settings_dirty"] = True
+    depth = snap.get("focus_depth")
+    if depth is not None and depth != st.session_state.get("_viz_cfg_focus_depth"):
+        # The same way as the mode: the page copies it into the slider's key.
+        st.session_state["_viz_cfg_focus_depth"] = depth
+        st.session_state["_viz_settings_dirty"] = True
 
 
 #: What a Node options file says it is, so loading some other JSON file is
@@ -2591,6 +2620,42 @@ def node_options_file_key() -> str:
     return f"viz_node_file_{st.session_state.get(_NODE_FILE_GEN, 0)}"
 
 
+def _str_list_field(value, where: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise TypeError(f"{where} is not a list of names")
+    return value
+
+
+def _read_node_options_file(data) -> tuple[dict[str, list[str]], bool, int, list]:
+    """Check a Node options file through and through, before any of it is used.
+
+    Returns ``(shown, focus_on, depth, node_ids)``. Raises ``ValueError`` or
+    ``TypeError`` for anything that is not the shape :func:`node_options_file` writes, so a
+    damaged file is refused whole rather than applied up to the field that
+    breaks: one that set the class filter and then failed on the individuals
+    left the panel half loaded, with no undo step for it (Codex review of PR
+    #534).
+    """
+    if not isinstance(data, dict) or data.get("format") != NODE_OPTIONS_FORMAT:
+        raise ValueError("not a Node options file")
+    shown = data.get("shown", {})
+    focus = data.get("focus", {})
+    if not isinstance(shown, dict) or not isinstance(focus, dict):
+        raise TypeError("not a Node options file")
+    shown = {
+        str(key): _str_list_field(uris, f"the {key} list")
+        for key, uris in shown.items()
+    }
+    node_ids = _str_list_field(focus.get("node_ids", []), "the focus list")
+    depth = focus.get("depth", 1)
+    focus_on = focus.get("on", False)
+    if isinstance(depth, bool) or not isinstance(depth, int):
+        raise TypeError("the focus depth is not a number")
+    if not isinstance(focus_on, bool):
+        raise TypeError("the focus switch is not on or off")
+    return shown, focus_on, depth, node_ids
+
+
 def viz_load_node_options(filters: dict, focus_targets: dict, ontology_uri: str):
     """Apply a saved Node options file (an ``on_change`` callback, issue #485).
 
@@ -2605,13 +2670,9 @@ def viz_load_node_options(filters: dict, focus_targets: dict, ontology_uri: str)
     st.session_state[_NODE_FILE_GEN] = st.session_state.get(_NODE_FILE_GEN, 0) + 1
     try:
         data = json.loads(upload.getvalue().decode("utf-8"))
-        if not isinstance(data, dict) or data.get("format") != NODE_OPTIONS_FORMAT:
-            raise ValueError("not a Node options file")
-        shown = data.get("shown") or {}
-        focus = data.get("focus") or {}
-        node_ids = [str(i) for i in focus.get("node_ids") or []]
-        depth = int(focus.get("depth") or 1)
-    except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as e:
+        shown, focus_on, depth, node_ids = _read_node_options_file(data)
+    except (ValueError, TypeError) as e:
+        # UnicodeDecodeError and json's own error are ValueErrors.
         st.toast(f"Could not load {upload.name}: {e}.", icon="⚠️")
         return
     viz_node_undo_checkpoint()
@@ -2620,7 +2681,7 @@ def viz_load_node_options(filters: dict, focus_targets: dict, ontology_uri: str)
         if key not in shown:
             continue
         known = set(entry["uris"])
-        wanted = [str(u) for u in shown[key] or []]
+        wanted = shown[key]
         st.session_state[f"_viz_cfg_selected_{key}_uris"] = [
             u for u in wanted if u in known
         ]
@@ -2634,7 +2695,7 @@ def viz_load_node_options(filters: dict, focus_targets: dict, ontology_uri: str)
     viz_set_focus_seeds(seeds)
     # On only with something to focus on: focus mode with no seeds backfills an
     # arbitrary node (see viz_focus_on_path).
-    st.session_state["_viz_cfg_focus_mode"] = bool(focus.get("on") and seeds)
+    st.session_state["_viz_cfg_focus_mode"] = focus_on and bool(seeds)
     st.session_state["_viz_cfg_focus_depth"] = min(max(depth, 1), 5)
     st.session_state["_viz_settings_dirty"] = True
     note = f"Loaded {upload.name}."

@@ -119,3 +119,60 @@ def test_the_uploader_is_emptied_after_a_load(session):
     before = ui.node_options_file_key()
     _load(_saved())
     assert ui.node_options_file_key() != before
+
+
+# --- Codex review of PR #534 --------------------------------------------------
+
+
+def test_undo_puts_the_focus_depth_back(session):
+    data = json.loads(_saved())
+    data["focus"]["depth"] = 5
+    _load(json.dumps(data))
+    assert st.session_state["_viz_cfg_focus_depth"] == 5
+    ui.viz_node_undo()
+    assert st.session_state["_viz_cfg_focus_depth"] == 2
+
+
+def test_a_load_that_only_changes_the_depth_is_still_an_undo_step(session):
+    data = json.loads(_saved())
+    data["focus"]["depth"] = 4
+    _load(json.dumps(data))
+    assert ui.viz_node_undo_available()
+    ui.viz_node_undo()
+    assert st.session_state["_viz_cfg_focus_depth"] == 2
+
+
+def test_moving_the_depth_slider_is_an_undo_step_of_its_own(session):
+    """With the depth in the snapshot, a move the history did not know about
+    would be reverted by the next Undo along with what that Undo is for."""
+    st.session_state["viz_focus_depth"] = 3
+    ui.viz_focus_depth_changed()
+    assert st.session_state["_viz_cfg_focus_depth"] == 3
+    ui.viz_node_undo()
+    assert st.session_state["_viz_cfg_focus_depth"] == 2
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        {"shown": {"class": [C], "ind": 42}},
+        {"shown": {"class": [C, 7]}},
+        {"shown": [C]},
+        {"focus": {"node_ids": "cls_a"}},
+        {"focus": {"depth": "3"}},
+        {"focus": {"depth": True}},
+        {"focus": {"on": "yes"}},
+        {"focus": 1},
+    ],
+)
+def test_a_damaged_file_is_refused_whole(session, damage):
+    """Checked through before anything is applied: a file that set the class
+    filter and then broke on the individuals left the panel half loaded."""
+    data = json.loads(_saved())
+    data.update(damage)
+    _load(json.dumps(data))
+    assert st.session_state["_viz_cfg_selected_class_uris"] == [A, B]
+    assert st.session_state["_viz_cfg_focus_seeds"] == ["Class: C"]
+    assert st.session_state["_viz_cfg_focus_depth"] == 2
+    assert not ui.viz_node_undo_available()
+    assert session[-1].startswith("Could not load node-options.json")

@@ -256,6 +256,7 @@ from .ui import (  # noqa: F401
     viz_drop_focus_seeds,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_depth_changed,
     viz_focus_on_path,
     viz_focus_seeds_changed,
     viz_focus_toggle,

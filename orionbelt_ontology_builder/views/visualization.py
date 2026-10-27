@@ -95,6 +95,7 @@ from ..ui import (
     viz_clear_sparql_highlight,
     viz_filter_changed,
     viz_find_changed,
+    viz_focus_depth_changed,
     viz_focus_on_path,
     viz_focus_seeds_changed,
     viz_focus_toggle,
@@ -1484,8 +1485,7 @@ def render_visualization():
                         1,
                         5,
                         key="viz_focus_depth",
-                        on_change=viz_sync,
-                        args=("_viz_cfg_focus_depth", "viz_focus_depth"),
+                        on_change=viz_focus_depth_changed,
                         help="1 = direct neighbours only; higher pulls in further links.",
                     )
                 # Picking seeds out of a long list is slow and a focus worth
