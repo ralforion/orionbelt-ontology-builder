@@ -217,6 +217,7 @@ from .ui import (  # noqa: F401
     persist_autosave,
     persist_language_packs,
     persist_sparql_state,
+    persist_text_size,
     picker_option_caption,
     prioritise_pinned,
     prune_reused_focus_seeds,
@@ -232,12 +233,14 @@ from .ui import (  # noqa: F401
     render_restriction_editor,
     render_restriction_form,
     render_restriction_row,
+    render_text_size_sidebar,
     request_autosave_flush,
     required_selectbox,
     resolve_annotation_predicate_choice,
     resolve_picked_object,
     restore_language_packs,
     restore_sparql_state,
+    restore_text_size,
     restriction_references_class,
     restriction_takes_on_class,
     restriction_value_is_class,
@@ -250,6 +253,9 @@ from .ui import (  # noqa: F401
     show_message,
     sparql_state_changed,
     start_help_capture,
+    text_size,
+    text_size_applied,
+    text_size_changed,
     theme_is_dark,
     viz_apply_focus_click,
     viz_auto_show_new_toggled,
@@ -641,6 +647,9 @@ def main():
     # the sidebar because those fields are on three pages and in the graph
     # panel, and one pack is meant to hold for all of them.
     render_language_pack_sidebar()
+    # The app's text size (issue #387), with the language pack as the other
+    # setting that holds for every page.
+    render_text_size_sidebar()
 
     st.sidebar.divider()
 
@@ -719,7 +728,11 @@ def main():
 
     # Render selected page
     try:
-        pages[selection]()
+        # Keyed by the text size the browser reports having applied, so a new
+        # size draws the page afresh (issue #387): the tables are a canvas that
+        # reads the size once, when it is first drawn, and kept the old one.
+        with st.container(key=f"page_text_size_{text_size_applied()}"):
+            pages[selection]()
     except Exception as e:  # noqa: BLE001 - a crash in any page must not kill the app
         log_error(e, context=f"Page: {selection}")
         st.error(f"An error occurred: {e}")

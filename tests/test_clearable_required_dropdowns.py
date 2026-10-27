@@ -108,7 +108,8 @@ def test_no_form_checks_without_offering_one():
 # options were built a line earlier and passed by name: three fixed sets from
 # the engine (the restriction types, the relation types), one "All" filter, and
 # the two language-pack pickers, whose options are the packs that exist and
-# where "no pack" is not a state the Language fields can be in (issue #252).
+# where "no pack" is not a state the Language fields can be in (issue #252),
+# and the text size, which always has one (issue #387).
 ALLOWED_BY_NAME = {
     ("render_restriction_form", "Restriction Type"),
     ("_render_panel_add_restriction_form", "Restriction Type"),
@@ -116,6 +117,7 @@ ALLOWED_BY_NAME = {
     ("render_view_annotations", "Filter by Type"),
     ("render_language_pack_sidebar", "Language pack"),
     ("render_language_packs", "Pack"),
+    ("render_text_size_sidebar", "Text size"),
 }
 
 

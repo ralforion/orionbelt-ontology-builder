@@ -149,6 +149,21 @@ SPARQL_QUERY_MAX_CHARS = 20_000
 #: The page's two limits, stored alongside the query. Session keys are these
 #: names under ``_sparql_cfg_``; see ``views.sparql`` for the widgets they seed.
 SPARQL_LIMIT_KEYS = ("max_rows", "timeout_seconds")
+#: Where the app's text size is stored (issue #387): the local config file when
+#: the launcher allows disk, browser localStorage on the cloud, the same two
+#: places the language packs use.
+TEXT_SIZE_KEY = "orionbelt_text_size"
+#: Session key holding the size, in percent. Not the widget's key, which is
+#: seeded from it on every render: a late restore has to be able to write it
+#: after the widget is on the page.
+TEXT_SIZE_STATE = "_app_cfg_text_size"
+TEXT_SIZE_WIDGET = "app_text_size"
+#: The component that applies the size in the browser and reports it back.
+TEXT_SIZE_APPLY = "app_text_size_apply"
+#: The sizes offered, in percent of Streamlit's 16px root. Everything Streamlit
+#: draws is sized in rem, so the root is the one value that scales it all.
+TEXT_SIZES = (90, 100, 115, 130)
+TEXT_SIZE_DEFAULT = 100
 AUTOSAVE_DEBOUNCE_SECONDS = 2.0
 # The package directory, not this module's: assets are the package's, and a
 # module that moves into a subpackage must not take their paths with it — the
@@ -211,6 +226,14 @@ _CUSTOM_CSS = """
         height: 0 !important;
         overflow: hidden !important;
         pointer-events: none;
+    }
+    /* The text size component (issue #387) only runs a script; it has
+       nothing to show, but would still take a gap in the sidebar. */
+    [data-testid="stElementContainer"].st-key-app_text_size_apply {
+        position: absolute !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
     }
     /* Reduce margin/padding. The side gutters are Streamlit's own 80px, which
        on a wide screen is 160px the graph could be using; 2rem still keeps text
@@ -1696,6 +1719,152 @@ def render_language_pack_sidebar() -> None:
         "Annotations → Language Packs, which switches packs too.",
     )
     persist_language_packs()
+
+
+def text_size() -> int:
+    """The text size in use, in percent; the default for anything unknown."""
+    size = st.session_state.get(TEXT_SIZE_STATE, TEXT_SIZE_DEFAULT)
+    return size if size in TEXT_SIZES else TEXT_SIZE_DEFAULT
+
+
+# Sets the root font size, which every rem in Streamlit's own styles is a
+# multiple of, so text, widgets and spacing grow together. Reported back only
+# once the browser has laid the page out at the new size: the tables are a
+# canvas that reads the size once, when it is drawn, and the page is drawn
+# afresh on the report (``text_size_applied``). Redrawing on the pass that
+# sent the size raced the browser applying it.
+_TEXT_SIZE_JS = """
+export default function ({ data, setStateValue }) {
+  document.documentElement.style.setProperty("font-size", `${data.px}px`, "important");
+  if (data.applied === data.size) return;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => setStateValue("applied", data.size)),
+  );
+}
+"""
+
+
+def text_size_px(size: int) -> float:
+    """The root font size for ``size`` percent of Streamlit's 16px."""
+    return 16 * size / 100
+
+
+def text_size_applied() -> int | None:
+    """The size, in percent, the browser has reported applying, if it has."""
+    state = st.session_state.get(TEXT_SIZE_APPLY) or {}
+    applied = state.get("applied")
+    return applied if applied in TEXT_SIZES else None
+
+
+def _apply_text_size(data) -> None:
+    """Copy a stored size into the session, if it is one of the offered ones."""
+    if isinstance(data, dict):
+        data = data.get("size")
+    if isinstance(data, int) and not isinstance(data, bool) and data in TEXT_SIZES:
+        st.session_state[TEXT_SIZE_STATE] = data
+
+
+def restore_text_size() -> None:
+    """Restore the stored text size once per session (issue #387).
+
+    Mirrors :func:`restore_language_packs`, retry included: on the cloud the
+    localStorage value only arrives on a later rerun.
+    """
+    if st.session_state.get("_text_size_restored"):
+        return
+    if st.session_state.get("_text_size_dirty"):
+        st.session_state["_text_size_restored"] = True
+        return
+    if local_store.local_persist_enabled():
+        _apply_text_size(local_store.load_config().get(TEXT_SIZE_KEY))
+        st.session_state["_text_size_restored"] = True
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        st.session_state["_text_size_restored"] = True
+        return
+    saved = ls.getItem(TEXT_SIZE_KEY)
+    if isinstance(saved, dict):
+        saved = saved.get(TEXT_SIZE_KEY) or next(
+            (v for v in saved.values() if isinstance(v, str)), None
+        )
+    if isinstance(saved, str) and saved.strip():
+        try:
+            _apply_text_size(json.loads(saved))
+        except (ValueError, TypeError):
+            pass
+        st.session_state["_text_size_restored"] = True
+
+
+def persist_text_size() -> None:
+    """Save the text size after the user changed it. No-op otherwise.
+
+    Re-offered until a pass survives, as :func:`persist_sparql_state` does and
+    for the same reason; the component is keyed by the value, so the re-offers
+    are one write.
+    """
+    if not st.session_state.get("_text_size_dirty"):
+        return
+    payload = json.dumps({"size": text_size()})
+    if local_store.local_persist_enabled():
+        if payload == st.session_state.get("_text_size_saved_json"):
+            return
+        try:
+            cfg = local_store.load_config()
+            cfg[TEXT_SIZE_KEY] = json.loads(payload)
+            local_store.save_config(cfg)
+        except OSError as e:
+            log_error(e, context="Text size save")
+            return
+        st.session_state["_text_size_saved_json"] = payload
+        return
+    ls = _get_local_storage()
+    if ls is None:
+        return
+    ls.setItem(TEXT_SIZE_KEY, payload, key=f"orionbelt_text_size_set_{text_size()}")
+
+
+def text_size_changed() -> None:
+    """``on_change`` for the picker: its value becomes the size in use."""
+    size = st.session_state.get(TEXT_SIZE_WIDGET)
+    if size in TEXT_SIZES:
+        st.session_state[TEXT_SIZE_STATE] = size
+        st.session_state["_text_size_dirty"] = True
+
+
+def render_text_size_sidebar() -> None:
+    """The app-wide text size (issue #387).
+
+    Browser zoom does the same on the web, but the desktop app's webview has no
+    zoom, and a size chosen here is kept with the app's other settings. The
+    size is applied from the sidebar, as is the restore's storage read: the
+    main column above the graph must not gain or lose elements between passes
+    (issue #189). The page itself is redrawn once per new size, keyed by
+    :func:`text_size_applied` in ``app.main``.
+    """
+    restore_text_size()
+    st.session_state[TEXT_SIZE_WIDGET] = text_size()
+    st.sidebar.selectbox(
+        "Text size",
+        TEXT_SIZES,
+        format_func=lambda size: f"{size}%",
+        key=TEXT_SIZE_WIDGET,
+        on_change=text_size_changed,
+        help="The size of the app's text and controls. Kept for next time.",
+    )
+    with st.sidebar:
+        # Registered on every call, as the case picker's is: the registry
+        # belongs to the runtime, and a cached handle outlives it.
+        st.components.v2.component("orionbelt_text_size", js=_TEXT_SIZE_JS)(
+            key=TEXT_SIZE_APPLY,
+            data={
+                "size": text_size(),
+                "px": text_size_px(text_size()),
+                "applied": text_size_applied(),
+            },
+            on_applied_change=lambda: None,
+        )
+    persist_text_size()
 
 
 def _clearing_key(base: str) -> str:
