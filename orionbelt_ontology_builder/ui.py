@@ -5950,11 +5950,20 @@ def _download_or_save(label, data, file_name, mime="text/plain", key=None):
             label=label, data=data, file_name=file_name, mime=mime, key=f"dl_{_k}"
         )
         return
-    path = st.text_input(
-        "Save to file",
-        value=str(_Path.home() / "Downloads" / file_name),
-        key=f"savepath_{_k}",
-    )
+    # The default path follows the file name, which can change under a fixed
+    # key: the Node options file is named after the ontology, and loading
+    # another one kept the first one's path, so saving overwrote its file
+    # (review of PR #534). A path still at its old default moves to the new
+    # one; a path the user typed is theirs and stays.
+    default = str(_Path.home() / "Downloads" / file_name)
+    path_key, default_key = f"savepath_{_k}", f"_savepath_default_{_k}"
+    previous = st.session_state.get(default_key)
+    if path_key not in st.session_state or (
+        previous != default and st.session_state[path_key] == previous
+    ):
+        st.session_state[path_key] = default
+    st.session_state[default_key] = default
+    path = st.text_input("Save to file", key=path_key)
     save_label = label.replace("Download", "Save") if "Download" in label else label
     if st.button(f"💾 {save_label}", key=f"savebtn_{_k}"):
         try:
