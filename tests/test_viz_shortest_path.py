@@ -372,6 +372,11 @@ def test_a_path_drawn_in_full_leaves_the_graph_notice_alone():
 # --- the next-best routes (issue #353) ---------------------------------------
 
 
+def _route_key(at):
+    """The Route picker's key, which is new for every list of routes."""
+    return f"viz_path_route_{at.session_state['_viz_path_route_gen']}"
+
+
 def _two_routes():
     """A to C both through B and through E: two routes of two hops."""
     at = _render("Class: A", "Class: C")
@@ -395,7 +400,8 @@ def _ringed_labels(at):
 
 
 def test_the_routes_are_offered_shortest_first():
-    route = _two_routes().radio(key="viz_path_route")
+    at = _two_routes()
+    route = at.radio(key=_route_key(at))
     assert route.options == ["1 · 2 hops", "2 · 2 hops"]
     assert not route.disabled
     assert route.value == 0
@@ -404,7 +410,7 @@ def test_the_routes_are_offered_shortest_first():
 def test_the_highlight_follows_the_route_picked():
     at = _two_routes()
     first = _ringed_labels(at)
-    at.radio(key="viz_path_route").set_value(1).run(timeout=300)
+    at.radio(key=_route_key(at)).set_value(1).run(timeout=300)
     assert not at.exception, at.exception
     second = _ringed_labels(at)
     assert {first, second} == {frozenset("ABC"), frozenset("AEC")}
@@ -412,18 +418,20 @@ def test_the_highlight_follows_the_route_picked():
 
 def test_a_new_pair_starts_again_at_the_shortest_route():
     at = _two_routes()
-    at.radio(key="viz_path_route").set_value(1).run(timeout=300)
+    at.radio(key=_route_key(at)).set_value(1).run(timeout=300)
     at.session_state["viz_path_target"] = "Class: B"
     at.run(timeout=300)
     assert not at.exception, at.exception
-    assert at.radio(key="viz_path_route").value == 0
+    assert at.radio(key=_route_key(at)).value == 0
 
 
 def test_the_route_picker_is_drawn_but_disabled_with_one_route():
     """Drawn whatever there is to pick from, so the panel keeps its elements
     and the graph below it keeps its iframe (issue #189)."""
-    one = _render("Class: A", "Class: C").radio(key="viz_path_route")
-    none = _render("Class: A", "Class: D").radio(key="viz_path_route")
+    one_at = _render("Class: A", "Class: C")
+    none_at = _render("Class: A", "Class: D")
+    one = one_at.radio(key=_route_key(one_at))
+    none = none_at.radio(key=_route_key(none_at))
     assert one.disabled and none.disabled
     assert none.options == ["—"]
 

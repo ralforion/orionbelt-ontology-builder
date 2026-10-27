@@ -169,6 +169,18 @@ def _node_undo_buttons() -> None:
     )
 
 
+def _route_key() -> str:
+    """The widget key of the path finder's Route picker (issue #353).
+
+    A new one for every list of routes. The same key kept across a change of
+    options left the browser showing no route picked while the script went on
+    with the first, and clearing the widget's state did not reach it; a picker
+    of its own starts at the shortest route and shows it. It replaces the old
+    one in place, so nothing below it in the panel moves (issue #189).
+    """
+    return f"viz_path_route_{st.session_state.get('_viz_path_route_gen', 0)}"
+
+
 def status_bar_copy_html(text: str) -> str:
     """The copy button that sits at the end of the status bar (issue #312).
 
@@ -1828,8 +1840,12 @@ def render_visualization():
                         )
                     else:
                         # A new pair, or a changed ontology: its routes are a
-                        # new list, so the pick starts again at the shortest.
-                        st.session_state.pop("viz_path_route", None)
+                        # new list, so the pick starts again at the shortest,
+                        # in a picker of its own (see _route_key below).
+                        st.session_state.pop(_route_key(), None)
+                        st.session_state["_viz_path_route_gen"] = (
+                            st.session_state.get("_viz_path_route_gen", 0) + 1
+                        )
                         try:
                             path_routes, path_more_cut = ont.find_paths(
                                 _src_key,
@@ -1869,8 +1885,6 @@ def render_visualization():
                 # this panel (see the note at its top): disabled, not withheld,
                 # when there is one route or none.
                 _route_count = len(path_routes or ())
-                if st.session_state.get("viz_path_route", 0) >= max(_route_count, 1):
-                    st.session_state.pop("viz_path_route", None)
                 _route = st.radio(
                     "Route",
                     list(range(max(_route_count, 1))),
@@ -1880,7 +1894,7 @@ def render_visualization():
                         if path_routes and path_routes[i]
                         else "—"
                     ),
-                    key="viz_path_route",
+                    key=_route_key(),
                     horizontal=True,
                     disabled=_route_count < 2,
                     help="The shortest route first, then the next-best ones, up "
