@@ -293,6 +293,57 @@ def test_a_path_through_a_full_focus_stays_within_the_cap(patch_ui):
     assert len(_highlighted_edges(edges)) == 2
 
 
+def _focus_on(at, seeds, depth=1, find=None, add=()):
+    """Rerun ``at`` focused on ``seeds``, after adding ``(name, parent)``
+    classes, with ``find`` picked in Find and centre."""
+    for name, parent in add:
+        at.session_state.ontology.add_class(name, parent=parent)
+    at.session_state["_viz_cfg_focus_mode"] = True
+    at.session_state["_viz_cfg_focus_seeds"] = list(seeds)
+    at.session_state["_viz_cfg_focus_depth"] = depth
+    if find:
+        at.session_state["viz_find_entity"] = find
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    return {n["label"] for n in _graph(at)[0]}
+
+
+def test_a_find_walk_runs_on_past_the_path():
+    """The path is in the keep set to be counted, not because a walk reached
+    it, so it must not stop the Find walk: F is two hops from E, through C,
+    which is on the path (Codex review of PR #531)."""
+    labels = _focus_on(
+        _render("Class: A", "Class: C"),
+        ["Class: D"],
+        depth=2,
+        find="Class: E",
+        add=[("E", "C"), ("F", "C")],
+    )
+    assert {"A", "B", "C", "D", "E", "F"} <= labels
+
+
+def test_a_node_on_the_path_and_in_the_focus_is_counted_once(patch_ui):
+    """Focused on A, which is on the path: A, B and C take three of four, and
+    the fourth goes to one of A's other neighbours rather than to nothing
+    (Codex review of PR #531)."""
+    patch_ui("GRAPH_MAX_NODES", 4)
+    labels = _focus_on(
+        _render("Class: A", "Class: C"),
+        ["Class: A"],
+        add=[("E", "A"), ("F", "A")],
+    )
+    assert {"A", "B", "C"} <= labels
+    assert len(labels) == 4
+
+
+def test_a_path_that_fills_the_cap_leaves_the_find_target_its_node(patch_ui):
+    """Find and centre has to have a node to centre on, whatever the path
+    takes (Codex review of PR #531)."""
+    patch_ui("GRAPH_MAX_NODES", 3)
+    labels = _focus_on(_render("Class: A", "Class: C"), ["Class: D"], find="Class: D")
+    assert {"A", "B", "C", "D"} <= labels
+
+
 def test_a_focus_keeps_its_own_advice_when_the_path_is_half_drawn(patch_ui):
     """The path line replaces the generic cap line and nothing else. The focus
     messages are sharper — one of them explains an empty canvas — and their
