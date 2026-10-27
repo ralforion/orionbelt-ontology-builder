@@ -7,6 +7,7 @@ import pytest
 from ontology_manager import (
     PATH_EDGE_KINDS,
     PATH_ENTITY_KINDS,
+    PATH_MAX_VISITED,
     OntologyManager,
     PathSearchLimitError,
     bfs_path,
@@ -249,6 +250,34 @@ def test_a_budget_hit_on_a_later_route_keeps_what_was_listed(monkeypatch):
     routes, cut = engine.k_shortest_paths(SQUARE, "a", "d")
     assert _chains(routes) == [["a", "b", "d"]]
     assert cut
+
+
+def test_the_later_routes_share_one_budget():
+    """Not a fresh allowance per search: a long route costs a search per step
+    for the next, which ran for seconds on a large graph (PR #532 review).
+    Exhausted, the list ends at the routes already taken."""
+    routes, cut = k_shortest_paths(SQUARE, "a", "d", alternatives_budget=2)
+    assert _chains(routes) == [["a", "b", "d"]]
+    assert cut
+
+
+def test_a_long_route_does_not_cost_its_length_squared():
+    """Every step used to slice and compare the whole route; a 50,000-step
+    chain ran past 12 seconds before any search did (PR #532 review). Built up
+    step by step it is one pass, well under a tenth of a second; the bound
+    leaves room for a slow runner and still fails the quadratic version."""
+    import time
+
+    n = PATH_MAX_VISITED
+    chain = {i: {} for i in range(n)}
+    for i in range(n - 1):
+        chain[i][i + 1] = ("via", True)
+        chain[i + 1][i] = ("via", False)
+    started = time.perf_counter()
+    routes, cut = k_shortest_paths(chain, 0, n - 1, max_visited=n + 1)
+    assert time.perf_counter() - started < 3
+    assert [len(route) for route in routes] == [n - 1]
+    assert not cut
 
 
 def test_the_manager_lists_routes_over_the_ontology(path_om):

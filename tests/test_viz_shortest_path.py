@@ -425,6 +425,22 @@ def test_a_new_pair_starts_again_at_the_shortest_route():
     assert at.radio(key=_route_key(at)).value == 0
 
 
+def test_the_route_picked_survives_the_panel_being_switched_off_and_on():
+    """Streamlit drops a widget's state on a run that does not draw it, so the
+    pick went back to route 1 with the same pair and ontology (PR #532
+    review). Kept apart, the way the pair is (issue #360)."""
+    at = _two_routes()
+    at.radio(key=_route_key(at)).set_value(1).run(timeout=300)
+    picked = _ringed_labels(at)
+    at.session_state["_viz_cfg_path_panel"] = False
+    at.run(timeout=300)
+    at.session_state["_viz_cfg_path_panel"] = True
+    at.run(timeout=300)
+    assert not at.exception, at.exception
+    assert at.radio(key=_route_key(at)).value == 1
+    assert _ringed_labels(at) == picked
+
+
 def test_the_route_picker_is_drawn_but_disabled_with_one_route():
     """Drawn whatever there is to pick from, so the panel keeps its elements
     and the graph below it keeps its iframe (issue #189)."""

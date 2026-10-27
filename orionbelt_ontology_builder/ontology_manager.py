@@ -13,6 +13,7 @@ import threading
 import weakref
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
@@ -163,6 +164,14 @@ class PathSearchLimitError(RuntimeError):
 #: the one before it, so this stays small.
 PATH_MAX_ROUTES = 5
 
+#: How many entities the searches for the routes after the first may settle
+#: between them. One budget for all of them, not one each: a route of h steps
+#: costs up to h searches for the next, so a fresh allowance per search let a
+#: long route over a large graph run for many seconds (PR #532 review). Shared,
+#: it holds the whole list to a few times the cost of the first route, and a
+#: count rather than a clock gives the same list on every render.
+PATH_ALTERNATIVES_BUDGET = 10 * PATH_MAX_VISITED
+
 _PathNode = Any
 _Adjacency = dict[_PathNode, dict[_PathNode, tuple[str, bool]]]
 
@@ -172,8 +181,9 @@ def _bfs_chain(
     source: _PathNode,
     target: _PathNode,
     max_visited: int,
-    banned_nodes: frozenset = frozenset(),
-    banned_links: frozenset = frozenset(),
+    banned_nodes: AbstractSet[_PathNode] = frozenset(),
+    banned_links: AbstractSet[frozenset] = frozenset(),
+    shared: list[int] | None = None,
 ) -> list[_PathNode] | None:
     """The entities along a shortest route, ``source`` first, or ``None``.
 
@@ -182,33 +192,43 @@ def _bfs_chain(
     undirected) never crossed, which is how :func:`k_shortest_paths` asks for a
     route that leaves the ones it already has. Raises
     :class:`PathSearchLimitError` past ``max_visited`` settled entities.
+
+    ``shared`` is a budget several searches draw on, as a one-item list: the
+    search also stops at what is left of it, and takes what it settled out of
+    it, whether or not it got there.
     """
+    if shared is not None:
+        max_visited = min(max_visited, shared[0])
     came_from: dict[_PathNode, _PathNode] = {}
     seen = {source}
     queue = deque([source])
-    while queue:
-        if len(seen) > max_visited:
-            raise PathSearchLimitError(
-                f"gave up after settling more than {max_visited} entities"
-            )
-        node = queue.popleft()
-        for neighbour in sorted(adjacency.get(node, {})):
-            if (
-                neighbour in seen
-                or neighbour in banned_nodes
-                or frozenset((node, neighbour)) in banned_links
-            ):
-                continue
-            seen.add(neighbour)
-            came_from[neighbour] = node
-            if neighbour == target:
-                chain = [target]
-                while chain[-1] != source:
-                    chain.append(came_from[chain[-1]])
-                chain.reverse()
-                return chain
-            queue.append(neighbour)
-    return None
+    try:
+        while queue:
+            if len(seen) > max_visited:
+                raise PathSearchLimitError(
+                    f"gave up after settling more than {max_visited} entities"
+                )
+            node = queue.popleft()
+            for neighbour in sorted(adjacency.get(node, {})):
+                if (
+                    neighbour in seen
+                    or neighbour in banned_nodes
+                    or frozenset((node, neighbour)) in banned_links
+                ):
+                    continue
+                seen.add(neighbour)
+                came_from[neighbour] = node
+                if neighbour == target:
+                    chain = [target]
+                    while chain[-1] != source:
+                        chain.append(came_from[chain[-1]])
+                    chain.reverse()
+                    return chain
+                queue.append(neighbour)
+        return None
+    finally:
+        if shared is not None:
+            shared[0] -= len(seen)
 
 
 def _chain_hops(adjacency: _Adjacency, chain: list[_PathNode]) -> list[dict[str, Any]]:
@@ -272,6 +292,7 @@ def k_shortest_paths(
     target: _PathNode,
     k: int = PATH_MAX_ROUTES,
     max_visited: int = PATH_MAX_VISITED,
+    alternatives_budget: int = PATH_ALTERNATIVES_BUDGET,
 ) -> tuple[list[list[dict[str, Any]]] | None, bool]:
     """Up to ``k`` routes from ``source`` to ``target``, shortest first.
 
@@ -283,8 +304,10 @@ def k_shortest_paths(
     Returns ``(routes, cut_short)``. ``routes`` is ``None`` when the two are
     not connected and ``[[]]`` when they are the same entity, as for
     :func:`bfs_path`. A budget hit on the first route raises
-    :class:`PathSearchLimitError`, as there; one hit while looking for a later
-    route ends the list there instead, with ``cut_short`` set. What was listed
+    :class:`PathSearchLimitError`, as there. The searches for the later routes
+    share one budget, ``alternatives_budget`` settled entities between them;
+    running out of it, or of ``max_visited`` in any one of them, ends the list
+    there instead, with ``cut_short`` set. What was listed
     by then is still right: a route is only taken once every search that could
     have found a shorter one has finished.
     """
@@ -293,29 +316,43 @@ def k_shortest_paths(
         return (None if first is None else [first]), False
     found = [[source, *(hop["target"] for hop in first)]]
     candidates: set[tuple[_PathNode, ...]] = set()
+    shared = [alternatives_budget]
     while len(found) < k:
         last = found[-1]
         try:
-            for spur_at in range(len(last) - 1):
-                root = last[: spur_at + 1]
+            # Built up a step at a time rather than sliced and compared whole
+            # at every step, which made a long route quadratic in its length
+            # before a single search ran (PR #532 review): the root behind the
+            # spur entity, and the listed routes that share it.
+            root: set[_PathNode] = set()
+            sharing = found
+            for spur_at, spur_node in enumerate(last[:-1]):
+                sharing = [
+                    route
+                    for route in sharing
+                    if len(route) > spur_at + 1 and route[spur_at] == spur_node
+                ]
                 # Leave the root by a link no listed route with the same root
                 # took, and without going back through the root itself, so the
                 # route found is new and visits no entity twice.
-                banned_links = frozenset(
-                    frozenset((route[spur_at], route[spur_at + 1]))
-                    for route in found
-                    if route[: spur_at + 1] == root
-                )
                 spur = _bfs_chain(
                     adjacency,
-                    root[-1],
+                    spur_node,
                     target,
                     max_visited,
-                    frozenset(root[:-1]),
-                    banned_links,
+                    root,
+                    frozenset(
+                        frozenset((route[spur_at], route[spur_at + 1]))
+                        for route in sharing
+                    ),
+                    shared,
                 )
                 if spur is not None:
-                    candidates.add(tuple(root[:-1] + spur))
+                    candidates.add((*last[:spur_at], *spur))
+                    # Putting the route together is work too, and on a long
+                    # one it is most of the work, so it is charged as well.
+                    shared[0] -= spur_at
+                root.add(spur_node)
         except PathSearchLimitError:
             return [_chain_hops(adjacency, route) for route in found], True
         candidates -= {tuple(route) for route in found}

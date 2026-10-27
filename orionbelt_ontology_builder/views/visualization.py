@@ -181,6 +181,15 @@ def _route_key() -> str:
     return f"viz_path_route_{st.session_state.get('_viz_path_route_gen', 0)}"
 
 
+#: The route picked in the path finder, kept apart from the picker's own state
+#: (see the Route picker on the Visualization page).
+_ROUTE_PICK = "_viz_path_route_pick"
+
+
+def _keep_route_pick() -> None:
+    st.session_state[_ROUTE_PICK] = st.session_state.get(_route_key(), 0)
+
+
 def status_bar_copy_html(text: str) -> str:
     """The copy button that sits at the end of the status bar (issue #312).
 
@@ -1843,6 +1852,7 @@ def render_visualization():
                         # new list, so the pick starts again at the shortest,
                         # in a picker of its own (see _route_key below).
                         st.session_state.pop(_route_key(), None)
+                        st.session_state.pop(_ROUTE_PICK, None)
                         st.session_state["_viz_path_route_gen"] = (
                             st.session_state.get("_viz_path_route_gen", 0) + 1
                         )
@@ -1888,6 +1898,15 @@ def render_visualization():
                 _route = st.radio(
                     "Route",
                     list(range(max(_route_count, 1))),
+                    # The pick outlives the panel being switched off and on, as
+                    # the pair does (issue #360): Streamlit drops a widget's
+                    # state on a run that does not draw it, so it is kept apart
+                    # and handed back as the default (PR #532 review).
+                    index=min(
+                        st.session_state.get(_ROUTE_PICK, 0),
+                        max(_route_count - 1, 0),
+                    ),
+                    on_change=_keep_route_pick,
                     format_func=lambda i: (
                         f"{i + 1} · {len(path_routes[i])} hop"
                         f"{'s' if len(path_routes[i]) != 1 else ''}"
