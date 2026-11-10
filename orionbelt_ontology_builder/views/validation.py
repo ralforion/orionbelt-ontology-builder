@@ -118,6 +118,12 @@ def render_validation():
         _render_reasoning(ont)
 
 
+#: From this many triples the Reasoning tab says a run may take minutes.
+#: owlrl's time grows faster than the graph: RDFS took 8 s at 8.5k triples
+#: and 160 s at 43k, measured with scripts/bench_large.py.
+REASONING_SLOW_TRIPLES = 20_000
+
+
 def _cancel_reasoning_cb() -> None:
     """Callback: the click has already stopped the run, and the worker with it
     (see :func:`~..reasoning.close_in_worker`); leave word for this run to
@@ -192,6 +198,12 @@ def _render_reasoning(ont) -> None:
 
     current_triples = len(ont.graph)
     st.write(f"Current triple count: {current_triples}")
+    if current_triples >= REASONING_SLOW_TRIPLES:
+        st.warning(
+            f"At {current_triples:,} triples a run can take many minutes: "
+            "RDFS took about 8 seconds at 8,500 triples and over two and a half "
+            "minutes at 43,000. OWL-RL takes longer than RDFS."
+        )
     minutes = REASONING_DEADLINE_SECONDS / 60
     st.caption(
         f"Runs in a separate process for at most {minutes:g} minutes. "

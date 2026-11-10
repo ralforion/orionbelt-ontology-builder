@@ -391,6 +391,52 @@ def bulk_annotation_updates(frame, uris_by_name):
     return updates, ambiguous
 
 
+#: Above this many resources the Bulk Edit table is built only for the ones a
+#: filter names. Building it reads every resource's annotations, and the grid
+#: sends every row to the browser: at 65k resources that was 2 s on every
+#: rerun and 118k rows.
+BULK_EDIT_MAX_RESOURCES = 2_000
+
+
+def _bulk_edit_resources(all_resources: list[dict]) -> list[dict]:
+    """The resources whose annotations the Bulk Edit table shows.
+
+    All of them up to :data:`BULK_EDIT_MAX_RESOURCES`. Past that, the ones
+    whose name or label contains what the filter holds, at most that many;
+    none until something is typed. Rows only ever act when marked ``add`` or
+    ``delete``, so editing part of the annotations leaves the rest alone, and
+    a row added by hand may still name any resource.
+    """
+    if len(all_resources) <= BULK_EDIT_MAX_RESOURCES:
+        return all_resources
+    needle = st.text_input(
+        "Resources whose name or label contains",
+        key="bulk_annotations_filter",
+        help=f"{len(all_resources):,} resources are too many to edit at once. "
+        "The table shows the annotations of the ones that match.",
+    )
+    query = needle.strip().lower()
+    if not query:
+        st.info(
+            f"{len(all_resources):,} resources. Type part of a name or label to "
+            "edit their annotations, or add rows for any resource below."
+        )
+        return []
+    matches = [
+        res
+        for res in all_resources
+        if query in res["name"].lower() or query in (res.get("label") or "").lower()
+    ]
+    if len(matches) > BULK_EDIT_MAX_RESOURCES:
+        st.caption(
+            f"{len(matches):,} resources match; the first "
+            f"{BULK_EDIT_MAX_RESOURCES:,} are shown. Narrow the filter to reach "
+            "the rest."
+        )
+        return matches[:BULK_EDIT_MAX_RESOURCES]
+    return matches
+
+
 def _render_stray_annotation_repair(ont, resource_uri, resource_name):
     """Offer to move annotations an older version put on the wrong subject.
 
@@ -662,7 +708,7 @@ def render_annotations():
 
         # Build initial data from existing annotations
         annotation_data = []
-        for res in all_resources:
+        for res in _bulk_edit_resources(all_resources):
             annots = ont.get_annotations(res.get("uri") or res["name"])
             for a in annots:
                 annotation_data.append(

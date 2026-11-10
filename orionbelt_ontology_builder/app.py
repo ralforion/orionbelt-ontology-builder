@@ -50,6 +50,7 @@ from .ui import (  # noqa: F401
     LANG_PACK_SIDEBAR_KEY,
     LANG_PACK_TAB_KEY,
     LANG_PACKS_KEY,
+    LARGE_ONTOLOGY_TRIPLES,
     LIST_PAGE_SIZE,
     PATH_HIGHLIGHT_BORDER,
     PATH_HIGHLIGHT_COLOR,
@@ -678,6 +679,11 @@ def main():
         _stat_lines.append(f"🏷️ SKOS Concepts: {stats['concepts']}")
     _stat_lines.append(f"📊 Triples: {stats['content_triples']}")
     st.sidebar.markdown("  \n".join(_stat_lines))
+    if stats["total_triples"] >= LARGE_ONTOLOGY_TRIPLES:
+        st.sidebar.caption(
+            f"Large ontology ({stats['total_triples']:,} triples): some views "
+            "show part of it at a time, and reasoning can take many minutes."
+        )
 
     # Say what the app is, but only to someone who has nothing loaded yet. The
     # name otherwise lives in the sidebar and the tab title, and a permanent

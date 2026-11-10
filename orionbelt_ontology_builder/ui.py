@@ -45,6 +45,12 @@ AUTOSAVE_MAX_BYTES = 4_000_000
 #: _still_too_big_for_localstorage). The backstop for what that estimate does
 #: not see.
 AUTOSAVE_OVERSIZED_RECHECK_SECONDS = 300
+
+#: From this many triples the sidebar says the ontology is large. The views
+#: that would otherwise put all of a large ontology on screen at once, and
+#: the Reasoning tab's warning, have thresholds of their own, set by what
+#: they do, and act well below this.
+LARGE_ONTOLOGY_TRIPLES = 100_000
 VIZ_SETTINGS_KEY = "orionbelt_viz_settings"
 _VIZ_PERSIST_KEYS = (
     "show_classes",
@@ -7625,7 +7631,9 @@ CLASS_TREE_MAX_LINES = 20_000
 def build_class_hierarchy_text(classes):
     """Render the class list as an indented subClassOf tree.
 
-    ``classes`` is the list returned by ``OntologyManager.get_classes()``.
+    ``classes`` is the list returned by ``OntologyManager.get_classes()``, or
+    any list of nodes shaped like it (``name``, ``label``, ``parents``,
+    ``children``): the SKOS page draws its concept hierarchy with it too.
 
     The traversal is iterative rather than recursive so a very deep hierarchy
     can't overflow the call stack and raise "maximum recursion depth exceeded"

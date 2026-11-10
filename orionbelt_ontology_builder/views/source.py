@@ -2,32 +2,45 @@
 
 import streamlit as st
 
-#: Above this many characters of Turtle the page waits for a click before
-#: rendering. The serialization is memoised on the graph revision, so what a
-#: rerun then pays for is ``st.code`` shipping and highlighting the whole text
-#: again, and at a megabyte that is what the reader waits on (issue #437).
-SOURCE_AUTO_RENDER_MAX_CHARS = 1_000_000
+#: The revision token the source was last generated for (see
+#: ``OntologyManager.revision_token``).
+_GENERATED = "_source_generated_for"
 
 
 def render_source():
-    """Render the source view page."""
+    """Render the source view page.
+
+    Visiting the page writes nothing. The Turtle is generated on request,
+    because at 213k triples writing it takes 2.5 s and showing it ships
+    megabytes to the browser, and a visit that only wanted a look at the
+    page should not wait for that. Once generated it is shown again on every
+    visit while the ontology is unchanged, from the serialization the engine
+    keeps for that revision. After an edit it waits to be generated again
+    rather than being rewritten on its own.
+    """
     st.header("Source (Turtle)")
     ont = st.session_state.ontology
+    token = ont.revision_token()
+    generated_for = st.session_state.get(_GENERATED)
+
+    if generated_for != token:
+        triples = len(ont.graph)
+        if generated_for is None:
+            st.caption(f"{triples:,} triples. The source is written when you ask.")
+            label = "Generate source"
+        else:
+            st.caption(
+                f"{triples:,} triples. The ontology changed since the source "
+                "was generated."
+            )
+            label = "Regenerate source"
+        if not st.button(label, key="btn_source_generate"):
+            return
+        st.session_state[_GENERATED] = token
+
     try:
         turtle_src = ont.export_to_string(format="turtle")
     except Exception as e:  # noqa: BLE001 - serialization failure must show as a message
         st.error(f"Error serializing ontology: {e}")
         return
-    if len(turtle_src) > SOURCE_AUTO_RENDER_MAX_CHARS and not st.session_state.get(
-        "_source_show_large"
-    ):
-        st.caption(
-            f"{len(turtle_src) / 1_000_000:.1f} MB, "
-            f"{turtle_src.count(chr(10)) + 1:,} lines. "
-            "A source this large takes a moment to show."
-        )
-        if st.button("Show source", key="btn_source_show"):
-            st.session_state["_source_show_large"] = True
-        else:
-            return
     st.code(turtle_src, language="turtle", line_numbers=True)
