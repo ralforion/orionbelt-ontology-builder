@@ -32,7 +32,7 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
-from .reasoning import REASONING_DEADLINE_SECONDS, close_in_worker
+from .reasoning import REASONING_DEADLINE_SECONDS, ClosureChange, close_in_worker
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +580,8 @@ class _JournalledMemory(Memory):
     def __init__(self, journal: _GraphJournal, identifier: BNode) -> None:
         super().__init__(identifier=identifier)
         self._journal = journal
+        #: See ``OntologyManager.removed_bytes``.
+        self.removed_bytes = 0
         self._ns_by_prefix: dict[str, URIRef] = {}
         self._prefix_by_ns: dict[URIRef, str] = {}
         self._explicit: set[str] = set()
@@ -611,6 +613,7 @@ class _JournalledMemory(Memory):
             removed = list(self._own_triples(triple_pattern))
         super().remove(triple_pattern, context)
         for triple in removed:
+            self.removed_bytes += _removal_size_bound(triple)
             self._journal.record(_TripleChange(False, triple))
 
     # -- prefix bindings ----------------------------------------------------
@@ -676,6 +679,16 @@ class _JournalledMemory(Memory):
 
     def namespaces(self) -> Iterator[tuple[str, URIRef]]:
         yield from self._ns_by_prefix.items()
+
+
+def _removal_size_bound(triple: _Triple) -> int:
+    """More than removing ``triple`` can take off a serialization of its graph.
+
+    Its terms in full, as N-Triples writes them in UTF-8, and then the same
+    again for what can go with it: a prefix declaration only it used, or a
+    blank node label another statement no longer needs. Plus the separators.
+    """
+    return 2 * sum(len(term.n3().encode("utf-8")) for term in triple) + 16
 
 
 def _cached_on_revision[**P, R](method: Callable[P, R]) -> Callable[P, R]:
@@ -758,6 +771,22 @@ class OntologyManager:
         derived state on it the way the listings here do (issue #437).
         """
         return self._journal.revision
+
+    @property
+    def removed_bytes(self) -> int:
+        """An upper bound on how much the removals from this graph have
+        shortened any serialization of it.
+
+        It starts at 0 with each new graph (a load, an import that replaces)
+        and only grows, by a generous bound per removed triple, a changed
+        literal included. A caller that knows how big the graph serialized
+        to once can then tell that it is still too big without serializing
+        it again, the way the browser autosave does. What it does not see:
+        a new prefix binding, which shortens every name in its namespace,
+        and the rare addition that lets a serializer write something
+        shorter (the last link of an RDF list, written as ``( ... )``).
+        """
+        return self._store.removed_bytes
 
     def _new_graph(self) -> Graph:
         identifier = BNode()
@@ -8083,6 +8112,55 @@ class OntologyManager:
         """
         return reason_to_fixpoint(self.graph, profile, progress)
 
+    def infer_in_worker(
+        self,
+        profile: str = "rdfs",
+        progress: Callable[[int, int], None] | None = None,
+        deadline_s: float = REASONING_DEADLINE_SECONDS,
+    ) -> ClosureChange:
+        """What :meth:`apply_reasoning` would change, worked out in a worker.
+
+        The graph is not touched. The worker reasons over a copy and sends
+        back the triples the closure added and removed, for
+        :meth:`apply_closure_change` to apply, so a caller can settle what it
+        must before the ontology changes. Raises
+        :class:`~.reasoning.ReasoningTimeout` when ``deadline_s`` passes,
+        :class:`~.reasoning.ReasoningFailed` when the worker stops without a
+        result, and whatever ``progress`` raises (see
+        :func:`~.reasoning.close_in_worker`).
+        """
+        if profile not in REASONING_PROFILES:
+            return ClosureChange(added=[], removed=[])
+        return close_in_worker(
+            self.graph, profile, deadline_s=deadline_s, progress=progress
+        )
+
+    def apply_closure_change(self, change: ClosureChange) -> int:
+        """Apply what :meth:`infer_in_worker` found, all of it or none of it.
+
+        Returns the net number of triples added. Should anything raise part
+        way, the triples applied so far are taken back before it propagates,
+        so the graph is never left half reasoned over. The closure's added
+        triples are new to the graph and its removed ones are in it, which is
+        what makes the plain reversal exact.
+        """
+        applied: list[tuple[bool, _Triple]] = []
+        try:
+            for triple in change.removed:
+                self.graph.remove(triple)
+                applied.append((False, triple))
+            for triple in change.added:
+                self.graph.add(triple)
+                applied.append((True, triple))
+        except BaseException:
+            for was_added, triple in reversed(applied):
+                if was_added:
+                    self.graph.remove(triple)
+                else:
+                    self.graph.add(triple)
+            raise
+        return len(change.added) - len(change.removed)
+
     def apply_reasoning_in_worker(
         self,
         profile: str = "rdfs",
@@ -8091,23 +8169,12 @@ class OntologyManager:
     ) -> int:
         """:meth:`apply_reasoning`, with the closure run in a worker process.
 
-        The worker reasons over a copy and sends back only what changed, which
-        is applied here, so the undo history records it like any other edit.
-        Raises :class:`~.reasoning.ReasoningTimeout` when ``deadline_s``
-        passes and :class:`~.reasoning.ReasoningFailed` when the worker stops
-        without a result; the graph is left as it was in both cases, and when
-        ``progress`` raises (see :func:`~.reasoning.close_in_worker`).
+        :meth:`infer_in_worker` and then :meth:`apply_closure_change`; the
+        graph is left as it was when the first raises.
         """
-        if profile not in REASONING_PROFILES:
-            return 0
-        change = close_in_worker(
-            self.graph, profile, deadline_s=deadline_s, progress=progress
+        return self.apply_closure_change(
+            self.infer_in_worker(profile, progress=progress, deadline_s=deadline_s)
         )
-        for triple in change.removed:
-            self.graph.remove(triple)
-        for triple in change.added:
-            self.graph.add(triple)
-        return len(change.added) - len(change.removed)
 
     # ==================== PATH SEARCH ====================
 

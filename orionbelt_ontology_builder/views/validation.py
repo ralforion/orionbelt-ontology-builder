@@ -42,6 +42,7 @@ from ..ui import (
     QUALITY_CONFIGS_STATE,
     _download_or_save,
     _uid,
+    note_mutation,
     persist_quality_configs,
     request_autosave_flush,
     restore_quality_configs,
@@ -124,6 +125,53 @@ def _cancel_reasoning_cb() -> None:
     st.session_state["_reasoning_cancelled"] = True
 
 
+def _commit_reasoning(ont, change) -> int:
+    """Apply a finished closure as one undo step, in an order a click cannot
+    break.
+
+    Streamlit stops a script the user has moved on from at its next Streamlit
+    call, and reading or writing ``st.session_state`` is one, not only drawing
+    an element. So everything that touches the session comes first, while
+    being stopped still leaves the ontology as it was: the undo manager is
+    looked up, the graph's revision is noted for :func:`_cancel_message` to
+    compare against, and the counters that make autosave and the caches look
+    again are moved (harmless if the change then does not happen). After that,
+    the change and its undo step, with no Streamlit call between them.
+    """
+    undo = st.session_state.get("undo_manager")
+    st.session_state["_reasoning_base"] = (
+        str(ont.graph.identifier),
+        ont.revision,
+        len(ont.graph),
+    )
+    note_mutation()
+    request_autosave_flush()
+    added = ont.apply_closure_change(change)
+    if undo is not None:
+        undo.checkpoint("Apply reasoning")
+    return added
+
+
+def _cancel_message(ont) -> tuple[str, str] | None:
+    """What to say after a Cancel click stopped a run, or None if none did.
+
+    A click that arrives once the result is being applied cannot stop that
+    (see :func:`_commit_reasoning`), and the revision noted before applying
+    tells the two cases apart.
+    """
+    if not st.session_state.pop("_reasoning_cancelled", False):
+        return None
+    base = st.session_state.pop("_reasoning_base", None)
+    if base is None or base[:2] == (str(ont.graph.identifier), ont.revision):
+        return "Reasoning was cancelled. The ontology was not changed.", "info"
+    added = len(ont.graph) - base[2]
+    text = (
+        "Reasoning had already finished when Cancel took effect: "
+        f"{added} triples were added. Undo takes them back."
+    )
+    return text, "warning"
+
+
 def _render_reasoning(ont) -> None:
     st.subheader("Apply Reasoning")
 
@@ -146,11 +194,14 @@ def _render_reasoning(ont) -> None:
         "Cancel stops it and leaves the ontology as it was."
     )
 
-    if st.session_state.pop("_reasoning_cancelled", False):
-        show_message("Reasoning was cancelled. The ontology was not changed.", "info")
+    cancelled = _cancel_message(ont)
+    if cancelled is not None:
+        show_message(*cancelled)
 
     if not st.button("Apply Reasoning"):
         return
+    # Left by an earlier run; only this run's may say what Cancel caught.
+    st.session_state.pop("_reasoning_base", None)
     # A pass over a large ontology takes minutes, and the closure repeats
     # until nothing new appears: say which pass is running and for how long.
     limit = ont.REASONING_MAX_PASSES
@@ -168,9 +219,8 @@ def _render_reasoning(ont) -> None:
         bar.progress(max(pass_number - 1, 0) / limit, text=text)
 
     try:
-        new_triples = ont.apply_reasoning_in_worker(profile=profile[1], progress=report)
-        save_checkpoint("Apply reasoning")
-        request_autosave_flush()
+        change = ont.infer_in_worker(profile=profile[1], progress=report)
+        new_triples = _commit_reasoning(ont, change)
         show_message(
             f"Reasoning complete! {new_triples} new triples inferred.",
             "success",

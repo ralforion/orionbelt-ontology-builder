@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 AUTOSAVE_KEY = "orionbelt_ontology_builder_autosave"
 AUTOSAVE_MAX_BYTES = 4_000_000
+#: How long an ontology found too big for browser autosave is taken to still
+#: be too big, unless an edit could have shrunk it (see
+#: _still_too_big_for_localstorage). The backstop for what that estimate does
+#: not see.
+AUTOSAVE_OVERSIZED_RECHECK_SECONDS = 300
 VIZ_SETTINGS_KEY = "orionbelt_viz_settings"
 _VIZ_PERSIST_KEYS = (
     "show_classes",
@@ -3984,6 +3989,17 @@ def save_checkpoint(label: str = "Edit"):
     """Save a snapshot to the undo history after a mutation."""
     if st.session_state.get("undo_manager"):
         st.session_state.undo_manager.checkpoint(label)
+    note_mutation()
+
+
+def note_mutation():
+    """Bump the counters that make autosave and the derived caches look again.
+
+    Part of :func:`save_checkpoint`; called on its own where the counters must
+    move before the graph does (see ``views.validation._commit_reasoning``).
+    Moving them for a change that then does not happen costs one needless
+    autosave and cache rebuild, nothing more.
+    """
     # Bump mutation counter so derived UI caches (e.g. graph viz) invalidate
     st.session_state["_ont_mutation_count"] = (
         st.session_state.get("_ont_mutation_count", 0) + 1
@@ -8329,8 +8345,10 @@ def _persist_autosave_to_localstorage():
     if size > AUTOSAVE_MAX_BYTES:
         st.session_state["_ls_oversized"] = (
             str(ont.graph.identifier),
-            len(ont.graph),
+            tuple(ont.graph.namespaces()),
+            ont.removed_bytes,
             size,
+            time.monotonic(),
         )
         if not st.session_state.get("_autosave_too_big_warned"):
             st.session_state["_autosave_too_big_warned"] = True
@@ -8352,22 +8370,29 @@ def _persist_autosave_to_localstorage():
 
 
 def _still_too_big_for_localstorage(ont) -> bool:
-    """True while the graph that last failed the size cap still would.
+    """True while the graph that last failed the size cap surely still would.
 
     A Turtle serialize takes seconds on a large graph, so once one came out
     over :data:`AUTOSAVE_MAX_BYTES` the next edit does not pay for another just
-    to learn the same thing. The size is estimated from the triple count at
-    the bytes per triple that serialize measured, which tracks the usual
-    edits (adding grows it, deleting shrinks it). A load starts a new graph,
-    and that is serialized afresh, since its triples may be of another size.
+    to learn the same thing. It is still too big when it would be even if
+    every removal since had come off the serialization in full
+    (``OntologyManager.removed_bytes`` bounds that): additions only grow it,
+    and a shortened literal is a removal. Anything else that can shrink it
+    sends it to be measured again: a new graph (a load), changed prefix
+    bindings, and, for what this does not see, the passing of
+    :data:`AUTOSAVE_OVERSIZED_RECHECK_SECONDS`.
     """
     oversized = st.session_state.get("_ls_oversized")
     if oversized is None:
         return False
-    graph_id, triples, size = oversized
-    if graph_id != str(ont.graph.identifier) or not triples:
+    graph_id, bindings, removed_then, size, measured_at = oversized
+    if (
+        graph_id != str(ont.graph.identifier)
+        or bindings != tuple(ont.graph.namespaces())
+        or time.monotonic() - measured_at > AUTOSAVE_OVERSIZED_RECHECK_SECONDS
+    ):
         return False
-    return len(ont.graph) * size / triples > AUTOSAVE_MAX_BYTES
+    return size - (ont.removed_bytes - removed_then) > AUTOSAVE_MAX_BYTES
 
 
 def _load_linked_file(target) -> bool:

@@ -9,7 +9,11 @@ from rdflib.compare import isomorphic
 
 from orionbelt_ontology_builder import worker_process
 from orionbelt_ontology_builder.ontology_manager import OntologyManager, UndoManager
-from orionbelt_ontology_builder.reasoning import ReasoningFailed, ReasoningTimeout
+from orionbelt_ontology_builder.reasoning import (
+    ClosureChange,
+    ReasoningFailed,
+    ReasoningTimeout,
+)
 
 ERR = Namespace("http://www.daml.org/2002/03/agents/agent-ont#")
 
@@ -201,4 +205,37 @@ def test_reasoning_in_the_worker_is_one_undo_step():
     undo.checkpoint("Apply reasoning")
     assert len(om.graph) > len(before)
     assert undo.undo() == "Initial state"
+    assert set(om.graph) == before
+
+
+def test_inferring_in_the_worker_leaves_the_graph_alone():
+    om = _prov_o()
+    before = set(om.graph)
+    change = om.infer_in_worker("rdfs")
+    assert change.added
+    assert set(om.graph) == before
+
+
+def test_applying_a_closure_change_is_all_or_nothing(monkeypatch):
+    om = OntologyManager(base_uri="http://test.org/r#")
+    a, b, c = (URIRef(f"http://test.org/r#{n}") for n in "ABC")
+    om.graph.add((a, RDF.type, OWL.Class))
+    before = set(om.graph)
+    change = ClosureChange(
+        added=[(b, RDF.type, OWL.Class), (c, RDF.type, OWL.Class)],
+        removed=[(a, RDF.type, OWL.Class)],
+    )
+    real_add = om.graph.add
+    calls = []
+
+    def add_failing_the_second_time(triple):
+        calls.append(triple)
+        if len(calls) == 2:
+            raise MemoryError
+        return real_add(triple)
+
+    monkeypatch.setattr(om.graph, "add", add_failing_the_second_time)
+    with pytest.raises(MemoryError):
+        om.apply_closure_change(change)
+    monkeypatch.undo()
     assert set(om.graph) == before
