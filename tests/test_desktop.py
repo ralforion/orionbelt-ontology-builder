@@ -77,6 +77,8 @@ def test_run_invokes_start_desktop_app(monkeypatch, tmp_path):
     # Brand colour passed as an explicit Streamlit option (not via env) so it
     # applies in the subprocess regardless of CWD.
     assert captured["options"]["theme.primaryColor"] == BRAND_PRIMARY_COLOR
+    # A real False: a "false" string would read as true.
+    assert captured["options"]["runner.fastReruns"] is False
 
 
 def test_run_enables_persistent_webview_storage(monkeypatch, tmp_path):

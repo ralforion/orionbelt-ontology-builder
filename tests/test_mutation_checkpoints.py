@@ -1,7 +1,7 @@
 """Every graph mutation must checkpoint (issue #190 investigation).
 
-``save_checkpoint()`` is the only place ``_ont_mutation_count`` is bumped, and
-three things hang off that revision:
+``save_checkpoint()`` is where ``_ont_mutation_count`` is bumped (through
+``note_mutation()``), and three things hang off that revision:
 
 * the undo history,
 * the Visualization's cache key, so the canvas redraws,
@@ -66,6 +66,12 @@ CHECKPOINTED_BY_CALLER = {
     # are called by render_relation_rows and render_relation_form, which
     # checkpoint after the call.
     "_custom_relation_spec",
+    # Moves the revision *before* applying a reasoning result, on purpose: a
+    # Cancel click stops the script at its next session access, so every one
+    # comes first and nothing touches the session between the change and its
+    # undo step. test_check_progress checks that whatever point a click lands
+    # on, a changed graph has its undo step and a moved revision.
+    "_commit_reasoning",
 }
 
 # Either of these moves the revision: the checkpoint helper, or a direct bump

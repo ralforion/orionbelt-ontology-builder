@@ -9,7 +9,12 @@ import os
 import sys
 from pathlib import Path
 
-from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, resolved_startup_base
+from .local_store import (
+    BRAND_PRIMARY_COLOR,
+    ENV_FLAG,
+    STREAMLIT_OPTIONS,
+    resolved_startup_base,
+)
 
 
 def run() -> None:
@@ -39,11 +44,15 @@ def run() -> None:
     saved_base = resolved_startup_base()
     if saved_base:
         theme_args.append(f"--theme.base={saved_base}")
+    option_args = [
+        f"--{name}={str(value).lower()}" for name, value in STREAMLIT_OPTIONS.items()
+    ]
     sys.argv = [
         "streamlit",
         "run",
         str(entry),
         *theme_args,
+        *option_args,
         *sys.argv[1:],
     ]
     sys.exit(stcli.main())

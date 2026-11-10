@@ -3,6 +3,7 @@
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -37,7 +38,8 @@ def test_persist_enabled_for_truthy_flag(monkeypatch, value):
 def test_data_dir_and_recovery_path(home):
     assert local_store.data_dir() == home / ".orionbelt_ontology_builder"
     assert local_store.data_dir().is_dir()
-    assert local_store.recovery_file() == local_store.data_dir() / "recovery.ttl"
+    assert local_store.recovery_file() == local_store.data_dir() / "recovery.nt"
+    assert local_store.legacy_recovery_file() == local_store.data_dir() / "recovery.ttl"
 
 
 def test_atomic_write_roundtrip(home):
@@ -181,3 +183,18 @@ def test_resolved_startup_base_falls_back_to_system(home, monkeypatch):
     monkeypatch.setitem(sys.modules, "darkdetect", fake)
     # No pin -> follow the OS.
     assert local_store.resolved_startup_base() == "dark"
+
+
+def test_streamlit_options_match_the_repo_config():
+    """``streamlit run app.py`` (Streamlit Cloud, Docker) reads
+    .streamlit/config.toml; the launchers pass STREAMLIT_OPTIONS. Both must
+    say the same, or one deployment races where the others do not."""
+    import tomllib
+
+    config = tomllib.loads(
+        (Path(__file__).parent.parent / ".streamlit" / "config.toml").read_text()
+    )
+    for name, value in local_store.STREAMLIT_OPTIONS.items():
+        section, key = name.split(".")
+        assert config[section][key] == value, name
+    assert local_store.STREAMLIT_OPTIONS["runner.fastReruns"] is False

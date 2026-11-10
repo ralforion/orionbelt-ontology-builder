@@ -37,10 +37,26 @@ ENV_FLAG = "ORIONBELT_LOCAL_PERSIST"
 #: and Streamlit would otherwise fall back to its default red).
 BRAND_PRIMARY_COLOR = "#0D2B7A"
 
+#: Streamlit options every launch sets, mirrored in ``.streamlit/config.toml``
+#: for ``streamlit run app.py`` (Streamlit Cloud, Docker) the same way.
+#:
+#: ``runner.fastReruns`` off: with it on, a click starts the next run in a new
+#: thread at once, while the old one carries on until its next Streamlit call.
+#: Both then work on the one OntologyManager in session state, which the app
+#: edits in place; Streamlit's own docs warn of races for exactly that. A
+#: reasoning result could land after the next run had autosaved the graph
+#: without it. Off, the click waits for that next call, which a running page
+#: reaches within moments, and the runs take turns.
+STREAMLIT_OPTIONS: dict[str, object] = {"runner.fastReruns": False}
+
 #: Per-user application data directory (created on demand).
 _DIR_NAME = ".orionbelt_ontology_builder"
-#: Crash-recovery snapshot the app mirrors the working ontology into.
-_RECOVERY_NAME = "recovery.ttl"
+#: Crash-recovery snapshot the app mirrors the working ontology into, in
+#: N-Triples with a prefix header (``OntologyManager.save_snapshot``).
+_RECOVERY_NAME = "recovery.nt"
+#: Where earlier releases kept the snapshot, as Turtle. Read on the first
+#: start after an upgrade, and removed once the new snapshot is written.
+_LEGACY_RECOVERY_NAME = "recovery.ttl"
 #: Small JSON config persisting cross-session settings (e.g. the linked path).
 _CONFIG_NAME = "config.json"
 
@@ -64,6 +80,11 @@ def data_dir() -> Path:
 def recovery_file() -> Path:
     """Path of the crash-recovery snapshot inside :func:`data_dir`."""
     return data_dir() / _RECOVERY_NAME
+
+
+def legacy_recovery_file() -> Path:
+    """Path of the Turtle snapshot that earlier releases wrote."""
+    return data_dir() / _LEGACY_RECOVERY_NAME
 
 
 def config_file() -> Path:

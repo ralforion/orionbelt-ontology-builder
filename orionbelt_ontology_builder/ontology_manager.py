@@ -5,6 +5,7 @@ OntologyManager - Core class for managing OWL ontologies using rdflib.
 import datetime
 import functools
 import hashlib
+import json
 import logging
 import os
 import re
@@ -31,6 +32,7 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
+from .reasoning import REASONING_DEADLINE_SECONDS, ClosureChange, close_in_worker
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,50 @@ def rdf_format_for_path(path, default: str = "turtle") -> str:
 
 
 _UNSET: Any = object()  # sentinel: "parameter not provided"
+
+#: First line of a file written by ``OntologyManager.save_snapshot``.
+_SNAPSHOT_MAGIC = "# orionbelt-snapshot 1"
+#: Start of the comment line that carries the prefix bindings as JSON.
+_SNAPSHOT_BINDINGS = "# bindings: "
+
+
+def _replace_atomically(file_path, write: Callable[[str], object]) -> None:
+    """Have ``write`` fill a temp file beside ``file_path``, then move it there.
+
+    ``os.replace`` makes the swap atomic, so a reader or a backup tool never
+    sees a half-written file, and a failed write leaves the old one in place.
+    """
+    p = Path(file_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")
+    os.close(fd)
+    try:
+        write(tmp)
+        os.replace(tmp, str(p))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_snapshot_bindings(file_path) -> "_Bindings":
+    """The prefix bindings in the header of a snapshot file."""
+    with open(file_path, encoding="utf-8") as f:
+        magic = f.readline().rstrip("\n")
+        line = f.readline().rstrip("\n")
+    if magic != _SNAPSHOT_MAGIC or not line.startswith(_SNAPSHOT_BINDINGS):
+        raise ValueError(f"{file_path} is not an OrionBelt snapshot")
+    try:
+        raw = json.loads(line[len(_SNAPSHOT_BINDINGS) :])
+        return tuple(
+            (str(prefix), URIRef(str(namespace)), bool(explicit))
+            for prefix, namespace, explicit in raw
+        )
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{file_path} has an unreadable prefix header") from exc
+
 
 _OWLRL_LOCK = threading.Lock()
 
@@ -87,6 +133,72 @@ def _owlrl_isolated() -> Iterator[None]:
                 table.clear()
                 table.update(copy)
             datatypes[:] = saved_datatypes
+
+
+#: The owlrl semantics behind each reasoning profile the app offers.
+REASONING_PROFILES: dict[str, type] = {
+    "rdfs": owlrl.RDFS_Semantics,
+    "owl-rl": owlrl.OWLRL_Semantics,
+    "owl-rl-ext": owlrl.OWLRL_Extension,
+}
+
+#: Upper bound on closure passes; every bundled sample settles within two.
+REASONING_MAX_PASSES = 5
+
+
+def reason_to_fixpoint(
+    graph: Graph,
+    profile: str = "rdfs",
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Infer new triples into ``graph``, repeating the closure until nothing
+    new appears, and return how many were added.
+
+    A single owlrl pass is not a fixpoint: its axiomatic rules run once, up
+    front, so terms the pass itself introduces (``rdfs:Resource`` typing under
+    RDFS) only get them on the next pass. And owlrl leaves behind triples with
+    a literal subject, which no RDF syntax can write and which the next pass
+    reads as datatype declarations ("``"0"^^xsd:int a owl:DataRange``"). Those
+    are dropped after each pass, and passes repeat until the graph stops
+    growing, so applying reasoning twice adds nothing. An inconsistency owlrl
+    reports is written on a fresh blank node every pass; only one node per
+    message is kept, or the graph would never stop growing.
+
+    ``progress(pass_number, triples_added_so_far)`` is called before each
+    pass. An unknown ``profile`` changes nothing.
+
+    Module level so the reasoning worker (:mod:`.reasoning_worker`) runs the
+    very same loop on its copy of the graph.
+    """
+    semantics = REASONING_PROFILES.get(profile)
+    if semantics is None:
+        return 0
+
+    initial_count = len(graph)
+    for pass_number in range(1, REASONING_MAX_PASSES + 1):
+        before = len(graph)
+        if progress is not None:
+            progress(pass_number, before - initial_count)
+        with _owlrl_isolated():
+            owlrl.DeductiveClosure(semantics).expand(graph)
+        for triple in [t for t in graph if isinstance(t[0], Literal)]:
+            graph.remove(triple)
+        _drop_repeated_reasoner_errors(graph)
+        if len(graph) == before:
+            break
+
+    return len(graph) - initial_count
+
+
+def _drop_repeated_reasoner_errors(graph: Graph) -> None:
+    """Keep one owlrl error node per distinct message, removing the rest."""
+    seen: set[frozenset[Node]] = set()
+    for node in list(graph.subjects(RDF.type, _OWLRL_ERR.ErrorMessage)):
+        message = frozenset(graph.objects(node, _OWLRL_ERR.error))
+        if message in seen:
+            graph.remove((node, None, None))
+        else:
+            seen.add(message)
 
 
 def _with_article(noun: str) -> str:
@@ -468,6 +580,8 @@ class _JournalledMemory(Memory):
     def __init__(self, journal: _GraphJournal, identifier: BNode) -> None:
         super().__init__(identifier=identifier)
         self._journal = journal
+        #: See ``OntologyManager.removed_bytes``.
+        self.removed_bytes = 0
         self._ns_by_prefix: dict[str, URIRef] = {}
         self._prefix_by_ns: dict[URIRef, str] = {}
         self._explicit: set[str] = set()
@@ -500,6 +614,7 @@ class _JournalledMemory(Memory):
         super().remove(triple_pattern, context)
         for triple in removed:
             self._journal.record(_TripleChange(False, triple))
+            self.removed_bytes += _removal_size_bound(triple)
 
     # -- prefix bindings ----------------------------------------------------
 
@@ -564,6 +679,26 @@ class _JournalledMemory(Memory):
 
     def namespaces(self) -> Iterator[tuple[str, URIRef]]:
         yield from self._ns_by_prefix.items()
+
+
+def _removal_size_bound(triple: _Triple) -> int:
+    """More than removing ``triple`` can take off a serialization of its graph.
+
+    Its terms in full, in UTF-8, with a literal's language or datatype and
+    room for quotes, and then the same again for escapes and for what can go
+    with it: a prefix declaration only it used, or a blank node label another
+    statement no longer needs. Plus the separators.
+
+    Built from ``str`` rather than ``n3()``, which raises on a URI with a
+    space in it, and those do get in through RDF/XML. This runs inside every
+    removal, so it must not be able to stop one.
+    """
+    size = 0
+    for term in triple:
+        size += len(str(term).encode("utf-8")) + 8
+        if isinstance(term, Literal):
+            size += len(term.language or "") + len(str(term.datatype or ""))
+    return 2 * size + 16
 
 
 def _cached_on_revision[**P, R](method: Callable[P, R]) -> Callable[P, R]:
@@ -646,6 +781,22 @@ class OntologyManager:
         derived state on it the way the listings here do (issue #437).
         """
         return self._journal.revision
+
+    @property
+    def removed_bytes(self) -> int:
+        """An upper bound on how much the removals from this graph have
+        shortened any serialization of it.
+
+        It starts at 0 with each new graph (a load, an import that replaces)
+        and only grows, by a generous bound per removed triple, a changed
+        literal included. A caller that knows how big the graph serialized
+        to once can then tell that it is still too big without serializing
+        it again, the way the browser autosave does. What it does not see:
+        a new prefix binding, which shortens every name in its namespace,
+        and the rare addition that lets a serializer write something
+        shorter (the last link of an RDF list, written as ``( ... )``).
+        """
+        return self._store.removed_bytes
 
     def _new_graph(self) -> Graph:
         identifier = BNode()
@@ -6717,21 +6868,50 @@ class OntologyManager:
         extension (Turtle if unknown).
         """
         fmt = format or rdf_format_for_path(file_path)
-        p = Path(file_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(p.parent), prefix=p.name + ".", suffix=".tmp"
+        _replace_atomically(
+            file_path, lambda tmp: self.graph.serialize(destination=tmp, format=fmt)
         )
-        os.close(fd)
-        try:
-            self.graph.serialize(destination=tmp, format=fmt)
-            os.replace(tmp, str(p))
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+
+    def save_snapshot(self, file_path) -> None:
+        """Write the graph and its prefix bindings to ``file_path``, atomically.
+
+        For the crash-recovery file, which is rewritten after every settled
+        edit. N-Triples rather than Turtle, because rdflib writes it about six
+        times faster (0.4 s against 2.5 s at 213k triples): nothing is grouped
+        or abbreviated. Reading it back is only a little faster than Turtle
+        (4.6 s against 5.5 s), but that happens once, at startup.
+
+        N-Triples has no prefixes, so the store's bindings, with the flag that
+        marks the ones the user added, go into a comment line at the top. Any
+        N-Triples reader skips it, and :meth:`load_snapshot` reads it back, so
+        a restore keeps prefixes Turtle would have dropped for being unused.
+        """
+        bindings = [
+            [prefix, str(namespace), explicit]
+            for prefix, namespace, explicit in self._store.bindings()
+        ]
+        header = f"{_SNAPSHOT_MAGIC}\n{_SNAPSHOT_BINDINGS}{json.dumps(bindings)}\n"
+
+        def write(tmp: str) -> None:
+            with open(tmp, "wb") as out:
+                out.write(header.encode("utf-8"))
+                self.graph.serialize(destination=out, format="nt", encoding="utf-8")
+
+        _replace_atomically(file_path, write)
+
+    def load_snapshot(self, file_path) -> None:
+        """Replace the graph with a file written by :meth:`save_snapshot`.
+
+        Raises ``ValueError`` when the header is missing or unreadable, so a
+        caller treats a damaged snapshot like any file that fails to parse.
+        """
+        bindings = _read_snapshot_bindings(file_path)
+        self._loaded_prefixes = []
+        self._install_graph()
+        self.graph.parse(str(file_path), format="nt")
+        self._store.set_bindings(bindings)
+        self._forget_qnames()
+        self._update_namespace_from_graph()
 
     def load_from_string(self, data: str, format: str = "turtle"):
         """Load ontology from a string."""
@@ -7928,62 +8108,83 @@ class OntologyManager:
 
         return issues
 
-    #: Upper bound on closure passes; every bundled sample settles within two.
-    REASONING_MAX_PASSES: ClassVar[int] = 5
+    REASONING_MAX_PASSES: ClassVar[int] = REASONING_MAX_PASSES
 
     def apply_reasoning(
         self,
         profile: str = "rdfs",
         progress: Callable[[int, int], None] | None = None,
     ) -> int:
-        """Infer new triples, repeating the closure until nothing new appears.
+        """Infer new triples in this process; see :func:`reason_to_fixpoint`.
 
-        A single owlrl pass is not a fixpoint: its axiomatic rules run once, up
-        front, so terms the pass itself introduces (``rdfs:Resource`` typing
-        under RDFS) only get them on the next pass. And owlrl leaves behind
-        triples with a literal subject, which no RDF syntax can write and which
-        the next pass reads as datatype declarations ("``"0"^^xsd:int a
-        owl:DataRange``"). Those are dropped after each pass, and passes repeat
-        until the graph stops growing, so applying reasoning twice adds nothing.
-        An inconsistency owlrl reports is written on a fresh blank node every
-        pass; only one node per message is kept, or the graph would never stop
-        growing.
-
-        ``progress(pass_number, triples_added_so_far)`` is called before each
-        pass.
+        Blocks until the closure is done, which takes minutes on a large
+        ontology. The app calls :meth:`apply_reasoning_in_worker` instead.
         """
-        semantics = {
-            "rdfs": owlrl.RDFS_Semantics,
-            "owl-rl": owlrl.OWLRL_Semantics,
-            "owl-rl-ext": owlrl.OWLRL_Extension,
-        }.get(profile)
-        if semantics is None:
-            return 0
+        return reason_to_fixpoint(self.graph, profile, progress)
 
-        initial_count = len(self.graph)
-        for pass_number in range(1, self.REASONING_MAX_PASSES + 1):
-            before = len(self.graph)
-            if progress is not None:
-                progress(pass_number, before - initial_count)
-            with _owlrl_isolated():
-                owlrl.DeductiveClosure(semantics).expand(self.graph)
-            for triple in [t for t in self.graph if isinstance(t[0], Literal)]:
+    def infer_in_worker(
+        self,
+        profile: str = "rdfs",
+        progress: Callable[[int, int], None] | None = None,
+        deadline_s: float = REASONING_DEADLINE_SECONDS,
+    ) -> ClosureChange:
+        """What :meth:`apply_reasoning` would change, worked out in a worker.
+
+        The graph is not touched. The worker reasons over a copy and sends
+        back the triples the closure added and removed, for
+        :meth:`apply_closure_change` to apply, so a caller can settle what it
+        must before the ontology changes. Raises
+        :class:`~.reasoning.ReasoningTimeout` when ``deadline_s`` passes,
+        :class:`~.reasoning.ReasoningFailed` when the worker stops without a
+        result, and whatever ``progress`` raises (see
+        :func:`~.reasoning.close_in_worker`).
+        """
+        if profile not in REASONING_PROFILES:
+            return ClosureChange(added=[], removed=[])
+        return close_in_worker(
+            self.graph, profile, deadline_s=deadline_s, progress=progress
+        )
+
+    def apply_closure_change(self, change: ClosureChange) -> int:
+        """Apply what :meth:`infer_in_worker` found, all of it or none of it.
+
+        Returns the net number of triples added. Should anything raise part
+        way, the triples applied so far are taken back before it propagates,
+        so the graph is never left half reasoned over. The closure's added
+        triples are new to the graph and its removed ones are in it, which is
+        what makes the plain reversal exact.
+        """
+        applied: list[tuple[bool, _Triple]] = []
+        try:
+            for triple in change.removed:
                 self.graph.remove(triple)
-            self._drop_repeated_reasoner_errors()
-            if len(self.graph) == before:
-                break
+                applied.append((False, triple))
+            for triple in change.added:
+                self.graph.add(triple)
+                applied.append((True, triple))
+        except BaseException:
+            for was_added, triple in reversed(applied):
+                if was_added:
+                    self.graph.remove(triple)
+                else:
+                    self.graph.add(triple)
+            raise
+        return len(change.added) - len(change.removed)
 
-        return len(self.graph) - initial_count
+    def apply_reasoning_in_worker(
+        self,
+        profile: str = "rdfs",
+        progress: Callable[[int, int], None] | None = None,
+        deadline_s: float = REASONING_DEADLINE_SECONDS,
+    ) -> int:
+        """:meth:`apply_reasoning`, with the closure run in a worker process.
 
-    def _drop_repeated_reasoner_errors(self) -> None:
-        """Keep one owlrl error node per distinct message, removing the rest."""
-        seen: set[frozenset[Node]] = set()
-        for node in list(self.graph.subjects(RDF.type, _OWLRL_ERR.ErrorMessage)):
-            message = frozenset(self.graph.objects(node, _OWLRL_ERR.error))
-            if message in seen:
-                self.graph.remove((node, None, None))
-            else:
-                seen.add(message)
+        :meth:`infer_in_worker` and then :meth:`apply_closure_change`; the
+        graph is left as it was when the first raises.
+        """
+        return self.apply_closure_change(
+            self.infer_in_worker(profile, progress=progress, deadline_s=deadline_s)
+        )
 
     # ==================== PATH SEARCH ====================
 

@@ -427,7 +427,7 @@ def render_autosave_sidebar():
         # Mark dirty and force an immediate flush so the now-empty graph
         # overwrites the saved copy via the dependable setItem path.
         st.session_state["_ls_saved_rev"] = None
-        st.session_state["_ls_oversized_rev"] = None
+        st.session_state["_ls_oversized"] = None
         st.session_state["_ont_mutation_count"] = (
             st.session_state.get("_ont_mutation_count", 0) + 1
         )

@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 GITHUB_ISSUES_URL = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
 AUTOSAVE_KEY = "orionbelt_ontology_builder_autosave"
 AUTOSAVE_MAX_BYTES = 4_000_000
+#: How long an ontology found too big for browser autosave is taken to still
+#: be too big, unless an edit could have shrunk it (see
+#: _still_too_big_for_localstorage). The backstop for what that estimate does
+#: not see.
+AUTOSAVE_OVERSIZED_RECHECK_SECONDS = 300
 VIZ_SETTINGS_KEY = "orionbelt_viz_settings"
 _VIZ_PERSIST_KEYS = (
     "show_classes",
@@ -996,9 +1001,13 @@ def _restore_autosave_from_disk(ont):
     path, label = _disk_restore_source()
     if path is None:
         return
-    fmt = "turtle" if label == "recovery file" else _rdf_format_for_path(path)
     try:
-        ont.load_from_file(str(path), format=fmt)
+        if path == local_store.recovery_file():
+            ont.load_snapshot(path)
+        elif path == local_store.legacy_recovery_file():
+            ont.load_from_file(str(path), format="turtle")
+        else:
+            ont.load_from_file(str(path), format=_rdf_format_for_path(path))
     except Exception as e:  # noqa: BLE001 - autosave restore must never break startup
         log_error(e, context="Autosave restore (disk)")
         _block_disk_persist(
@@ -3980,6 +3989,17 @@ def save_checkpoint(label: str = "Edit"):
     """Save a snapshot to the undo history after a mutation."""
     if st.session_state.get("undo_manager"):
         st.session_state.undo_manager.checkpoint(label)
+    note_mutation()
+
+
+def note_mutation():
+    """Bump the counters that make autosave and the derived caches look again.
+
+    Part of :func:`save_checkpoint`; called on its own where the counters must
+    move before the graph does (see ``views.validation._commit_reasoning``).
+    Moving them for a change that then does not happen costs one needless
+    autosave and cache rebuild, nothing more.
+    """
     # Bump mutation counter so derived UI caches (e.g. graph viz) invalidate
     st.session_state["_ont_mutation_count"] = (
         st.session_state.get("_ont_mutation_count", 0) + 1
@@ -8186,14 +8206,15 @@ def _disk_restore_source():
     """Return ``(path, label)`` to restore from on a local run, else ``(None, None)``.
 
     Prefers the user's linked working file; falls back to the crash-recovery
-    snapshot written by :func:`persist_autosave`.
+    snapshot written by :func:`persist_autosave`, and to the Turtle one an
+    earlier release wrote when there is no new one yet.
     """
     linked = local_store.get_linked_path()
     if linked is not None and linked.exists():
         return linked, "linked file"
-    rec = local_store.recovery_file()
-    if rec.exists():
-        return rec, "recovery file"
+    for rec in (local_store.recovery_file(), local_store.legacy_recovery_file()):
+        if rec.exists():
+            return rec, "recovery file"
     return None, None
 
 
@@ -8279,12 +8300,18 @@ def _persist_autosave_to_disk():
     if not _autosave_ready():
         return
     try:
-        ont.save_to_file(local_store.recovery_file(), format="turtle")
+        ont.save_snapshot(local_store.recovery_file())
         st.session_state["_recovery_saved_rev"] = mc
         st.session_state.pop("_force_autosave_flush", None)
     except OSError as e:
         # Leave the revision unset so the next rerun retries.
         log_error(e, context="Recovery write")
+        return
+    # The new snapshot supersedes the Turtle one an earlier release left.
+    try:
+        local_store.legacy_recovery_file().unlink(missing_ok=True)
+    except OSError as e:
+        log_error(e, context="Legacy recovery cleanup")
 
 
 def _persist_autosave_to_localstorage():
@@ -8292,8 +8319,8 @@ def _persist_autosave_to_localstorage():
 
     Same dirty + debounce gate as the disk backend, so a no-mutation rerun does
     no work and a large ontology isn't re-serialized every rerun just to fail the
-    size check. An over-quota graph disables browser autosave until the next
-    mutation (e.g. the graph shrinks back under the cap).
+    size check. An over-quota graph disables browser autosave until it has
+    shrunk enough to fit (see :func:`_still_too_big_for_localstorage`).
     """
     ls = _get_local_storage()
     if ls is None:
@@ -8302,20 +8329,27 @@ def _persist_autosave_to_localstorage():
     mc = _autosave_tick()
     if mc == st.session_state.get("_ls_saved_rev"):
         return  # unchanged — no serialize, no hashing
-    if st.session_state.get("_ls_oversized_rev") == mc:
-        return  # already known too big at this revision; wait for a change
+    ont = st.session_state.ontology
+    if _still_too_big_for_localstorage(ont):
+        return
     if not _autosave_ready():
         return
 
     try:
-        ttl = st.session_state.ontology.export_to_string(format="turtle")
+        ttl = ont.export_to_string(format="turtle")
     except Exception as e:  # noqa: BLE001 - autosave export must never break the session
         log_error(e, context="Autosave export")
         return
 
-    if len(ttl.encode("utf-8")) > AUTOSAVE_MAX_BYTES:
-        # Disable until the next mutation rather than re-serializing every rerun.
-        st.session_state["_ls_oversized_rev"] = mc
+    size = len(ttl.encode("utf-8"))
+    if size > AUTOSAVE_MAX_BYTES:
+        st.session_state["_ls_oversized"] = (
+            str(ont.graph.identifier),
+            tuple(ont.graph.namespaces()),
+            ont.removed_bytes,
+            size,
+            time.monotonic(),
+        )
         if not st.session_state.get("_autosave_too_big_warned"):
             st.session_state["_autosave_too_big_warned"] = True
             st.sidebar.warning(
@@ -8331,7 +8365,34 @@ def _persist_autosave_to_localstorage():
     ls.setItem(AUTOSAVE_KEY, ttl, key=f"orionbelt_autosave_set_{h[:12]}")
     st.session_state["_ls_saved_rev"] = mc
     st.session_state["_autosave_too_big_warned"] = False
+    st.session_state.pop("_ls_oversized", None)
     st.session_state.pop("_force_autosave_flush", None)
+
+
+def _still_too_big_for_localstorage(ont) -> bool:
+    """True while the graph that last failed the size cap surely still would.
+
+    A Turtle serialize takes seconds on a large graph, so once one came out
+    over :data:`AUTOSAVE_MAX_BYTES` the next edit does not pay for another just
+    to learn the same thing. It is still too big when it would be even if
+    every removal since had come off the serialization in full
+    (``OntologyManager.removed_bytes`` bounds that): additions only grow it,
+    and a shortened literal is a removal. Anything else that can shrink it
+    sends it to be measured again: a new graph (a load), changed prefix
+    bindings, and, for what this does not see, the passing of
+    :data:`AUTOSAVE_OVERSIZED_RECHECK_SECONDS`.
+    """
+    oversized = st.session_state.get("_ls_oversized")
+    if oversized is None:
+        return False
+    graph_id, bindings, removed_then, size, measured_at = oversized
+    if (
+        graph_id != str(ont.graph.identifier)
+        or bindings != tuple(ont.graph.namespaces())
+        or time.monotonic() - measured_at > AUTOSAVE_OVERSIZED_RECHECK_SECONDS
+    ):
+        return False
+    return size - (ont.removed_bytes - removed_then) > AUTOSAVE_MAX_BYTES
 
 
 def _load_linked_file(target) -> bool:

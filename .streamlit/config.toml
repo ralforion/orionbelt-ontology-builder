@@ -7,3 +7,11 @@ primaryColor = "#0D2B7A"
 # note that parsing happens in memory, so the practical ceiling is the host's
 # available RAM (the hosted demo on Streamlit Community Cloud is RAM-limited).
 maxUploadSize = 200
+
+[runner]
+# Off, so a click waits for the running script's next Streamlit call instead
+# of starting the next run beside it: the app edits the ontology in session
+# state in place, and two runs at once race on it. Kept in step with
+# STREAMLIT_OPTIONS in orionbelt_ontology_builder/local_store.py, which the
+# console and desktop launchers pass.
+fastReruns = false

@@ -30,7 +30,13 @@ import threading
 import time
 from pathlib import Path
 
-from .local_store import BRAND_PRIMARY_COLOR, ENV_FLAG, data_dir, resolved_startup_base
+from .local_store import (
+    BRAND_PRIMARY_COLOR,
+    ENV_FLAG,
+    STREAMLIT_OPTIONS,
+    data_dir,
+    resolved_startup_base,
+)
 from .ui import APP_NAME
 
 logger = logging.getLogger(__name__)
@@ -387,7 +393,7 @@ def run() -> None:
     # without relying on env inheritance into the Streamlit subprocess.
     # Apply the saved startup theme so the app opens the way it was left
     # (issues #70, #78).
-    options = {"theme.primaryColor": BRAND_PRIMARY_COLOR}
+    options = {"theme.primaryColor": BRAND_PRIMARY_COLOR, **STREAMLIT_OPTIONS}
     saved_base = resolved_startup_base()
     if saved_base:
         options["theme.base"] = saved_base

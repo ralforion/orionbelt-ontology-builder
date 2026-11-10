@@ -104,6 +104,10 @@ testpaths = ["tests"]
 # "tests" too, so the suite can share helpers (tests/sources.py) rather than
 # each file re-deriving where the UI source lives.
 pythonpath = [".", "tests"]
+# The large-ontology budgets (tests/test_large_ontology.py) take a while and
+# are not a CI gate yet: deselected here, run with `pytest -m slow`.
+addopts = "-m 'not slow'"
+markers = ["slow: large-ontology time budgets, deselected by default"]
 filterwarnings = [
     "ignore:ConjunctiveGraph is deprecated:DeprecationWarning:rdflib",
 ]

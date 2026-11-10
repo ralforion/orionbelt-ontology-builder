@@ -13,11 +13,15 @@ them with a tiny fake ``st`` and a temp home directory. Covered:
 """
 
 import time
+from pathlib import Path
 
 import pytest
+from rdflib import BNode, Graph, Literal, URIRef
+from rdflib.compare import isomorphic
+from rdflib.namespace import RDFS
 
 from ontology_manager import OntologyManager, rdf_format_for_path
-from orionbelt_ontology_builder import app, local_store
+from orionbelt_ontology_builder import app, local_store, ui
 
 
 class _FakeSessionState(dict):
@@ -68,12 +72,18 @@ def _populated():
 
 
 def _spy_save(monkeypatch, om):
-    """Record (path, format) for each save_to_file call; never touch disk."""
+    """Record (path, format) for each save_to_file and save_snapshot call;
+    never touch disk."""
     calls = []
     monkeypatch.setattr(
         type(om),
         "save_to_file",
         lambda self, path, format=None: calls.append((str(path), format)),
+    )
+    monkeypatch.setattr(
+        type(om),
+        "save_snapshot",
+        lambda self, path: calls.append((str(path), "snapshot")),
     )
     return calls
 
@@ -112,6 +122,47 @@ def test_save_to_file_detects_format_from_extension(tmp_path):
     out = tmp_path / "o.owl"
     _populated().save_to_file(out)  # no format -> xml from .owl
     assert "RDF" in out.read_text(encoding="utf-8")
+
+
+# ---- the recovery snapshot: N-Triples with a prefix header ----------------
+
+
+def _with_restriction_and_prefix() -> OntologyManager:
+    om = _populated()
+    om.add_restriction("A", "relatedTo", "someValuesFrom", "B")  # blank nodes
+    om.add_prefix("unused", "http://unused.example/ns#")  # Turtle would drop it
+    return om
+
+
+def test_snapshot_round_trip_keeps_triples_and_bindings(tmp_path):
+    om = _with_restriction_and_prefix()
+    out = tmp_path / "recovery.nt"
+    om.save_snapshot(out)
+    assert [p.name for p in tmp_path.iterdir()] == ["recovery.nt"]
+
+    reloaded = OntologyManager()
+    reloaded.load_snapshot(out)
+
+    assert isomorphic(reloaded.graph, om.graph)
+    assert reloaded._store.bindings() == om._store.bindings()
+    assert reloaded._user_added_prefixes == {"unused": "http://unused.example/ns#"}
+    assert (reloaded.base_uri, reloaded.ontology_uri) == (om.base_uri, om.ontology_uri)
+
+
+def test_snapshot_is_plain_n_triples(tmp_path):
+    om = _with_restriction_and_prefix()
+    out = tmp_path / "recovery.nt"
+    om.save_snapshot(out)
+    assert isomorphic(Graph().parse(str(out), format="nt"), om.graph)
+
+
+def test_load_snapshot_rejects_a_file_without_the_header(tmp_path):
+    out = tmp_path / "recovery.nt"
+    out.write_text(_populated().graph.serialize(format="nt"), encoding="utf-8")
+    om = _populated()
+    with pytest.raises(ValueError, match="not an OrionBelt snapshot"):
+        om.load_snapshot(out)
+    assert {c["name"] for c in om.get_classes()} == {"A", "B"}  # left as it was
 
 
 # ---- mutation-count gating + debounce ------------------------------------
@@ -238,6 +289,41 @@ def test_restore_corrupt_recovery_blocks_persist(fake_st):
     assert local_store.read_text(local_store.recovery_file()) == before
 
 
+# ---- the Turtle recovery file of an earlier release ------------------------
+
+
+def test_restore_reads_the_legacy_turtle_recovery_then_replaces_it(fake_st):
+    legacy = local_store.legacy_recovery_file()
+    _populated().save_to_file(legacy, "turtle")
+    ont = OntologyManager()
+    fake_st.session_state.ontology = ont
+
+    app._restore_autosave_from_disk(ont)
+    assert not fake_st.session_state.get("_disk_persist_blocked")
+    assert {c["name"] for c in ont.get_classes()} == {"A", "B"}
+
+    # The next write is the new snapshot, which takes the old file's place.
+    ont.add_class("C")
+    _set_state(fake_st, mc=2, recovery=None, settled=True)
+    app._persist_autosave_to_disk()
+    assert not legacy.exists()
+    restored = OntologyManager()
+    restored.load_snapshot(local_store.recovery_file())
+    assert {c["name"] for c in restored.get_classes()} == {"A", "B", "C"}
+
+
+def test_restore_prefers_the_snapshot_over_a_legacy_file(fake_st):
+    _populated().save_to_file(local_store.legacy_recovery_file(), "turtle")
+    newer = _populated()
+    newer.add_class("Newer")
+    newer.save_snapshot(local_store.recovery_file())
+    ont = OntologyManager()
+    fake_st.session_state.ontology = ont
+
+    app._restore_autosave_from_disk(ont)
+    assert "Newer" in {c["name"] for c in ont.get_classes()}
+
+
 # ---- linking an existing file loads it (does not overwrite) ---------------
 
 
@@ -308,13 +394,8 @@ def test_localstorage_no_serialize_when_not_dirty(patch_ui, fake_st, monkeypatch
     assert ls.items == {}
 
 
-def test_localstorage_oversized_disables_until_mutation(patch_ui, fake_st, monkeypatch):
-    ls = _use_fake_ls(monkeypatch, patch_ui)
-    patch_ui("AUTOSAVE_MAX_BYTES", 5)  # force "too big"
-    om = _populated()
-    fake_st.session_state.ontology = om
-    _set_state(fake_st, mc=1, settled=True)
-
+def _count_serializes(monkeypatch, om):
+    """Record each Turtle serialize of ``om``, letting it run."""
     serialized = []
     real_export = type(om).export_to_string
     monkeypatch.setattr(
@@ -324,13 +405,162 @@ def test_localstorage_oversized_disables_until_mutation(patch_ui, fake_st, monke
             serialized.append(1) or real_export(self, format=format)
         ),
     )
+    return serialized
 
-    app._persist_autosave_to_localstorage()  # serializes once, finds it too big
-    assert fake_st.session_state["_ls_oversized_rev"] == 1
+
+def _oversized(patch_ui, fake_st, om, mc=1):
+    """Make ``om`` one byte too big for browser autosave, and find that out."""
+    patch_ui("AUTOSAVE_MAX_BYTES", len(om.export_to_string("turtle").encode()) - 1)
+    fake_st.session_state.ontology = om
+    _set_state(fake_st, mc=mc, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert fake_st.session_state["_ls_oversized"] is not None
+
+
+def test_localstorage_oversized_disables_until_mutation(patch_ui, fake_st, monkeypatch):
+    ls = _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    _oversized(patch_ui, fake_st, om)
     assert ls.items == {}
+    serialized = _count_serializes(monkeypatch, om)
 
     app._persist_autosave_to_localstorage()  # same revision -> no re-serialize
-    assert len(serialized) == 1
+    assert serialized == []
+
+
+def test_localstorage_oversized_waits_until_the_graph_may_have_shrunk(
+    patch_ui, fake_st, monkeypatch
+):
+    """An edit that only adds does not pay for another serialize of a graph
+    that was too big; one that removes enough that it might fit does."""
+    ls = _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    _oversized(patch_ui, fake_st, om)
+    serialized = _count_serializes(monkeypatch, om)
+
+    om.add_class("C")
+    _set_state(fake_st, mc=2, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == []  # bigger still: not serialized again
+
+    om.delete_class("C")
+    om.delete_class("B")
+    _set_state(fake_st, mc=3, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == [1]
+    assert app.AUTOSAVE_KEY in ls.items
+    assert fake_st.session_state.get("_ls_oversized") is None
+
+
+def test_localstorage_oversized_measures_again_after_a_shortened_literal(
+    patch_ui, fake_st, monkeypatch
+):
+    """Cutting a literal short shrinks the graph without changing how many
+    triples it has (Codex review of #545)."""
+    ls = _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    a = URIRef(om.namespace["A"])
+    om.graph.add((a, RDFS.comment, Literal("long " * 2000)))
+    _oversized(patch_ui, fake_st, om)
+    serialized = _count_serializes(monkeypatch, om)
+
+    count = len(om.graph)
+    om.graph.set((a, RDFS.comment, Literal("short")))
+    assert len(om.graph) == count
+    _set_state(fake_st, mc=2, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == [1]
+    assert app.AUTOSAVE_KEY in ls.items
+
+
+def test_localstorage_oversized_measures_again_after_a_new_prefix(
+    patch_ui, fake_st, monkeypatch
+):
+    """A prefix binding shortens every name in its namespace, and removes
+    nothing."""
+    _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    _oversized(patch_ui, fake_st, om)
+    serialized = _count_serializes(monkeypatch, om)
+
+    om.add_prefix("short", str(om.namespace))
+    _set_state(fake_st, mc=2, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == [1]
+
+
+def test_localstorage_oversized_measures_again_after_a_while(
+    patch_ui, fake_st, monkeypatch
+):
+    """The backstop for what the estimate does not see."""
+    _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    _oversized(patch_ui, fake_st, om)
+    serialized = _count_serializes(monkeypatch, om)
+    *kept, measured_at = fake_st.session_state["_ls_oversized"]
+    fake_st.session_state["_ls_oversized"] = (
+        *kept,
+        measured_at - ui.AUTOSAVE_OVERSIZED_RECHECK_SECONDS - 1,
+    )
+
+    om.add_class("C")
+    _set_state(fake_st, mc=2, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == [1]
+
+
+def test_localstorage_oversized_estimate_ignores_a_new_graph(
+    patch_ui, fake_st, monkeypatch
+):
+    """A load replaces the graph, which may be of any size."""
+    _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    fake_st.session_state.ontology = om
+    fake_st.session_state["_ls_oversized"] = (
+        str(om.graph.identifier),
+        tuple(om.graph.namespaces()),
+        om.removed_bytes,
+        10**9,
+        time.monotonic(),
+    )
+    assert ui._still_too_big_for_localstorage(om)
+    om.load_from_string(_populated().export_to_string("turtle"))
+    assert not ui._still_too_big_for_localstorage(om)
+
+
+def test_removed_bytes_counts_removals_only():
+    om = _populated()
+    assert om.removed_bytes == 0
+    om.add_class("C")
+    assert om.removed_bytes == 0
+    a = URIRef(om.namespace["A"])
+    om.graph.set((a, RDFS.comment, Literal("first")))
+    assert om.removed_bytes == 0  # nothing was there to replace
+    om.graph.set((a, RDFS.comment, Literal("second")))
+    after_one = om.removed_bytes
+    assert after_one > len('"first"')
+    om.delete_class("B")
+    assert om.removed_bytes > after_one
+    om.load_from_string(om.export_to_string("turtle"))
+    assert om.removed_bytes == 0  # a new graph
+
+
+def test_removed_bytes_bounds_what_removals_take_off_the_turtle():
+    """Remove triples one by one, blank-node ones included, and check that the
+    Turtle never shrinks by more than the bound says it may."""
+    om = OntologyManager()
+    om.load_from_file(
+        str(Path(app.__file__).parent / "samples" / "pizza.owl"), format="xml"
+    )
+    triples = sorted(om.graph, key=str)
+    picked = triples[::40] + [t for t in triples if isinstance(t[0], BNode)][:10]
+    size = len(om.export_to_string("turtle").encode("utf-8"))
+    for triple in picked:
+        bound_before = om.removed_bytes
+        om.graph.remove(triple)
+        smaller = len(om.export_to_string("turtle").encode("utf-8"))
+        assert size - smaller <= om.removed_bytes - bound_before, triple
+        size = smaller
 
 
 def test_localstorage_writes_when_dirty_and_settled(patch_ui, fake_st, monkeypatch):
@@ -388,3 +618,35 @@ def test_link_flush_with_bad_write_does_not_crash(fake_st, tmp_path, monkeypatch
     assert fake_st.session_state.get("_disk_persist_blocked") is True
     assert fake_st.session_state["_linked_saved_rev"] is None  # never recorded
     assert fake_st.session_state.error_log
+
+
+def test_removing_a_triple_with_a_malformed_uri_is_recorded(tmp_path):
+    """RDF/XML lets a URI with a space through, and ``n3()`` refuses to write
+    one. Counting a removal must not stop it half way, after the triple is
+    gone but before the undo history has it (Codex review of #545)."""
+    from orionbelt_ontology_builder.ontology_manager import UndoManager
+
+    source = tmp_path / "bad.rdf"
+    source.write_text(
+        """<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Ontology rdf:about="http://example.org/o"/>
+  <owl:Class rdf:about="http://example.org/Bad Name"/>
+</rdf:RDF>
+""",
+        encoding="utf-8",
+    )
+    om = OntologyManager()
+    om.load_from_file(str(source), format="xml")
+    bad = URIRef("http://example.org/Bad Name")
+    assert any(c["uri"] == str(bad) for c in om.get_classes())
+    undo = UndoManager(om)
+    before = set(om.graph)
+
+    om.graph.remove((bad, None, None))
+    undo.checkpoint("Delete Bad Name")
+    assert om.removed_bytes > len(str(bad))
+    assert not any(c["uri"] == str(bad) for c in om.get_classes())
+    undo.undo()
+    assert set(om.graph) == before
