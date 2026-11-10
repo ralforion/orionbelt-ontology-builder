@@ -507,13 +507,25 @@ class _GraphJournal:
     them; it is kept only while an :class:`UndoManager` is alive to consume
     it, so a manager used without one (scripts, tests) never accumulates a
     log.
+
+    The caches keep a log of their own (:meth:`drain_for_caches`), so a
+    listing can follow an edit instead of being built again: every change,
+    a replayed undo step included, whether or not an undo history is kept.
+    It holds at most :data:`CACHE_LOG_LIMIT` changes. Past that, or after a
+    change nobody reported (:meth:`touch`), it says "anything may have
+    changed", and the caches start over, as they did on every change before.
     """
+
+    #: Changes the caches' log holds before it stops counting. A bulk change
+    #: (an import, reasoning) passes it, and rebuilding beats replaying then.
+    CACHE_LOG_LIMIT: ClassVar[int] = 5000
 
     def __init__(self) -> None:
         self.revision = 0
         self.entries: list[_Change] = []
         self._consumer: weakref.ref[UndoManager] | None = None
         self._paused = 0
+        self._cache_log: list[_Change] | None = []
 
     @property
     def recording(self) -> bool:
@@ -532,8 +544,19 @@ class _GraphJournal:
         entries, self.entries = self.entries, []
         return entries
 
+    def drain_for_caches(self) -> list[_Change] | None:
+        """The changes since the last call, or None for "anything may have"."""
+        log, self._cache_log = self._cache_log, []
+        return log
+
     def record(self, change: _Change) -> None:
         self.revision += 1
+        log = self._cache_log
+        if log is not None:
+            if len(log) < self.CACHE_LOG_LIMIT:
+                log.append(change)
+            else:
+                self._cache_log = None
         if self._paused:
             return
         if self._consumer is not None and self._consumer() is not None:
@@ -545,6 +568,7 @@ class _GraphJournal:
     def touch(self) -> None:
         """Move the revision for a change the store did not report itself."""
         self.revision += 1
+        self._cache_log = None
 
     @contextmanager
     def paused(self) -> Iterator[None]:
@@ -716,9 +740,11 @@ def _removal_size_bound(triple: _Triple) -> int:
 def _cached_on_revision[**P, R](method: Callable[P, R]) -> Callable[P, R]:
     """Memoise a listing on the graph revision.
 
-    The result is computed once per revision and handed back until the graph
-    changes. A list or dict comes back as a fresh top-level container, so a
-    caller may sort or extend it, but the entries inside are shared: treat
+    The result is computed once and handed back until the graph changes. A
+    change then either drops it, to be computed again when next asked for, or,
+    for a listing in :data:`_LISTING_UPDATES`, brings it up to date in place
+    of a rebuild. A list or dict comes back as a fresh top-level container, so
+    a caller may sort or extend it, but the entries inside are shared: treat
     them as read-only.
     """
 
@@ -734,6 +760,135 @@ def _cached_on_revision[**P, R](method: Callable[P, R]) -> Callable[P, R]:
         return value
 
     return wrapper
+
+
+#: What a listing update returns to have the listing dropped and built anew.
+_REBUILD: Any = object()
+
+
+def _by_name(entry: dict[str, Any]) -> tuple[str, str]:
+    """How the entity listings sort: by local name, then by URI.
+
+    The URI settles a tie between equal names in different namespaces, so a
+    listing patched entry by entry and one built from scratch agree on the
+    order.
+    """
+    return entry["name"], entry["uri"]
+
+
+@dataclass(frozen=True)
+class _EntryListing:
+    """A listing with one entry per subject typed ``rdf_type``, which an edit
+    updates entry by entry.
+
+    The entry is built by the manager method named ``entry``, from the
+    triples about its subject alone and, with ``objects_of`` set, from the
+    triples of that predicate pointing at it (a class lists its children).
+    So a change can alter only the entry of its subject, and under
+    ``objects_of`` the entry of its object. Those are built again and the
+    rest are kept. An edit that touches no member, such as a label on an
+    individual for the classes, hands the listing back as it was.
+    """
+
+    rdf_type: URIRef
+    entry: str
+    objects_of: URIRef | None = None
+
+    def __call__(
+        self,
+        manager: "OntologyManager",
+        entries: list[dict[str, Any]],
+        changes: list["_Change"],
+    ) -> list[dict[str, Any]]:
+        touched: set[Node] = set()
+        dropped: set[Node] = set()
+        for change in changes:
+            if not isinstance(change, _TripleChange):
+                continue
+            subject, predicate, obj = change.triple
+            touched.add(subject)
+            if predicate == self.objects_of:
+                touched.add(obj)
+            if not change.added and predicate == RDF.type and obj == self.rdf_type:
+                dropped.add(subject)
+        members = [
+            node
+            for node in touched
+            if isinstance(node, URIRef)
+            and (node, RDF.type, self.rdf_type) in manager.graph
+        ]
+        stale = {str(node) for node in (*members, *dropped)}
+        if not stale:
+            return entries
+        build = getattr(manager, self.entry)
+        followed = [entry for entry in entries if entry["uri"] not in stale]
+        followed.extend(build(node) for node in members)
+        followed.sort(key=_by_name)
+        return followed
+
+
+#: The ``rdf:type`` counts :meth:`OntologyManager.get_statistics` keeps.
+_COUNTED_TYPES: dict[Node, str] = {
+    OWL.Class: "classes",
+    OWL.ObjectProperty: "object_properties",
+    OWL.DatatypeProperty: "data_properties",
+    OWL.NamedIndividual: "individuals",
+    OWL.Restriction: "restrictions",
+    SKOS.ConceptScheme: "concept_schemes",
+    SKOS.Concept: "concepts",
+}
+
+
+def _follow_statistics(
+    manager: "OntologyManager", stats: dict[str, int], changes: list["_Change"]
+) -> dict[str, int]:
+    """Count each change into the statistics instead of counting the graph.
+
+    Exact, because the journal reports only real changes: an add that was
+    already there and a remove that matched nothing are not among them.
+    """
+    stats = dict(stats)
+    for change in changes:
+        if not isinstance(change, _TripleChange):
+            continue
+        subject, predicate, obj = change.triple
+        step = 1 if change.added else -1
+        stats["total_triples"] += step
+        if subject != manager.ontology_uri:
+            stats["content_triples"] += step
+        if predicate == RDF.type and obj in _COUNTED_TYPES:
+            stats[_COUNTED_TYPES[obj]] += step
+    return stats
+
+
+def _follow_bindings(
+    manager: "OntologyManager",
+    bindings: list[tuple[str, str]],
+    changes: list["_Change"],
+) -> Any:
+    """The prefix bindings read no triples, only the bindings."""
+    if any(isinstance(change, _BindingChange) for change in changes):
+        return _REBUILD
+    return bindings
+
+
+#: How a memoised listing follows a change to the graph instead of being
+#: built again (see ``OntologyManager._follow_changes``). Each is called with
+#: the manager, the cached value and the changes, and returns the value they
+#: lead to, or :data:`_REBUILD`. A listing not named here is dropped on any
+#: change, so a listing is only ever wrong here if its entry in this table
+#: claims it reads less than it does; tests/test_listing_updates.py replays
+#: random edits on the bundled samples against a fresh build to catch that.
+_LISTING_UPDATES: dict[str, Callable[..., Any]] = {
+    "get_classes": _EntryListing(OWL.Class, "_class_entry", objects_of=RDFS.subClassOf),
+    "get_individuals": _EntryListing(OWL.NamedIndividual, "_individual_entry"),
+    "get_object_properties": _EntryListing(
+        OWL.ObjectProperty, "_object_property_entry"
+    ),
+    "get_data_properties": _EntryListing(OWL.DatatypeProperty, "_data_property_entry"),
+    "get_statistics": _follow_statistics,
+    "namespace_bindings": _follow_bindings,
+}
 
 
 class OntologyManager:
@@ -773,6 +928,7 @@ class OntologyManager:
         self._journal = _GraphJournal()
         self._memo_cache: dict[tuple[Any, ...], Any] = {}
         self._memo_token: tuple[Any, ...] | None = None
+        self._memo_revision = 0
         self.graph = self._new_graph()
         self.base_uri = base_uri
         self.namespace = Namespace(base_uri)
@@ -869,29 +1025,60 @@ class OntologyManager:
     def revision_token(self) -> str:
         """A short token that changes whenever the graph or its identity does.
 
-        What :meth:`_memo` invalidates on, as a string: callers that keep a
-        result across reruns (a quality run) compare it to tell whether that
-        result is stale.
+        Callers that keep a result across reruns (a quality run) compare it to
+        tell whether that result is stale.
         """
         key = "\x1f".join(str(part) for part in self._revision_key())
         return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
     def _memo(self, key: tuple[Any, ...], build: Callable[[], Any]) -> Any:
-        """Return ``build()`` for ``key``, computed once per graph revision.
+        """Return ``build()`` for ``key``, kept up to date with the graph.
 
-        One token guards the whole cache: when the revision, the base URI or
-        the ontology URI moves, everything cached is stale and is dropped,
-        rather than checked entry by entry.
+        When the graph's identity moves (another graph, base URI or ontology
+        URI), everything cached is dropped. When only its revision moved, the
+        changes since are replayed onto what is cached (see
+        :meth:`_follow_changes`), so one edit costs what it touches rather
+        than a walk of the whole graph per listing.
         """
-        token = self._revision_key()
-        if token != self._memo_token:
+        identity = (str(self.graph.identifier), self.base_uri, str(self.ontology_uri))
+        if identity != self._memo_token:
             self._memo_cache.clear()
-            self._memo_token = token
+            self._memo_token = identity
+            self._journal.drain_for_caches()
+            self._memo_revision = self._journal.revision
+        elif self._journal.revision != self._memo_revision:
+            self._follow_changes(self._journal.drain_for_caches())
+            self._memo_revision = self._journal.revision
         try:
             return self._memo_cache[key]
         except KeyError:
             value = self._memo_cache[key] = build()
             return value
+
+    def _follow_changes(self, changes: list[_Change] | None) -> None:
+        """Bring every cached listing up to ``changes``, or drop it.
+
+        A listing in :data:`_LISTING_UPDATES` is handed the changes and its
+        cached value, and returns the value they lead to (or
+        :data:`_REBUILD`); any other is dropped, to be built again when next
+        asked for. ``None`` (the journal could not keep the changes) drops
+        everything.
+        """
+        if changes is None:
+            self._memo_cache.clear()
+            return
+        for key, value in list(self._memo_cache.items()):
+            name, args, kwargs = key
+            update = _LISTING_UPDATES.get(name)
+            followed = (
+                _REBUILD
+                if update is None or args or kwargs
+                else update(self, value, changes)
+            )
+            if followed is _REBUILD:
+                del self._memo_cache[key]
+            else:
+                self._memo_cache[key] = followed
 
     def set_ontology_metadata(
         self, label=_UNSET, comment=_UNSET, creator=_UNSET, version_iri=_UNSET
@@ -1707,37 +1894,48 @@ class OntologyManager:
         existing callers working; consumers that need to disambiguate across
         namespaces (e.g. the graph visualizer) should use the URI lists.
         """
-        classes = []
-        for class_uri in self.graph.subjects(RDF.type, OWL.Class):
-            if isinstance(class_uri, BNode):
-                continue  # Skip anonymous classes (restrictions)
+        return sorted(
+            (
+                self._class_entry(class_uri)
+                for class_uri in self.graph.subjects(RDF.type, OWL.Class)
+                # Anonymous classes (restrictions) are not listed.
+                if not isinstance(class_uri, BNode)
+            ),
+            key=_by_name,
+        )
 
-            class_info: dict[str, Any] = {
-                "uri": str(class_uri),
-                "name": self._local_name(class_uri),
-                "label": str(self.graph.value(class_uri, RDFS.label) or ""),
-                "comment": str(self.graph.value(class_uri, RDFS.comment) or ""),
-                "parents": [],
-                "parent_uris": [],
-                "children": [],
-                "child_uris": [],
-            }
+    def _class_entry(self, class_uri: Node) -> dict[str, Any]:
+        """One class's entry in :meth:`get_classes`.
 
-            # Get parent classes
-            for parent in self.graph.objects(class_uri, RDFS.subClassOf):
-                if isinstance(parent, URIRef):
-                    class_info["parents"].append(self._local_name(parent))
-                    class_info["parent_uris"].append(str(parent))
+        Reads only the triples about the class and the ``rdfs:subClassOf``
+        links to it, which is what lets an edit patch the listing (see
+        :data:`_LISTING_UPDATES`). Reading anything else here means saying so
+        there.
+        """
+        class_info: dict[str, Any] = {
+            "uri": str(class_uri),
+            "name": self._local_name(class_uri),
+            "label": str(self.graph.value(class_uri, RDFS.label) or ""),
+            "comment": str(self.graph.value(class_uri, RDFS.comment) or ""),
+            "parents": [],
+            "parent_uris": [],
+            "children": [],
+            "child_uris": [],
+        }
 
-            # Get child classes
-            for child in self.graph.subjects(RDFS.subClassOf, class_uri):
-                if isinstance(child, URIRef):
-                    class_info["children"].append(self._local_name(child))
-                    class_info["child_uris"].append(str(child))
+        # Get parent classes
+        for parent in self.graph.objects(class_uri, RDFS.subClassOf):
+            if isinstance(parent, URIRef):
+                class_info["parents"].append(self._local_name(parent))
+                class_info["parent_uris"].append(str(parent))
 
-            classes.append(class_info)
+        # Get child classes
+        for child in self.graph.subjects(RDFS.subClassOf, class_uri):
+            if isinstance(child, URIRef):
+                class_info["children"].append(self._local_name(child))
+                class_info["child_uris"].append(str(child))
 
-        return sorted(classes, key=lambda x: x["name"])
+        return class_info
 
     def get_class_hierarchy(self) -> dict[str, list[str]]:
         """Get class hierarchy as adjacency list."""
@@ -2351,109 +2549,125 @@ class OntologyManager:
     @_cached_on_revision
     def get_object_properties(self) -> list[dict[str, Any]]:
         """Get all object properties with their details."""
-        properties = []
-        for prop_uri in self.graph.subjects(RDF.type, OWL.ObjectProperty):
-            if isinstance(prop_uri, BNode):
-                continue
+        return sorted(
+            (
+                self._object_property_entry(prop_uri)
+                for prop_uri in self.graph.subjects(RDF.type, OWL.ObjectProperty)
+                if not isinstance(prop_uri, BNode)
+            ),
+            key=_by_name,
+        )
 
-            prop_info: dict[str, Any] = {
-                "uri": str(prop_uri),
-                "name": self._local_name(prop_uri),
-                "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
-                "comment": str(self.graph.value(prop_uri, RDFS.comment) or ""),
-                "domain": "",
-                "domain_uri": "",
-                "range": "",
-                "range_uri": "",
-                "characteristics": [],
-            }
+    def _object_property_entry(self, prop_uri: Node) -> dict[str, Any]:
+        """One object property's entry in :meth:`get_object_properties`.
 
-            domain = self.graph.value(prop_uri, RDFS.domain)
-            if not domain or not isinstance(domain, URIRef):
-                for dp in _DOMAIN_INCLUDES:
-                    domain = self.graph.value(prop_uri, dp)
-                    if domain and isinstance(domain, URIRef):
-                        break
-            if domain and isinstance(domain, URIRef):
-                prop_info["domain"] = self._local_name(domain)
-                prop_info["domain_uri"] = str(domain)
+        Reads only the triples about the property (see
+        :data:`_LISTING_UPDATES`).
+        """
+        prop_info: dict[str, Any] = {
+            "uri": str(prop_uri),
+            "name": self._local_name(prop_uri),
+            "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
+            "comment": str(self.graph.value(prop_uri, RDFS.comment) or ""),
+            "domain": "",
+            "domain_uri": "",
+            "range": "",
+            "range_uri": "",
+            "characteristics": [],
+        }
 
-            range_ = self.graph.value(prop_uri, RDFS.range)
-            if not range_ or not isinstance(range_, URIRef):
-                for rp in _RANGE_INCLUDES:
-                    range_ = self.graph.value(prop_uri, rp)
-                    if range_ and isinstance(range_, URIRef):
-                        break
-            if range_ and isinstance(range_, URIRef):
-                prop_info["range"] = self._local_name(range_)
-                prop_info["range_uri"] = str(range_)
+        domain = self.graph.value(prop_uri, RDFS.domain)
+        if not domain or not isinstance(domain, URIRef):
+            for dp in _DOMAIN_INCLUDES:
+                domain = self.graph.value(prop_uri, dp)
+                if domain and isinstance(domain, URIRef):
+                    break
+        if domain and isinstance(domain, URIRef):
+            prop_info["domain"] = self._local_name(domain)
+            prop_info["domain_uri"] = str(domain)
 
-            # Check characteristics
-            if (prop_uri, RDF.type, OWL.FunctionalProperty) in self.graph:
-                prop_info["characteristics"].append("Functional")
-            if (prop_uri, RDF.type, OWL.InverseFunctionalProperty) in self.graph:
-                prop_info["characteristics"].append("InverseFunctional")
-            if (prop_uri, RDF.type, OWL.TransitiveProperty) in self.graph:
-                prop_info["characteristics"].append("Transitive")
-            if (prop_uri, RDF.type, OWL.SymmetricProperty) in self.graph:
-                prop_info["characteristics"].append("Symmetric")
-            if (prop_uri, RDF.type, OWL.AsymmetricProperty) in self.graph:
-                prop_info["characteristics"].append("Asymmetric")
-            if (prop_uri, RDF.type, OWL.ReflexiveProperty) in self.graph:
-                prop_info["characteristics"].append("Reflexive")
-            if (prop_uri, RDF.type, OWL.IrreflexiveProperty) in self.graph:
-                prop_info["characteristics"].append("Irreflexive")
+        range_ = self.graph.value(prop_uri, RDFS.range)
+        if not range_ or not isinstance(range_, URIRef):
+            for rp in _RANGE_INCLUDES:
+                range_ = self.graph.value(prop_uri, rp)
+                if range_ and isinstance(range_, URIRef):
+                    break
+        if range_ and isinstance(range_, URIRef):
+            prop_info["range"] = self._local_name(range_)
+            prop_info["range_uri"] = str(range_)
 
-            inverse = self.graph.value(prop_uri, OWL.inverseOf)
-            if inverse:
-                prop_info["inverse_of"] = self._local_name(inverse)
+        # Check characteristics
+        if (prop_uri, RDF.type, OWL.FunctionalProperty) in self.graph:
+            prop_info["characteristics"].append("Functional")
+        if (prop_uri, RDF.type, OWL.InverseFunctionalProperty) in self.graph:
+            prop_info["characteristics"].append("InverseFunctional")
+        if (prop_uri, RDF.type, OWL.TransitiveProperty) in self.graph:
+            prop_info["characteristics"].append("Transitive")
+        if (prop_uri, RDF.type, OWL.SymmetricProperty) in self.graph:
+            prop_info["characteristics"].append("Symmetric")
+        if (prop_uri, RDF.type, OWL.AsymmetricProperty) in self.graph:
+            prop_info["characteristics"].append("Asymmetric")
+        if (prop_uri, RDF.type, OWL.ReflexiveProperty) in self.graph:
+            prop_info["characteristics"].append("Reflexive")
+        if (prop_uri, RDF.type, OWL.IrreflexiveProperty) in self.graph:
+            prop_info["characteristics"].append("Irreflexive")
 
-            properties.append(prop_info)
+        inverse = self.graph.value(prop_uri, OWL.inverseOf)
+        if inverse:
+            prop_info["inverse_of"] = self._local_name(inverse)
 
-        return sorted(properties, key=lambda x: x["name"])
+        return prop_info
 
     @_cached_on_revision
     def get_data_properties(self) -> list[dict[str, Any]]:
         """Get all data properties with their details."""
-        properties = []
-        for prop_uri in self.graph.subjects(RDF.type, OWL.DatatypeProperty):
-            if isinstance(prop_uri, BNode):
-                continue
+        return sorted(
+            (
+                self._data_property_entry(prop_uri)
+                for prop_uri in self.graph.subjects(RDF.type, OWL.DatatypeProperty)
+                if not isinstance(prop_uri, BNode)
+            ),
+            key=_by_name,
+        )
 
-            prop_info = {
-                "uri": str(prop_uri),
-                "name": self._local_name(prop_uri),
-                "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
-                "comment": str(self.graph.value(prop_uri, RDFS.comment) or ""),
-                "domain": "",
-                "domain_uri": "",
-                "range": "",
-                "functional": False,
-            }
+    def _data_property_entry(self, prop_uri: Node) -> dict[str, Any]:
+        """One data property's entry in :meth:`get_data_properties`.
 
-            domain = self.graph.value(prop_uri, RDFS.domain)
-            if not domain or not isinstance(domain, URIRef):
-                for dp in _DOMAIN_INCLUDES:
-                    domain = self.graph.value(prop_uri, dp)
-                    if domain and isinstance(domain, URIRef):
-                        break
-            if domain and isinstance(domain, URIRef):
-                prop_info["domain"] = self._local_name(domain)
-                prop_info["domain_uri"] = str(domain)
+        Reads only the triples about the property (see
+        :data:`_LISTING_UPDATES`).
+        """
+        prop_info = {
+            "uri": str(prop_uri),
+            "name": self._local_name(prop_uri),
+            "label": str(self.graph.value(prop_uri, RDFS.label) or ""),
+            "comment": str(self.graph.value(prop_uri, RDFS.comment) or ""),
+            "domain": "",
+            "domain_uri": "",
+            "range": "",
+            "functional": False,
+        }
 
-            range_ = self.graph.value(prop_uri, RDFS.range)
-            if range_:
-                prop_info["range"] = self._local_name(range_)
+        domain = self.graph.value(prop_uri, RDFS.domain)
+        if not domain or not isinstance(domain, URIRef):
+            for dp in _DOMAIN_INCLUDES:
+                domain = self.graph.value(prop_uri, dp)
+                if domain and isinstance(domain, URIRef):
+                    break
+        if domain and isinstance(domain, URIRef):
+            prop_info["domain"] = self._local_name(domain)
+            prop_info["domain_uri"] = str(domain)
 
-            prop_info["functional"] = (
-                prop_uri,
-                RDF.type,
-                OWL.FunctionalProperty,
-            ) in self.graph
+        range_ = self.graph.value(prop_uri, RDFS.range)
+        if range_:
+            prop_info["range"] = self._local_name(range_)
 
-            properties.append(prop_info)
+        prop_info["functional"] = (
+            prop_uri,
+            RDF.type,
+            OWL.FunctionalProperty,
+        ) in self.graph
 
-        return sorted(properties, key=lambda x: x["name"])
+        return prop_info
 
     # ==================== INDIVIDUAL OPERATIONS ====================
 
@@ -2578,53 +2792,58 @@ class OntologyManager:
     @_cached_on_revision
     def get_individuals(self) -> list[dict[str, Any]]:
         """Get all individuals with their details."""
-        individuals = []
-        seen = set()
+        return sorted(
+            (
+                self._individual_entry(ind_uri)
+                for ind_uri in self.graph.subjects(RDF.type, OWL.NamedIndividual)
+                if not isinstance(ind_uri, BNode)
+            ),
+            key=_by_name,
+        )
 
-        for ind_uri in self.graph.subjects(RDF.type, OWL.NamedIndividual):
-            if isinstance(ind_uri, BNode) or str(ind_uri) in seen:
-                continue
-            seen.add(str(ind_uri))
+    def _individual_entry(self, ind_uri: Node) -> dict[str, Any]:
+        """One individual's entry in :meth:`get_individuals`.
 
-            ind_info: dict[str, Any] = {
-                "uri": str(ind_uri),
-                "name": self._local_name(ind_uri),
-                "label": str(self.graph.value(ind_uri, RDFS.label) or ""),
-                "comment": str(self.graph.value(ind_uri, RDFS.comment) or ""),
-                "classes": [],
-                "class_uris": [],
-                "properties": [],
-            }
+        Reads only the triples about the individual (see
+        :data:`_LISTING_UPDATES`).
+        """
+        ind_info: dict[str, Any] = {
+            "uri": str(ind_uri),
+            "name": self._local_name(ind_uri),
+            "label": str(self.graph.value(ind_uri, RDFS.label) or ""),
+            "comment": str(self.graph.value(ind_uri, RDFS.comment) or ""),
+            "classes": [],
+            "class_uris": [],
+            "properties": [],
+        }
 
-            # Get classes — expose both the local name (for display) and the
-            # full URI (so consumers like the graph viewer can target the
-            # exact class even when local names collide across namespaces).
-            for class_uri in self.graph.objects(ind_uri, RDF.type):
-                if isinstance(class_uri, URIRef) and class_uri != OWL.NamedIndividual:
-                    ind_info["classes"].append(self._local_name(class_uri))
-                    ind_info["class_uris"].append(str(class_uri))
+        # Get classes — expose both the local name (for display) and the
+        # full URI (so consumers like the graph viewer can target the
+        # exact class even when local names collide across namespaces).
+        for class_uri in self.graph.objects(ind_uri, RDF.type):
+            if isinstance(class_uri, URIRef) and class_uri != OWL.NamedIndividual:
+                ind_info["classes"].append(self._local_name(class_uri))
+                ind_info["class_uris"].append(str(class_uri))
 
-            # Get property assertions. ``value`` is the local name for display;
-            # ``value_uri`` carries the full URI of an object value (empty for a
-            # literal) so callers can resolve the target unambiguously — two
-            # individuals in different namespaces can share a local name.
-            for pred, obj in self.graph.predicate_objects(ind_uri):
-                if pred not in [RDF.type, RDFS.label, RDFS.comment]:
-                    prop_name = self._local_name(pred)
-                    is_ref = isinstance(obj, URIRef)
-                    value = self._local_name(obj) if is_ref else str(obj)
-                    ind_info["properties"].append(
-                        {
-                            "property": prop_name,
-                            "property_uri": str(pred),
-                            "value": value,
-                            "value_uri": str(obj) if is_ref else "",
-                        }
-                    )
+        # Get property assertions. ``value`` is the local name for display;
+        # ``value_uri`` carries the full URI of an object value (empty for a
+        # literal) so callers can resolve the target unambiguously — two
+        # individuals in different namespaces can share a local name.
+        for pred, obj in self.graph.predicate_objects(ind_uri):
+            if pred not in [RDF.type, RDFS.label, RDFS.comment]:
+                prop_name = self._local_name(pred)
+                is_ref = isinstance(obj, URIRef)
+                value = self._local_name(obj) if is_ref else str(obj)
+                ind_info["properties"].append(
+                    {
+                        "property": prop_name,
+                        "property_uri": str(pred),
+                        "value": value,
+                        "value_uri": str(obj) if is_ref else "",
+                    }
+                )
 
-            individuals.append(ind_info)
-
-        return sorted(individuals, key=lambda x: x["name"])
+        return ind_info
 
     # ==================== RESTRICTION OPERATIONS ====================
 
