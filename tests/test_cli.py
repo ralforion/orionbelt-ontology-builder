@@ -72,6 +72,8 @@ def test_run_opts_into_persistence_and_brand_theme(monkeypatch):
     assert os.environ[ENV_FLAG] == "1"
     # Brand colour passed as an explicit flag so config.toml isn't needed.
     assert f"--theme.primaryColor={BRAND_PRIMARY_COLOR}" in captured["argv"]
+    # And fast reruns off, for the same reason (see STREAMLIT_OPTIONS).
+    assert "--runner.fastReruns=false" in captured["argv"]
 
 
 def test_run_reapplies_saved_theme_base(monkeypatch):

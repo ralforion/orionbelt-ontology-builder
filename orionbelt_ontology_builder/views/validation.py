@@ -137,6 +137,10 @@ def _commit_reasoning(ont, change) -> int:
     compare against, and the counters that make autosave and the caches look
     again are moved (harmless if the change then does not happen). After that,
     the change and its undo step, with no Streamlit call between them.
+
+    The next run starts only once this one has stopped because fast reruns
+    are off (``local_store.STREAMLIT_OPTIONS``). With them on, it would start
+    beside this one, and could autosave the graph before the change landed.
     """
     undo = st.session_state.get("undo_manager")
     st.session_state["_reasoning_base"] = (

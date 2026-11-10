@@ -618,3 +618,35 @@ def test_link_flush_with_bad_write_does_not_crash(fake_st, tmp_path, monkeypatch
     assert fake_st.session_state.get("_disk_persist_blocked") is True
     assert fake_st.session_state["_linked_saved_rev"] is None  # never recorded
     assert fake_st.session_state.error_log
+
+
+def test_removing_a_triple_with_a_malformed_uri_is_recorded(tmp_path):
+    """RDF/XML lets a URI with a space through, and ``n3()`` refuses to write
+    one. Counting a removal must not stop it half way, after the triple is
+    gone but before the undo history has it (Codex review of #545)."""
+    from orionbelt_ontology_builder.ontology_manager import UndoManager
+
+    source = tmp_path / "bad.rdf"
+    source.write_text(
+        """<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Ontology rdf:about="http://example.org/o"/>
+  <owl:Class rdf:about="http://example.org/Bad Name"/>
+</rdf:RDF>
+""",
+        encoding="utf-8",
+    )
+    om = OntologyManager()
+    om.load_from_file(str(source), format="xml")
+    bad = URIRef("http://example.org/Bad Name")
+    assert any(c["uri"] == str(bad) for c in om.get_classes())
+    undo = UndoManager(om)
+    before = set(om.graph)
+
+    om.graph.remove((bad, None, None))
+    undo.checkpoint("Delete Bad Name")
+    assert om.removed_bytes > len(str(bad))
+    assert not any(c["uri"] == str(bad) for c in om.get_classes())
+    undo.undo()
+    assert set(om.graph) == before

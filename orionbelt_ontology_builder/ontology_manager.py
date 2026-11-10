@@ -613,8 +613,8 @@ class _JournalledMemory(Memory):
             removed = list(self._own_triples(triple_pattern))
         super().remove(triple_pattern, context)
         for triple in removed:
-            self.removed_bytes += _removal_size_bound(triple)
             self._journal.record(_TripleChange(False, triple))
+            self.removed_bytes += _removal_size_bound(triple)
 
     # -- prefix bindings ----------------------------------------------------
 
@@ -684,11 +684,21 @@ class _JournalledMemory(Memory):
 def _removal_size_bound(triple: _Triple) -> int:
     """More than removing ``triple`` can take off a serialization of its graph.
 
-    Its terms in full, as N-Triples writes them in UTF-8, and then the same
-    again for what can go with it: a prefix declaration only it used, or a
-    blank node label another statement no longer needs. Plus the separators.
+    Its terms in full, in UTF-8, with a literal's language or datatype and
+    room for quotes, and then the same again for escapes and for what can go
+    with it: a prefix declaration only it used, or a blank node label another
+    statement no longer needs. Plus the separators.
+
+    Built from ``str`` rather than ``n3()``, which raises on a URI with a
+    space in it, and those do get in through RDF/XML. This runs inside every
+    removal, so it must not be able to stop one.
     """
-    return 2 * sum(len(term.n3().encode("utf-8")) for term in triple) + 16
+    size = 0
+    for term in triple:
+        size += len(str(term).encode("utf-8")) + 8
+        if isinstance(term, Literal):
+            size += len(term.language or "") + len(str(term.datatype or ""))
+    return 2 * size + 16
 
 
 def _cached_on_revision[**P, R](method: Callable[P, R]) -> Callable[P, R]:

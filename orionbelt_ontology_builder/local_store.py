@@ -37,6 +37,18 @@ ENV_FLAG = "ORIONBELT_LOCAL_PERSIST"
 #: and Streamlit would otherwise fall back to its default red).
 BRAND_PRIMARY_COLOR = "#0D2B7A"
 
+#: Streamlit options every launch sets, mirrored in ``.streamlit/config.toml``
+#: for ``streamlit run app.py`` (Streamlit Cloud, Docker) the same way.
+#:
+#: ``runner.fastReruns`` off: with it on, a click starts the next run in a new
+#: thread at once, while the old one carries on until its next Streamlit call.
+#: Both then work on the one OntologyManager in session state, which the app
+#: edits in place; Streamlit's own docs warn of races for exactly that. A
+#: reasoning result could land after the next run had autosaved the graph
+#: without it. Off, the click waits for that next call, which a running page
+#: reaches within moments, and the runs take turns.
+STREAMLIT_OPTIONS: dict[str, object] = {"runner.fastReruns": False}
+
 #: Per-user application data directory (created on demand).
 _DIR_NAME = ".orionbelt_ontology_builder"
 #: Crash-recovery snapshot the app mirrors the working ontology into, in
