@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from rdflib import BNode, Graph, Literal, URIRef
 from rdflib.compare import isomorphic
-from rdflib.namespace import RDFS
+from rdflib.namespace import RDF, RDFS
 
 from ontology_manager import OntologyManager, rdf_format_for_path
 from orionbelt_ontology_builder import app, local_store, ui
@@ -545,22 +545,45 @@ def test_removed_bytes_counts_removals_only():
     assert om.removed_bytes == 0  # a new graph
 
 
-def test_removed_bytes_bounds_what_removals_take_off_the_turtle():
-    """Remove triples one by one, blank-node ones included, and check that the
-    Turtle never shrinks by more than the bound says it may."""
+def _pizza() -> OntologyManager:
     om = OntologyManager()
     om.load_from_file(
         str(Path(app.__file__).parent / "samples" / "pizza.owl"), format="xml"
     )
-    triples = sorted(om.graph, key=str)
-    picked = triples[::40] + [t for t in triples if isinstance(t[0], BNode)][:10]
-    size = len(om.export_to_string("turtle").encode("utf-8"))
-    for triple in picked:
+    return om
+
+
+def _turtle_size(om: OntologyManager) -> int:
+    return len(om.export_to_string("turtle").encode("utf-8"))
+
+
+def test_removed_bytes_bounds_what_removals_take_off_the_turtle():
+    """Remove triples without blank nodes one by one, and check that the
+    Turtle never shrinks by more than the bound says it may.
+
+    Picked by their text, which is stable for these; blank node labels are
+    new on every load, so a pick among them would differ from run to run."""
+    om = _pizza()
+    named = sorted(
+        (t for t in om.graph if not any(isinstance(n, BNode) for n in t)), key=str
+    )
+    size = _turtle_size(om)
+    for triple in named[::25]:
         bound_before = om.removed_bytes
         om.graph.remove(triple)
-        smaller = len(om.export_to_string("turtle").encode("utf-8"))
+        smaller = _turtle_size(om)
         assert size - smaller <= om.removed_bytes - bound_before, triple
         size = smaller
+
+
+def test_a_removal_with_a_blank_node_has_no_bound():
+    """One link out of an RDF list can change how the whole list is written
+    (CI on #546: 509 bytes off the Turtle against a bound of 290),
+    so it counts for more than the graph serializes to."""
+    om = _pizza()
+    link = next(iter(om.graph.triples((None, RDF.rest, None))))
+    om.graph.remove(link)
+    assert om.removed_bytes > _turtle_size(om)
 
 
 def test_localstorage_writes_when_dirty_and_settled(patch_ui, fake_st, monkeypatch):

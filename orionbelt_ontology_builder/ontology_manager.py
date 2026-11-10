@@ -681,18 +681,30 @@ class _JournalledMemory(Memory):
         yield from self._ns_by_prefix.items()
 
 
+#: What a removal with a blank node in it counts for: more than any
+#: serialization, so whoever compares against the bound measures again.
+_UNBOUNDED_REMOVAL = 1 << 62
+
+
 def _removal_size_bound(triple: _Triple) -> int:
     """More than removing ``triple`` can take off a serialization of its graph.
 
     Its terms in full, in UTF-8, with a literal's language or datatype and
     room for quotes, and then the same again for escapes and for what can go
-    with it: a prefix declaration only it used, or a blank node label another
-    statement no longer needs. Plus the separators.
+    with it: a prefix declaration only it used. Plus the separators.
+
+    A triple with a blank node in it has no such bound. Blank nodes are
+    written nested (``[ ... ]``) or as a list (``( ... )``) depending on the
+    whole structure around them, so taking out one link of a list can change
+    how all of it is written: on pizza.owl one ``rdf:rest`` took 509 bytes
+    off the Turtle. Such a removal counts as :data:`_UNBOUNDED_REMOVAL`.
 
     Built from ``str`` rather than ``n3()``, which raises on a URI with a
     space in it, and those do get in through RDF/XML. This runs inside every
     removal, so it must not be able to stop one.
     """
+    if any(isinstance(term, BNode) for term in triple):
+        return _UNBOUNDED_REMOVAL
     size = 0
     for term in triple:
         size += len(str(term).encode("utf-8")) + 8
@@ -789,9 +801,11 @@ class OntologyManager:
 
         It starts at 0 with each new graph (a load, an import that replaces)
         and only grows, by a generous bound per removed triple, a changed
-        literal included. A caller that knows how big the graph serialized
-        to once can then tell that it is still too big without serializing
-        it again, the way the browser autosave does. What it does not see:
+        literal included, and past any size for a triple with a blank node in
+        it (see :func:`_removal_size_bound`). A caller that knows how big the
+        graph serialized to once can then tell that it is still too big
+        without serializing it again, the way the browser autosave does.
+        What it does not see:
         a new prefix binding, which shortens every name in its namespace,
         and the rare addition that lets a serializer write something
         shorter (the last link of an RDF list, written as ``( ... )``).
