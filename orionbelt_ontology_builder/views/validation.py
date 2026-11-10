@@ -1,5 +1,6 @@
 """The validation page."""
 
+import time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from ..quality import (
 )
 from ..quality.context import QualityContext
 from ..quality.exports import findings_csv, findings_json
+from ..reasoning import REASONING_DEADLINE_SECONDS, ReasoningTimeout
 from ..shacl import (
     BUNDLED_SHAPES,
     ShapesError,
@@ -112,47 +114,79 @@ def render_validation():
         _render_shacl(ont)
 
     if _val_tab == "Reasoning":
-        st.subheader("Apply Reasoning")
+        _render_reasoning(ont)
 
-        st.write("""
-        Reasoning can infer new triples based on the ontology structure.
-        This uses OWL-RL (Rule Language) reasoning.
-        """)
 
-        profile = st.selectbox(
-            "Reasoning Profile",
-            [("RDFS", "rdfs"), ("OWL-RL", "owl-rl"), ("OWL-RL Extended", "owl-rl-ext")],
-            format_func=lambda x: x[0],
+def _cancel_reasoning_cb() -> None:
+    """Callback: the click has already stopped the run, and the worker with it
+    (see :func:`~..reasoning.close_in_worker`); leave word for this run to
+    say so."""
+    st.session_state["_reasoning_cancelled"] = True
+
+
+def _render_reasoning(ont) -> None:
+    st.subheader("Apply Reasoning")
+
+    st.write("""
+    Reasoning can infer new triples based on the ontology structure.
+    This uses OWL-RL (Rule Language) reasoning.
+    """)
+
+    profile = st.selectbox(
+        "Reasoning Profile",
+        [("RDFS", "rdfs"), ("OWL-RL", "owl-rl"), ("OWL-RL Extended", "owl-rl-ext")],
+        format_func=lambda x: x[0],
+    )
+
+    current_triples = len(ont.graph)
+    st.write(f"Current triple count: {current_triples}")
+    minutes = REASONING_DEADLINE_SECONDS / 60
+    st.caption(
+        f"Runs in a separate process for at most {minutes:g} minutes. "
+        "Cancel stops it and leaves the ontology as it was."
+    )
+
+    if st.session_state.pop("_reasoning_cancelled", False):
+        show_message("Reasoning was cancelled. The ontology was not changed.", "info")
+
+    if not st.button("Apply Reasoning"):
+        return
+    # A pass over a large ontology takes minutes, and the closure repeats
+    # until nothing new appears: say which pass is running and for how long.
+    limit = ont.REASONING_MAX_PASSES
+    started = time.monotonic()
+    bar = st.progress(0.0, text="Starting the reasoner…")
+    cancel = st.empty()
+    cancel.button("Cancel", key="reasoning_cancel", on_click=_cancel_reasoning_cb)
+
+    def report(pass_number: int, added: int) -> None:
+        elapsed = f"{time.monotonic() - started:.0f} s"
+        if pass_number == 0:
+            text = f"Starting the reasoner… ({elapsed})"
+        else:
+            text = f"Pass {pass_number}: {added} triples inferred so far… ({elapsed})"
+        bar.progress(max(pass_number - 1, 0) / limit, text=text)
+
+    try:
+        new_triples = ont.apply_reasoning_in_worker(profile=profile[1], progress=report)
+        save_checkpoint("Apply reasoning")
+        request_autosave_flush()
+        show_message(
+            f"Reasoning complete! {new_triples} new triples inferred.",
+            "success",
         )
-
-        current_triples = len(ont.graph)
-        st.write(f"Current triple count: {current_triples}")
-
-        if st.button("Apply Reasoning"):
-            # A pass over a large ontology takes seconds, and the closure
-            # repeats until nothing new appears: say which pass is running.
-            limit = ont.REASONING_MAX_PASSES
-            bar = st.progress(0.0, text="Applying reasoning…")
-
-            def report(pass_number: int, added: int) -> None:
-                bar.progress(
-                    (pass_number - 1) / limit,
-                    text=f"Pass {pass_number}: {added} triples inferred so far…",
-                )
-
-            try:
-                new_triples = ont.apply_reasoning(profile=profile[1], progress=report)
-                save_checkpoint("Apply reasoning")
-                request_autosave_flush()
-                show_message(
-                    f"Reasoning complete! {new_triples} new triples inferred.",
-                    "success",
-                )
-                st.write(f"New triple count: {len(ont.graph)}")
-            except Exception as e:  # noqa: BLE001 - reasoner failure must show as a message, not a traceback
-                show_message(f"Error during reasoning: {e!s}", "error")
-            finally:
-                bar.empty()
+        st.write(f"New triple count: {len(ont.graph)}")
+    except ReasoningTimeout:
+        show_message(
+            f"Reasoning did not finish within {minutes:g} minutes and was "
+            "stopped. The ontology was not changed.",
+            "warning",
+        )
+    except Exception as e:  # noqa: BLE001 - reasoner failure must show as a message, not a traceback
+        show_message(f"Error during reasoning: {e!s}", "error")
+    finally:
+        bar.empty()
+        cancel.empty()
 
 
 _PROFILE_LABELS = {

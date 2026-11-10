@@ -15,9 +15,11 @@ them with a tiny fake ``st`` and a temp home directory. Covered:
 import time
 
 import pytest
+from rdflib import Graph
+from rdflib.compare import isomorphic
 
 from ontology_manager import OntologyManager, rdf_format_for_path
-from orionbelt_ontology_builder import app, local_store
+from orionbelt_ontology_builder import app, local_store, ui
 
 
 class _FakeSessionState(dict):
@@ -68,12 +70,18 @@ def _populated():
 
 
 def _spy_save(monkeypatch, om):
-    """Record (path, format) for each save_to_file call; never touch disk."""
+    """Record (path, format) for each save_to_file and save_snapshot call;
+    never touch disk."""
     calls = []
     monkeypatch.setattr(
         type(om),
         "save_to_file",
         lambda self, path, format=None: calls.append((str(path), format)),
+    )
+    monkeypatch.setattr(
+        type(om),
+        "save_snapshot",
+        lambda self, path: calls.append((str(path), "snapshot")),
     )
     return calls
 
@@ -112,6 +120,47 @@ def test_save_to_file_detects_format_from_extension(tmp_path):
     out = tmp_path / "o.owl"
     _populated().save_to_file(out)  # no format -> xml from .owl
     assert "RDF" in out.read_text(encoding="utf-8")
+
+
+# ---- the recovery snapshot: N-Triples with a prefix header ----------------
+
+
+def _with_restriction_and_prefix() -> OntologyManager:
+    om = _populated()
+    om.add_restriction("A", "relatedTo", "someValuesFrom", "B")  # blank nodes
+    om.add_prefix("unused", "http://unused.example/ns#")  # Turtle would drop it
+    return om
+
+
+def test_snapshot_round_trip_keeps_triples_and_bindings(tmp_path):
+    om = _with_restriction_and_prefix()
+    out = tmp_path / "recovery.nt"
+    om.save_snapshot(out)
+    assert [p.name for p in tmp_path.iterdir()] == ["recovery.nt"]
+
+    reloaded = OntologyManager()
+    reloaded.load_snapshot(out)
+
+    assert isomorphic(reloaded.graph, om.graph)
+    assert reloaded._store.bindings() == om._store.bindings()
+    assert reloaded._user_added_prefixes == {"unused": "http://unused.example/ns#"}
+    assert (reloaded.base_uri, reloaded.ontology_uri) == (om.base_uri, om.ontology_uri)
+
+
+def test_snapshot_is_plain_n_triples(tmp_path):
+    om = _with_restriction_and_prefix()
+    out = tmp_path / "recovery.nt"
+    om.save_snapshot(out)
+    assert isomorphic(Graph().parse(str(out), format="nt"), om.graph)
+
+
+def test_load_snapshot_rejects_a_file_without_the_header(tmp_path):
+    out = tmp_path / "recovery.nt"
+    out.write_text(_populated().graph.serialize(format="nt"), encoding="utf-8")
+    om = _populated()
+    with pytest.raises(ValueError, match="not an OrionBelt snapshot"):
+        om.load_snapshot(out)
+    assert {c["name"] for c in om.get_classes()} == {"A", "B"}  # left as it was
 
 
 # ---- mutation-count gating + debounce ------------------------------------
@@ -238,6 +287,41 @@ def test_restore_corrupt_recovery_blocks_persist(fake_st):
     assert local_store.read_text(local_store.recovery_file()) == before
 
 
+# ---- the Turtle recovery file of an earlier release ------------------------
+
+
+def test_restore_reads_the_legacy_turtle_recovery_then_replaces_it(fake_st):
+    legacy = local_store.legacy_recovery_file()
+    _populated().save_to_file(legacy, "turtle")
+    ont = OntologyManager()
+    fake_st.session_state.ontology = ont
+
+    app._restore_autosave_from_disk(ont)
+    assert not fake_st.session_state.get("_disk_persist_blocked")
+    assert {c["name"] for c in ont.get_classes()} == {"A", "B"}
+
+    # The next write is the new snapshot, which takes the old file's place.
+    ont.add_class("C")
+    _set_state(fake_st, mc=2, recovery=None, settled=True)
+    app._persist_autosave_to_disk()
+    assert not legacy.exists()
+    restored = OntologyManager()
+    restored.load_snapshot(local_store.recovery_file())
+    assert {c["name"] for c in restored.get_classes()} == {"A", "B", "C"}
+
+
+def test_restore_prefers_the_snapshot_over_a_legacy_file(fake_st):
+    _populated().save_to_file(local_store.legacy_recovery_file(), "turtle")
+    newer = _populated()
+    newer.add_class("Newer")
+    newer.save_snapshot(local_store.recovery_file())
+    ont = OntologyManager()
+    fake_st.session_state.ontology = ont
+
+    app._restore_autosave_from_disk(ont)
+    assert "Newer" in {c["name"] for c in ont.get_classes()}
+
+
 # ---- linking an existing file loads it (does not overwrite) ---------------
 
 
@@ -326,11 +410,65 @@ def test_localstorage_oversized_disables_until_mutation(patch_ui, fake_st, monke
     )
 
     app._persist_autosave_to_localstorage()  # serializes once, finds it too big
-    assert fake_st.session_state["_ls_oversized_rev"] == 1
+    assert fake_st.session_state["_ls_oversized"][1:] == (
+        len(om.graph),
+        len(om.export_to_string("turtle").encode("utf-8")),
+    )
+    serialized.clear()
     assert ls.items == {}
 
     app._persist_autosave_to_localstorage()  # same revision -> no re-serialize
-    assert len(serialized) == 1
+    assert serialized == []
+
+
+def test_localstorage_oversized_waits_until_the_graph_shrinks(
+    patch_ui, fake_st, monkeypatch
+):
+    """An edit that grows a too-big graph does not pay for another serialize;
+    one that shrinks it below the cap at the measured bytes per triple does."""
+    ls = _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    patch_ui("AUTOSAVE_MAX_BYTES", len(om.export_to_string("turtle").encode()) - 1)
+    fake_st.session_state.ontology = om
+    _set_state(fake_st, mc=1, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert fake_st.session_state["_ls_oversized"] is not None
+
+    serialized = []
+    real_export = type(om).export_to_string
+    monkeypatch.setattr(
+        type(om),
+        "export_to_string",
+        lambda self, format="turtle": (
+            serialized.append(1) or real_export(self, format=format)
+        ),
+    )
+
+    om.add_class("C")
+    _set_state(fake_st, mc=2, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == []  # bigger still: not serialized again
+
+    om.delete_class("C")
+    om.delete_class("B")
+    _set_state(fake_st, mc=3, settled=True)
+    app._persist_autosave_to_localstorage()
+    assert serialized == [1]
+    assert app.AUTOSAVE_KEY in ls.items
+    assert fake_st.session_state.get("_ls_oversized") is None
+
+
+def test_localstorage_oversized_estimate_ignores_a_new_graph(
+    patch_ui, fake_st, monkeypatch
+):
+    """A load replaces the graph, whose triples may be of another size."""
+    _use_fake_ls(monkeypatch, patch_ui)
+    om = _populated()
+    fake_st.session_state.ontology = om
+    fake_st.session_state["_ls_oversized"] = (str(om.graph.identifier), 1, 10**9)
+    assert ui._still_too_big_for_localstorage(om)
+    om.load_from_string(_populated().export_to_string("turtle"))
+    assert not ui._still_too_big_for_localstorage(om)
 
 
 def test_localstorage_writes_when_dirty_and_settled(patch_ui, fake_st, monkeypatch):

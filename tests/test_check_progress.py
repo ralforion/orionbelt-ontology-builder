@@ -69,4 +69,15 @@ def test_applying_reasoning_leaves_no_progress_bar_behind():
     next(b for b in at.button if b.label == "Apply Reasoning").click().run()
     assert not at.exception, at.exception
     assert not at.get("progress")
+    assert not any(b.label == "Cancel" for b in at.button)
     assert any("New triple count" in md.value for md in at.markdown)
+
+
+def test_a_cancelled_reasoning_run_says_nothing_changed_once():
+    """The Cancel click stops the run itself; the next run reports it."""
+    at = _page("Reasoning")
+    at.session_state["_reasoning_cancelled"] = True
+    at.run(timeout=120)
+    assert any("cancelled" in info.value for info in at.info)
+    at.run(timeout=120)
+    assert not any("cancelled" in info.value for info in at.info)

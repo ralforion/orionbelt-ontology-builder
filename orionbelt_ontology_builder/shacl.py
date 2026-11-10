@@ -24,10 +24,8 @@ not resolved, and no SHACL-SPARQL constraint may reach another server through
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -40,6 +38,7 @@ from rdflib.collection import Collection
 from rdflib.namespace import RDF, RDFS
 from rdflib.term import Node
 
+from . import worker_process
 from .quality.models import QualityFinding, Severity
 
 SH = Namespace("http://www.w3.org/ns/shacl#")
@@ -543,8 +542,8 @@ def _in_worker(
 ) -> dict[str, Any]:
     """Run pySHACL in a fresh worker process, killed if the deadline passes.
 
-    A subprocess per check (see :mod:`.shacl_worker`): it starts in a fraction
-    of a second, and killing it is the whole of the cleanup.
+    A subprocess per check (see :mod:`.worker_process`): it starts in a
+    fraction of a second, and killing it is the whole of the cleanup.
     """
     request = json.dumps(
         {
@@ -555,22 +554,7 @@ def _in_worker(
             "inference": inference,
         }
     )
-    # The package's own location first, so the worker imports this copy of it
-    # whether or not it is installed (a checkout run with streamlit run).
-    env = dict(os.environ)
-    package_root = str(Path(__file__).resolve().parent.parent)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [package_root, *filter(None, [env.get("PYTHONPATH")])]
-    )
-    worker = subprocess.Popen(
-        [sys.executable, "-m", "orionbelt_ontology_builder.shacl_worker"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        env=env,
-    )
+    worker = worker_process.start("orionbelt_ontology_builder.shacl_worker")
     try:
         out, err = worker.communicate(request, timeout=deadline_s)
     except subprocess.TimeoutExpired:

@@ -26,6 +26,7 @@ orionbelt_ontology_builder/
 ├── ontology_manager.py # Core OWL/SKOS engine on rdflib (OntologyManager, UndoManager)
 ├── templates.py        # Built-in templates, upper & reference ontologies
 ├── sparql.py           # Read-only SPARQL execution (deadline + row cap)
+├── reasoning.py        # owlrl closure in a worker process (deadline, progress, cancel)
 ├── samples/            # Bundled ontologies (gist, gUFO, FOAF, PROV-O, …)
 ├── lib/                # The graph component (vendored vis-network)
 ├── assets/             # Logos, screenshots

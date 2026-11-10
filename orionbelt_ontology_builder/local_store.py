@@ -39,8 +39,12 @@ BRAND_PRIMARY_COLOR = "#0D2B7A"
 
 #: Per-user application data directory (created on demand).
 _DIR_NAME = ".orionbelt_ontology_builder"
-#: Crash-recovery snapshot the app mirrors the working ontology into.
-_RECOVERY_NAME = "recovery.ttl"
+#: Crash-recovery snapshot the app mirrors the working ontology into, in
+#: N-Triples with a prefix header (``OntologyManager.save_snapshot``).
+_RECOVERY_NAME = "recovery.nt"
+#: Where earlier releases kept the snapshot, as Turtle. Read on the first
+#: start after an upgrade, and removed once the new snapshot is written.
+_LEGACY_RECOVERY_NAME = "recovery.ttl"
 #: Small JSON config persisting cross-session settings (e.g. the linked path).
 _CONFIG_NAME = "config.json"
 
@@ -64,6 +68,11 @@ def data_dir() -> Path:
 def recovery_file() -> Path:
     """Path of the crash-recovery snapshot inside :func:`data_dir`."""
     return data_dir() / _RECOVERY_NAME
+
+
+def legacy_recovery_file() -> Path:
+    """Path of the Turtle snapshot that earlier releases wrote."""
+    return data_dir() / _LEGACY_RECOVERY_NAME
 
 
 def config_file() -> Path:

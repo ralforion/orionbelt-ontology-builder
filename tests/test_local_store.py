@@ -37,7 +37,8 @@ def test_persist_enabled_for_truthy_flag(monkeypatch, value):
 def test_data_dir_and_recovery_path(home):
     assert local_store.data_dir() == home / ".orionbelt_ontology_builder"
     assert local_store.data_dir().is_dir()
-    assert local_store.recovery_file() == local_store.data_dir() / "recovery.ttl"
+    assert local_store.recovery_file() == local_store.data_dir() / "recovery.nt"
+    assert local_store.legacy_recovery_file() == local_store.data_dir() / "recovery.ttl"
 
 
 def test_atomic_write_roundtrip(home):
