@@ -197,6 +197,33 @@ def test_the_multi_picker_keeps_the_picked_order_and_drops_stale_options():
     assert at.session_state["returned"] == ["Class: FN", "Class: fn"]
 
 
+def _all_picked_script():
+    import time
+
+    import streamlit as st
+
+    from orionbelt_ontology_builder.case_picker import case_multiselect
+
+    options = [f"Class: C{i}" for i in range(30_000)]
+    if "all" not in st.session_state:
+        st.session_state["all"] = list(options)
+    began = time.perf_counter()
+    case_multiselect("Pick", options, key="all")
+    st.session_state["took"] = time.perf_counter() - began
+
+
+def test_every_option_of_a_long_list_picked_stays_fast():
+    """ "Select all" over 50k classes held every option, and checking each
+    against the option list made the Visualization page take six seconds on
+    every rerun. At 30k options that check alone took over two seconds."""
+    at = AppTest.from_function(_all_picked_script)
+    at.run(timeout=60)  # the first mount also sets the component up
+    at.run(timeout=60)
+    assert not at.exception, at.exception
+    assert len(at.session_state["all"]) == 30_000
+    assert at.session_state["took"] < 0.5  # 17 ms here, 1.9 s with a list scan
+
+
 def test_a_default_comes_back_once_the_multi_picker_was_away(monkeypatch):
     """As a multiselect's did: an editor left with unsaved picks shows what it
     holds when it is opened again."""
