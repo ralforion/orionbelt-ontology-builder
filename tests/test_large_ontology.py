@@ -43,6 +43,7 @@ def test_listings_after_one_edit_stay_within_budget(large):
     large.graph.add(
         (URIRef(large.get_classes()[0]["uri"]), RDFS.comment, Literal("edited"))
     )
-    assert _seconds(large.get_classes) < 2
+    # Patched entry by entry since WP2: 9 ms here, against 480 ms rebuilt.
+    assert _seconds(large.get_classes) < 0.05
     assert _seconds(large.get_class_hierarchy) < 0.6
     assert _seconds(large.get_statistics) < 0.2
