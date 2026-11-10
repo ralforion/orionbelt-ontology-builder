@@ -216,7 +216,11 @@ def case_multiselect(
         st.session_state[key] = list(default or [])
     mark_drawn(key)
     held = st.session_state[key] or []
-    value = [o for o in held if o in options]
+    # Against a set: "Select all" on a 50k-class ontology picks every option,
+    # and a scan of the list per pick took six seconds on every rerun of the
+    # Visualization page.
+    offered = set(options)
+    value = [o for o in held if o in offered]
     if value != held:
         st.session_state[key] = value
     _mount(
