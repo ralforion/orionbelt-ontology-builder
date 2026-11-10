@@ -6837,9 +6837,10 @@ class OntologyManager:
         """Write the graph and its prefix bindings to ``file_path``, atomically.
 
         For the crash-recovery file, which is rewritten after every settled
-        edit. N-Triples rather than Turtle, because rdflib writes it about
-        nine times faster (0.7 s against 6.4 s at 213k triples) and parses it
-        about three times faster: nothing is grouped or abbreviated.
+        edit. N-Triples rather than Turtle, because rdflib writes it about six
+        times faster (0.4 s against 2.5 s at 213k triples): nothing is grouped
+        or abbreviated. Reading it back is only a little faster than Turtle
+        (4.6 s against 5.5 s), but that happens once, at startup.
 
         N-Triples has no prefixes, so the store's bindings, with the flag that
         marks the ones the user added, go into a comment line at the top. Any

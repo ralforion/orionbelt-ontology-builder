@@ -1,10 +1,10 @@
 """Loose time budgets on a 50k-class ontology (213k triples).
 
 Marked ``slow`` and deselected by default: building the ontology alone takes
-seconds. Run with ``pytest -m slow``. The budgets sit at roughly three times
-the times measured for design/PLAN_large_ontologies.md, so they catch a
-regression of the order the plan is about (a listing rebuilt from scratch, a
-format nine times slower), not noise.
+seconds. Run with ``pytest -m slow``. The budgets sit at three to four times
+what ``scripts/bench_large.py`` measures, so they catch a regression of the
+order that matters (the recovery file written as Turtle again, a listing
+several times slower), not noise.
 """
 
 import time
@@ -32,7 +32,7 @@ def _seconds(fn) -> float:
 
 def test_the_recovery_snapshot_round_trips_within_budget(large, tmp_path):
     snapshot = tmp_path / "recovery.nt"
-    assert _seconds(lambda: large.save_snapshot(snapshot)) < 3
+    assert _seconds(lambda: large.save_snapshot(snapshot)) < 1.5  # Turtle: 2.5
     restored = OntologyManager()
     assert _seconds(lambda: restored.load_snapshot(snapshot)) < 15
     assert len(restored.graph) == len(large.graph)
@@ -43,6 +43,6 @@ def test_listings_after_one_edit_stay_within_budget(large):
     large.graph.add(
         (URIRef(large.get_classes()[0]["uri"]), RDFS.comment, Literal("edited"))
     )
-    assert _seconds(large.get_classes) < 5
-    assert _seconds(large.get_class_hierarchy) < 2
-    assert _seconds(large.get_statistics) < 1
+    assert _seconds(large.get_classes) < 2
+    assert _seconds(large.get_class_hierarchy) < 0.6
+    assert _seconds(large.get_statistics) < 0.2

@@ -1,9 +1,9 @@
 """Run the reasoning closure in a worker process.
 
-owlrl's RDFS closure takes about 100 s per pass on a 43k-triple ontology, and
-the closure repeats passes until nothing new appears (measured in
-``design/PLAN_large_ontologies.md``). Run in the Streamlit process, that froze
-the app for minutes with no way out. In a worker (:mod:`.reasoning_worker`):
+owlrl's RDFS closure takes minutes on a 43k-triple ontology, and the closure
+repeats passes until nothing new appears (``scripts/bench_large.py`` times it).
+Run in the Streamlit process, that froze the app for the whole time with no
+way out. In a worker (:mod:`.reasoning_worker`):
 
 * the caller's ``progress`` callback is called a few times a second while it
   waits. Under Streamlit that call is where a script the user has moved on

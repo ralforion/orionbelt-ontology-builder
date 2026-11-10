@@ -471,7 +471,7 @@ native desktop window), it persists to disk instead of browser storage:
   a recovery file under `~/.orionbelt_ontology_builder/` on every change, so an
   unexpected close (crash, freeze) is recovered automatically on the next launch.
   It is N-Triples (`recovery.nt`, with your prefixes in a comment at the top),
-  which writes about nine times faster than Turtle on a large ontology; a
+  which writes about six times faster than Turtle on a large ontology; a
   `recovery.ttl` left by an earlier release is read once and then replaced.
   When a linked file is set it becomes the store (below), and the recovery file
   is only written as a fallback if a linked-file write fails — so each change is
