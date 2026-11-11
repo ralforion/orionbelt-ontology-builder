@@ -110,3 +110,27 @@ def test_a_warning_toast_keeps_the_default(flash):
     ui.display_flash_message()
 
     assert shown[0][2] == "short"
+
+
+def test_a_clean_bulk_result_is_a_toast_and_errors_a_banner(patch_ui):
+    """A banner above the page pushes the bulk grid and its Apply button out
+    of view; the failed rows of a result with errors are worth reading."""
+    from orionbelt_ontology_builder import ui
+
+    class _St:
+        def __init__(self):
+            self.session_state = _State()
+
+    class _State(dict):
+        def __getattr__(self, name):
+            return self[name]
+
+        def __setattr__(self, name, value):
+            self[name] = value
+
+    fake = _St()
+    patch_ui("st", fake)
+    ui.flash_bulk_result("Updated 3 class(es)")
+    assert fake.session_state.flash_message["toast"] is True
+    ui.flash_bulk_result("2 rows failed", "warning")
+    assert fake.session_state.flash_message["toast"] is False

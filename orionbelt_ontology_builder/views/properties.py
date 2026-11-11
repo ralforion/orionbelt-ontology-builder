@@ -22,6 +22,7 @@ from ..ui import (
     build_uri_options,
     clearable_selectbox,
     confirm_delete,
+    flash_bulk_result,
     get_ontology_manager_class,
     missing_required,
     option_sort_key,
@@ -809,7 +810,7 @@ def render_properties():
                         result = ont.bulk_add_properties(entries, property_type=ptype)
                         save_checkpoint("Bulk add properties")
                         _msg, _type = _bulk_result_message(result, "propert(ies)")
-                        set_flash_message(_msg, _type)
+                        flash_bulk_result(_msg, _type)
                         st.rerun()
 
         elif bulk_op == "Edit":
@@ -852,7 +853,7 @@ def render_properties():
                             changes += 1
                     if changes:
                         save_checkpoint("Bulk edit properties")
-                        show_message(f"Updated {changes} propert(ies)", "success")
+                        flash_bulk_result(f"Updated {changes} propert(ies)")
                         st.rerun()
                     else:
                         show_message("No changes detected.", "info")
@@ -877,7 +878,7 @@ def render_properties():
                     ):
                         result = ont.bulk_delete_properties(selected)
                         save_checkpoint("Bulk delete properties")
-                        show_message(
-                            f"Deleted {len(result['deleted'])} propert(ies)", "success"
+                        flash_bulk_result(
+                            f"Deleted {len(result['deleted'])} propert(ies)"
                         )
                         st.rerun()

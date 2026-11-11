@@ -184,6 +184,16 @@ PKG_DIR = _Path(__file__).resolve().parent
 _FAVICON = PKG_DIR / "favicon.png"
 _CUSTOM_CSS = """
 <style>
+    /* A long Bulk Edit grid fills the window down to just above Apply Changes
+       (views.annotations.BULK_EDIT_FIT_ROWS); the grid stretches to the box.
+       The offset is what sits above the grid plus the button below it, in
+       rem so it follows the text size; never shorter than Streamlit's own
+       ten-row default. */
+    .st-key-bulk_edit_grid, .st-key-bulk_edit_grid_filtered {
+        flex: none;  /* Streamlit's flex-basis would override the height */
+        height: max(400px, calc(100vh - 24.5rem));
+    }
+    .st-key-bulk_edit_grid_filtered { height: max(400px, calc(100vh - 29rem)); }
     .metric-card {
         background-color: #f0f2f6;
         border-radius: 8px;
@@ -4073,6 +4083,17 @@ def set_flash_message(message: str, type: str = "info", toast: bool = False):
         "type": type,
         "toast": toast,
     }
+
+
+def flash_bulk_result(message: str, type: str = "success") -> None:
+    """Flash the summary of a bulk add, edit or delete for after the rerun.
+
+    A clean result floats as a toast: a banner goes above the whole page and
+    pushes the bulk grid and its Apply button down, out of the window the
+    grid is sized to. A result with errors stays a banner, since the failed
+    rows are worth reading (issue #114).
+    """
+    set_flash_message(message, type, toast=type == "success")
 
 
 def display_flash_message():

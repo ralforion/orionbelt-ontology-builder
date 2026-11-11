@@ -1,5 +1,7 @@
 """The annotations page."""
 
+import contextlib
+
 import streamlit as st
 
 from .. import languages
@@ -14,6 +16,7 @@ from ..ui import (
     annotation_resource_options,
     clearable_selectbox,
     delete_custom_language_pack,
+    flash_bulk_result,
     format_label_name,
     language_pack_entries,
     language_pack_names,
@@ -398,20 +401,24 @@ def bulk_annotation_updates(frame, uris_by_name):
 BULK_EDIT_MAX_RESOURCES = 2_000
 
 
-#: Rows the Bulk Edit grid shows before it scrolls. Streamlit's default
-#: height shows about ten, in a fixed box that left most of a screen empty
-#: below it; ``"stretch"`` falls back to three rows in a page that has no
-#: fixed height, and ``"content"`` grows a long table past the page.
-BULK_EDIT_VISIBLE_ROWS = 20
+#: Up to this many rows the Bulk Edit grid is as tall as its rows, which
+#: leaves Apply Changes in view in any usual window. A longer grid fills the
+#: window down to just above the button instead, and scrolls inside: the
+#: browser knows the window's height and Python does not, so that is CSS
+#: (``.st-key-bulk_edit_grid`` in ``ui._CUSTOM_CSS``) with the grid set to
+#: ``height="stretch"``. Streamlit's default, a fixed ten-row box, left a
+#: large window mostly empty; a fixed twenty rows pushed the button out of a
+#: small one.
+BULK_EDIT_FIT_ROWS = 10
 
 #: Pixel height of a grid row and of its header, in Streamlit's data editor.
 _GRID_ROW_PX = 35
 
 
 def _bulk_edit_height(rows: int) -> int:
-    """The grid's height: its rows up to :data:`BULK_EDIT_VISIBLE_ROWS`, plus
-    the header and the row for adding one, and the border."""
-    return _GRID_ROW_PX * (min(rows, BULK_EDIT_VISIBLE_ROWS) + 2) + 3
+    """A short grid's height: its rows, plus the header and the row for
+    adding one, and the border."""
+    return _GRID_ROW_PX * (rows + 2) + 3
 
 
 def _bulk_edit_resources(all_resources: list[dict]) -> list[dict]:
@@ -748,7 +755,15 @@ def render_annotations():
                 columns=["Resource", "Predicate", "Value", "Language", "Action"]
             )
 
-        with sized_table():
+        # A long grid goes in a box the CSS sizes to the window (see
+        # BULK_EDIT_FIT_ROWS); the filter above it, when shown, takes room.
+        filtered = len(all_resources) > BULK_EDIT_MAX_RESOURCES
+        long_grid = len(df) > BULK_EDIT_FIT_ROWS
+        box_key = "bulk_edit_grid_filtered" if filtered else "bulk_edit_grid"
+        with (
+            sized_table(),
+            st.container(key=box_key) if long_grid else contextlib.nullcontext(),
+        ):
             edited_df = st.data_editor(
                 df,
                 num_rows="dynamic",
@@ -760,7 +775,7 @@ def render_annotations():
                     ),
                 },
                 key="bulk_annotations_editor",
-                height=_bulk_edit_height(len(df)),
+                height="stretch" if long_grid else _bulk_edit_height(len(df)),
                 width="stretch",
             )
 
@@ -784,7 +799,7 @@ def render_annotations():
                 if errors:
                     msg += f", {len(errors)} error(s): {errors[0]['error']}"
                 # Flash (not show_message) so the summary survives the rerun below.
-                set_flash_message(msg, "success" if not errors else "warning")
+                flash_bulk_result(msg, "warning" if errors else "success")
                 st.rerun()
             else:
                 show_message(

@@ -22,6 +22,7 @@ from ..ui import (
     build_namespace_options,
     clearable_selectbox,
     confirm_delete,
+    flash_bulk_result,
     format_label_name,
     missing_required,
     render_add_class_form,
@@ -407,7 +408,7 @@ def render_classes():
                         result = ont.bulk_add_classes(entries)
                         save_checkpoint("Bulk add classes")
                         _msg, _type = _bulk_result_message(result, "class(es)")
-                        set_flash_message(_msg, _type)
+                        flash_bulk_result(_msg, _type)
                         st.rerun()
 
         elif bulk_op == "Edit":
@@ -476,7 +477,7 @@ def render_classes():
                             changes += 1
                     if changes:
                         save_checkpoint("Bulk edit classes")
-                        show_message(f"Updated {changes} class(es)", "success")
+                        flash_bulk_result(f"Updated {changes} class(es)")
                         st.rerun()
                     else:
                         show_message("No changes detected.", "info")
@@ -500,7 +501,5 @@ def render_classes():
                     ):
                         result = ont.bulk_delete_classes(selected)
                         save_checkpoint("Bulk delete classes")
-                        show_message(
-                            f"Deleted {len(result['deleted'])} class(es)", "success"
-                        )
+                        flash_bulk_result(f"Deleted {len(result['deleted'])} class(es)")
                         st.rerun()
