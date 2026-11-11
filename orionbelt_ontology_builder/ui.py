@@ -4068,16 +4068,20 @@ _FLASH_TOAST_ICON = {"success": "✅", "warning": "⚠️", "error": "🚫", "in
 _FLASH_TOAST_SECONDS = 2
 
 
-def set_flash_message(message: str, type: str = "info", toast: bool = False):
+def set_flash_message(message: str, type: str = "info", toast: bool | None = None):
     """Set a flash message to be displayed after rerun.
 
     ``toast`` floats the message over the page instead of drawing it as a banner.
     The banner goes above the whole page body, so a confirmation for an edit made
     further down — the details panel, a row editor — pushes everything the user
-    is looking at out from under the cursor (issue #330). Use it for the short
-    confirmations that say only that the edit landed; anything worth reading
-    twice, such as a bulk-add summary or an error, stays a banner (issue #114).
+    is looking at out from under the cursor (issue #330), and a bulk grid's Apply
+    button out of the window it is sized to (#551). So a success is a toast unless
+    the caller says otherwise: it only says that the edit landed. Anything worth
+    reading twice, an error, a warning, a note, or a bulk summary with failed
+    rows, stays a banner (issue #114).
     """
+    if toast is None:
+        toast = type == "success"
     st.session_state.flash_message = {
         "message": message,
         "type": type,
@@ -4093,7 +4097,7 @@ def flash_bulk_result(message: str, type: str = "success") -> None:
     grid is sized to. A result with errors stays a banner, since the failed
     rows are worth reading (issue #114).
     """
-    set_flash_message(message, type, toast=type == "success")
+    set_flash_message(message, type)
 
 
 def display_flash_message():

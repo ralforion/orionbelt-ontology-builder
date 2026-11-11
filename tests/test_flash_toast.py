@@ -134,3 +134,32 @@ def test_a_clean_bulk_result_is_a_toast_and_errors_a_banner(patch_ui):
     assert fake.session_state.flash_message["toast"] is True
     ui.flash_bulk_result("2 rows failed", "warning")
     assert fake.session_state.flash_message["toast"] is False
+
+
+def test_a_success_is_a_toast_unless_the_caller_says_otherwise(patch_ui):
+    """Every plain confirmation floats; errors, warnings and notes stay
+    banners, to be read (issue #114)."""
+    from orionbelt_ontology_builder import ui
+
+    class _State(dict):
+        def __getattr__(self, name):
+            return self[name]
+
+        def __setattr__(self, name, value):
+            self[name] = value
+
+    class _St:
+        session_state = _State()
+
+    patch_ui("st", _St())
+    flash = _St.session_state
+    for kind, toast in (
+        ("success", True),
+        ("error", False),
+        ("warning", False),
+        ("info", False),
+    ):
+        ui.set_flash_message("x", kind)
+        assert flash.flash_message["toast"] is toast, kind
+    ui.set_flash_message("x", "success", toast=False)
+    assert flash.flash_message["toast"] is False
