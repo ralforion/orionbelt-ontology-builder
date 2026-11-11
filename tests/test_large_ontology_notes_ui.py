@@ -62,13 +62,16 @@ def _reasoning_script():
     app.render_validation()
 
 
-def test_reasoning_warns_before_a_slow_run(monkeypatch):
+def test_reasoning_warns_before_a_slow_owlrl_run(monkeypatch):
     monkeypatch.setenv("SLOW_AT", "2")
     at = AppTest.from_function(_reasoning_script)
     at.run(timeout=60)
+    assert not at.warning  # RDFS, computed natively, takes seconds
+    at.selectbox[0].set_value(("OWL-RL", "owl-rl")).run(timeout=60)
     assert any("many minutes" in w.value for w in at.warning)
 
     monkeypatch.delenv("SLOW_AT")
     at = AppTest.from_function(_reasoning_script)
     at.run(timeout=60)
+    at.selectbox[0].set_value(("OWL-RL", "owl-rl")).run(timeout=60)
     assert not at.warning

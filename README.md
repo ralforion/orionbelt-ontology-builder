@@ -246,8 +246,10 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 - Orphan classes, duplicate labels, domain/range mismatches
 - Untyped individuals
 - SKOS checks (see above)
-- RDFS and OWL-RL reasoning via owlrl, in a separate process with progress,
-  a 10 minute limit and a Cancel button, so a long closure never freezes the app
+- RDFS reasoning computed natively (seconds even at 200,000 triples), with a
+  lean option that leaves out what every RDFS graph implies, and OWL-RL
+  reasoning via owlrl; both run in a separate process with progress, a
+  10 minute limit and a Cancel button, so a long closure never freezes the app
 
 ### Model quality
 

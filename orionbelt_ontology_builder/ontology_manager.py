@@ -32,6 +32,7 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
+from .rdfs import rdfs_closure
 from .reasoning import REASONING_DEADLINE_SECONDS, ClosureChange, close_in_worker
 
 logger = logging.getLogger(__name__)
@@ -135,12 +136,18 @@ def _owlrl_isolated() -> Iterator[None]:
             datatypes[:] = saved_datatypes
 
 
-#: The owlrl semantics behind each reasoning profile the app offers.
-REASONING_PROFILES: dict[str, type] = {
-    "rdfs": owlrl.RDFS_Semantics,
+#: The RDFS profiles, computed natively, and whether each is lean (see
+#: :func:`.rdfs.rdfs_closure`).
+RDFS_PROFILES: dict[str, bool] = {"rdfs": False, "rdfs-lean": True}
+
+#: The owlrl semantics behind each OWL-RL profile.
+OWLRL_PROFILES: dict[str, type] = {
     "owl-rl": owlrl.OWLRL_Semantics,
     "owl-rl-ext": owlrl.OWLRL_Extension,
 }
+
+#: Every reasoning profile the app offers.
+REASONING_PROFILES = (*RDFS_PROFILES, *OWLRL_PROFILES)
 
 #: Upper bound on closure passes; every bundled sample settles within two.
 REASONING_MAX_PASSES = 5
@@ -151,8 +158,40 @@ def reason_to_fixpoint(
     profile: str = "rdfs",
     progress: Callable[[int, int], None] | None = None,
 ) -> int:
-    """Infer new triples into ``graph``, repeating the closure until nothing
-    new appears, and return how many were added.
+    """Infer new triples into ``graph`` until nothing new follows, and return
+    how many were added.
+
+    RDFS is computed natively (:func:`.rdfs.rdfs_closure`), to the same result
+    as owlrl run to its fixpoint, in seconds where owlrl took minutes;
+    ``rdfs-lean`` leaves out what every RDFS graph implies. The OWL-RL
+    profiles still run owlrl (:func:`_owlrl_fixpoint`).
+
+    ``progress(pass_number, triples_added_so_far)`` is called before each
+    pass; the native RDFS closure is one pass. An unknown ``profile`` changes
+    nothing.
+
+    Module level so the reasoning worker (:mod:`.reasoning_worker`) runs the
+    very same code on its copy of the graph.
+    """
+    if profile in RDFS_PROFILES:
+        if progress is not None:
+            progress(1, 0)
+        added = rdfs_closure(graph, lean=RDFS_PROFILES[profile])
+        for triple in added:
+            graph.add(triple)
+        return len(added)
+    semantics = OWLRL_PROFILES.get(profile)
+    if semantics is None:
+        return 0
+    return _owlrl_fixpoint(graph, semantics, progress)
+
+
+def _owlrl_fixpoint(
+    graph: Graph,
+    semantics: type,
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Run owlrl's ``semantics`` on ``graph`` until a run adds nothing.
 
     A single owlrl pass is not a fixpoint: its axiomatic rules run once, up
     front, so terms the pass itself introduces (``rdfs:Resource`` typing under
@@ -163,17 +202,7 @@ def reason_to_fixpoint(
     growing, so applying reasoning twice adds nothing. An inconsistency owlrl
     reports is written on a fresh blank node every pass; only one node per
     message is kept, or the graph would never stop growing.
-
-    ``progress(pass_number, triples_added_so_far)`` is called before each
-    pass. An unknown ``profile`` changes nothing.
-
-    Module level so the reasoning worker (:mod:`.reasoning_worker`) runs the
-    very same loop on its copy of the graph.
     """
-    semantics = REASONING_PROFILES.get(profile)
-    if semantics is None:
-        return 0
-
     initial_count = len(graph)
     for pass_number in range(1, REASONING_MAX_PASSES + 1):
         before = len(graph)
