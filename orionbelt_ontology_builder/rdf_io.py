@@ -45,7 +45,7 @@ bound the way rdflib's Turtle parser binds them, once the triples are in.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pyoxigraph as ox
@@ -67,7 +67,9 @@ _FAST_FORMATS = {
 _XSD_STRING = str(XSD.string)
 
 #: Turtle's white space and comments, which may sit between any two tokens.
-_SKIP = r"(?:[ \t\r\n]|#[^\r\n]*)*"
+#: Possessive, so that a comment always runs to the end of its line and a run
+#: of ``#`` is read one way only, not split every way it can be.
+_SKIP = re.compile(r"(?:[ \t\r\n]++|#[^\r\n]*+)*+")
 
 #: What an IRI between angle brackets may contain, escapes included.
 _IRI_CHARS = r"[^<>\"{}|^`\x00-\x20]"
@@ -89,13 +91,15 @@ _PREFIXED_DATATYPE = re.compile(r"\^\^[ \t\r\n]*" + _PREFIXED_NAME)
 
 _ABSOLUTE_IRI = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
 
-#: A language tag after the closing quote of its literal, and what is between
-#: them. rdflib requires nothing there; Oxigraph also takes white space or a
-#: comment, and lowercases the tag.
-_LANGUAGE_TAG = re.compile(r"[\"'](" + _SKIP + r")@([A-Za-z]+(?:-[A-Za-z0-9]+)*)")
+#: A language tag after the closing quote of its literal. rdflib requires
+#: nothing between them; Oxigraph also takes white space or a comment, and
+#: lowercases the tag.
+_QUOTE = r"[\"']"
+_LANGUAGE_TAG = r"@([A-Za-z]+(?:-[A-Za-z0-9]+)*)"
 
 #: ``@base`` or ``BASE`` and its IRI, or text that reads like one.
-_BASE = re.compile(r"(?i)base" + _SKIP + "<(" + _IRI_CHARS + "*)>")
+_BASE = r"(?i:base)"
+_BRACKETED_IRI = "<(" + _IRI_CHARS + "*)>"
 #: An IRI that is relative, or that hides its scheme behind an escape.
 _RELATIVE_IRI = re.compile(r"<((?![A-Za-z][A-Za-z0-9+.\-]*:)" + _IRI_CHARS + "*)>")
 
@@ -186,7 +190,7 @@ def _relative_iris_resolve_alike(text: str) -> bool:
     IRIs under the same base. Text in a string or a comment that reads like an
     IRI is resolved too, which can only send a file to rdflib needlessly.
     """
-    bases = _BASE.findall(text)
+    bases = [iri for _, iri in _next_tokens(text, _BASE, _BRACKETED_IRI)]
     if not bases:
         return True  # Oxigraph rejects a relative IRI without a base
     relative = sorted(set(_RELATIVE_IRI.findall(text)))
@@ -207,7 +211,13 @@ def _relative_iris_resolve_alike(text: str) -> bool:
         ]
     except Exception:  # noqa: BLE001 - an IRI Oxigraph rejects goes to rdflib
         return False
-    return by_oxigraph == [rdflib_join(base, iri) for iri in relative]
+    try:
+        by_rdflib = [rdflib_join(base, iri) for iri in relative]
+    except ValueError:
+        # A path under a base without one (``urn:x``): rdflib rejects a real
+        # IRI like that, and text in a string that reads like one is fine.
+        return False
+    return by_oxigraph == by_rdflib
 
 
 def _prefixed_datatypes(text: str) -> set[tuple[str, str]] | None:
@@ -232,8 +242,8 @@ def _prefixed_datatypes(text: str) -> set[tuple[str, str]] | None:
 def _declared_once(text: str, prefix: str) -> bool:
     """Whether ``prefix`` is declared exactly once, so that the namespace
     Oxigraph ends with is the one every use of it had."""
-    declaration = re.compile(r"(?<!\S)" + re.escape(prefix) + ":" + _SKIP + "<")
-    return len(declaration.findall(text)) == 1
+    name = r"(?<!\S)" + re.escape(prefix) + ":"
+    return len(_next_tokens(text, name, "(<)")) == 1
 
 
 def _language_tags_as_written(text: str) -> dict[str, str] | None:
@@ -246,13 +256,49 @@ def _language_tags_as_written(text: str) -> dict[str, str] | None:
     case is never put on a tag.
     """
     spelling: dict[str, str] = {}
-    for apart, tag in set(_LANGUAGE_TAG.findall(text)):
+    for apart, tag in set(_next_tokens(text, _QUOTE, _LANGUAGE_TAG)):
         if apart:
             return None
         lower = tag.lower()
         if spelling.setdefault(lower, tag) != tag:
             return None
     return spelling
+
+
+def _next_tokens(text: str, anchor: str, token: str) -> list[tuple[bool, str]]:
+    """Each match of ``token`` (a pattern with one group) that follows a match
+    of ``anchor`` in ``text``, past white space and comments: whether any
+    were in between, and the group.
+
+    Tokens on the anchor's line are matched in a single pass. Only for an
+    anchor whose line runs on, blank or into a comment, is what follows read
+    further, and each stretch of white space and comments is read once.
+    """
+    found = re.findall(anchor + r"([ \t]*+)(?:" + token + r"|([#\r\n]))", text)
+    tokens = [(bool(blank), value) for blank, value, runs_on in found if not runs_on]
+    if len(tokens) < len(found):
+        after = re.compile(token)
+        for start in _starts_past_lines(text, anchor):
+            if match := after.match(text, start):
+                tokens.append((True, match.group(1)))
+    return tokens
+
+
+def _starts_past_lines(text: str, anchor: str) -> Iterator[int]:
+    """For each match of ``anchor`` whose line runs on, blank or into a
+    comment, where the next token starts.
+
+    A match that falls inside a comment of the stretch read before it is
+    followed by a ``#`` or a line end within that stretch, so what follows it
+    starts where the stretch ends, and no stretch is read twice.
+    """
+    stretch_end = -1
+    for match in re.finditer(anchor + r"[ \t]*+(?=[#\r\n])", text):
+        start = match.end()
+        if start >= stretch_end:
+            skipped = _SKIP.match(text, start)
+            stretch_end = skipped.end() if skipped else start
+        yield stretch_end
 
 
 def _converted(quads: Iterable[ox.Quad], spelling: dict[str, str]) -> Iterable[_Triple]:

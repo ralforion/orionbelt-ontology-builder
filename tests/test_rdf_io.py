@@ -6,6 +6,9 @@ in Turtle and in N-Triples, and on a file built for the corners where the two
 parsers part ways.
 """
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -201,6 +204,84 @@ def test_a_relative_iri_under_a_base_comes_out_as_rdflib_resolves_it(reference):
         assert used
 
 
+def test_text_like_a_relative_iri_under_a_base_without_a_path_goes_to_rdflib():
+    """rdflib's ``join`` raises for a path under ``urn:example``. Text in a
+    literal that reads like one must not stop a file rdflib loads."""
+    data = '@base <urn:example> .\n<http://e/a> <http://e/b> "see <relative>" .'
+    by_rdflib, ours, used = _both("turtle", data=data)
+    assert not used
+    _assert_same(by_rdflib, ours)
+
+
+def test_a_base_written_past_a_comment_is_read():
+    """``?y`` resolves differently in rdflib, so the file has to go there,
+    which it only does if the base after the comment is found."""
+    data = (
+        "@base # the base\n  <http://a/b/c/d;p?q> .\n<http://e/s> <http://e/p> <?y> ."
+    )
+    by_rdflib, ours, used = _both("turtle", data=data)
+    assert not used
+    _assert_same(by_rdflib, ours)
+
+
+def test_a_prefix_declared_past_a_comment_counts():
+    """``x:ing`` is ``xsd:string`` under the first declaration only. Missing
+    that one would leave the prefix declared once, and the fast path."""
+    data = (
+        "@prefix x: # c\n <http://www.w3.org/2001/XMLSchema#str> .\n"
+        '<http://e/a> <http://e/b> "s"^^x:ing .\n@prefix x: <http://e/other#> .\n'
+    )
+    by_rdflib, ours, used = _both("turtle", data=data)
+    assert not used
+    _assert_same(by_rdflib, ours)
+
+
+#: Text that white space and comments were once matched on in exponential or
+#: quadratic time. rdflib parses each in milliseconds.
+ADVERSARIAL = {
+    "hashes after base": "# base " + "#" * 64 + "\n@prefix ex: <http://e/> .\n"
+    "ex:a ex:b ex:c .\n",
+    "bases ending comment lines": "# base\n" * 20000 + "@prefix ex: <http://e/> .\n"
+    "ex:a ex:b ex:c .\n",
+    "quotes ending comment lines": '#"\n' * 20000
+    + "<http://e/a> <http://e/b> <http://e/c> .\n",
+    "quotes along one comment": '<http://e/a> <http://e/b> "#"'
+    + '#"' * 50000
+    + "\n.\n",
+    "prefixes ending comment lines": "@prefix ex: <http://e/> .\n"
+    + "# ex:\n" * 20000
+    + 'ex:a ex:b "1"^^ex:t .\n',
+}
+
+_PARSE_ADVERSARIAL = """
+import json, sys
+from rdflib import Graph
+from rdflib.compare import isomorphic
+from orionbelt_ontology_builder.rdf_io import parse_into
+results = {}
+for name, data in json.load(sys.stdin).items():
+    ours = Graph()
+    used = parse_into(ours, "turtle", data=data)
+    results[name] = [used, isomorphic(ours, Graph().parse(data=data, format="turtle"))]
+print(json.dumps(results))
+"""
+
+
+def test_comments_are_read_in_linear_time():
+    """A regression hangs rather than fails, so these parse in a child
+    process with a deadline; each takes milliseconds."""
+    done = subprocess.run(
+        [sys.executable, "-c", _PARSE_ADVERSARIAL],
+        input=json.dumps(ADVERSARIAL),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+        cwd=SAMPLES.parent.parent,
+    )
+    assert json.loads(done.stdout) == {name: [True, True] for name in ADVERSARIAL}
+
+
 def test_two_bases_and_a_relative_iri_go_to_rdflib():
     data = (
         "@base <http://a/x/> .\n<s> <http://e/p> <o> .\n"
@@ -213,10 +294,13 @@ def test_two_bases_and_a_relative_iri_go_to_rdflib():
 
 def test_a_language_tag_set_apart_fails_as_rdflib_fails():
     """Oxigraph takes ``"x" @en-GB`` and lowercases the tag; rdflib rejects
-    it. A load must not start accepting it in a different form."""
+    it. A load must not start accepting it in a different form. The last
+    has the tag written right as well, and ``"#"`` reads like a comment that
+    covers the real one."""
     for data in (
         '<http://e/a> <http://e/b> "x" @en-GB .',
         '<http://e/a> <http://e/b> "x" # note\n @en-GB .',
+        '<http://e/a> <http://e/b> "y"@en-GB , "#" , "x" # note\n @en-GB .',
     ):
         with pytest.raises(Exception) as by_rdflib:
             Graph().parse(data=data, format="turtle")
