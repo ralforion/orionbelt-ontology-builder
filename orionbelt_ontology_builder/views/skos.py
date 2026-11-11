@@ -13,6 +13,7 @@ from ..ui import (
     _open_entity,
     _renamed_ref,
     _resolve_list_view,
+    build_class_hierarchy_text,
     build_uri_options,
     clearable_selectbox,
     confirm_delete,
@@ -708,39 +709,28 @@ def render_skos_vocabulary():
             hierarchy = ont.get_concept_hierarchy(
                 scheme=scheme_lookup.get(h_scheme) if h_scheme else None
             )
+            # One text block, built by the class tree's walker, rather than a
+            # markdown element per concept: thousands of elements are what
+            # brings the desktop webview down (issue #140). The walker also
+            # stops at a cycle, expands a concept with two broader concepts
+            # once, and caps the lines.
+            pref_labels = {c["name"]: c["prefLabel"] for c in concepts}
+            broader: dict[str, list[str]] = {name: [] for name in hierarchy}
+            for parent, children in hierarchy.items():
+                for child in children:
+                    broader.setdefault(child, []).append(parent)
+            nodes = [
+                {
+                    "name": name,
+                    "label": pref_labels.get(name, ""),
+                    "parents": broader.get(name, []),
+                    "children": sorted(children),
+                }
+                for name, children in sorted(hierarchy.items())
+            ]
+            st.code(build_class_hierarchy_text(nodes), language=None)
 
-            # Find root concepts (those that are not narrower of any other)
-            all_children = set()
-            for children in hierarchy.values():
-                all_children.update(children)
-            roots = [name for name in hierarchy if name not in all_children]
-
-            def render_tree(name, indent=0, trail=()):
-                pad = "&nbsp;&nbsp;&nbsp;&nbsp;" * indent
-                arm = "└─ " if indent > 0 else ""
-                # The trail is the current path, not a global visited set: under
-                # poly-hierarchy a concept legitimately appears beneath several
-                # parents, and de-duplicating that would hide real structure.
-                # Only a repeat *on the same path* is a cycle, and without this
-                # guard an imported cyclic vocabulary recurses until the app
-                # dies, before the warning below ever renders.
-                if name in trail:
-                    st.markdown(f"{pad}{arm}↻ **{name}** — cycle, not expanded")
-                    return
-                concept_data = next((c for c in concepts if c["name"] == name), None)
-                pref = (
-                    concept_data["prefLabel"]
-                    if concept_data and concept_data["prefLabel"]
-                    else name
-                )
-                st.markdown(f"{pad}{arm}**{pref}** ({name})")
-                for child in sorted(hierarchy.get(name, [])):
-                    render_tree(child, indent + 1, (*trail, name))
-
-            for root in sorted(roots):
-                render_tree(root)
-
-            if not roots and hierarchy:
+            if hierarchy and all(broader.get(name) for name in hierarchy):
                 st.warning("All concepts have broader concepts — possible cycle.")
 
     if _skos_tab == "SKOS Validation":

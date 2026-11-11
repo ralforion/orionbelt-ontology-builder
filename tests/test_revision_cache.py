@@ -123,3 +123,29 @@ def test_direct_graph_edits_are_seen(om):
     before = om.revision
     om.graph.add((URIRef("http://x.org/a"), RDF.type, OWL.Class))
     assert om.revision > before
+
+
+def test_a_build_that_binds_a_prefix_keeps_its_value(monkeypatch):
+    """Writing Turtle binds a prefix for a namespace it meets unbound, which
+    moves the revision during the build. The value already reflects that and
+    is kept, so the next call does not write the whole graph again; the
+    prefix listing still follows the new binding."""
+    from rdflib import Graph, Literal, URIRef
+
+    om = OntologyManager()
+    om.add_class("A")
+    om.graph.add((om._uri("A"), URIRef("http://unbound.example/p"), Literal("x")))
+    om.namespace_bindings()
+
+    writes = []
+    real = Graph.serialize
+
+    def counting(self, *args, **kwargs):
+        writes.append(1)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Graph, "serialize", counting)
+    first = om.export_to_string("turtle")
+    assert om.export_to_string("turtle") == first
+    assert len(writes) == 1
+    assert any(ns == "http://unbound.example/" for _, ns in om.namespace_bindings())

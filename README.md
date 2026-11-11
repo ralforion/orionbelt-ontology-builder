@@ -553,7 +553,7 @@ the 200 MB default; raise the value only when self-hosting with enough memory.
 | **Annotations**     | RDFS, SKOS, DC and custom annotations, language packs, bulk edit, rename |
 | **SKOS Vocabulary** | Concept schemes, concepts, hierarchy, SKOS validation          |
 | **Import / Export** | File import with merge review, export, new ontology, templates |
-| **Source**          | Live Turtle source view of the ontology                        |
+| **Source**          | Turtle source of the ontology, generated when you ask          |
 | **SPARQL**          | Read-only SPARQL console with row and time limits              |
 | **Validation & Reasoning** | Validation, model quality, SHACL and OWL reasoning      |
 | **Visualization**   | Interactive graph (OWL + SKOS), hierarchy tree, statistics     |
