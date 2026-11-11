@@ -581,7 +581,7 @@ orionbelt-ontology-builder/
 └── tests/                              # pytest suite
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx, streamlit-ace.
+Dependencies: streamlit, rdflib, owlrl, pyshacl, pyoxigraph, networkx, streamlit-ace.
 
 ---
 

@@ -32,6 +32,7 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
+from .rdf_io import parse_into
 from .rdfs import rdfs_closure
 from .reasoning import REASONING_DEADLINE_SECONDS, ClosureChange, close_in_worker
 
@@ -7158,7 +7159,7 @@ class OntologyManager:
         else:
             self._loaded_prefixes = []
         self._install_graph()
-        self.graph.parse(file_path, format=format)
+        parse_into(self.graph, format, data=content, path=file_path)
         self._update_namespace_from_graph()
 
     def save_to_file(self, file_path, format: str | None = None) -> None:
@@ -7211,7 +7212,7 @@ class OntologyManager:
         bindings = _read_snapshot_bindings(file_path)
         self._loaded_prefixes = []
         self._install_graph()
-        self.graph.parse(str(file_path), format="nt")
+        parse_into(self.graph, "nt", path=file_path)
         self._store.set_bindings(bindings)
         self._forget_qnames()
         self._update_namespace_from_graph()
@@ -7225,7 +7226,7 @@ class OntologyManager:
         else:
             self._loaded_prefixes = []
         self._install_graph()
-        self.graph.parse(data=data, format=format)
+        parse_into(self.graph, format, data=data)
         self._update_namespace_from_graph()
 
     def preview_import(
@@ -7248,7 +7249,7 @@ class OntologyManager:
         report = progress or (lambda step, done: None)
         report("Parsing the file", 0.0)
         temp = Graph()
-        temp.parse(data=data, format=format)
+        parse_into(temp, format, data=data)
 
         report("Comparing it with the current ontology", 0.7)
         diff = self.compare_graphs(temp)
@@ -7409,7 +7410,7 @@ class OntologyManager:
     ) -> dict[str, Any]:
         """Parse data and merge into current graph."""
         temp = Graph()
-        temp.parse(data=data, format=format)
+        parse_into(temp, format, data=data)
         return self.merge_from_graph(temp, strategy=strategy)
 
     def _detect_prefix_conflicts(self, other_graph: Graph) -> list[dict[str, str]]:
@@ -7820,7 +7821,7 @@ class OntologyManager:
         survive a restore.
         """
         self._install_graph()
-        self.graph.parse(data=snapshot.decode("utf-8"), format="nt")
+        parse_into(self.graph, "nt", data=snapshot.decode("utf-8"))
         self._update_namespace_from_graph()
 
     # ==================== DIFF & COMPARISON ====================
@@ -7913,7 +7914,7 @@ class OntologyManager:
     def compare_to_string(self, data: str, format: str = "turtle") -> dict[str, Any]:
         """Parse data into a temporary graph and compare to current state."""
         temp = Graph()
-        temp.parse(data=data, format=format)
+        parse_into(temp, format, data=data)
         return self.compare_graphs(temp)
 
     def _group_triples_by_subject(self, triples) -> dict[str, list[dict]]:

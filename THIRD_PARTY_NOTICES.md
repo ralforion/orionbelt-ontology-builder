@@ -79,15 +79,23 @@ the whole runtime dependency tree. Most of that carries its own terms:
 - Debian ships `/usr/share/doc/*/copyright` for the OS packages and for CPython, which is
   under the Python Software Foundation License.
 - Installed Python distributions carry their licence files into `site-packages`. That covers
-  54 of the 55 in the current lock.
-- `streamlit` is the exception: its wheel ships no licence file at all. Its Apache-2.0 text is
-  copied into the image at `/app/licenses/`, from `docker/licenses/` in this repository.
-  Streamlit publishes no NOTICE file, so there is none to carry with it.
+  all but two in the current lock.
+- `streamlit` and `pyoxigraph` are the exceptions: their wheels ship no licence file at all.
+  Their texts are copied into the image at `/app/licenses/`, from `docker/licenses/` in this
+  repository. Streamlit's is Apache-2.0, and Streamlit publishes no NOTICE file, so there is
+  none to carry with it. pyoxigraph is offered under MIT or Apache-2.0; both texts are carried,
+  taken from the [Oxigraph repository](https://github.com/oxigraph/oxigraph) at the tag of the
+  locked version.
+- pyoxigraph's compiled extension statically links about 200 Rust crates. Its wheel lists them
+  with their licences in a CycloneDX SBOM, `pyoxigraph-*.dist-info/sboms/pyoxigraph.cyclonedx.json`,
+  which the image carries; the crates' licence texts are not in the wheel. All are under
+  permissive licences (MIT, Apache-2.0, Unicode-3.0, ISC, BSD, Zlib and the like) except
+  RocksDB (`oxrocksdb-sys`), which is offered under GPL-2.0-only or Apache-2.0.
 
-Nothing in the tree needs a licence election. `python-dateutil` offers a choice (Apache-2.0 or
-BSD-3-Clause) and ships both texts, which satisfies it without electing either; numpy's
-`BSD-3-Clause AND 0BSD AND MIT AND Zlib` is a conjunction rather than a choice, and it ships
-all four.
+The one licence election in the tree is RocksDB's: the image redistributes it under Apache-2.0.
+`python-dateutil` and `pyoxigraph` offer a choice and both texts are carried, which satisfies it
+without electing either; numpy's `BSD-3-Clause AND 0BSD AND MIT AND Zlib` is a conjunction
+rather than a choice, and it ships all four.
 
 If the PyInstaller build in issue #54 ever bundles the interpreter and dependencies into a
 downloadable artifact, that is a third distribution channel and this section wants revisiting
