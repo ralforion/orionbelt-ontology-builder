@@ -36,11 +36,14 @@ def render_source():
             label = "Regenerate source"
         if not st.button(label, key="btn_source_generate"):
             return
-        st.session_state[_GENERATED] = token
 
     try:
         turtle_src = ont.export_to_string(format="turtle")
     except Exception as e:  # noqa: BLE001 - serialization failure must show as a message
         st.error(f"Error serializing ontology: {e}")
         return
+    # Taken after writing: rdflib binds a prefix for each namespace it meets
+    # unbound, which moves the revision, and a token taken before would call
+    # the source just generated out of date.
+    st.session_state[_GENERATED] = ont.revision_token()
     st.code(turtle_src, language="turtle", line_numbers=True)

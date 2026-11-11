@@ -1052,7 +1052,16 @@ class OntologyManager:
         try:
             return self._memo_cache[key]
         except KeyError:
-            value = self._memo_cache[key] = build()
+            value = build()
+            if self._journal.revision != self._memo_revision:
+                # The build itself changed the graph: rdflib's serializer binds
+                # a prefix for each namespace it meets unbound. The value
+                # already reflects that, so it is kept; everything else cached
+                # follows the change as usual. Dropping it instead would write
+                # the whole Turtle again on the next call.
+                self._follow_changes(self._journal.drain_for_caches())
+                self._memo_revision = self._journal.revision
+            self._memo_cache[key] = value
             return value
 
     def _follow_changes(self, changes: list[_Change] | None) -> None:

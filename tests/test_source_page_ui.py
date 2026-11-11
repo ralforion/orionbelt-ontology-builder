@@ -66,3 +66,36 @@ def test_an_edit_waits_for_a_regenerate():
     assert regenerate.label == "Regenerate source"
     regenerate.click().run(timeout=60)
     assert "Tandem" in at.code[0].value
+
+
+def _unbound_script():
+    import streamlit as st
+    from rdflib import Literal, URIRef
+
+    from orionbelt_ontology_builder import app
+    from orionbelt_ontology_builder.ontology_manager import OntologyManager
+
+    if "ontology" not in st.session_state:
+        om = OntologyManager()
+        om.add_class("Bicycle")
+        # A namespace with no prefix: writing Turtle binds one, which moves
+        # the revision while the source is being generated.
+        om.graph.add(
+            (om._uri("Bicycle"), URIRef("http://unbound.example/p"), Literal("x"))
+        )
+        st.session_state.ontology = om
+        st.session_state["_autosave_restored"] = True
+
+    app.render_source()
+
+
+def test_a_prefix_bound_while_writing_does_not_date_the_source():
+    """Codex review of #549: the token was taken before writing, so the
+    source was out of date the moment it was shown."""
+    at = AppTest.from_function(_unbound_script)
+    at.run(timeout=60)
+    at.button(key="btn_source_generate").click().run(timeout=60)
+    assert len(at.code) == 1
+    at.run(timeout=60)
+    assert len(at.code) == 1
+    assert not at.button
