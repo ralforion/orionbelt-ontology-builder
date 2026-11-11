@@ -78,9 +78,16 @@ def test_a_sample_parses_alike(path, tmp_path):
 
 def test_the_samples_take_the_fast_path_where_they_can(tmp_path):
     """Not only the fallback being exercised: these have no explicit
-    ^^xsd:string and are Turtle."""
+    ^^xsd:string. gUFO declares a base and has IRI-like text in a comment
+    (``<38.8897,-77.0089>``); PROV-O has ``^^xsd:dateTime`` in the text of a
+    comment, which in N-Triples names no declared prefix."""
     for name in ("prov-o.ttl", "gufo/gufo.ttl", "skos-showcase.ttl"):
         assert parse_into(Graph(), "turtle", path=SAMPLES / name), name
+        nt = tmp_path / "sample.nt"
+        Graph().parse(SAMPLES / name, format="turtle").serialize(
+            str(nt), format="nt", encoding="utf-8"
+        )
+        assert parse_into(Graph(), "nt", path=nt), f"{name} as N-Triples"
 
 
 def test_the_corners_parse_alike_through_oxigraph():
@@ -104,21 +111,133 @@ def test_a_tag_written_two_ways_goes_to_rdflib():
     _assert_same(by_rdflib, ours)
 
 
-def test_an_explicit_xsd_string_goes_to_rdflib():
-    """RDF 1.1 makes "a" and "a"^^xsd:string one term; rdflib does not."""
+XSD_STRING = URIRef("http://www.w3.org/2001/XMLSchema#string")
+XSD_DECL = "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+STRING_TYPED = {
+    "prefixed": XSD_DECL + '<http://e/a> <http://e/b> "x"^^xsd:string , "x" .',
+    "comment after ^^": XSD_DECL
+    + '<http://e/a> <http://e/b> "x"^^ # note\n xsd:string , "x" .',
+    "full IRI": '<http://e/a> <http://e/b> "x"^^<http://www.w3.org/2001/XMLSchema#string> .',
+    "escaped IRI": '<http://e/a> <http://e/b> "x"^^<http://www.w3.org/2001/XMLSchema#\\u0073tring> .',
+    "another prefix": "@prefix t: <http://www.w3.org/2001/XMLSchema#> .\n"
+    '<http://e/a> <http://e/b> "x"^^t:string .',
+    "empty prefix": "@prefix : <http://www.w3.org/2001/XMLSchema#> .\n"
+    '<http://e/a> <http://e/b> "x"^^:string .',
+    "split across prefix and name": "@prefix s: <http://www.w3.org/2001/XMLSchema#str> .\n"
+    '<http://e/a> <http://e/b> "x"^^s:ing .',
+    "escaped local name": "@prefix s: <http://www.w3.org/2001/XMLSchema> .\n"
+    '<http://e/a> <http://e/b> "x"^^s:\\#string .',
+    "prefix redefined after use": "@prefix s: <http://www.w3.org/2001/XMLSchema#str> .\n"
+    '<http://e/a> <http://e/b> "x"^^s:ing .\n@prefix s: <http://e/> .',
+    "relative under a base": "@base <http://www.w3.org/2001/XMLSchema> .\n"
+    '<http://e/a> <http://e/b> "x"^^<#string> .',
+    "N-Triples": '<http://e/a> <http://e/b> "x"^^<http://www.w3.org/2001/XMLSchema#string> .\n',
+}
+
+
+@pytest.mark.parametrize("spelling", STRING_TYPED)
+def test_an_xsd_string_datatype_however_written_goes_to_rdflib(spelling):
+    """RDF 1.1 makes "a" and "a"^^xsd:string one term and Oxigraph reports
+    both alike; rdflib keeps them apart, so these must come out as rdflib's."""
+    fmt = "nt" if spelling == "N-Triples" else "turtle"
+    by_rdflib, ours, used = _both(fmt, data=STRING_TYPED[spelling])
+    assert set(ours) == set(by_rdflib)
+    assert any(o.datatype == XSD_STRING for o in ours.objects())
+    assert not used
+
+
+def test_other_datatypes_keep_the_fast_path():
     data = (
-        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
-        '<http://e/a> <http://e/b> "x"^^xsd:string .'
+        XSD_DECL + "@prefix ex: <http://e/> .\n"
+        'ex:a ex:b "1"^^xsd:integer, "x"^^ex:string2, "2026-11-11"^^xsd:date ;'
+        ' ex:c "y"^^<http://e/dt> ; ex:d "has ^^xsd:string in its text" .'
     )
     by_rdflib, ours, used = _both("turtle", data=data)
-    assert not used
+    _assert_same(by_rdflib, ours)
+    assert not used  # the text mentions ^^xsd:string, which is read as one
+    data = data.replace("has ^^xsd:string in its text", "plain")
+    by_rdflib, ours, used = _both("turtle", data=data)
+    _assert_same(by_rdflib, ours)
+    assert used
+
+
+def test_numbers_in_shorthand_come_out_as_rdflib_writes_them():
+    """rdflib normalizes ``+1`` to ``1`` and ``1E3`` to ``1000.0``; Oxigraph
+    reports them as written, and the conversion normalizes them alike."""
+    data = "<http://e/a> <http://e/b> +1, .5, 1E3, -.5e-3, 0.0, true, 007 ."
+    by_rdflib, ours, used = _both("turtle", data=data)
+    assert used
     assert set(ours) == set(by_rdflib)
 
 
-def test_a_relative_iri_goes_to_rdflib():
+def test_a_relative_iri_without_a_base_goes_to_rdflib():
     by_rdflib, ours, used = _both("turtle", data="<a> <http://e/b> <c> .")
     assert not used
     _assert_same(by_rdflib, ours)
+
+
+#: RFC 3986 section 5.4 reference resolution examples, against its base.
+RFC_REFERENCES = [
+    "g:h", "g", "./g", "g/", "/g", "//g", "?y", "g?y", "#s", "g#s", "g?y#s",
+    ";x", "g;x", "g;x?y#s", "", ".", "./", "..", "../", "../g", "../..",
+    "../../", "../../g", "../../../g", "../../../../g", "/./g", "/../g", "g.",
+    ".g", "g..", "..g", "./../g", "./g/.", "g/./h", "g/../h", "g;x=1/./y",
+    "g;x=1/../y", "g?y/./x", "g?y/../x", "g#s/./x", "g#s/../x",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("reference", RFC_REFERENCES)
+def test_a_relative_iri_under_a_base_comes_out_as_rdflib_resolves_it(reference):
+    """rdflib's resolution departs from RFC 3986 for some of these (``?y``,
+    ``g/../h``), and Oxigraph follows the RFC. Those go to rdflib; the rest
+    keep the fast path."""
+    data = (
+        "@base <http://a/b/c/d;p?q> .\n"
+        f"@prefix r: <{reference}> .\n<http://e/s> <http://e/p> <{reference}> ."
+    )
+    by_rdflib, ours, used = _both("turtle", data=data)
+    _assert_same(by_rdflib, ours)
+    if reference in ("g", "#s", "../g", "g?y"):
+        assert used
+
+
+def test_two_bases_and_a_relative_iri_go_to_rdflib():
+    data = (
+        "@base <http://a/x/> .\n<s> <http://e/p> <o> .\n"
+        "@base <http://b/y/> .\n<s> <http://e/p> <o> ."
+    )
+    by_rdflib, ours, used = _both("turtle", data=data)
+    assert not used
+    _assert_same(by_rdflib, ours)
+
+
+def test_a_language_tag_set_apart_fails_as_rdflib_fails():
+    """Oxigraph takes ``"x" @en-GB`` and lowercases the tag; rdflib rejects
+    it. A load must not start accepting it in a different form."""
+    for data in (
+        '<http://e/a> <http://e/b> "x" @en-GB .',
+        '<http://e/a> <http://e/b> "x" # note\n @en-GB .',
+    ):
+        with pytest.raises(Exception) as by_rdflib:
+            Graph().parse(data=data, format="turtle")
+        with pytest.raises(type(by_rdflib.value)):
+            parse_into(Graph(), "turtle", data=data)
+
+
+def test_a_crlf_inside_a_long_string_survives_a_load_from_a_file(tmp_path):
+    """rdflib parses a file from its bytes and keeps the CRLF; reading the
+    file in text mode turned it into LF, so the same content loaded from a
+    file and from a string differed, and a re-import showed it as changed."""
+    path = tmp_path / "crlf.ttl"
+    path.write_bytes(b'@prefix ex: <http://e/> .\r\nex:a ex:b """one\r\ntwo""" .\r\n')
+    from_file = OntologyManager()
+    from_file.load_from_file(str(path), format="turtle")
+    from_string = OntologyManager()
+    from_string.load_from_string(path.read_bytes().decode("utf-8"), "turtle")
+    by_rdflib = Graph().parse(str(path), format="turtle")
+    assert set(from_file.graph) == set(from_string.graph) == set(by_rdflib)
+    assert [str(o) for o in from_file.graph.objects()] == ["one\r\ntwo"]
+    assert parse_into(Graph(), "turtle", path=path)
 
 
 def test_rdf_xml_goes_to_rdflib():

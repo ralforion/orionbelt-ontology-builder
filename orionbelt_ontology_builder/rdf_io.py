@@ -1,29 +1,41 @@
 """Parse RDF into an rdflib graph, through Oxigraph where that gives rdflib's result.
 
 rdflib's Turtle and N-Triples parsers are pure Python: a 213k-triple file took
-5 s to load, nearly all of it in the parser. Oxigraph parses the same file in a
+3.5 s to load, most of it in the parser. Oxigraph parses the same file in a
 fraction of a second; turning its terms into rdflib's and filling the working
 graph is the rest. The working graph stays rdflib.
 
 The fast path is taken only where its result is exactly rdflib's, so that
 loading a file one way or the other never makes a difference (a re-import
-would otherwise show every literal as changed):
+would otherwise show every literal as changed). Where the two parsers part
+ways, the file is read for the spellings that are known to be safe, and
+anything not recognized as safe goes to rdflib:
 
-* **Turtle and N-Triples only.** Oxigraph's RDF/XML parser does not apply XML's
-  normalization of attribute values and line ends the way rdflib's does, and
-  the other formats are rare in large files.
-* **No explicit** ``^^xsd:string``. RDF 1.1 makes ``"a"`` and ``"a"^^xsd:string``
-  one term, and Oxigraph reports both alike, but rdflib keeps them apart. A file
-  that writes the datatype out is left to rdflib. The check is on the text and
-  errs towards rdflib.
+* **Turtle and N-Triples only.** Oxigraph's RDF/XML parser normalizes white
+  space in literals differently from rdflib's, and the other formats are rare
+  in large files.
+* **No** ``xsd:string`` **datatype.** RDF 1.1 makes ``"a"`` and
+  ``"a"^^xsd:string`` one term, and Oxigraph reports both alike, but rdflib
+  keeps them apart. Every ``^^`` must be followed by a datatype read here as
+  something else: a full IRI, or a prefixed name whose prefix is declared once.
+  A comment or an escape there sends the file to rdflib.
 * **Language tags keep their case.** Oxigraph lowercases them, rdflib keeps
-  them as written (``@en-GB``). The tags as written are read off the text and
-  put back; a file that spells one tag two ways is left to rdflib.
-* **No base IRI.** A relative IRI makes Oxigraph fail, and rdflib resolves it
-  against the same base as before.
+  them as written (``@en-GB``). Each tag must be written right after its
+  literal, the way rdflib requires, and is put back as written; a tag spelt
+  two ways, or one Oxigraph reports that was not found, sends the file to
+  rdflib.
+* **Relative IRIs resolve alike.** Under ``@base``, rdflib resolves some
+  relative IRIs (``<?y>``, ``<g/../h>``) differently from RFC 3986, which
+  Oxigraph follows. Each relative IRI is resolved both ways, and one that
+  differs, or a second base, sends the file to rdflib. Without a base,
+  Oxigraph rejects a relative IRI and rdflib parses. Absolute IRIs are kept
+  as written by both.
 * **Anything else Oxigraph rejects or that has no rdflib term** (an RDF 1.2
   triple term, a literal with a base direction) also goes to rdflib, which
   then parses or reports the error as it always did.
+
+Numbers written in shorthand (``+1``, ``1E3``) agree: both sides build an
+rdflib ``Literal``, which normalizes the lexical form the same way.
 
 Nothing reaches the graph until Oxigraph has parsed and converted the whole
 file, so a file that falls back leaves no partial triples behind. Prefixes are
@@ -39,6 +51,9 @@ from pathlib import Path
 import pyoxigraph as ox
 from rdflib import BNode, Graph, Literal, URIRef
 from rdflib.namespace import XSD
+
+# What rdflib's Turtle parser resolves every IRI with once it has a base.
+from rdflib.plugins.parsers.notation3 import join as rdflib_join
 from rdflib.term import Node
 
 _FAST_FORMATS = {
@@ -49,17 +64,40 @@ _FAST_FORMATS = {
     "ntriples": ox.RdfFormat.N_TRIPLES,
 }
 
-#: A literal that writes out a datatype named ``string``: ``^^xsd:string`` under
-#: any prefix, or the full IRI. Matching other ``…:string`` datatypes too is
-#: harmless; such a file only goes to rdflib.
-_EXPLICIT_STRING = re.compile(
-    r"\^\^\s*(?:<http://www\.w3\.org/2001/XMLSchema#string>|[A-Za-z_][\w.\-]*:string\b|:string\b)"
-)
-
-#: A language tag as written, right after the closing quote of a literal.
-_LANGUAGE_TAG = re.compile(r"[\"']@([A-Za-z]+(?:-[A-Za-z0-9]+)*)")
-
 _XSD_STRING = str(XSD.string)
+
+#: Turtle's white space and comments, which may sit between any two tokens.
+_SKIP = r"(?:[ \t\r\n]|#[^\r\n]*)*"
+
+#: What an IRI between angle brackets may contain, escapes included.
+_IRI_CHARS = r"[^<>\"{}|^`\x00-\x20]"
+
+#: A datatype as this module reads it, after ``^^`` and plain white space: a
+#: full IRI without escapes, or a prefixed name whose local name is followed
+#: by what ends a term (an escape or a colon in it is not read).
+_IRI_DATATYPE = r"<[^<>\"{}|^`\\\x00-\x20]*>"
+_PREFIXED_NAME = r"([^\s:<>\"'\\^#()\[\],;]*):([\w.\-]*)(?![^ \t\r\n,;)\]#])"
+#: A ``^^`` that is not followed by a datatype read here.
+_UNREAD_DATATYPE = re.compile(
+    r"\^\^(?![ \t\r\n]*(?:" + _IRI_DATATYPE + "|" + _PREFIXED_NAME + "))"
+)
+#: A datatype IRI that is relative, or is ``xsd:string``.
+_RELATIVE_OR_STRING_DATATYPE = re.compile(
+    r"\^\^[ \t\r\n]*<(?:(?![A-Za-z][A-Za-z0-9+.\-]*:)|" + re.escape(_XSD_STRING) + ">)"
+)
+_PREFIXED_DATATYPE = re.compile(r"\^\^[ \t\r\n]*" + _PREFIXED_NAME)
+
+_ABSOLUTE_IRI = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
+
+#: A language tag after the closing quote of its literal, and what is between
+#: them. rdflib requires nothing there; Oxigraph also takes white space or a
+#: comment, and lowercases the tag.
+_LANGUAGE_TAG = re.compile(r"[\"'](" + _SKIP + r")@([A-Za-z]+(?:-[A-Za-z0-9]+)*)")
+
+#: ``@base`` or ``BASE`` and its IRI, or text that reads like one.
+_BASE = re.compile(r"(?i)base" + _SKIP + "<(" + _IRI_CHARS + "*)>")
+#: An IRI that is relative, or that hides its scheme behind an escape.
+_RELATIVE_IRI = re.compile(r"<((?![A-Za-z][A-Za-z0-9+.\-]*:)" + _IRI_CHARS + "*)>")
 
 _Triple = tuple[Node, Node, Node]
 
@@ -78,13 +116,13 @@ def parse_into(
     """Parse ``data`` or the file at ``path`` into ``graph`` as
     ``graph.parse`` would, through Oxigraph where that gives the same result.
 
-    With both given, ``data`` is the file's text, already read, and ``path``
-    is what rdflib parses if it has to (so it resolves against the same base
-    as before). Returns whether Oxigraph did the parsing.
+    With both given, ``data`` is the file's text, already read with its line
+    ends kept, and ``path`` is what rdflib parses if it has to (so it resolves
+    against the same base as before). Returns whether Oxigraph did the parsing.
     """
     if data is None and path is None:
         raise ValueError("parse_into needs data or a path")
-    text = data if data is not None else Path(path).read_text(encoding="utf-8")  # type: ignore[arg-type]
+    text = data if data is not None else read_text_as_is(path)  # type: ignore[arg-type]
     parsed = _parse_with_oxigraph(text, format)
     if parsed is None:
         if path is not None:
@@ -100,16 +138,30 @@ def parse_into(
     return True
 
 
+def read_text_as_is(path: str | Path) -> str:
+    """A file's text with its line ends as written.
+
+    rdflib parses a file from its bytes, so a CRLF inside a long string stays
+    in the literal. Reading in text mode would turn it into LF.
+    """
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
 def _parse_with_oxigraph(
     text: str, format: str
 ) -> tuple[list[_Triple], dict[str, str]] | None:
     """Oxigraph's parse as rdflib triples and the declared prefixes, or None
     when rdflib should parse instead (see the module docstring)."""
     ox_format = _FAST_FORMATS.get(format)
-    if ox_format is None or _EXPLICIT_STRING.search(text):
+    if ox_format is None:
         return None
+    # N-Triples has no base, and Oxigraph rejects a relative IRI in it.
+    if ox_format is ox.RdfFormat.TURTLE and not _relative_iris_resolve_alike(text):
+        return None
+    datatypes = _prefixed_datatypes(text)
     spelling = _language_tags_as_written(text)
-    if spelling is None:
+    if datatypes is None or spelling is None:
         return None
     try:
         parser = ox.parse(text, format=ox_format)
@@ -117,19 +169,86 @@ def _parse_with_oxigraph(
         prefixes = dict(parser.prefixes)
     except Exception:  # noqa: BLE001 - any failure hands the text to rdflib, which reports it as before
         return None
+    for prefix, local in datatypes:
+        namespace = prefixes.get(prefix)
+        if namespace is None:
+            continue  # never declared, so not a datatype: Oxigraph would have failed
+        if namespace + local == _XSD_STRING or not _declared_once(text, prefix):
+            return None
     return triples, prefixes
+
+
+def _relative_iris_resolve_alike(text: str) -> bool:
+    """Whether every relative IRI in ``text`` resolves to the same IRI in
+    rdflib as in Oxigraph.
+
+    rdflib resolves with its own ``join``; Oxigraph is asked by parsing the
+    IRIs under the same base. Text in a string or a comment that reads like an
+    IRI is resolved too, which can only send a file to rdflib needlessly.
+    """
+    bases = _BASE.findall(text)
+    if not bases:
+        return True  # Oxigraph rejects a relative IRI without a base
+    relative = sorted(set(_RELATIVE_IRI.findall(text)))
+    if not relative:
+        return True
+    if len(bases) > 1:
+        return False  # which base each IRI is under is not read here
+    (base,) = bases
+    if not _ABSOLUTE_IRI.match(base) or "\\" in base + "".join(relative):
+        return False
+    probe = f"@base <{base}> .\n<urn:s> <urn:p> " + " , ".join(
+        f"<{iri}>" for iri in relative
+    )
+    try:
+        by_oxigraph = [
+            quad.object.value
+            for quad in ox.parse(probe + " .", format=ox.RdfFormat.TURTLE)
+        ]
+    except Exception:  # noqa: BLE001 - an IRI Oxigraph rejects goes to rdflib
+        return False
+    return by_oxigraph == [rdflib_join(base, iri) for iri in relative]
+
+
+def _prefixed_datatypes(text: str) -> set[tuple[str, str]] | None:
+    """Read every ``^^`` in ``text``: the datatypes written as prefixed names,
+    as (prefix, local name) pairs to check once the prefixes are known, or
+    None when a datatype is ``xsd:string``, may be, or is not read here.
+
+    A ``^^`` inside a string or a comment is read too, which can only send a
+    file to rdflib that did not need to go.
+    """
+    if _UNREAD_DATATYPE.search(text) or _RELATIVE_OR_STRING_DATATYPE.search(text):
+        return None
+    names: set[tuple[str, str]] = set()
+    for prefix, local in set(_PREFIXED_DATATYPE.findall(text)):
+        local = local.rstrip(".")  # a dot after a local name ends the statement
+        if local == "string":
+            return None
+        names.add((prefix, local))
+    return names
+
+
+def _declared_once(text: str, prefix: str) -> bool:
+    """Whether ``prefix`` is declared exactly once, so that the namespace
+    Oxigraph ends with is the one every use of it had."""
+    declaration = re.compile(r"(?<!\S)" + re.escape(prefix) + ":" + _SKIP + "<")
+    return len(declaration.findall(text)) == 1
 
 
 def _language_tags_as_written(text: str) -> dict[str, str] | None:
     """Each language tag in ``text`` by its lowercase form, as written; None
-    when one tag is written two ways and rdflib should parse the file.
+    when one tag is written two ways, or apart from its literal, and rdflib
+    should parse the file.
 
     A match inside a literal's text can only add a spelling, which then
     conflicts with the real tag's and sends the file to rdflib, so a wrong
     case is never put on a tag.
     """
     spelling: dict[str, str] = {}
-    for tag in set(_LANGUAGE_TAG.findall(text)):
+    for apart, tag in set(_LANGUAGE_TAG.findall(text)):
+        if apart:
+            return None
         lower = tag.lower()
         if spelling.setdefault(lower, tag) != tag:
             return None
@@ -163,8 +282,10 @@ def _converted(quads: Iterable[ox.Quad], spelling: dict[str, str]) -> Iterable[_
             if getattr(node, "direction", None) is not None:
                 raise _LeaveToRdflib("a literal with a base direction")
             if node.language:
-                language = node.language
-                return Literal(node.value, lang=spelling.get(language, language))
+                written = spelling.get(node.language)
+                if written is None:
+                    raise _LeaveToRdflib("a language tag not found as written")
+                return Literal(node.value, lang=written)
             datatype = node.datatype.value
             if datatype == _XSD_STRING:
                 return Literal(node.value)

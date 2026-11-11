@@ -32,7 +32,7 @@ from rdflib.plugins.stores.memory import Memory
 from rdflib.term import Node
 
 from .languages import invalid_tag_reason
-from .rdf_io import parse_into
+from .rdf_io import parse_into, read_text_as_is
 from .rdfs import rdfs_closure
 from .reasoning import REASONING_DEADLINE_SECONDS, ClosureChange, close_in_worker
 
@@ -7150,8 +7150,7 @@ class OntologyManager:
 
     def load_from_file(self, file_path: str, format: str = "turtle"):
         """Load ontology from a file."""
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        content = read_text_as_is(file_path)
         if format == "turtle":
             self._loaded_prefixes = self._extract_prefixes_from_ttl(content)
         elif format == "json-ld":
