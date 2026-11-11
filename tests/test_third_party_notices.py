@@ -11,6 +11,7 @@ ontologies shipped with no terms at all while gist and gUFO, alone, carried
 theirs.
 """
 
+import re
 import subprocess
 import sys
 import zipfile
@@ -159,8 +160,16 @@ IMAGE_LICENCES = {
     "pyoxigraph": {
         "pyoxigraph-LICENSE-MIT.txt": "Permission is hereby granted",
         "pyoxigraph-LICENSE-APACHE.txt": "TERMS AND CONDITIONS",
+        "pyoxigraph-THIRD-PARTY.txt": "LZ4 Library",
     },
 }
+
+#: A crate's source directory as Rust keeps it in a compiled module, for panic
+#: messages: ``.../registry/src/index.crates.io-<hash>/<name>-<version>/``.
+_EMBEDDED_CRATE = re.compile(
+    rb"registry[/\\]src[/\\][^/\\]+[/\\]"
+    rb"([A-Za-z0-9_.-]+?)-(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)[/\\]"
+)
 
 
 def test_the_image_carries_the_licences_pip_does_not():
@@ -185,6 +194,40 @@ def test_the_image_carries_the_licences_pip_does_not():
     assert "COPY docker/licenses/" in (REPO / "Dockerfile").read_text(
         encoding="utf-8"
     ), "the image does not copy the licence directory in"
+
+
+def test_the_pyoxigraph_notices_cover_the_installed_module():
+    """pyoxigraph's module is compiled from about 200 Rust crates and from
+    RocksDB and LZ4, and its wheel carries none of their terms; the image does,
+    in a file generated from Oxigraph's lockfile and submodules.
+
+    Two checks tie that file to what is installed: it names the installed
+    version, and it lists every crate whose source path the compiled module
+    embeds. An upgrade of pyoxigraph fails both until the file is generated
+    again. The second is the stronger check, since it reads the binary itself,
+    but not a complete one: a crate that leaves no path behind is not seen.
+    """
+    from importlib import metadata
+
+    regenerate = "run scripts/generate_pyoxigraph_licenses.py"
+    dist = metadata.distribution("pyoxigraph")
+    text = (REPO / "docker" / "licenses" / "pyoxigraph-THIRD-PARTY.txt").read_text(
+        encoding="utf-8"
+    )
+    assert text.startswith(f"Third-party licences in pyoxigraph {dist.version}\n"), (
+        f"the file is not for pyoxigraph {dist.version}; {regenerate}"
+    )
+    (module,) = [f for f in dist.files or [] if f.suffix in (".so", ".pyd")]
+    embedded = {
+        (name.decode(), version.decode())
+        for name, version in _EMBEDDED_CRATE.findall(
+            Path(str(module.locate())).read_bytes()
+        )
+    }
+    assert len(embedded) > 20, "the module names too few crates to check against"
+    listed = set(re.findall(r"^- (\S+) (\S+)$", text, re.MULTILINE))
+    missing = sorted(f"{name} {version}" for name, version in embedded - listed)
+    assert not missing, f"compiled in but not listed: {missing}; {regenerate}"
 
 
 def _runtime_distributions() -> set[str]:
