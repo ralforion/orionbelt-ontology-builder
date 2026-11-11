@@ -20,6 +20,7 @@ from ..ui import (
     build_namespace_options,
     clearable_selectbox,
     confirm_delete,
+    flash_bulk_result,
     missing_required,
     required_selectbox,
     save_checkpoint,
@@ -414,7 +415,7 @@ def render_individuals():
                         result = ont.bulk_add_individuals(entries)
                         save_checkpoint("Bulk add individuals")
                         _msg, _type = _bulk_result_message(result, "individual(s)")
-                        set_flash_message(_msg, _type)
+                        flash_bulk_result(_msg, _type)
                         st.rerun()
 
         elif bulk_op == "Edit":
@@ -454,7 +455,7 @@ def render_individuals():
                             changes += 1
                     if changes:
                         save_checkpoint("Bulk edit individuals")
-                        show_message(f"Updated {changes} individual(s)", "success")
+                        flash_bulk_result(f"Updated {changes} individual(s)")
                         st.rerun()
                     else:
                         show_message("No changes detected.", "info")
@@ -478,7 +479,7 @@ def render_individuals():
                     ):
                         result = ont.bulk_delete_individuals(selected)
                         save_checkpoint("Bulk delete individuals")
-                        show_message(
-                            f"Deleted {len(result['deleted'])} individual(s)", "success"
+                        flash_bulk_result(
+                            f"Deleted {len(result['deleted'])} individual(s)"
                         )
                         st.rerun()
