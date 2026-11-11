@@ -811,17 +811,22 @@ class _EntryListing:
     updates entry by entry.
 
     The entry is built by the manager method named ``entry``, from the
-    triples about its subject alone and, with ``objects_of`` set, from the
-    triples of that predicate pointing at it (a class lists its children).
-    So a change can alter only the entry of its subject, and under
-    ``objects_of`` the entry of its object. Those are built again and the
-    rest are kept. An edit that touches no member, such as a label on an
+    triples about its subject, the triples of an ``objects_of`` predicate
+    pointing at it (a class lists its children), and the triples about a
+    node it links to through ``reached_through`` (a concept's SKOS-XL label
+    resources). So a change can alter only the entry of its subject, of its
+    object under ``objects_of``, and of the members linking to its subject
+    through ``reached_through``. Those are built again and the rest are
+    kept. An edit that touches no member, such as a label on an
     individual for the classes, hands the listing back as it was.
     """
 
     rdf_type: URIRef
     entry: str
-    objects_of: URIRef | None = None
+    objects_of: tuple[URIRef, ...] = ()
+    #: Links to nodes whose own triples the entry also reads: a change on
+    #: such a node touches the members that link to it (SKOS-XL labels).
+    reached_through: tuple[URIRef, ...] = ()
 
     def __call__(
         self,
@@ -836,8 +841,10 @@ class _EntryListing:
                 continue
             subject, predicate, obj = change.triple
             touched.add(subject)
-            if predicate == self.objects_of:
+            if predicate in self.objects_of:
                 touched.add(obj)
+            for link in self.reached_through:
+                touched.update(manager.graph.subjects(link, subject))
             if not change.added and predicate == RDF.type and obj == self.rdf_type:
                 dropped.add(subject)
         members = [
@@ -909,7 +916,15 @@ def _follow_bindings(
 #: claims it reads less than it does; tests/test_listing_updates.py replays
 #: random edits on the bundled samples against a fresh build to catch that.
 _LISTING_UPDATES: dict[str, Callable[..., Any]] = {
-    "get_classes": _EntryListing(OWL.Class, "_class_entry", objects_of=RDFS.subClassOf),
+    "get_classes": _EntryListing(
+        OWL.Class, "_class_entry", objects_of=(RDFS.subClassOf,)
+    ),
+    "_concept_listing": _EntryListing(
+        SKOS.Concept,
+        "_concept_entry",
+        objects_of=(SKOS.hasTopConcept,),
+        reached_through=(SKOSXL.prefLabel, SKOSXL.altLabel, SKOSXL.hiddenLabel),
+    ),
     "get_individuals": _EntryListing(OWL.NamedIndividual, "_individual_entry"),
     "get_object_properties": _EntryListing(
         OWL.ObjectProperty, "_object_property_entry"
@@ -4488,137 +4503,154 @@ class OntologyManager:
 
         return concept_uri
 
-    @_cached_on_revision
     def get_concepts(self, scheme: str | None = None) -> list[dict[str, Any]]:
-        """Get SKOS Concepts, optionally filtered by scheme."""
+        """Get SKOS Concepts, optionally filtered by scheme.
+
+        A filter over :meth:`_concept_listing`, which an edit updates entry by
+        entry (see :data:`_LISTING_UPDATES`), so a filtered call is as quick
+        as the full one. Membership is each entry's ``scheme_uris``:
+        ``skos:inScheme``, ``skos:topConceptOf`` and the scheme's own
+        ``skos:hasTopConcept``, as :meth:`_concept_in_scheme` decides it.
+        """
+        concepts = self._concept_listing()
+        if not scheme:
+            return concepts
         # Resolve scheme name to URI by looking it up in the graph
         scheme_uri = None
-        if scheme:
-            for s_uri in self.graph.subjects(RDF.type, SKOS.ConceptScheme):
-                if self._local_name(s_uri) == scheme:
-                    scheme_uri = s_uri
-                    break
-            if not scheme_uri:
-                scheme_uri = self._uri(scheme)
+        for s_uri in self.graph.subjects(RDF.type, SKOS.ConceptScheme):
+            if self._local_name(s_uri) == scheme:
+                scheme_uri = s_uri
+                break
+        if not scheme_uri:
+            scheme_uri = self._uri(scheme)
+        wanted = str(scheme_uri)
+        return [c for c in concepts if wanted in c["scheme_uris"]]
 
-        concepts = []
-        for uri in self.graph.subjects(RDF.type, SKOS.Concept):
-            if isinstance(uri, BNode):
-                continue
+    @_cached_on_revision
+    def _concept_listing(self) -> list[dict[str, Any]]:
+        """Every SKOS concept's entry, sorted by name and URI."""
+        return sorted(
+            (
+                self._concept_entry(uri)
+                for uri in self.graph.subjects(RDF.type, SKOS.Concept)
+                if not isinstance(uri, BNode)
+            ),
+            key=_by_name,
+        )
 
-            # Filter by scheme if specified
-            if scheme and scheme_uri and not self._concept_in_scheme(uri, scheme_uri):
-                continue
+    def _concept_entry(self, uri: Node) -> dict[str, Any]:
+        """One concept's entry in :meth:`get_concepts`.
 
-            name = self._local_name(uri)
+        Reads the triples about the concept, the schemes' ``skos:hasTopConcept``
+        links to it, and the ``skos:literalForm`` of its SKOS-XL label
+        resources (see :data:`_LISTING_UPDATES`).
+        """
+        name = self._local_name(uri)
 
-            labels = {
-                kind: self._tagged_literals(uri, prop)
-                for kind, prop in self.SKOS_LABEL_KINDS.items()
-            }
-            notes = {
-                kind: self._tagged_literals(uri, prop)
-                for kind, prop in self.SKOS_NOTE_KINDS.items()
-            }
-            # Kept in their own key rather than merged into ``labels``: the
-            # editor writes plain SKOS, so a SKOS-XL label offered in the same
-            # list would come with a delete button that silently does nothing.
-            xl_labels = {
-                kind: self._xl_literals(uri, prop)
-                for kind, prop in self.SKOS_XL_LABEL_KINDS.items()
-            }
-            # The flat key falls back to SKOS-XL so the graph, the dashboard and
-            # the concept list show a name for an imported vocabulary instead of
-            # a bare local name.
-            pref_label = self._flatten_literal(
-                labels["prefLabel"] or xl_labels["prefLabel"]
-            )
-            definition = self._flatten_literal(notes["definition"])
-            alt_labels = [v["value"] for v in labels["altLabel"]]
+        labels = {
+            kind: self._tagged_literals(uri, prop)
+            for kind, prop in self.SKOS_LABEL_KINDS.items()
+        }
+        notes = {
+            kind: self._tagged_literals(uri, prop)
+            for kind, prop in self.SKOS_NOTE_KINDS.items()
+        }
+        # Kept in their own key rather than merged into ``labels``: the
+        # editor writes plain SKOS, so a SKOS-XL label offered in the same
+        # list would come with a delete button that silently does nothing.
+        xl_labels = {
+            kind: self._xl_literals(uri, prop)
+            for kind, prop in self.SKOS_XL_LABEL_KINDS.items()
+        }
+        # The flat key falls back to SKOS-XL so the graph, the dashboard and
+        # the concept list show a name for an imported vocabulary instead of
+        # a bare local name.
+        pref_label = self._flatten_literal(
+            labels["prefLabel"] or xl_labels["prefLabel"]
+        )
+        definition = self._flatten_literal(notes["definition"])
+        alt_labels = [v["value"] for v in labels["altLabel"]]
 
-            notation = str(self.graph.value(uri, SKOS.notation) or "")
-            # Both directions of the pair. ``set_top_concept`` writes both, but
-            # a published vocabulary often asserts only the scheme side,
-            # ``scheme skos:hasTopConcept concept``, and reading one direction
-            # made such a concept look like an orphan belonging to no scheme.
-            top_of_uris = sorted(
-                {
-                    str(o)
-                    for o in self.graph.objects(uri, SKOS.topConceptOf)
-                    if isinstance(o, URIRef)
-                }
-                | {
-                    str(s)
-                    for s in self.graph.subjects(SKOS.hasTopConcept, uri)
-                    if isinstance(s, URIRef)
-                }
-            )
-            mappings = {
-                rel: sorted(
-                    str(o)
-                    for o in self.graph.objects(uri, self.SKOS_RELATIONS[rel])
-                    if isinstance(o, URIRef)
-                )
-                for rel in self.SKOS_MAPPING_RELATIONS
-            }
-
-            broader_uris = [
+        notation = str(self.graph.value(uri, SKOS.notation) or "")
+        # Both directions of the pair. ``set_top_concept`` writes both, but
+        # a published vocabulary often asserts only the scheme side,
+        # ``scheme skos:hasTopConcept concept``, and reading one direction
+        # made such a concept look like an orphan belonging to no scheme.
+        top_of_uris = sorted(
+            {
                 str(o)
-                for o in self.graph.objects(uri, SKOS.broader)
+                for o in self.graph.objects(uri, SKOS.topConceptOf)
                 if isinstance(o, URIRef)
-            ]
-            narrower_uris = [
+            }
+            | {
+                str(s)
+                for s in self.graph.subjects(SKOS.hasTopConcept, uri)
+                if isinstance(s, URIRef)
+            }
+        )
+        mappings = {
+            rel: sorted(
                 str(o)
-                for o in self.graph.objects(uri, SKOS.narrower)
+                for o in self.graph.objects(uri, self.SKOS_RELATIONS[rel])
                 if isinstance(o, URIRef)
-            ]
-            related_uris = [
+            )
+            for rel in self.SKOS_MAPPING_RELATIONS
+        }
+
+        broader_uris = [
+            str(o)
+            for o in self.graph.objects(uri, SKOS.broader)
+            if isinstance(o, URIRef)
+        ]
+        narrower_uris = [
+            str(o)
+            for o in self.graph.objects(uri, SKOS.narrower)
+            if isinstance(o, URIRef)
+        ]
+        related_uris = [
+            str(o)
+            for o in self.graph.objects(uri, SKOS.related)
+            if isinstance(o, URIRef)
+        ]
+        # skos:topConceptOf is a sub-property of skos:inScheme, so heading a
+        # scheme is membership of it whether or not inScheme was asserted.
+        scheme_uris = sorted(
+            {
                 str(o)
-                for o in self.graph.objects(uri, SKOS.related)
+                for o in self.graph.objects(uri, SKOS.inScheme)
                 if isinstance(o, URIRef)
-            ]
-            # skos:topConceptOf is a sub-property of skos:inScheme, so heading a
-            # scheme is membership of it whether or not inScheme was asserted.
-            scheme_uris = sorted(
-                {
-                    str(o)
-                    for o in self.graph.objects(uri, SKOS.inScheme)
-                    if isinstance(o, URIRef)
-                }
-                | set(top_of_uris)
-            )
+            }
+            | set(top_of_uris)
+        )
 
-            # Full URIs (``*_uris``) accompany the local-name lists so callers can
-            # address a broader/related concept or scheme unambiguously even when
-            # local names collide across namespaces (issue #87 part B).
-            concepts.append(
-                {
-                    "name": name,
-                    "uri": str(uri),
-                    "prefLabel": pref_label,
-                    "definition": definition,
-                    "altLabels": alt_labels,
-                    "broader": [self._local_name(URIRef(u)) for u in broader_uris],
-                    "narrower": [self._local_name(URIRef(u)) for u in narrower_uris],
-                    "related": [self._local_name(URIRef(u)) for u in related_uris],
-                    "schemes": [self._local_name(URIRef(u)) for u in scheme_uris],
-                    "broader_uris": broader_uris,
-                    "narrower_uris": narrower_uris,
-                    "related_uris": related_uris,
-                    "scheme_uris": scheme_uris,
-                    # Structured, language-aware views. The flat keys above are
-                    # computed from these and kept for existing readers.
-                    "labels": labels,
-                    "xl_labels": xl_labels,
-                    "notes": notes,
-                    "notation": notation,
-                    "top_of_uris": top_of_uris,
-                    "top_of": [self._local_name(URIRef(u)) for u in top_of_uris],
-                    "mappings": mappings,
-                }
-            )
+        # Full URIs (``*_uris``) accompany the local-name lists so callers can
+        # address a broader/related concept or scheme unambiguously even when
+        # local names collide across namespaces (issue #87 part B).
 
-        return sorted(concepts, key=lambda c: c["name"])
+        return {
+            "name": name,
+            "uri": str(uri),
+            "prefLabel": pref_label,
+            "definition": definition,
+            "altLabels": alt_labels,
+            "broader": [self._local_name(URIRef(u)) for u in broader_uris],
+            "narrower": [self._local_name(URIRef(u)) for u in narrower_uris],
+            "related": [self._local_name(URIRef(u)) for u in related_uris],
+            "schemes": [self._local_name(URIRef(u)) for u in scheme_uris],
+            "broader_uris": broader_uris,
+            "narrower_uris": narrower_uris,
+            "related_uris": related_uris,
+            "scheme_uris": scheme_uris,
+            # Structured, language-aware views. The flat keys above are
+            # computed from these and kept for existing readers.
+            "labels": labels,
+            "xl_labels": xl_labels,
+            "notes": notes,
+            "notation": notation,
+            "top_of_uris": top_of_uris,
+            "top_of": [self._local_name(URIRef(u)) for u in top_of_uris],
+            "mappings": mappings,
+        }
 
     def update_concept(
         self,
