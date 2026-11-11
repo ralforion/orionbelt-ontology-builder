@@ -1,5 +1,8 @@
 """The import export page."""
 
+import contextlib
+from contextlib import contextmanager
+
 import streamlit as st
 
 from ..shacl import shape_nodes
@@ -13,6 +16,48 @@ from ..ui import (
     show_message,
     sized_table,
 )
+
+#: Change lines the import preview lists before it sums up the rest. Each line
+#: was its own element, one per changed resource: 65,000 for a 50k-class file,
+#: which the browser, and the desktop window above all, cannot hold.
+PREVIEW_MAX_SUMMARY_LINES = 300
+
+
+@contextmanager
+def _import_progress(size: int, where=None):
+    """Show an import's progress while the ``with`` block runs.
+
+    A bar that moves from step to step (the steps call the ``report`` this
+    yields with their name and how far along the whole they start), and a
+    spinner whose seconds the browser counts. rdflib's parser reports
+    nothing while it runs, and a large file spends seconds in it, so the
+    count is what shows the import is alive between steps. ``where`` is the
+    container to draw in, by default the current position.
+    """
+    megabytes = size / 1_000_000
+    with where if where is not None else contextlib.nullcontext():
+        bar = st.progress(0.0, text=f"Reading {megabytes:.1f} MB...")
+
+        def report(step: str, done: float) -> None:
+            bar.progress(done, text=f"{step} ({megabytes:.1f} MB)...")
+
+        try:
+            with st.spinner("Working", show_time=True):
+                yield report
+        finally:
+            bar.empty()
+
+
+def _coloured_change(line: str) -> str:
+    """A change line in the colour of its kind: added, removed or modified."""
+    for prefix, colour in (
+        ("Added", "green"),
+        ("Removed", "red"),
+        ("Modified", "orange"),
+    ):
+        if line.startswith(prefix):
+            return f":{colour}[{line}]"
+    return line
 
 
 def render_import_export():
@@ -84,9 +129,11 @@ def render_import_export():
                 st.session_state["_ontology_cleared"] = "Ontology cleared!"
                 st.rerun()
 
-        def _direct_import(content, format_):
+        def _direct_import(content, format_, report=None):
             """Import directly without preview (for empty ontologies)."""
             try:
+                if report is not None:
+                    report("Parsing the file", 0.0)
                 ont.load_from_string(content, format=format_)
                 st.session_state.ontology = ont
                 save_checkpoint("Import ontology")
@@ -146,14 +193,17 @@ def render_import_export():
                     if st.button(btn_label):
                         try:
                             content = uploaded_file.read().decode("utf-8")
-                            if _ont_is_empty:
-                                _direct_import(content, format_)
-                            else:
-                                preview = ont.preview_import(content, format=format_)
-                                st.session_state.import_preview = preview
-                                st.session_state.import_content = content
-                                st.session_state.import_format = format_
-                                st.rerun()
+                            with _import_progress(len(content)) as report:
+                                if _ont_is_empty:
+                                    _direct_import(content, format_, report)
+                                else:
+                                    preview = ont.preview_import(
+                                        content, format=format_, progress=report
+                                    )
+                                    st.session_state.import_preview = preview
+                                    st.session_state.import_content = content
+                                    st.session_state.import_format = format_
+                                    st.rerun()
                         except Exception as e:  # noqa: BLE001 - malformed import must show as a message, not a traceback
                             show_message(f"Error parsing file: {e!s}", "error")
 
@@ -169,14 +219,17 @@ def render_import_export():
                         show_message("Please paste ontology content!", "error")
                     else:
                         try:
-                            if _ont_is_empty:
-                                _direct_import(content, format_)
-                            else:
-                                preview = ont.preview_import(content, format=format_)
-                                st.session_state.import_preview = preview
-                                st.session_state.import_content = content
-                                st.session_state.import_format = format_
-                                st.rerun()
+                            with _import_progress(len(content)) as report:
+                                if _ont_is_empty:
+                                    _direct_import(content, format_, report)
+                                else:
+                                    preview = ont.preview_import(
+                                        content, format=format_, progress=report
+                                    )
+                                    st.session_state.import_preview = preview
+                                    st.session_state.import_content = content
+                                    st.session_state.import_format = format_
+                                    st.rerun()
                         except Exception as e:  # noqa: BLE001 - malformed import must show as a message, not a traceback
                             show_message(f"Error parsing content: {e!s}", "error")
 
@@ -243,19 +296,24 @@ def render_import_export():
                 st.metric("Individuals", incoming_stats["individuals"])
                 st.metric("Total Triples", incoming_stats["total_triples"])
 
-            # Apply / Cancel buttons (compact, above the change report)
+            # Apply / Cancel buttons (compact, above the change report). The
+            # progress goes above them, in the page's width, not the column's.
+            apply_progress = st.container()
             col_apply, col_cancel, _ = st.columns([1, 1, 4])
             with col_apply:
                 if st.button("Apply Import", type="primary"):
                     try:
                         content = st.session_state.import_content
                         format_ = st.session_state.import_format
-                        if selected_strategy == IMPORT_REPLACE:
-                            ont.load_from_string(content, format=format_)
-                        else:
-                            ont.merge_from_string(
-                                content, format=format_, strategy=selected_strategy
-                            )
+                        with _import_progress(len(content), apply_progress) as report:
+                            if selected_strategy == IMPORT_REPLACE:
+                                report("Parsing and loading the file", 0.0)
+                                ont.load_from_string(content, format=format_)
+                            else:
+                                report("Parsing and merging the file", 0.0)
+                                ont.merge_from_string(
+                                    content, format=format_, strategy=selected_strategy
+                                )
                         st.session_state.ontology = ont
                         save_checkpoint("Import ontology")
                         request_autosave_flush()
@@ -285,16 +343,14 @@ def render_import_export():
                 expanded=True,
             ):
                 if diff["summary"]:
-                    for line in diff["summary"]:
-                        # Color-code by change type
-                        if line.startswith("Added"):
-                            st.markdown(f":green[{line}]")
-                        elif line.startswith("Removed"):
-                            st.markdown(f":red[{line}]")
-                        elif line.startswith("Modified"):
-                            st.markdown(f":orange[{line}]")
-                        else:
-                            st.write(line)
+                    shown = diff["summary"][:PREVIEW_MAX_SUMMARY_LINES]
+                    st.markdown("  \n".join(_coloured_change(line) for line in shown))
+                    hidden = len(diff["summary"]) - len(shown)
+                    if hidden:
+                        st.caption(
+                            f"...and {hidden:,} more changes. The counts above "
+                            "cover them all."
+                        )
                 else:
                     st.write("No changes detected.")
 
