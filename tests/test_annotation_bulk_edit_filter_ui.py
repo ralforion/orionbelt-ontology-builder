@@ -36,3 +36,17 @@ def test_no_rows_until_a_filter_names_some():
     at.text_input(key="bulk_annotations_filter").set_value("whe").run(timeout=60)
     rows = _rows(at)
     assert set(rows["Resource"]) == {"Wheel"}
+
+
+def test_the_grid_fits_its_rows_up_to_a_screenful():
+    """Streamlit's default kept the grid at about ten rows whatever the
+    space; it now shows its rows, up to BULK_EDIT_VISIBLE_ROWS."""
+    from orionbelt_ontology_builder.views.annotations import (
+        BULK_EDIT_VISIBLE_ROWS,
+        _bulk_edit_height,
+    )
+
+    assert _bulk_edit_height(0) < _bulk_edit_height(3) < _bulk_edit_height(15)
+    capped = _bulk_edit_height(BULK_EDIT_VISIBLE_ROWS)
+    assert _bulk_edit_height(5_000) == capped
+    assert capped > 400  # the height Streamlit gave it before

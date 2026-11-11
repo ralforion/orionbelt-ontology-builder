@@ -398,6 +398,22 @@ def bulk_annotation_updates(frame, uris_by_name):
 BULK_EDIT_MAX_RESOURCES = 2_000
 
 
+#: Rows the Bulk Edit grid shows before it scrolls. Streamlit's default
+#: height shows about ten, in a fixed box that left most of a screen empty
+#: below it; ``"stretch"`` falls back to three rows in a page that has no
+#: fixed height, and ``"content"`` grows a long table past the page.
+BULK_EDIT_VISIBLE_ROWS = 20
+
+#: Pixel height of a grid row and of its header, in Streamlit's data editor.
+_GRID_ROW_PX = 35
+
+
+def _bulk_edit_height(rows: int) -> int:
+    """The grid's height: its rows up to :data:`BULK_EDIT_VISIBLE_ROWS`, plus
+    the header and the row for adding one, and the border."""
+    return _GRID_ROW_PX * (min(rows, BULK_EDIT_VISIBLE_ROWS) + 2) + 3
+
+
 def _bulk_edit_resources(all_resources: list[dict]) -> list[dict]:
     """The resources whose annotations the Bulk Edit table shows.
 
@@ -744,6 +760,7 @@ def render_annotations():
                     ),
                 },
                 key="bulk_annotations_editor",
+                height=_bulk_edit_height(len(df)),
                 width="stretch",
             )
 
