@@ -161,6 +161,9 @@ SPARQL_QUERY_MAX_CHARS = 20_000
 #: The page's two limits, stored alongside the query. Session keys are these
 #: names under ``_sparql_cfg_``; see ``views.sparql`` for the widgets they seed.
 SPARQL_LIMIT_KEYS = ("max_rows", "timeout_seconds")
+#: Session key holding the engine choice (``sparql.ENGINES``), stored alongside
+#: the query for the reason the editor choice is.
+SPARQL_ENGINE_KEY = "_sparql_cfg_engine"
 #: Where the app's text size is stored (issue #387): the local config file when
 #: the launcher allows disk, browser localStorage on the cloud, the same two
 #: places the language packs use.
@@ -1668,6 +1671,11 @@ def _apply_sparql_state(data) -> None:
     plain = data.get("plain_editor")
     if isinstance(plain, bool):
         st.session_state[SPARQL_PLAIN_KEY] = plain
+    from . import sparql
+
+    engine = data.get("engine")
+    if engine in sparql.ENGINES:
+        st.session_state[SPARQL_ENGINE_KEY] = engine
     for name, (lo, hi) in _sparql_limit_ranges().items():
         value = data.get(name)
         if isinstance(value, int) and not isinstance(value, bool):
@@ -1681,6 +1689,9 @@ def _sparql_state_payload() -> str:
         "query": query[:SPARQL_QUERY_MAX_CHARS] if isinstance(query, str) else "",
         "plain_editor": bool(st.session_state.get(SPARQL_PLAIN_KEY)),
     }
+    engine = st.session_state.get(SPARQL_ENGINE_KEY)
+    if isinstance(engine, str):
+        data["engine"] = engine
     for name in SPARQL_LIMIT_KEYS:
         value = st.session_state.get(f"_sparql_cfg_{name}")
         if isinstance(value, int) and not isinstance(value, bool):

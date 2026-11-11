@@ -316,6 +316,16 @@ editor pages, where they are checkpointed and can be undone. Every query runs
 under a row limit and a wall-clock time limit, so a runaway query is stopped
 rather than taking the app with it.
 
+On an ontology of 20,000 triples or more, queries run on Oxigraph, in a
+separate process that is stopped at the time limit, and the result says which
+engine answered. Oxigraph can answer differently from rdflib: numbers come
+back in canonical form (`1.50` as `1.5`), `"a"` and `"a"^^xsd:string` count as
+one value, decimal division keeps 18 places, and ORDER BY may put labels in
+different languages in another order. A query where a difference would be
+hard to spot (a REGEX with a backreference, `lang()` on mixed-case language
+tags) runs on rdflib anyway. The Engine setting can send every query to
+Oxigraph whatever the size, or every query to rdflib.
+
 ### Visualization
 
 Interactive vis-network graph with class filtering, configurable node limits, click-to-navigate into the editor, Ctrl/Cmd-click a node to add it to the "Focus on one node" selection (narrowing the graph to its neighbourhood) or Alt-click to focus on it alone, shortest-path search between any two entities (written out hop by hop and highlighted on the canvas), hierarchy tree view, and statistics charts.
@@ -572,6 +582,7 @@ orionbelt-ontology-builder/
 │   ├── ontology_manager.py             # Core OWL/SKOS engine (rdflib)
 │   ├── templates.py                    # Built-in templates / upper / reference ontologies
 │   ├── sparql.py                       # Read-only SPARQL execution (deadline + row cap)
+│   ├── sparql_oxigraph.py              # SPARQL on Oxigraph for large ontologies (worker process)
 │   ├── samples/                        # Bundled gist, gUFO, FOAF, PROV-O, GoodRelations, …
 │   ├── lib/                            # The graph component (vendored vis-network)
 │   ├── assets/                         # Logos and screenshots

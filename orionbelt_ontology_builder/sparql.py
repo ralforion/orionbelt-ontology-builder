@@ -41,8 +41,27 @@ main thread, so it behaves the same on the server and in the desktop build.
 The one blowup this cannot interrupt is a query with no triple patterns at all —
 a cross product of large ``VALUES`` blocks never touches the store, so nothing
 trips. :func:`prepare` rejects that shape up front rather than leaving a hole.
+
+**On a large ontology** a query runs on Oxigraph instead
+(:mod:`.sparql_oxigraph`), in a worker process killed at the deadline, which
+needs no fork of this process: the worker is a fresh interpreter. Above
+:data:`OXIGRAPH_MIN_TRIPLES` it is several times faster than rdflib, and
+below it the two take about the same time. The query is still parsed and
+vetted by :func:`prepare` first, so the read-only rule and the refusals above
+hold on both engines.
+
+The two engines do not always answer alike, so the page says which one ran.
+Language tags come back as the ontology writes them. A query goes to rdflib
+when Oxigraph would answer it differently in a way that is hard to see: a
+REGEX written for Python's ``re`` (backreferences, lookarounds), which
+Oxigraph's regex engine does not support and silently matches nothing with,
+and ``lang()`` read on an ontology whose tags are not all lowercase, which
+Oxigraph lowercases. What remains, the page lists: numbers come back in
+canonical form (``1.50`` as ``1.5``), ``"a"`` and ``"a"^^xsd:string`` are one
+value, and decimal division keeps 18 places rather than 28.
 """
 
+import re
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -56,6 +75,8 @@ from rdflib.plugins.sparql.sparql import Query
 from rdflib.query import ResultRow
 from rdflib.store import Store
 from rdflib.term import Node
+
+from . import sparql_oxigraph
 
 #: Wall-clock budget for a single query, in seconds.
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -77,6 +98,43 @@ _VALUES_PRODUCT_LIMIT = 100_000
 
 #: The query forms that cannot modify the graph. Everything else is an update.
 READ_ONLY_FORMS = ("SELECT", "ASK", "CONSTRUCT", "DESCRIBE")
+
+#: From this size on, a query runs on Oxigraph unless it is one of those that
+#: go to rdflib. Measured on the page's examples: about even at 8.5k triples,
+#: Oxigraph 2 to 8 times faster at 43k.
+OXIGRAPH_MIN_TRIPLES = 20_000
+
+#: The engine choices: Oxigraph on a large ontology and rdflib below, or one
+#: of the two always. The queries Oxigraph would answer wrongly without saying
+#: so go to rdflib under either of the first two.
+ENGINE_AUTO = "auto"
+ENGINE_OXIGRAPH = "oxigraph"
+ENGINE_RDFLIB = "rdflib"
+ENGINES = (ENGINE_AUTO, ENGINE_OXIGRAPH, ENGINE_RDFLIB)
+
+#: Regular expression syntax Python's ``re`` reads and Oxigraph's (Rust) regex
+#: engine does not: backreferences, lookarounds, atomic groups, conditionals,
+#: possessive quantifiers, ``\Z`` and inline comments. Oxigraph treats such a
+#: pattern as an error, and a FILTER error drops the row, so the query would
+#: silently match nothing.
+_PYTHON_ONLY_REGEX = re.compile(
+    r"\\[1-9]|\\k<|\(\?P=|\(\?<?[=!]|\(\?>|\(\?\(|[*+?}]\+|\\Z|\(\?#"
+)
+
+#: Why a query on a large ontology ran on rdflib, shown under the result.
+_NOTE_REGEX = (
+    "Ran on rdflib: the query's REGEX or REPLACE uses syntax Oxigraph does not "
+    "support (a backreference or lookaround), or builds its pattern at run time."
+)
+_NOTE_LANGUAGE = (
+    "Ran on rdflib: the query reads language tags with lang(), and Oxigraph "
+    "would see this ontology's tags (such as {example}) in lowercase."
+)
+_NOTE_SPELLINGS = (
+    "Ran on rdflib: this ontology writes one language tag in two cases (en-GB "
+    "and en-gb, say), which Oxigraph cannot tell apart."
+)
+_NOTE_REFUSED = "Ran on rdflib: Oxigraph could not run the query ({reason})."
 
 
 class QueryError(Exception):
@@ -357,7 +415,7 @@ def query_form(query: Query) -> str:
     return form if form in READ_ONLY_FORMS else ""
 
 
-def format_term(term: Node, prefixes: list[tuple[str, str]]) -> str:
+def format_term(term: Node | None, prefixes: list[tuple[str, str]]) -> str:
     """Render one result term for a table cell.
 
     Shortens URIs against ``prefixes`` (longest namespace first, so the most
@@ -417,6 +475,11 @@ class QueryResult:
     truncated: bool = False
     timed_out: bool = False
     elapsed: float = 0.0
+    #: Which engine answered: :data:`ENGINE_RDFLIB` or :data:`ENGINE_OXIGRAPH`.
+    engine: str = ENGINE_RDFLIB
+    #: Why rdflib answered a query that would have gone to Oxigraph, for the
+    #: page to show under the result. Empty otherwise.
+    engine_note: str = ""
 
     @property
     def row_count(self) -> int:
@@ -434,8 +497,16 @@ def run_query(
     *,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_rows: int = DEFAULT_MAX_ROWS,
+    engine: str = ENGINE_AUTO,
 ) -> QueryResult:
     """Run a read-only query against ``graph`` under a deadline and a row cap.
+
+    With ``engine`` left at :data:`ENGINE_AUTO`, a query on a graph of
+    :data:`OXIGRAPH_MIN_TRIPLES` or more runs on Oxigraph, and
+    :data:`ENGINE_OXIGRAPH` sends it there at any size; either way a query
+    that Oxigraph would answer differently without saying so goes to rdflib
+    (see the module docstring). :data:`ENGINE_RDFLIB` runs every query on
+    rdflib.
 
     Raises :class:`QueryError` for a query that is refused outright; a query
     that runs but is cut short comes back with ``timed_out``/``truncated`` set.
@@ -446,27 +517,148 @@ def run_query(
     )
     prefixes = sorted_prefixes(graph)
     prepared = prepare(query_text, dict(graph.namespaces()))
-    query = prepared.query
-    form = query_form(query)
+    form = query_form(prepared.query)
 
     started = time.monotonic()
     deadline = started + timeout_seconds
+    result = QueryResult(form=form, source_graph=str(graph.identifier))
+    if engine == ENGINE_OXIGRAPH or (
+        engine == ENGINE_AUTO and len(graph) >= OXIGRAPH_MIN_TRIPLES
+    ):
+        note = _on_oxigraph(
+            graph, query_text, prepared, prefixes, deadline, max_rows, result
+        )
+        if note is None:
+            result.engine = ENGINE_OXIGRAPH
+            result.elapsed = time.monotonic() - started
+            return result
+        result.engine_note = note
+    _on_rdflib(graph, prepared, prefixes, deadline, max_rows, result)
+    result.elapsed = time.monotonic() - started
+    return result
+
+
+def _on_oxigraph(
+    graph: Graph,
+    query_text: str,
+    prepared: PreparedQuery,
+    prefixes: list[tuple[str, str]],
+    deadline: float,
+    max_rows: int,
+    result: QueryResult,
+) -> str | None:
+    """Answer the query on Oxigraph into ``result``, or say why rdflib
+    should: the note the page shows, with ``result`` untouched."""
+    algebra = prepared.query.algebra
+    if _regex_needs_python(algebra):
+        return _NOTE_REGEX
+    nt = graph.serialize(format="nt")
+    spellings = sparql_oxigraph.language_spellings(nt)
+    if spellings is None:
+        return _NOTE_SPELLINGS
+    mixed_case = next((tag for tag in spellings.values() if tag != tag.lower()), None)
+    if mixed_case is not None and _reads_language_tags(algebra):
+        return _NOTE_LANGUAGE.format(example=mixed_case)
+    try:
+        answer = sparql_oxigraph.run(
+            nt,
+            query_text,
+            dict(prefixes),
+            deadline=deadline,
+            max_rows=max_rows,
+            spellings=spellings,
+        )
+    except sparql_oxigraph.Refused as exc:
+        return _NOTE_REFUSED.format(reason=exc)
+    result.timed_out = answer.timed_out
+    result.truncated = answer.truncated
+    if result.form == "ASK":
+        result.ask = answer.ask
+    elif result.form in ("CONSTRUCT", "DESCRIBE"):
+        result.columns = ["subject", "predicate", "object"]
+        result.graph = _bound_like(graph)
+        for triple in answer.triples:
+            result.graph.add(triple)
+            result.rows.append([format_term(t, prefixes) for t in triple])
+            result.row_uris.append(_uris_in(triple))
+    else:
+        position = {name: i for i, name in enumerate(answer.variables)}
+        columns = ordered_vars(
+            prepared.var_order,
+            [Variable(name) for name in answer.variables],
+            prepared.select_star,
+        )
+        result.columns = [str(v) for v in columns]
+        for row in answer.rows:
+            values = [row[position[str(v)]] for v in columns]
+            result.rows.append([format_term(t, prefixes) for t in values])
+            result.row_uris.append(_uris_in(values))
+    return None
+
+
+def _regex_needs_python(algebra: Any) -> bool:
+    """Whether a REGEX or REPLACE in the query has a pattern Oxigraph may read
+    differently: one built at run time, or one using Python-only syntax."""
+    for node in _walk(algebra):
+        if node.name in ("Builtin_REGEX", "Builtin_REPLACE"):
+            pattern = node.get("pattern")
+            if not isinstance(pattern, Literal) or _PYTHON_ONLY_REGEX.search(
+                str(pattern)
+            ):
+                return True
+    return False
+
+
+def _reads_language_tags(node: Any, in_langmatches: bool = False) -> bool:
+    """Whether the query reads a language tag with ``lang()`` anywhere but in
+    ``langMatches``, which compares tags regardless of case."""
+    if isinstance(node, dict):
+        name = getattr(node, "name", None)
+        if name == "Builtin_LANG" and not in_langmatches:
+            return True
+        return any(
+            _reads_language_tags(
+                value,
+                in_langmatches or (name == "Builtin_LANGMATCHES" and key == "arg1"),
+            )
+            for key, value in node.items()
+        )
+    if isinstance(node, (list, tuple)):
+        return any(_reads_language_tags(value, in_langmatches) for value in node)
+    return False
+
+
+def _bound_like(graph: Graph) -> Graph:
+    """An empty graph with ``graph``'s prefix bindings, for a constructed result."""
+    built = Graph()
+    for prefix, namespace in graph.namespaces():
+        built.bind(prefix, namespace)
+    return built
+
+
+def _on_rdflib(
+    graph: Graph,
+    prepared: PreparedQuery,
+    prefixes: list[tuple[str, str]],
+    deadline: float,
+    max_rows: int,
+    result: QueryResult,
+) -> None:
+    """Answer the query on rdflib into ``result``, bounded by ``deadline``."""
+    query = prepared.query
+    form = result.form
     # Same identifier as the source graph: the default store is context-aware,
     # so a wrapper graph with a fresh identifier addresses an empty context and
     # every query silently returns nothing.
     bounded = Graph(
         store=_DeadlineStore(graph.store, deadline), identifier=graph.identifier
     )
-
-    result = QueryResult(form=form, source_graph=str(graph.identifier))
     try:
         answer = bounded.query(query)
         if form == "ASK":
             result.ask = bool(answer.askAnswer)
         elif form in ("CONSTRUCT", "DESCRIBE"):
-            built = Graph()
-            for prefix, namespace in graph.namespaces():
-                built.bind(prefix, namespace)
+            built = _bound_like(graph)
             result.columns = ["subject", "predicate", "object"]
             for triple in answer.graph or ():
                 if len(result.rows) >= max_rows:
@@ -508,8 +700,6 @@ def run_query(
         # An evaluation failure belongs to the user's query (a bad datatype in a
         # FILTER, say), so it is reported as one rather than as an app crash.
         raise QueryError(str(exc), engine_text=True) from exc
-    result.elapsed = time.monotonic() - started
-    return result
 
 
 def rows_to_csv(columns: list[str], rows: list[list[str]]) -> str:
