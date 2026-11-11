@@ -87,12 +87,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The runner's Azure package mirror has stopped resolving for hours at a
+      # time while the rest of the network worked, so a retry goes to the
+      # main Ubuntu archive instead.
       - name: Install Qt GUI runtime libraries
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            libgl1 libegl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
-            libfontconfig1 libfreetype6
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq &&
+              sudo apt-get install -y -qq --no-install-recommends \
+                libgl1 libegl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
+                libfontconfig1 libfreetype6; then
+              exit 0
+            fi
+            echo "::warning::apt failed on attempt $attempt, retrying without the Azure mirror"
+            sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/' \
+              /etc/apt/apt-mirrors.txt || true
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
