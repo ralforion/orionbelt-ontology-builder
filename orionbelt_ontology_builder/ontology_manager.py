@@ -7196,7 +7196,12 @@ class OntologyManager:
         self.graph.parse(data=data, format=format)
         self._update_namespace_from_graph()
 
-    def preview_import(self, data: str, format: str = "turtle") -> dict[str, Any]:
+    def preview_import(
+        self,
+        data: str,
+        format: str = "turtle",
+        progress: Callable[[str, float], None] | None = None,
+    ) -> dict[str, Any]:
         """Parse import data and return a preview without modifying the current graph.
 
         Returns a dict with:
@@ -7204,11 +7209,18 @@ class OntologyManager:
           - incoming_stats: statistics of the parsed graph
           - conflicts: list of detected conflicts (for merge modes)
           - prefix_conflicts: list of prefix/namespace mismatches
+
+        ``progress(step, fraction_done)`` is called before each step. Parsing
+        is most of the time (5 s of 6 at 273k triples), then the comparison.
         """
+        report = progress or (lambda step, done: None)
+        report("Parsing the file", 0.0)
         temp = Graph()
         temp.parse(data=data, format=format)
 
+        report("Comparing it with the current ontology", 0.7)
         diff = self.compare_graphs(temp)
+        report("Checking for conflicts", 0.9)
         conflicts = self.detect_conflicts(temp)
         prefix_conflicts = self._detect_prefix_conflicts(temp)
 
@@ -7792,8 +7804,9 @@ class OntologyManager:
           - stats: dict with counts (added, removed, modified, unchanged)
         """
         # Compute triple-level diffs using rdflib graph subtraction
-        added_set = set(other_graph) - set(self.graph)
-        removed_set = set(self.graph) - set(other_graph)
+        own, other = set(self.graph), set(other_graph)
+        added_set = other - own
+        removed_set = own - other
 
         # Filter out BNode-rooted triples for display (count them separately)
         bnode_added = {t for t in added_set if isinstance(t[0], BNode)}
@@ -7805,14 +7818,16 @@ class OntologyManager:
         added_by_subj = self._group_triples_by_subject(named_added)
         removed_by_subj = self._group_triples_by_subject(named_removed)
 
-        # Classify each changed subject
-        all_subjects = set(added_by_subj.keys()) | set(removed_by_subj.keys())
+        # Classify each changed subject. The key sets are built once: built
+        # per subject, they made a 50k-class import take two minutes here.
+        added_subjects, removed_subjects = set(added_by_subj), set(removed_by_subj)
+        all_subjects = added_subjects | removed_subjects
         modified_resources = []
         counts = {"added": 0, "removed": 0, "modified": 0}
 
         for subj in sorted(all_subjects):
             change_type = self._classify_resource_change(
-                subj, set(added_by_subj.keys()), set(removed_by_subj.keys())
+                subj, added_subjects, removed_subjects
             )
             counts[change_type] = counts.get(change_type, 0) + 1
             modified_resources.append(
@@ -7842,7 +7857,7 @@ class OntologyManager:
             for s, p, o in named_removed
         ]
 
-        unchanged_count = len(set(self.graph) & set(other_graph))
+        unchanged_count = len(own & other)
 
         diff = {
             "added_triples": sorted(added_triples),
