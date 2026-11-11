@@ -18,10 +18,11 @@ from pathlib import Path
 
 import pytest
 from rdflib import BNode, Literal, URIRef
-from rdflib.namespace import OWL, RDF, RDFS, XSD
+from rdflib.namespace import OWL, RDF, RDFS, SKOS, XSD
 
 from orionbelt_ontology_builder.ontology_manager import (
     _LISTING_UPDATES,
+    SKOSXL,
     OntologyManager,
     UndoManager,
     _GraphJournal,
@@ -36,6 +37,8 @@ SAMPLE_FILES = {
     "foaf.rdf": "xml",
     "wine.owl": "xml",
     "gist/gistCore14.1.0.ttl": "turtle",
+    "geography-thesaurus.ttl": "turtle",
+    "skos-showcase.ttl": "turtle",
 }
 SCHEMA_DOMAIN = URIRef("https://schema.org/domainIncludes")
 #: A name the engine accepts, so it resolves to an entity in the namespace.
@@ -49,6 +52,23 @@ def _built_fresh(om: OntologyManager, name: str):
 def _assert_followed(om: OntologyManager, step: str) -> None:
     for name in _LISTING_UPDATES:
         assert getattr(om, name)() == _built_fresh(om, name), f"{name} after {step}"
+    _assert_scheme_filters(om, step)
+
+
+def _assert_scheme_filters(om: OntologyManager, step: str) -> None:
+    """A scheme filter over the followed concepts keeps exactly the concepts
+    _concept_in_scheme counts in, as get_concepts filtered before."""
+    fresh = _built_fresh(om, "_concept_listing")
+    schemes = list(om.graph.subjects(RDF.type, SKOS.ConceptScheme))
+    for scheme in schemes:
+        if not isinstance(scheme, URIRef):
+            continue
+        name = om._local_name(scheme)
+        resolved = next(s for s in schemes if om._local_name(s) == name)
+        expected = [
+            c for c in fresh if om._concept_in_scheme(URIRef(c["uri"]), resolved)
+        ]
+        assert om.get_concepts(scheme=name) == expected, f"scheme {name} after {step}"
 
 
 class _Editor:
@@ -215,6 +235,73 @@ class _Editor:
             if custom:
                 self.om.remove_prefix(self.rng.choice(sorted(custom)))
 
+    def add_concept(self):
+        schemes = self._own(SKOS.ConceptScheme)
+        concepts = self._own(SKOS.Concept)
+        self.om.add_concept(
+            self._new_name("k"),
+            scheme=self.rng.choice(schemes)
+            if schemes and self.rng.random() < 0.7
+            else None,
+            pref_label="New concept",
+            broader=self.rng.choice(concepts)
+            if concepts and self.rng.random() < 0.6
+            else None,
+        )
+
+    def delete_concept(self):
+        names = self._own(SKOS.Concept)
+        if names:
+            self.om.delete_concept(self.rng.choice(names))
+
+    def relabel_concept(self):
+        concept = self._pick(SKOS.Concept)
+        if concept is not None:
+            self.om.graph.set(
+                (concept, SKOS.prefLabel, Literal(f"Concept {self.made}", lang="en"))
+            )
+            self.made += 1
+
+    def move_concept(self):
+        concept, other = self._pick(SKOS.Concept), self._pick(SKOS.Concept)
+        if concept is not None and other is not None:
+            self.om.graph.set((concept, SKOS.broader, other))
+            self.om.graph.add((other, SKOS.narrower, concept))
+
+    def scheme_side_top(self):
+        scheme, concept = self._pick(SKOS.ConceptScheme), self._pick(SKOS.Concept)
+        if scheme is None or concept is None:
+            return
+        if self.rng.random() < 0.5:
+            self.om.graph.add((scheme, SKOS.hasTopConcept, concept))
+        else:
+            self.om.graph.remove((scheme, SKOS.hasTopConcept, None))
+
+    def drop_in_scheme(self):
+        concept = self._pick(SKOS.Concept)
+        if concept is not None:
+            self.om.graph.remove((concept, SKOS.inScheme, None))
+
+    def xl_label(self):
+        """A SKOS-XL label resource: added, or its literal form changed, which
+        is a change to a triple about the label node, not the concept."""
+        labels = sorted(self.om.graph.triples((None, SKOSXL.prefLabel, None)), key=str)
+        if labels and self.rng.random() < 0.6:
+            _, _, node = self.rng.choice(labels)
+            self.om.graph.set(
+                (node, SKOSXL.literalForm, Literal(f"XL {self.made}", lang="en"))
+            )
+            self.made += 1
+            return
+        concept = self._pick(SKOS.Concept)
+        if concept is not None:
+            node = BNode()
+            self.om.graph.add((concept, SKOSXL.prefLabel, node))
+            self.om.graph.add((node, RDF.type, SKOSXL.Label))
+            self.om.graph.add(
+                (node, SKOSXL.literalForm, Literal("XL label", lang="en"))
+            )
+
     def blank_node_soup(self):
         node = BNode()
         self.om.graph.add((node, RDF.type, OWL.Class))
@@ -239,6 +326,13 @@ class _Editor:
         touch_ontology_header,
         change_prefixes,
         blank_node_soup,
+        add_concept,
+        delete_concept,
+        relabel_concept,
+        move_concept,
+        scheme_side_top,
+        drop_in_scheme,
+        xl_label,
     )
 
     def step(self) -> str:
@@ -346,3 +440,36 @@ def test_statistics_follow_the_count_exactly():
     om.delete_class("A")
     om.set_ontology_metadata(label="Stats")
     assert om.get_statistics() == _built_fresh(om, "get_statistics")
+
+
+def _scheme_with_concept() -> tuple[OntologyManager, URIRef, URIRef]:
+    om = OntologyManager(base_uri="http://test.org/k#")
+    om.add_concept_scheme("Things")
+    om.add_concept("Dog", pref_label="Dog")
+    om.get_concepts()
+    return om, URIRef("http://test.org/k#Things"), URIRef("http://test.org/k#Dog")
+
+
+def test_a_scheme_naming_its_top_concept_updates_that_concept():
+    """The scheme states it (scheme skos:hasTopConcept concept): a triple
+    about the scheme that changes the concept's entry."""
+    om, scheme, dog = _scheme_with_concept()
+    om.graph.add((scheme, SKOS.hasTopConcept, dog))
+    (entry,) = om.get_concepts()
+    assert entry["top_of_uris"] == [str(scheme)]
+    assert om.get_concepts(scheme="Things") == [entry]
+    _assert_followed(om, "hasTopConcept")
+
+
+def test_a_changed_skos_xl_label_updates_its_concept():
+    """The label lives on its own resource: a triple about that resource
+    changes the concept's entry."""
+    om, _, dog = _scheme_with_concept()
+    om.graph.remove((dog, SKOS.prefLabel, None))
+    label = BNode()
+    om.graph.add((dog, SKOSXL.prefLabel, label))
+    om.graph.add((label, SKOSXL.literalForm, Literal("Hound", lang="en")))
+    assert om.get_concepts()[0]["prefLabel"] == "Hound"
+    om.graph.set((label, SKOSXL.literalForm, Literal("Doggo", lang="en")))
+    assert om.get_concepts()[0]["prefLabel"] == "Doggo"
+    _assert_followed(om, "literalForm")
