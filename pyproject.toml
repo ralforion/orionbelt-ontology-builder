@@ -35,6 +35,10 @@ dependencies = [
     "streamlit-local-storage>=0.0.25",
     "streamlit-ace>=0.1.1",
     "pyshacl>=0.40",
+    # Parses large RDF files many times faster than rdflib (Rust; wheels for
+    # Linux, macOS and Windows on x86 and ARM, abi3 from CPython 3.9). The
+    # working graph stays rdflib; rdflib parses what Oxigraph does not take.
+    "pyoxigraph>=0.5.13,<0.6",
 ]
 
 [project.scripts]

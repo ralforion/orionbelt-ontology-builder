@@ -1,0 +1,27 @@
+# cargo-about configuration for scripts/generate-pyoxigraph-licenses.sh.
+#
+# Every licence the crates compiled into pyoxigraph are offered under, in order
+# of preference: where a crate offers a choice, it is listed under the first
+# one here. Apache-2.0 comes first because for a binary it asks for its text
+# and any NOTICE file, and the text is complete even for a crate that did not
+# package its own licence file. An MIT notice is not: it is the copyright line
+# that has to travel, and only the crate's own file has that.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "Unicode-3.0",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "BSL-1.0",
+    "0BSD",
+    "Unlicense",
+    "CDLA-Permissive-2.0",
+]
+workarounds = ["ring"]
+
+# Build scripts and tests are not compiled into the binary.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

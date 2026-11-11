@@ -11,6 +11,7 @@ ontologies shipped with no terms at all while gist and gUFO, alone, carried
 theirs.
 """
 
+import re
 import subprocess
 import sys
 import zipfile
@@ -151,11 +152,31 @@ def test_every_licence_text_reaches_the_wheel(wheel_names):
         ), f"{vocab}'s licence is not in the wheel"
 
 
-def test_the_image_carries_the_one_licence_pip_does_not():
+#: The runtime distributions whose wheels ship no licence file, mapped to the
+#: texts the image carries for them and the marker that shows each is the real
+#: licence.
+IMAGE_LICENCES = {
+    "streamlit": {"streamlit-Apache-2.0.txt": "TERMS AND CONDITIONS"},
+    "pyoxigraph": {
+        "pyoxigraph-LICENSE-MIT.txt": "Permission is hereby granted",
+        "pyoxigraph-LICENSE-APACHE.txt": "TERMS AND CONDITIONS",
+        "pyoxigraph-THIRD-PARTY.txt": "LZ4 Library",
+    },
+}
+
+#: A crate's source directory as Rust keeps it in a compiled module, for panic
+#: messages: ``.../registry/src/index.crates.io-<hash>/<name>-<version>/``.
+_EMBEDDED_CRATE = re.compile(
+    rb"registry[/\\]src[/\\][^/\\]+[/\\]"
+    rb"([A-Za-z0-9_.-]+?)-(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)[/\\]"
+)
+
+
+def test_the_image_carries_the_licences_pip_does_not():
     """The container image redistributes the whole dependency tree, and almost
-    all of it carries its own terms into site-packages. The streamlit wheel does
-    not: its dist-info has METADATA, RECORD and WHEEL and no licence file, so the
-    text has to be put in by hand.
+    all of it carries its own terms into site-packages. The streamlit and
+    pyoxigraph wheels do not: their dist-info has no licence file, so the texts
+    have to be put in by hand.
 
     A file assertion rather than an image one. Building the image takes minutes
     and needs a daemon, so this checks that the text exists, is the real Apache
@@ -163,15 +184,102 @@ def test_the_image_carries_the_one_licence_pip_does_not():
     built image contains is verified by the Docker workflow's smoke test, not
     here.
     """
-    text = REPO / "docker" / "licenses" / "streamlit-Apache-2.0.txt"
-    assert text.is_file(), "streamlit's licence text is missing"
-    body = text.read_text(encoding="utf-8")
-    assert "Apache License" in body and "TERMS AND CONDITIONS" in body, (
-        "that file is not the Apache licence"
-    )
+    for dist, texts in IMAGE_LICENCES.items():
+        for name, marker in texts.items():
+            text = REPO / "docker" / "licenses" / name
+            assert text.is_file(), f"{dist}'s licence text {name} is missing"
+            assert marker in text.read_text(encoding="utf-8"), (
+                f"{name} is not the licence it is named for"
+            )
     assert "COPY docker/licenses/" in (REPO / "Dockerfile").read_text(
         encoding="utf-8"
     ), "the image does not copy the licence directory in"
+
+
+def test_the_pyoxigraph_notices_cover_the_installed_module():
+    """pyoxigraph's module is compiled from about 200 Rust crates and from
+    RocksDB and LZ4, and its wheel carries none of their terms; the image does,
+    in a file generated from Oxigraph's lockfile and submodules.
+
+    Two checks tie that file to what is installed: it names the installed
+    version, and it lists every crate whose source path the compiled module
+    embeds. An upgrade of pyoxigraph fails both until the file is generated
+    again. The second is the stronger check, since it reads the binary itself,
+    but not a complete one: a crate that leaves no path behind is not seen.
+    """
+    from importlib import metadata
+
+    regenerate = "run scripts/generate_pyoxigraph_licenses.py"
+    dist = metadata.distribution("pyoxigraph")
+    text = (REPO / "docker" / "licenses" / "pyoxigraph-THIRD-PARTY.txt").read_text(
+        encoding="utf-8"
+    )
+    assert text.startswith(f"Third-party licences in pyoxigraph {dist.version}\n"), (
+        f"the file is not for pyoxigraph {dist.version}; {regenerate}"
+    )
+    (module,) = [f for f in dist.files or [] if f.suffix in (".so", ".pyd")]
+    embedded = {
+        (name.decode(), version.decode())
+        for name, version in _EMBEDDED_CRATE.findall(
+            Path(str(module.locate())).read_bytes()
+        )
+    }
+    assert len(embedded) > 20, "the module names too few crates to check against"
+    listed = set(re.findall(r"^- (\S+) (\S+)$", text, re.MULTILINE))
+    missing = sorted(f"{name} {version}" for name, version in embedded - listed)
+    assert not missing, f"compiled in but not listed: {missing}; {regenerate}"
+
+
+def _runtime_distributions() -> set[str]:
+    """The installed distributions the app needs at run time: its own
+    requirements, followed through theirs, without extras."""
+    from importlib import metadata
+
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    seen: set[str] = set()
+    pending = ["orionbelt-ontology-builder"]
+    while pending:
+        name = pending.pop()
+        try:
+            requirements = metadata.requires(name) or []
+        except metadata.PackageNotFoundError:
+            continue  # not for this platform, as watchdog is not on macOS
+        for line in requirements:
+            requirement = Requirement(line)
+            if requirement.marker and not requirement.marker.evaluate({"extra": ""}):
+                continue
+            dist = canonicalize_name(requirement.name)
+            if dist not in seen:
+                seen.add(dist)
+                pending.append(dist)
+    return seen
+
+
+def test_every_runtime_dependency_without_a_licence_file_is_covered():
+    """A new dependency whose wheel ships no licence text has to be added to
+    docker/licenses, or the image redistributes it without its terms.
+    pyoxigraph was the second such wheel, and nothing but a hand check caught
+    it."""
+    from importlib import metadata
+
+    unlicensed = set()
+    for dist in _runtime_distributions():
+        try:
+            files = metadata.distribution(dist).files or []
+        except metadata.PackageNotFoundError:
+            continue
+        if not any(
+            ".dist-info/" in str(f)
+            and any(w in f.name.lower() for w in ("licen", "copying", "notice"))
+            for f in files
+        ):
+            unlicensed.add(dist)
+    assert unlicensed == set(IMAGE_LICENCES), (
+        "the runtime distributions without a licence file are "
+        f"{sorted(unlicensed)}; carry their texts in docker/licenses"
+    )
 
 
 def test_the_notices_do_not_claim_dependencies_are_unshipped():

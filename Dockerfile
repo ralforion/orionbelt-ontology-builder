@@ -37,8 +37,9 @@ RUN uv sync --frozen --no-editable
 # so it has to carry their terms. Almost all of that comes for free: Debian ships
 # /usr/share/doc/*/copyright for the OS packages and for CPython, and installed
 # Python distributions carry their own licence files into site-packages. The
-# streamlit wheel is the one that ships none, so its Apache-2.0 text is copied in
-# here. See THIRD_PARTY_NOTICES.md.
+# streamlit and pyoxigraph wheels ship none, so their texts are copied in here,
+# for pyoxigraph with those of the crates and C libraries compiled into it.
+# See THIRD_PARTY_NOTICES.md.
 COPY docker/licenses/ /app/licenses/
 
 # uv installs into a project venv; put it first on PATH so `streamlit` resolves.

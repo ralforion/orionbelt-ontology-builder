@@ -87,12 +87,23 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Canonical's mirrors can be out of reach for hours (on 2026-11-11 no
+      # *.ubuntu.com host resolved from the runners, actions/runner-images#15296),
+      # so a failed install is tried again from kernel.org's mirror, which is
+      # outside that domain.
       - name: Install Qt GUI runtime libraries
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            libgl1 libegl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
-            libfontconfig1 libfreetype6
+          install_qt_libraries() {
+            sudo apt-get update -qq &&
+              sudo apt-get install -y -qq --no-install-recommends \
+                libgl1 libegl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
+                libfontconfig1 libfreetype6
+          }
+          install_qt_libraries || {
+            echo "::warning::Ubuntu's mirrors failed, trying kernel.org's"
+            echo "https://mirrors.edge.kernel.org/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
+            install_qt_libraries
+          }
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3

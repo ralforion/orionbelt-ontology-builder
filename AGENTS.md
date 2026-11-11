@@ -26,6 +26,7 @@ orionbelt_ontology_builder/
 ├── ontology_manager.py # Core OWL/SKOS engine on rdflib (OntologyManager, UndoManager)
 ├── templates.py        # Built-in templates, upper & reference ontologies
 ├── sparql.py           # Read-only SPARQL execution (deadline + row cap)
+├── rdf_io.py           # Parsing through pyoxigraph where it gives rdflib's result
 ├── reasoning.py        # owlrl closure in a worker process (deadline, progress, cancel)
 ├── samples/            # Bundled ontologies (gist, gUFO, FOAF, PROV-O, …)
 ├── lib/                # The graph component (vendored vis-network)
@@ -61,7 +62,7 @@ pytest                                    # testpaths/pythonpath configured in p
 pytest tests/test_classes.py -q           # a single file
 ```
 
-Dependencies: streamlit, rdflib, owlrl, networkx, streamlit-ace. Python >= 3.12.
+Dependencies: streamlit, rdflib, owlrl, pyshacl, pyoxigraph, networkx, streamlit-ace. Python >= 3.12.
 
 The floor is 3.12 because that is the oldest runtime CI keeps green, and
 because both deployment targets are at or above it (Streamlit Community
@@ -79,6 +80,12 @@ and the CI matrix in `.github/workflows/ci.yml` must agree, and
   missed.
 - Code is reviewed with OpenAI Codex — keep changes clean and minimal.
 - Match the surrounding style; add tests under `tests/` for new engine behavior.
+- **A pyoxigraph upgrade needs its licence file regenerated:**
+  `uv run python scripts/generate_pyoxigraph_licenses.py` (git and Docker, about
+  two minutes) rewrites `docker/licenses/pyoxigraph-THIRD-PARTY.txt`, the terms
+  of the crates and C libraries compiled into it, which the Docker image has to
+  carry. `tests/test_third_party_notices.py` fails until it has been run, so a
+  Dependabot bump of pyoxigraph goes red on purpose.
 - **GitHub Actions are pinned to commit SHAs**, each with a `# vX.Y.Z` comment
   naming the exact patch release it came from. Never write `uses: owner/repo@v7`.
   Resolve a SHA with `git ls-remote https://github.com/owner/repo 'refs/tags/vX.Y.Z^{}'`,
