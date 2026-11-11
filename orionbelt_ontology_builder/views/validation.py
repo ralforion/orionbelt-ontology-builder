@@ -118,9 +118,10 @@ def render_validation():
         _render_reasoning(ont)
 
 
-#: From this many triples the Reasoning tab says a run may take minutes.
-#: owlrl's time grows faster than the graph: RDFS took 8 s at 8.5k triples
-#: and 160 s at 43k, measured with scripts/bench_large.py.
+#: From this many triples the Reasoning tab says an OWL-RL run may take
+#: minutes. OWL-RL runs owlrl, whose time grows faster than the graph: 6.8 s
+#: at 8.5k triples and 36 s at 43k. RDFS is computed natively (``rdfs.py``)
+#: and takes seconds even at 200k triples, so it gets no warning.
 REASONING_SLOW_TRIPLES = 20_000
 
 
@@ -192,17 +193,27 @@ def _render_reasoning(ont) -> None:
 
     profile = st.selectbox(
         "Reasoning Profile",
-        [("RDFS", "rdfs"), ("OWL-RL", "owl-rl"), ("OWL-RL Extended", "owl-rl-ext")],
+        [
+            ("RDFS", "rdfs"),
+            ("RDFS, lean", "rdfs-lean"),
+            ("OWL-RL", "owl-rl"),
+            ("OWL-RL Extended", "owl-rl-ext"),
+        ],
         format_func=lambda x: x[0],
+        help="RDFS, lean adds only what the ontology's own terms imply: types "
+        "from domains, ranges and superclasses, and the closed class and "
+        "property hierarchies. It leaves out what every RDFS graph implies, "
+        "such as typing every node an rdfs:Resource and every predicate an "
+        "rdf:Property, which is most of what plain RDFS adds.",
     )
 
     current_triples = len(ont.graph)
     st.write(f"Current triple count: {current_triples}")
-    if current_triples >= REASONING_SLOW_TRIPLES:
+    if current_triples >= REASONING_SLOW_TRIPLES and profile[1].startswith("owl"):
         st.warning(
-            f"At {current_triples:,} triples a run can take many minutes: "
-            "RDFS took about 8 seconds at 8,500 triples and over two and a half "
-            "minutes at 43,000. OWL-RL takes longer than RDFS."
+            f"At {current_triples:,} triples an OWL-RL run can take many "
+            "minutes: it took 7 seconds at 8,500 triples and 36 seconds at "
+            "43,000, and grows faster than the ontology. RDFS takes seconds."
         )
     minutes = REASONING_DEADLINE_SECONDS / 60
     st.caption(

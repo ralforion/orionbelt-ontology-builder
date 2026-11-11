@@ -47,17 +47,26 @@ def test_reasoning_leaves_no_literal_subjects(profile):
     assert not any(isinstance(s, Literal) for s, _, _ in om.graph)
 
 
-def test_reasoning_reports_each_pass():
+def test_owlrl_reports_each_pass():
+    om = _prov_o()
+    calls = []
+    added = om.apply_reasoning(
+        "owl-rl", progress=lambda n, so_far: calls.append((n, so_far))
+    )
+    # owlrl needs a second pass to see nothing new.
+    assert [n for n, _ in calls] == [1, 2]
+    assert calls[0][1] == 0
+    assert 0 < calls[1][1] == added
+
+
+def test_native_rdfs_is_one_pass():
     om = _prov_o()
     calls = []
     added = om.apply_reasoning(
         "rdfs", progress=lambda n, so_far: calls.append((n, so_far))
     )
-    # RDFS needs a second pass for the terms the first one introduced, and a
-    # third to see nothing new.
-    assert [n for n, _ in calls] == [1, 2, 3]
-    assert calls[0][1] == 0
-    assert 0 < calls[1][1] <= calls[2][1] == added
+    assert calls == [(1, 0)]
+    assert added > 0
 
 
 def test_unknown_profile_changes_nothing():
@@ -128,11 +137,11 @@ def test_the_worker_reports_progress_from_pass_zero():
     om = _prov_o()
     calls = []
     added = om.apply_reasoning_in_worker(
-        "rdfs", progress=lambda n, so_far: calls.append((n, so_far))
+        "owl-rl", progress=lambda n, so_far: calls.append((n, so_far))
     )
     passes = sorted(set(calls))
     assert passes[0] == (0, 0)  # while the worker starts and reads the graph
-    assert passes[1:] == [(1, 0), (2, passes[2][1]), (3, added)]
+    assert passes[1:] == [(1, 0), (2, added)]
 
 
 def _spy_workers(monkeypatch):
