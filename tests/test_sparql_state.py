@@ -270,3 +270,32 @@ def test_a_late_restore_reaches_a_limit_already_on_screen(monkeypatch):
     _late_restore(monkeypatch, state, {"_sparql_cfg_max_rows": 25})
     assert state["sparql_max_rows"] == 25
     assert state["sparql_timeout"] == 10, "a limit nothing restored is left alone"
+
+
+def test_the_engine_choice_round_trips_and_is_checked(monkeypatch, patch_ui, tmp_path):
+    cfg_file = tmp_path / "config.json"
+    monkeypatch.setattr(app.local_store, "local_persist_enabled", lambda: True)
+    monkeypatch.setattr(app.local_store, "config_file", lambda: cfg_file)
+
+    save_state: dict = {"_sparql_state_dirty": True, "_sparql_cfg_engine": "rdflib"}
+    monkeypatch.setattr(app.st, "session_state", save_state)
+    app.persist_sparql_state()
+    stored = json.loads(cfg_file.read_text())["orionbelt_sparql_state"]
+    assert stored["engine"] == "rdflib"
+
+    restore_state: dict = {}
+    monkeypatch.setattr(app.st, "session_state", restore_state)
+    app.restore_sparql_state()
+    assert restore_state["_sparql_cfg_engine"] == "rdflib"
+
+    unknown: dict = {}
+    monkeypatch.setattr(app.st, "session_state", unknown)
+    app._apply_sparql_state({"engine": "virtuoso"})
+    app._apply_sparql_state({"engine": True})
+    assert "_sparql_cfg_engine" not in unknown, "only an engine the page offers"
+
+
+def test_a_late_restore_reaches_the_engine_already_on_screen(monkeypatch):
+    state = {"sparql_query_text": "", "sparql_engine": "auto"}
+    _late_restore(monkeypatch, state, {"_sparql_cfg_engine": "rdflib"})
+    assert state["sparql_engine"] == "rdflib"

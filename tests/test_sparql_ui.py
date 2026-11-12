@@ -454,6 +454,38 @@ def test_the_limits_survive_another_page():
     assert at.number_input(key="sparql_timeout").value == 3
 
 
+def test_the_engine_choice_survives_another_page():
+    os.environ["SPARQL_AWAY"] = "0"
+    at = AppTest.from_function(_away_script)
+    at.run(timeout=120)
+    assert at.selectbox(key="sparql_engine").value == "auto"
+
+    at.selectbox(key="sparql_engine").set_value("rdflib").run(timeout=120)
+    assert at.session_state["_sparql_cfg_engine"] == "rdflib"
+    assert at.session_state["_sparql_state_dirty"] is True
+
+    os.environ["SPARQL_AWAY"] = "1"
+    at.run(timeout=120)
+    os.environ["SPARQL_AWAY"] = "0"
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    assert at.selectbox(key="sparql_engine").value == "rdflib"
+
+
+def test_the_result_names_the_engine_and_the_choice_reaches_the_query(monkeypatch):
+    from orionbelt_ontology_builder import sparql
+
+    monkeypatch.setattr(sparql, "OXIGRAPH_MIN_TRIPLES", 0)
+    at = _run("SELECT ?c WHERE { ?c a owl:Class }")
+    assert "3 rows in" in _captions(at) and "on Oxigraph." in _captions(at)
+
+    at.selectbox(key="sparql_engine").set_value("rdflib").run(timeout=120)
+    at.button[0].click().run(timeout=120)
+    assert not at.exception, at.exception
+    assert "on rdflib." in _captions(at)
+    assert "Ran on rdflib:" not in _captions(at), "chosen, so nothing to explain"
+
+
 def test_a_change_is_marked_for_saving():
     """The store is only written after the user changes something, so the page
     has to say when they have (the gate itself is in test_sparql_state.py)."""

@@ -28,7 +28,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import IO, Any
+from typing import Any
 
 from rdflib import Graph
 from rdflib.term import Node
@@ -111,8 +111,8 @@ def close_in_worker(
     threads = [
         threading.Thread(target=target, args=args, daemon=True)
         for target, args in (
-            (_send, (worker.stdin, request)),
-            (_receive, (worker.stdout, events)),
+            (worker_process.send, (worker.stdin, request)),
+            (worker_process.receive, (worker.stdout, events)),
             (stderr_tail.extend, (worker.stderr,)),
         )
     ]
@@ -153,26 +153,3 @@ def close_in_worker(
         if worker.poll() is None:
             worker.kill()
         worker.wait()
-
-
-def _send(stream: IO[str], text: str) -> None:
-    """Write the request and close the pipe, so the worker sees its end."""
-    try:
-        stream.write(text)
-        stream.close()
-    except OSError:
-        pass  # the worker is gone; the reader reports why
-
-
-def _receive(stream: IO[str], events: queue.Queue[dict[str, Any] | None]) -> None:
-    """Queue each JSON line the worker writes, then ``None`` at its end."""
-    try:
-        for line in stream:
-            try:
-                events.put(json.loads(line))
-            except ValueError:
-                continue  # not one of ours
-    except OSError:
-        pass
-    finally:
-        events.put(None)

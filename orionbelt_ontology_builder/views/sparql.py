@@ -9,6 +9,7 @@ import streamlit as st
 
 from .. import sparql
 from ..ui import (
+    SPARQL_ENGINE_KEY,
     SPARQL_PLAIN_KEY,
     SPARQL_QUERY_KEY,
     VIZ_SPARQL_HIGHLIGHT,
@@ -127,11 +128,13 @@ _QUERY_KEY = SPARQL_QUERY_KEY
 #: widget stops being rendered, so with the choice living here it was lost the
 #: moment the user looked at another page (issue #388).
 _PLAIN_WIDGET_KEY = "sparql_plain_editor"
-#: The two limits, and what they start from when nothing is stored. The engine's
-#: own defaults, so the page and the query agree about what "unset" means.
-_LIMIT_DEFAULTS = {
+#: The two limits and the engine choice, and what they start from when nothing
+#: is stored. The query's own defaults, so the page and the query agree about
+#: what "unset" means.
+_SETTING_DEFAULTS = {
     "_sparql_cfg_max_rows": sparql.DEFAULT_MAX_ROWS,
     "_sparql_cfg_timeout_seconds": int(sparql.DEFAULT_TIMEOUT_SECONDS),
+    SPARQL_ENGINE_KEY: sparql.ENGINE_AUTO,
 }
 #: Every widget on this page that is seeded from a stored choice rather than
 #: holding it, as ``{widget key: the key holding the choice}``. Streamlit drops a
@@ -142,6 +145,7 @@ _SEEDED_WIDGETS = {
     _PLAIN_WIDGET_KEY: SPARQL_PLAIN_KEY,
     "sparql_max_rows": "_sparql_cfg_max_rows",
     "sparql_timeout": "_sparql_cfg_timeout_seconds",
+    "sparql_engine": SPARQL_ENGINE_KEY,
 }
 #: The plain box's own widget key. It is deliberately not ``_QUERY_KEY``: a
 #: widget's state is dropped as soon as it stops being rendered, so with the two
@@ -154,6 +158,26 @@ _BOX_KEY = "sparql_query_box"
 #: or the editor keeps showing what the user had before.
 _EDITOR_NONCE = "sparql_editor_nonce"
 _RESULT_KEY = "sparql_last_result"
+#: How the page names each engine choice, and each engine in a result.
+_ENGINE_LABELS = {
+    sparql.ENGINE_AUTO: "Automatic",
+    sparql.ENGINE_OXIGRAPH: "Oxigraph",
+    sparql.ENGINE_RDFLIB: "rdflib",
+}
+_ENGINE_NAMES = {sparql.ENGINE_OXIGRAPH: "Oxigraph", sparql.ENGINE_RDFLIB: "rdflib"}
+_ENGINE_HELP = (
+    "**Automatic** runs a query on Oxigraph once the ontology has "
+    f"{sparql.OXIGRAPH_MIN_TRIPLES:,} triples or more, where it is several times "
+    "faster, and on rdflib below that. The result says which engine ran.\n\n"
+    "Oxigraph can answer differently: numbers come back in canonical form "
+    '(`1.50` as `1.5`), `"a"` and `"a"^^xsd:string` count as one value, '
+    "decimal division keeps 18 places, and ORDER BY may put labels in "
+    "different languages in a different order. A query where a difference "
+    "would be hard to spot (a REGEX with a backreference, `lang()` on "
+    "mixed-case tags) runs on rdflib anyway.\n\n"
+    "**Oxigraph** runs every query there whatever the size, and **rdflib** "
+    "runs every query on rdflib."
+)
 _ERROR_KEY = "sparql_last_error"
 #: Whether what ``_ERROR_KEY`` holds is the engine's wording rather than ours.
 #: Kept beside the message rather than folded into it so a session that was
@@ -270,15 +294,15 @@ def _seed_widgets() -> None:
     ``setdefault``, because a widget that is on the page holds the newer value:
     the seed is for the ones Streamlit has thrown away, or has yet to build.
     """
-    for cfg_key, default in _LIMIT_DEFAULTS.items():
+    for cfg_key, default in _SETTING_DEFAULTS.items():
         st.session_state.setdefault(cfg_key, default)
     for wid_key, cfg_key in _SEEDED_WIDGETS.items():
         if cfg_key in st.session_state:
             st.session_state.setdefault(wid_key, st.session_state[cfg_key])
 
 
-def _limit_changed(cfg_key: str, wid_key: str) -> None:
-    """Mirror a limit widget into the key that outlives it, and save it."""
+def _setting_changed(cfg_key: str, wid_key: str) -> None:
+    """Mirror a setting's widget into the key that outlives it, and save it."""
     if wid_key not in st.session_state:
         return
     st.session_state[cfg_key] = st.session_state[wid_key]
@@ -550,14 +574,21 @@ def _render_result(result: sparql.QueryResult) -> None:
             "Raise the row limit or add a LIMIT clause to see a different slice."
         )
 
+    engine = _ENGINE_NAMES.get(result.engine, result.engine)
     if result.form == "ASK":
         st.metric("Result", "true" if result.ask else "false")
-        st.caption(f"Ran in {result.elapsed:.2f}s.")
+        st.caption(f"Ran in {result.elapsed:.2f}s on {engine}.")
+        if result.engine_note:
+            st.caption(result.engine_note)
         return
 
     noun = "triple" if result.form in ("CONSTRUCT", "DESCRIBE") else "row"
     plural = "" if result.row_count == 1 else "s"
-    st.caption(f"{result.row_count} {noun}{plural} in {result.elapsed:.2f}s.")
+    st.caption(
+        f"{result.row_count} {noun}{plural} in {result.elapsed:.2f}s on {engine}."
+    )
+    if result.engine_note:
+        st.caption(result.engine_note)
 
     if result.form in ("CONSTRUCT", "DESCRIBE"):
         _render_graph_result(result)
@@ -590,7 +621,7 @@ def render_sparql():
     query_text = _render_editor()
     _render_prefixes(ont)
 
-    limit_col, timeout_col, run_col = st.columns([2, 2, 1])
+    limit_col, timeout_col, engine_col, run_col = st.columns([2, 2, 2, 1])
     with limit_col:
         max_rows = st.number_input(
             "Row limit",
@@ -598,7 +629,7 @@ def render_sparql():
             max_value=sparql.MAX_ROWS_CEILING,
             step=100,
             key="sparql_max_rows",
-            on_change=_limit_changed,
+            on_change=_setting_changed,
             args=("_sparql_cfg_max_rows", "sparql_max_rows"),
             help=(
                 "Stops reading results past this many rows. A query with "
@@ -613,9 +644,19 @@ def render_sparql():
             max_value=int(sparql.MAX_TIMEOUT_SECONDS),
             step=1,
             key="sparql_timeout",
-            on_change=_limit_changed,
+            on_change=_setting_changed,
             args=("_sparql_cfg_timeout_seconds", "sparql_timeout"),
             help="A query that runs longer than this is stopped.",
+        )
+    with engine_col:
+        engine = st.selectbox(
+            "Engine",
+            list(sparql.ENGINES),
+            format_func=lambda choice: _ENGINE_LABELS[choice],
+            key="sparql_engine",
+            on_change=_setting_changed,
+            args=(SPARQL_ENGINE_KEY, "sparql_engine"),
+            help=_ENGINE_HELP,
         )
     with run_col:
         st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
@@ -632,6 +673,7 @@ def render_sparql():
                     query_text,
                     timeout_seconds=timeout_seconds,
                     max_rows=max_rows,
+                    engine=engine,
                 )
         except sparql.QueryError as e:
             st.session_state[_ERROR_KEY] = str(e)
