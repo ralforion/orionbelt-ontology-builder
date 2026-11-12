@@ -586,6 +586,33 @@ def theme_is_dark() -> bool:
     return luminance is not None and luminance < _DARK_BACKGROUND_LUMINANCE
 
 
+def chart_accent() -> str:
+    """The colour a chart's marks are drawn in, from the app's accent family.
+
+    The brand navy on a light background; on a dark one, where the navy is
+    1.48:1, the dark accent, at 4.35:1 well clear of the 3:1 a graphic needs.
+    """
+    return _DARK_ACCENT if theme_is_dark() else _BRAND
+
+
+def chart_ink() -> str:
+    """The colour of text drawn inside a chart.
+
+    Streamlit's chart theme styles the axes but leaves a text mark at
+    Vega's black, which cannot be read on a dark background. The theme's own
+    text colour where one is configured, else Streamlit's default for the
+    background.
+    """
+    try:
+        configured = st.get_option("theme.textColor")
+    except Exception:  # theme lookup is cosmetic, never fatal
+        logger.debug("Theme text colour unavailable; using the default", exc_info=True)
+        configured = None
+    if configured:
+        return str(configured)
+    return "#FAFAFA" if theme_is_dark() else "#31333F"
+
+
 def get_ontology_manager_class():
     """Lazy load the OntologyManager class.
 
