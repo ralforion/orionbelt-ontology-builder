@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from rdflib import DC, DCTERMS, OWL, RDFS, SKOS, URIRef
 
+from .ontology_manager import _DOMAIN_INCLUDES, _RANGE_INCLUDES
 from .quality.context import QualityContext
 from .quality.registry import OWL_PROFILE, SKOS_PROFILE
 
@@ -26,6 +27,12 @@ if TYPE_CHECKING:
 
 #: Where an ontology's name is looked for, first match wins.
 TITLE_PREDICATES = (RDFS.label, DCTERMS.title, DC.title, SKOS.prefLabel)
+#: What states a property's domain or range, as ``validate()`` and rule Q008
+#: read it. Any value counts, a datatype included: ``QualityContext.ranges``
+#: keeps only classes, which is what connects two of them, not what says
+#: whether a range was given.
+DOMAIN_PREDICATES = (RDFS.domain, *_DOMAIN_INCLUDES)
+RANGE_PREDICATES = (RDFS.range, *_RANGE_INCLUDES)
 #: The language of a label without a language tag, as the dashboard lists it.
 NO_LANGUAGE = "no tag"
 
@@ -118,16 +125,20 @@ def _hierarchy(ctx: QualityContext) -> Hierarchy:
             children[p].append(child)
 
     # Longest path from a root, by Kahn's order: a class is placed once every
-    # superclass is. What a cycle holds (and what hangs below it) never is.
+    # superclass is. What a cycle holds (and what hangs below it) never is,
+    # even when one of its parents is placed: A ⊑ B, B ⊑ A, both ⊑ Root.
     waiting = {c: len(ps) for c, ps in parents.items()}
     depth = {c: 0 for c, n in waiting.items() if n == 0}
+    # Below the deepest parent placed so far; the depth once all of them are.
+    below: dict[str, int] = {}
     ready = list(depth)
     while ready:
         current = ready.pop()
         for child in children[current]:
-            depth[child] = max(depth.get(child, 0), depth[current] + 1)
+            below[child] = max(below.get(child, 0), depth[current] + 1)
             waiting[child] -= 1
             if waiting[child] == 0:
+                depth[child] = below[child]
                 ready.append(child)
 
     per_depth = Counter(depth.values())
@@ -156,7 +167,10 @@ def ontology_overview(ont: OntologyManager, *, top: int = 8) -> Overview:
     stats = ont.get_statistics()
     metadata = ont.get_ontology_metadata()
     vocabularies = ctx.vocabularies
-    uses_skos = SKOS_PROFILE in vocabularies
+    # A scheme counts too, though the quality rules wait for a concept: one
+    # made before its first concept is not an empty ontology (Codex review of
+    # PR #562).
+    uses_skos = SKOS_PROFILE in vocabularies or stats["concept_schemes"] > 0
     # An empty graph uses neither; it gets the OWL tiles, at zero.
     uses_owl = OWL_PROFILE in vocabularies or not uses_skos
 
@@ -179,17 +193,19 @@ def ontology_overview(ont: OntologyManager, *, top: int = 8) -> Overview:
     ]
     if ctx.properties:
         props = [URIRef(p) for p in ctx.properties]
-        coverage.append(
-            Coverage(
-                "Property domains",
-                sum(1 for p in props if ctx.domains(p)),
-                len(props),
+
+        def declared(predicates: tuple[URIRef, ...]) -> int:
+            return sum(
+                1
+                for p in props
+                if any(ont.graph.value(p, pred) is not None for pred in predicates)
             )
+
+        coverage.append(
+            Coverage("Property domains", declared(DOMAIN_PREDICATES), len(props))
         )
         coverage.append(
-            Coverage(
-                "Property ranges", sum(1 for p in props if ctx.ranges(p)), len(props)
-            )
+            Coverage("Property ranges", declared(RANGE_PREDICATES), len(props))
         )
     coverage.extend(_coverage(ctx, ctx.concepts, "Concept"))
 

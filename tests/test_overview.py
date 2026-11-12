@@ -141,3 +141,38 @@ def test_the_tail_folds_into_one_other_row():
     counts = Counter({"a": 5, "b": 4, "c": 1, "d": 1, "e": 1})
     assert _ranked(counts, 2) == (("a", 5), ("b", 4), ("Other (3)", 3))
     assert _ranked(counts, 9) == (("a", 5), ("b", 4), ("c", 1), ("d", 1), ("e", 1))
+
+
+def test_a_datatype_range_counts_as_a_range():
+    """``ctx.ranges`` leaves datatypes out, since they connect no classes; a
+    data property ranging over xsd:string has its range all the same, as
+    ``validate()`` and rule Q008 count it (Codex review of PR #562)."""
+    om = OntologyManager(base_uri=str(NS))
+    om.add_class("Person")
+    om.add_data_property("hasName", domain="Person", range_="string")
+    coverage = {c.label: (c.have, c.total) for c in ontology_overview(om).coverage}
+    assert coverage["Property domains"] == (1, 1)
+    assert coverage["Property ranges"] == (1, 1)
+
+
+def test_a_cycle_below_a_root_gets_no_depth():
+    """A ⊑ B, B ⊑ A, both ⊑ Root: Root is placed, A and B never are, though
+    each has a placed parent (Codex review of PR #562)."""
+    om = OntologyManager(base_uri=str(NS))
+    for name in ("Root", "A", "B"):
+        om.add_class(name)
+    for child, parent in (("A", "B"), ("B", "A"), ("A", "Root"), ("B", "Root")):
+        om.graph.add((NS[child], RDFS.subClassOf, NS[parent]))
+    shape = ontology_overview(om).hierarchy
+    assert shape.in_cycles == 2
+    assert shape.per_depth == (1,)
+
+
+def test_a_vocabulary_with_only_a_scheme_is_not_empty():
+    """A scheme made before its first concept (Codex review of PR #562)."""
+    om = OntologyManager(base_uri=str(NS))
+    om.add_concept_scheme("Parts")
+    overview = ontology_overview(om)
+    assert not overview.is_empty
+    assert overview.uses_skos and not overview.uses_owl
+    assert overview.counts == {"Concept schemes": 1, "Concepts": 0}
