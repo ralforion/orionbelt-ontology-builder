@@ -136,6 +136,18 @@ def test_the_overview_leads_with_counts_and_runs_the_checks(monkeypatch):
     ]
 
 
+def test_validation_leaves_out_what_model_quality_counts(monkeypatch):
+    # Wheel and Tandem have no label: Q001 warnings under Model quality, and
+    # nothing under Validation, which used to count them as well.
+    at = _run(monkeypatch)
+    om = at.session_state["ontology"]
+    assert {i["type"] for i in om.validate()} >= {"missing_label"}
+    run = at.session_state[quality_run_key(om)]
+    unlabelled = {f.resource for f in run.by_rule("Q001")}
+    assert {"http://test.org/o#Wheel", "http://test.org/o#Tandem"} <= unlabelled
+    assert [s.value for s in at.success] == ["No structural problems found."]
+
+
 def test_a_large_ontology_waits_for_a_click(monkeypatch):
     at = _run(monkeypatch, AUTORUN_MAX="1")
     om = at.session_state["ontology"]

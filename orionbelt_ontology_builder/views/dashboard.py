@@ -31,6 +31,13 @@ CHECKS_AUTORUN_MAX_TRIPLES = 10_000
 #: How many rules the findings chart names before folding the rest.
 _TOP_RULES = 6
 
+#: Validation issues a quality rule reports as well: missing labels (Q001),
+#: unconnected classes (Q007) and subClassOf cycles (Q006). Model quality
+#: counts them in the ontology's own scope and with its suppressions, so the
+#: Validation panel beside it leaves them out rather than count one problem
+#: twice, with two different numbers.
+_COUNTED_BY_QUALITY = frozenset({"missing_label", "orphan_class", "class_cycle"})
+
 _OVERVIEW_STATE = "_dashboard_overview"
 _VALIDATION_STATE = "_dashboard_validation"
 
@@ -226,7 +233,9 @@ def _render_checks(ont, triples: int, accent: str) -> None:
 
     validation_col, quality_col = st.columns([2, 3], gap="large")
     with validation_col:
-        _render_validation(validation[1])
+        _render_validation(
+            [i for i in validation[1] if i["type"] not in _COUNTED_BY_QUALITY]
+        )
     with quality_col:
         # Suppressions apply as they are now, as on the Quality section.
         shown, suppressed = partition(run.all_findings(), config)
@@ -235,6 +244,10 @@ def _render_checks(ont, triples: int, accent: str) -> None:
 
 def _render_validation(issues: list[dict[str, str]]) -> None:
     st.markdown("**Validation**")
+    st.caption(
+        "Missing labels, unconnected classes and hierarchy cycles count under "
+        "Model quality."
+    )
     if not issues:
         st.success("No structural problems found.")
         return
