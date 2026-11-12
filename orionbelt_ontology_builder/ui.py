@@ -6508,6 +6508,28 @@ def _page_bounds(total: int, page: int, page_size: int) -> tuple[int, int, int, 
     return num_pages, page, start, min(start + page_size, total)
 
 
+#: The Page selector's width in pixels: room for a four-digit page and its
+#: step buttons, not the whole row it used to fill.
+_PAGE_INPUT_WIDTH = 140
+
+
+def _page_input(container, page_key: str, total: int, noun: str) -> int:
+    """The Page selector for ``total`` items, clamped and drawn in ``container``."""
+    num_pages, page, _, _ = _page_bounds(
+        total, st.session_state.get(page_key, 1), LIST_PAGE_SIZE
+    )
+    st.session_state[page_key] = page  # clamp before the widget reads the key
+    return container.number_input(
+        "Page",
+        min_value=1,
+        max_value=num_pages,
+        step=1,
+        key=page_key,
+        width=_PAGE_INPUT_WIDTH,
+        help=f"{total} {noun}; {LIST_PAGE_SIZE} shown per page.",
+    )
+
+
 def _paginate_rows(items: list, page_key: str, noun: str) -> list:
     """Paginate a flat list of rows (no open/active state) at LIST_PAGE_SIZE.
 
@@ -6519,40 +6541,80 @@ def _paginate_rows(items: list, page_key: str, noun: str) -> list:
     total = len(items)
     if total <= LIST_PAGE_SIZE:
         return items
-    num_pages, page, _, _ = _page_bounds(
-        total, st.session_state.get(page_key, 1), LIST_PAGE_SIZE
-    )
-    st.session_state[page_key] = page  # clamp before the widget reads the key
-    page = st.number_input(
-        "Page",
-        min_value=1,
-        max_value=num_pages,
-        step=1,
-        key=page_key,
-        help=f"{total} {noun}; {LIST_PAGE_SIZE} shown per page.",
-    )
+    row = st.container(horizontal=True, vertical_alignment="bottom")
+    page = _page_input(row, page_key, total, noun)
     _, _, start, end = _page_bounds(total, page, LIST_PAGE_SIZE)
-    st.caption(f"Showing {noun} {start + 1}–{end} of {total}.")
+    row.caption(f"Showing {noun} {start + 1}–{end} of {total}.")
     return items[start:end]
+
+
+def _filter_texts(item: dict) -> list[str]:
+    """What a list filter matches an item on: its name and its label."""
+    return [
+        text
+        for text in (item.get("name"), item.get("label"), item.get("prefLabel"))
+        if isinstance(text, str) and text
+    ]
+
+
+def filter_list_items(items: list, pattern: str) -> list:
+    """The ``items`` whose name or label matches a list filter's ``pattern``.
+
+    Case is ignored. Plain text matches anywhere in the name or label; with
+    ``*`` (any run of characters) or ``?`` (one character) the pattern has to
+    match the whole of it, so ``address*`` is "starts with" and ``*type``
+    "ends with". An empty pattern keeps every item.
+    """
+    pattern = (pattern or "").strip()
+    if not pattern:
+        return items
+    if "*" in pattern or "?" in pattern:
+        regex = re.compile(
+            "".join(
+                ".*" if ch == "*" else "." if ch == "?" else re.escape(ch)
+                for ch in pattern
+            ),
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        def matches(text: str) -> bool:
+            return regex.fullmatch(text) is not None
+
+    else:
+        needle = pattern.casefold()
+
+        def matches(text: str) -> bool:
+            return needle in text.casefold()
+
+    return [item for item in items if any(map(matches, _filter_texts(item)))]
+
+
+def _to_first_page(page_key: str) -> None:
+    """Callback: a changed filter starts its list on the first page."""
+    st.session_state[page_key] = 1
 
 
 def _resolve_list_view(items, kind, key_of, page_key, noun):
     """Shared logic for a per-item "view" list (classes, properties, ...).
 
-    Given the already sorted/filtered display list, this:
+    Given the already sorted display list, this:
 
       * reads the open item directly from the single ``active_{kind}`` value —
         no scan over per-item flags, no cleanup loop, since only one card can be
         open per kind by construction (issue #147);
-      * paginates at LIST_PAGE_SIZE with a page selector, jumping to the active
-        item's page once when it becomes active — not every render, so a manual
-        page change sticks while a card stays open (issues #140 / #143 / #146).
+      * draws a Filter box over the name or label (see
+        :func:`filter_list_items`), and beside it, past one page, a narrow
+        Page selector;
+      * paginates at LIST_PAGE_SIZE, jumping to the active item's page once
+        when it becomes active — not every render, so a manual page change
+        sticks while a card stays open (issues #140 / #143 / #146).
 
     ``kind`` is the active-value segment (``active_{kind}`` holds
     ``(key, mode)``) and ``key_of`` maps an item to its unique key string. An
-    open item that is not in ``items`` (e.g. filtered out by search) simply
+    open item that is not in ``items``, or that the Filter box hides, simply
     reads as "nothing open" this render, leaving the value intact so the card
-    reappears when the filter clears.
+    reappears when the filter clears. One opened from elsewhere (the graph,
+    the sidebar search) clears a filter that would hide it.
 
     Returns ``(page_items, active_item)``.
     """
@@ -6562,34 +6624,56 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
     if active_state is not None:
         active = next((it for it in items if key_of(it) == active_state[0]), None)
 
+    # Remember which card the page last jumped to, so it jumps once per
+    # opening; with no card open, forget it so reopening one jumps again.
+    jump_key = f"{page_key}__active_key"
+    newly_active = False
+    if active is None:
+        st.session_state.pop(jump_key, None)
+    elif st.session_state.get(jump_key) != key_of(active):
+        newly_active = True
+        st.session_state[jump_key] = key_of(active)
+
+    filter_key = f"{page_key}__filter"
+    if newly_active and not filter_list_items(
+        [active], st.session_state.get(filter_key, "")
+    ):
+        st.session_state[filter_key] = ""  # before the box reads its key
+
+    row = st.container(horizontal=True, vertical_alignment="bottom")
+    query = row.text_input(
+        "Filter by name",
+        key=filter_key,
+        placeholder="Name or label, e.g. address*",
+        help=(
+            "Matches the name or label, ignoring case. Plain text matches "
+            "anywhere in it; `*` stands for any text and `?` for one "
+            "character, so `address*` finds the ones starting with address "
+            "and `*type` the ones ending with type."
+        ),
+        on_change=_to_first_page,
+        args=(page_key,),
+    )
+    unfiltered = len(items)
+    items = filter_list_items(items, query)
+    if active is not None and active not in items:
+        active = None
     total = len(items)
+    if not total:
+        if unfiltered:
+            st.caption(f"No {noun} match “{query.strip()}”.")
+        return items, None
+    of_all = f" (filtered from {unfiltered})" if total < unfiltered else ""
     if total <= LIST_PAGE_SIZE:
+        if of_all:
+            st.caption(f"Showing {noun} 1–{total} of {total}{of_all}.")
         return items, active
 
-    jump_key = f"{page_key}__active_key"
-    if active is not None:
-        _akey = key_of(active)
-        if st.session_state.get(jump_key) != _akey:
-            st.session_state[page_key] = items.index(active) // LIST_PAGE_SIZE + 1
-            st.session_state[jump_key] = _akey
-    else:
-        # No card open: forget the last jump so reopening one jumps again.
-        st.session_state.pop(jump_key, None)
-
-    num_pages, page, _, _ = _page_bounds(
-        total, st.session_state.get(page_key, 1), LIST_PAGE_SIZE
-    )
-    st.session_state[page_key] = page  # clamp before the widget reads the key
-    page = st.number_input(
-        "Page",
-        min_value=1,
-        max_value=num_pages,
-        step=1,
-        key=page_key,
-        help=f"{total} {noun}; {LIST_PAGE_SIZE} shown per page.",
-    )
+    if newly_active and active is not None:
+        st.session_state[page_key] = items.index(active) // LIST_PAGE_SIZE + 1
+    page = _page_input(row, page_key, total, noun)
     _, _, start, end = _page_bounds(total, page, LIST_PAGE_SIZE)
-    st.caption(f"Showing {noun} {start + 1}–{end} of {total}.")
+    st.caption(f"Showing {noun} {start + 1}–{end} of {total}{of_all}.")
     return items[start:end], active
 
 

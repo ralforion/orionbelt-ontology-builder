@@ -30,6 +30,15 @@ def _ind_script():
         _p = os.environ.get("IND_PAGE")
         if _p:
             st.session_state["ind_view_page"] = int(_p)
+        _f = os.environ.get("IND_FILTER")
+        if _f:
+            st.session_state["ind_view_page__filter"] = _f
+        _a = os.environ.get("IND_ACTIVE")
+        if _a:
+            from orionbelt_ontology_builder.ui import _uid
+
+            uri = next(i["uri"] for i in om.get_individuals() if i["name"] == _a)
+            st.session_state["active_ind"] = (_uid(uri), "view")
 
     app.render_individuals()
 
@@ -57,8 +66,20 @@ def _shown(at, needle):
     return next((c.value for c in at.caption if needle in c.value), None)
 
 
+def _run_individuals(**env) -> AppTest:
+    for name in ("IND_PAGE", "IND_FILTER", "IND_ACTIVE"):
+        os.environ.pop(name, None)
+    os.environ.update(env)
+    at = AppTest.from_function(_ind_script)
+    at.run(timeout=120)
+    assert not at.exception, at.exception
+    return at
+
+
 def test_individuals_view_paginates():
     os.environ.pop("IND_PAGE", None)
+    os.environ.pop("IND_FILTER", None)
+    os.environ.pop("IND_ACTIVE", None)
     at = AppTest.from_function(_ind_script)
     at.run(timeout=120)
     assert not at.exception, at.exception
@@ -69,6 +90,8 @@ def test_individuals_view_paginates():
 
 
 def test_individuals_view_last_page_is_short_and_clamps():
+    os.environ.pop("IND_FILTER", None)
+    os.environ.pop("IND_ACTIVE", None)
     os.environ["IND_PAGE"] = "99"  # out of range -> clamps to the last page
     at = AppTest.from_function(_ind_script)
     at.run(timeout=120)
@@ -86,3 +109,28 @@ def test_relations_view_paginates_rows():
     # Each relation row renders one delete button; the page bounds them to 50.
     del_buttons = [b for b in at.button if b.key and b.key.startswith("del_irel_")]
     assert len(del_buttons) == 50
+
+
+def test_a_filter_narrows_the_list_and_drops_the_pager():
+    at = _run_individuals(IND_FILTER="ind00*")
+    assert (
+        _shown(at, "filtered") == "Showing individuals 1–10 of 10 (filtered from 120)."
+    )
+    cards = [e for e in at.expander if "👤" in e.label]
+    assert len(cards) == 10
+    assert not [n for n in at.number_input if n.key == "ind_view_page"]
+
+
+def test_a_filter_matching_nothing_says_so():
+    at = _run_individuals(IND_FILTER="Nobody")
+    assert _shown(at, "match") == "No individuals match “Nobody”."
+    assert not [e for e in at.expander if "👤" in e.label]
+
+
+def test_a_card_opened_elsewhere_clears_a_filter_that_hides_it():
+    # As the graph or the sidebar search would open it.
+    at = _run_individuals(IND_FILTER="ind00*", IND_ACTIVE="Ind075")
+    assert at.text_input(key="ind_view_page__filter").value == ""
+    assert [e.label for e in at.expander if "👤" in e.label and e.proto.expanded] == [
+        next(e.label for e in at.expander if "Ind075" in e.label)
+    ]
