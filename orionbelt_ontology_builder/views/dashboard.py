@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
 import streamlit as st
+from rdflib.namespace import RDFS
 
 from ..overview import NO_LANGUAGE, Overview, ontology_overview
 from ..quality import RULES, QualityFinding, analyze, partition
@@ -35,6 +36,8 @@ _TOP_RULES = 6
 #: The quality rule that reports a validation issue of this type as well, on
 #: the same class. Cycles are matched by their members instead.
 _QUALITY_RULE_FOR = {"missing_label": "Q001", "orphan_class": "Q007"}
+
+_SUBCLASS_OF = str(RDFS.subClassOf)
 
 _OVERVIEW_STATE = "_dashboard_overview"
 _VALIDATION_STATE = "_dashboard_validation"
@@ -268,9 +271,16 @@ def _not_counted_by_quality(
     """
     reported: set[tuple[str, object]] = set()
     for finding in findings:
-        reported.add((finding.rule_id, finding.resource))
-        if finding.rule_id == "Q006":
-            reported.add(("Q006", tuple(finding.evidence.get("cycle", ()))))
+        if finding.rule_id not in ("Q006", "Q009"):
+            reported.add((finding.rule_id, finding.resource))
+        # Both cover SKOS hierarchies too, and a resource that is a class and
+        # a concept can be on a cycle in each: only a subClassOf one is a
+        # class_cycle's (Codex review of PR #564).
+        elif finding.evidence.get("predicate") == _SUBCLASS_OF:
+            cycle = finding.evidence.get("cycle")
+            reported.add(
+                ("Q006", tuple(cycle)) if cycle else ("Q009", finding.resource)
+            )
     cycles = iter(validation.cycles)
     kept = []
     for issue in validation.issues:

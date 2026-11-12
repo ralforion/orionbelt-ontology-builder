@@ -1,7 +1,7 @@
 """The Dashboard page: its Overview and Settings, and the charts it draws."""
 
 from rdflib import URIRef
-from rdflib.namespace import OWL, RDF, RDFS
+from rdflib.namespace import OWL, RDF, RDFS, SKOS
 from streamlit.testing.v1 import AppTest
 
 from orionbelt_ontology_builder.ontology_manager import OntologyManager
@@ -195,6 +195,21 @@ def test_a_cycle_quality_cannot_see_stays_under_validation():
     _cycle(om, "A", "B")
     off = QualityConfig(rules={"Q006": RuleSettings(enabled=False)})
     assert _validation_panel(om, off) == ["class_cycle"]
+
+
+def test_a_skos_cycle_does_not_count_for_a_subclass_cycle():
+    # Classes and concepts at once, on a cycle in each hierarchy: only the
+    # SKOS one is in Model quality, rdfs:Class being out of Q006's reach
+    # (Codex review of #564).
+    om = OntologyManager(base_uri=NS)
+    _cycle(om, "A", "B", kind=RDFS.Class)
+    _cycle(om, "C", kind=RDFS.Class)
+    for child, parent in (("A", "B"), ("B", "A"), ("C", "C")):
+        om.graph.add((URIRef(NS + child), RDF.type, SKOS.Concept))
+        om.graph.add((URIRef(NS + child), SKOS.broader, URIRef(NS + parent)))
+    run = analyze(om, QualityConfig())
+    assert run.by_rule("Q006") and run.by_rule("Q009")
+    assert _validation_panel(om) == ["class_cycle", "class_cycle"]
 
 
 def test_a_class_outside_the_own_scope_keeps_its_missing_label():
