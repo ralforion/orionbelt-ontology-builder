@@ -335,7 +335,7 @@ Interactive vis-network graph with class filtering, configurable node limits, cl
 - Full undo/redo with labeled checkpoints
 - Delete impact analysis before confirmation
 - Bulk operations create a single undo point
-- Namespace prefix management from the Dashboard
+- Namespace prefix management on the Dashboard's Settings tab
 
 ---
 
@@ -555,7 +555,7 @@ the 200 MB default; raise the value only when self-hosting with enough memory.
 
 | Page                | What it does                                                   |
 | ------------------- | -------------------------------------------------------------- |
-| **Dashboard**       | Metadata, base URI, statistics, prefix management, validation  |
+| **Dashboard**       | Overview (counts, documentation coverage, class hierarchy, validation and quality checks, individuals, label languages); Settings (metadata, base URI, imports, prefixes) |
 | **Classes**         | Class hierarchy, CRUD, bulk operations                         |
 | **Properties**      | Object & data properties, CRUD, bulk operations                |
 | **Individuals**     | Instance management, property assertions, bulk operations      |

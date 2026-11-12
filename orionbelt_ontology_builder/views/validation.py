@@ -61,10 +61,13 @@ def render_validation():
 
     ont = st.session_state.ontology
 
+    # Seeded rather than given as ``default=``: the dashboard's Open Quality
+    # pre-sets this key, and Streamlit warns when a keyed widget gets both.
+    if "val_active_tab" not in st.session_state:
+        st.session_state["val_active_tab"] = "Validation"
     _val_tab = st.segmented_control(
         "Section",
         ["Validation", "Quality", "SHACL", "Reasoning"],
-        default="Validation",
         key="val_active_tab",
         label_visibility="collapsed",
     )
@@ -283,6 +286,24 @@ def _stored_config(iri: str) -> QualityConfig:
         return QualityConfig()
 
 
+def stored_quality_config(ont) -> QualityConfig:
+    """The quality settings kept for ``ont``, read without drawing the rules.
+
+    What the Quality section runs with, so a run made elsewhere (the
+    dashboard) finds and suppresses the same findings.
+    """
+    restore_quality_configs()
+    return _stored_config(str(ont.ontology_uri))
+
+
+def quality_run_key(ont) -> str:
+    """Where the latest quality run of ``ont`` is kept.
+
+    Keyed by ontology, so switching ontologies keeps each one's results.
+    """
+    return f"_quality_run_{_uid(str(ont.ontology_uri))}"
+
+
 def _store_config(iri: str, config: QualityConfig) -> None:
     """Keep ``config`` for this ontology, and mark it for saving if it changed."""
     configs = dict(st.session_state.get(QUALITY_CONFIGS_STATE) or {})
@@ -468,9 +489,8 @@ def _render_quality(ont) -> None:
     config = _quality_config(ont)
     persist_quality_configs()
 
-    # Keyed by ontology, so switching ontologies keeps each one's results.
     scope = _uid(str(ont.ontology_uri))
-    run_key = f"_quality_run_{scope}"
+    run_key = quality_run_key(ont)
     if st.button("Run Quality Checks"):
         # A large ontology takes seconds; without this the button looked like
         # it did nothing.
