@@ -24,7 +24,7 @@ def _cycles(ctx: QualityContext, severity: Severity) -> RuleResult:
     """
     result = RuleResult(checked=len(ctx.classes) + len(ctx.concepts))
     # Both come from the same walk over the same parent map, in the same order.
-    cycles = ctx.ont._cycles_in(ctx.ont._class_parent_map())
+    cycles = ctx.ont.class_cycles()
     for issue, cycle in zip(ctx.ont._class_cycle_issues(), cycles, strict=True):
         own = [uri for uri in cycle if uri in ctx.classes]
         if not own or len(cycle) < 2:

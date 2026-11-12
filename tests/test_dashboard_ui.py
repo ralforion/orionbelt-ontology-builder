@@ -1,12 +1,20 @@
 """The Dashboard page: its Overview and Settings, and the charts it draws."""
 
+from rdflib import URIRef
+from rdflib.namespace import OWL, RDF, RDFS
 from streamlit.testing.v1 import AppTest
 
+from orionbelt_ontology_builder.ontology_manager import OntologyManager
+from orionbelt_ontology_builder.quality import QualityConfig, RuleSettings, analyze
 from orionbelt_ontology_builder.views.charts import (
     column_bars,
     describe,
     meter_list,
     ranked_bars,
+)
+from orionbelt_ontology_builder.views.dashboard import (
+    _not_counted_by_quality,
+    _Validation,
 )
 from orionbelt_ontology_builder.views.validation import quality_run_key
 
@@ -146,6 +154,64 @@ def test_validation_leaves_out_what_model_quality_counts(monkeypatch):
     unlabelled = {f.resource for f in run.by_rule("Q001")}
     assert {"http://test.org/o#Wheel", "http://test.org/o#Tandem"} <= unlabelled
     assert [s.value for s in at.success] == ["No structural problems found."]
+
+
+NS = "http://test.org/o#"
+
+
+def _validation_panel(om, config=None) -> list[str]:
+    """The issue types the dashboard's Validation panel shows for ``om``."""
+    validation = _Validation(
+        om.revision_token(),
+        om.validate(check_missing_domain_range=False),
+        om.class_cycles(),
+    )
+    findings = analyze(om, config or QualityConfig()).all_findings()
+    return [i["type"] for i in _not_counted_by_quality(validation, findings)]
+
+
+def _cycle(om, *names, kind=OWL.Class):
+    for name in names:
+        om.graph.add((URIRef(NS + name), RDF.type, kind))
+    for child, parent in zip(names, names[1:] + names[:1], strict=True):
+        om.graph.add((URIRef(NS + child), RDFS.subClassOf, URIRef(NS + parent)))
+
+
+def test_a_cycle_quality_reports_is_counted_there_only():
+    om = OntologyManager(base_uri=NS)
+    _cycle(om, "A", "B")
+    _cycle(om, "C")  # its own subclass: Q009's, not Q006's
+    assert [i["type"] for i in om.validate()].count("class_cycle") == 2
+    assert "class_cycle" not in _validation_panel(om)
+
+
+def test_a_cycle_quality_cannot_see_stays_under_validation():
+    # rdfs:Class, not owl:Class: Q006 does not reach it (Codex review of #564).
+    om = OntologyManager(base_uri=NS)
+    _cycle(om, "A", "B", kind=RDFS.Class)
+    assert _validation_panel(om) == ["class_cycle"]
+    # Nor does it once Q006 is switched off.
+    om = OntologyManager(base_uri=NS)
+    _cycle(om, "A", "B")
+    off = QualityConfig(rules={"Q006": RuleSettings(enabled=False)})
+    assert _validation_panel(om, off) == ["class_cycle"]
+
+
+def test_a_class_outside_the_own_scope_keeps_its_missing_label():
+    om = OntologyManager(base_uri=NS)
+    om.add_class("Own", label="Own")
+    om.add_class("Unlabelled")
+    om.graph.add((URIRef("http://other.org/Imported"), RDF.type, OWL.Class))
+    om.graph.add(
+        (URIRef(NS + "Own"), RDFS.subClassOf, URIRef("http://other.org/Imported"))
+    )
+    om.graph.add((URIRef(NS + "Unlabelled"), RDFS.subClassOf, URIRef(NS + "Own")))
+    issues = om.validate(check_missing_domain_range=False)
+    assert {i["subject_uri"] for i in issues if i["type"] == "missing_label"} == {
+        NS + "Unlabelled",
+        "http://other.org/Imported",
+    }
+    assert _validation_panel(om) == ["missing_label"]
 
 
 def test_a_large_ontology_waits_for_a_click(monkeypatch):

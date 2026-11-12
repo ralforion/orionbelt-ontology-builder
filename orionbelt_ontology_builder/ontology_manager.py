@@ -5831,6 +5831,11 @@ class OntologyManager:
             uri: (name if counts[name] == 1 else uri) for uri, name in names.items()
         }
 
+    def class_cycles(self) -> list[list[str]]:
+        """The ``rdfs:subClassOf`` cycles as class URIs, one per ``class_cycle``
+        issue :meth:`validate` reports and in its order."""
+        return self._cycles_in(self._class_parent_map())
+
     def _class_cycle_issues(self) -> list[dict[str, str]]:
         """One issue per ``rdfs:subClassOf`` cycle (issue #413).
 
