@@ -114,6 +114,14 @@ class TestQ003DuplicateLabels:
         om.graph.add((URIRef(NS + "B"), RDFS.label, Literal("Bank", lang="de")))
         assert analyze(om, ALL).by_rule("Q003") == []
 
+    def test_one_class_named_alike_in_two_languages_is_no_duplicate(self):
+        # The pizza ontology labels Cajun "Cajun"@en and "Cajun"@pt.
+        om = _om()
+        om.add_class("Cajun")
+        om.graph.add((URIRef(NS + "Cajun"), RDFS.label, Literal("Cajun", lang="en")))
+        om.graph.add((URIRef(NS + "Cajun"), RDFS.label, Literal("Cajun", lang="pt")))
+        assert analyze(om, ALL).by_rule("Q003") == []
+
     def test_a_class_and_a_property_may_share_a_word(self):
         om = _om()
         om.add_class("Name", label="name")

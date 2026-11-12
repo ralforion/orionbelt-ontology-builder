@@ -5831,6 +5831,11 @@ class OntologyManager:
             uri: (name if counts[name] == 1 else uri) for uri, name in names.items()
         }
 
+    def class_cycles(self) -> list[list[str]]:
+        """The ``rdfs:subClassOf`` cycles as class URIs, one per ``class_cycle``
+        issue :meth:`validate` reports and in its order."""
+        return self._cycles_in(self._class_parent_map())
+
     def _class_cycle_issues(self) -> list[dict[str, str]]:
         """One issue per ``rdfs:subClassOf`` cycle (issue #413).
 
@@ -8353,25 +8358,12 @@ class OntologyManager:
                     }
                 )
 
-        # Check for duplicate rdfs:label values across resources
-        from collections import defaultdict
-
-        label_to_resources: dict[str, list[str]] = defaultdict(list)
-        for subj, label_val in self.graph.subject_objects(RDFS.label):
-            if isinstance(subj, URIRef) and isinstance(label_val, Literal):
-                label_str = str(label_val)
-                name = self._local_name(subj)
-                label_to_resources[label_str].append(name)
-        for label_str, resources in label_to_resources.items():
-            if len(resources) > 1:
-                issues.append(
-                    {
-                        "severity": "warning",
-                        "type": "duplicate_label",
-                        "subject": ", ".join(sorted(resources)),
-                        "message": f"Duplicate label '{label_str}' shared by: {', '.join(sorted(resources))}",
-                    }
-                )
+        # Duplicate labels are left to the quality rule Q003, which compares
+        # within one kind and one language, in the ontology's own scope. The
+        # check this used to run ignored the language tag, so "Cajun"@en and
+        # "Cajun"@pt on one class clashed with itself, and named resources by
+        # local name, so gist:Category and gufo:Category read "Category,
+        # Category".
 
         # External references: links whose target is defined in another ontology
         # that has not been imported (issue #87 part B). Editing an entity to a

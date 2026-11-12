@@ -134,21 +134,11 @@ def test_class_with_instance_not_orphan(om):
     assert "MyClass" not in orphan_names
 
 
-def test_duplicate_label_detected(om):
+def test_duplicate_labels_are_left_to_the_quality_rule(om):
+    """Q003 reports them; validate() used to as well, with other counts."""
     om.add_class("ClassA", label="Thing")
     om.add_class("ClassB", label="Thing")
-    issues = om.validate()
-    dup_issues = [i for i in issues if i["type"] == "duplicate_label"]
-    assert len(dup_issues) == 1
-    assert "ClassA" in dup_issues[0]["subject"]
-    assert "ClassB" in dup_issues[0]["subject"]
-
-
-def test_no_duplicate_label_for_unique_labels(om):
-    om.add_class("ClassA", label="Alpha")
-    om.add_class("ClassB", label="Beta")
-    issues = om.validate()
-    assert not any(i["type"] == "duplicate_label" for i in issues)
+    assert not [i for i in om.validate() if i["type"] == "duplicate_label"]
 
 
 def test_domain_mismatch_detected(om):

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import textwrap
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from typing import NamedTuple
 
 import streamlit as st
+from rdflib.namespace import RDFS
 
 from ..overview import NO_LANGUAGE, Overview, ontology_overview
-from ..quality import RULES, analyze, partition
+from ..quality import RULES, QualityFinding, analyze, partition
 from ..ui import (
     _uid,
     chart_accent,
@@ -31,8 +33,21 @@ CHECKS_AUTORUN_MAX_TRIPLES = 10_000
 #: How many rules the findings chart names before folding the rest.
 _TOP_RULES = 6
 
+#: The quality rule that reports a validation issue of this type as well, on
+#: the same class. Cycles are matched by their members instead.
+_QUALITY_RULE_FOR = {"missing_label": "Q001", "orphan_class": "Q007"}
+
+_SUBCLASS_OF = str(RDFS.subClassOf)
+
 _OVERVIEW_STATE = "_dashboard_overview"
 _VALIDATION_STATE = "_dashboard_validation"
+
+
+class _Validation(NamedTuple):
+    token: str
+    issues: list[dict[str, str]]
+    #: ``validate()``'s class cycles, one per ``class_cycle`` issue, in order.
+    cycles: list[list[str]]
 
 
 def render_dashboard():
@@ -196,19 +211,26 @@ def _render_checks(ont, triples: int, accent: str) -> None:
     token = ont.revision_token()
     run = st.session_state.get(run_key)
     validation = st.session_state.get(validation_key)
+    # One kept by an older version of this page has no cycles: run again.
+    if not isinstance(validation, _Validation):
+        validation = None
     stale = not (
         run is not None
         and run.graph_fingerprint == token
         and run.config_fingerprint == config.fingerprint
         and validation is not None
-        and validation[0] == token
+        and validation.token == token
     )
     small = triples <= CHECKS_AUTORUN_MAX_TRIPLES
     if stale and (
         small or st.button("Run checks", key="dash_run_checks", type="primary")
     ):
         with st.spinner("Running validation and the quality checks…"):
-            validation = (token, ont.validate(check_missing_domain_range=False))
+            validation = _Validation(
+                token,
+                ont.validate(check_missing_domain_range=False),
+                ont.class_cycles(),
+            )
             run = analyze(ont, config)
         st.session_state[validation_key] = validation
         st.session_state[run_key] = run
@@ -225,16 +247,60 @@ def _render_checks(ont, triples: int, accent: str) -> None:
         st.warning("The ontology changed since these checks ran. Run them again.")
 
     validation_col, quality_col = st.columns([2, 3], gap="large")
+    findings = run.all_findings()
     with validation_col:
-        _render_validation(validation[1])
+        _render_validation(_not_counted_by_quality(validation, findings))
     with quality_col:
         # Suppressions apply as they are now, as on the Quality section.
-        shown, suppressed = partition(run.all_findings(), config)
+        shown, suppressed = partition(findings, config)
         _render_quality(shown, len(suppressed), accent)
+
+
+def _not_counted_by_quality(
+    validation: _Validation, findings: Iterable[QualityFinding]
+) -> list[dict[str, str]]:
+    """The validation issues no quality finding reports as well.
+
+    Missing labels (Q001), unconnected classes (Q007) and subClassOf cycles
+    (Q006, or Q009 for a class that is its own subclass) are in both, so an
+    issue is left out where its rule reported the same class or the same
+    cycle, suppressed findings included. One the rules do not reach stays:
+    a class outside the ontology's own scope or not declared an owl:Class,
+    or a rule switched off, so a problem never drops out of both panels
+    (Codex review of PR #564).
+    """
+    reported: set[tuple[str, object]] = set()
+    for finding in findings:
+        if finding.rule_id not in ("Q006", "Q009"):
+            reported.add((finding.rule_id, finding.resource))
+        # Both cover SKOS hierarchies too, and a resource that is a class and
+        # a concept can be on a cycle in each: only a subClassOf one is a
+        # class_cycle's (Codex review of PR #564).
+        elif finding.evidence.get("predicate") == _SUBCLASS_OF:
+            cycle = finding.evidence.get("cycle")
+            reported.add(
+                ("Q006", tuple(cycle)) if cycle else ("Q009", finding.resource)
+            )
+    cycles = iter(validation.cycles)
+    kept = []
+    for issue in validation.issues:
+        key: tuple[str, object]
+        if issue["type"] == "class_cycle":
+            cycle = next(cycles)
+            key = ("Q009", cycle[0]) if len(cycle) == 1 else ("Q006", tuple(cycle))
+        else:
+            key = (_QUALITY_RULE_FOR.get(issue["type"], ""), issue.get("subject_uri"))
+        if key not in reported:
+            kept.append(issue)
+    return kept
 
 
 def _render_validation(issues: list[dict[str, str]]) -> None:
     st.markdown("**Validation**")
+    st.caption(
+        "Missing labels, unconnected classes and hierarchy cycles that Model "
+        "quality reports are counted there."
+    )
     if not issues:
         st.success("No structural problems found.")
         return

@@ -24,7 +24,7 @@ def _cycles(ctx: QualityContext, severity: Severity) -> RuleResult:
     """
     result = RuleResult(checked=len(ctx.classes) + len(ctx.concepts))
     # Both come from the same walk over the same parent map, in the same order.
-    cycles = ctx.ont._cycles_in(ctx.ont._class_parent_map())
+    cycles = ctx.ont.class_cycles()
     for issue, cycle in zip(ctx.ont._class_cycle_issues(), cycles, strict=True):
         own = [uri for uri in cycle if uri in ctx.classes]
         if not own or len(cycle) < 2:
@@ -35,7 +35,10 @@ def _cycles(ctx: QualityContext, severity: Severity) -> RuleResult:
                 severity,
                 own[0],
                 issue["message"],
-                evidence={"cycle": list(cycle)},
+                # The hierarchy, as Q009 names it: a resource that is a class
+                # and a concept can be on a cycle in each (Codex review of
+                # PR #564).
+                evidence={"cycle": list(cycle), "predicate": str(RDFS.subClassOf)},
                 suggestion="Remove one subClassOf edge in the cycle, or replace the "
                 "cycle with owl:equivalentClass if the classes are meant to be "
                 "the same.",
@@ -81,6 +84,7 @@ def _self_edges(ctx: QualityContext, severity: Severity) -> RuleResult:
                     severity,
                     uri,
                     f"'{ctx.name(uri)}' is stated to be a subclass of itself.",
+                    evidence={"predicate": str(RDFS.subClassOf)},
                     suggestion="Remove the subClassOf edge: every class is a "
                     "subclass of itself anyway, so it says nothing.",
                 )

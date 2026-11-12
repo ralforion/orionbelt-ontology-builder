@@ -54,7 +54,7 @@ It's not trying to be Protégé. It's meant for people who want something lighte
 
 **Not losing your work.** Every change creates an undo checkpoint. Deletes show you what will break before you confirm. Imports show a diff so you can review before applying.
 
-**Keeping your ontology clean.** Validation catches orphan classes, duplicate labels, domain/range mismatches, missing annotations, and SKOS-specific issues like broader/narrower cycles. Model quality rules point out redundant hierarchy edges, disconnected islands and naming problems, and SHACL shapes check the data against your own constraints. Not just "you have warnings" but "here's what's wrong and where."
+**Keeping your ontology clean.** Validation catches orphan classes, domain/range mismatches, missing annotations, and SKOS-specific issues like broader/narrower cycles. Model quality rules point out redundant hierarchy edges, disconnected islands and naming problems, and SHACL shapes check the data against your own constraints. Not just "you have warnings" but "here's what's wrong and where."
 
 **Moving fast in large ontologies.** Global search across everything, including what an entity's annotations say about it, so a definition or a scope note finds it when the name does not. Usage/backlink views for any resource. Click a node in the graph and jump straight to the editor. Bulk add/edit/delete so you're not filling out forms one entity at a time.
 
@@ -243,7 +243,7 @@ Imports on an empty ontology go straight through. Otherwise you get a review pan
 ### Validation & reasoning
 
 - Missing labels, domains, ranges
-- Orphan classes, duplicate labels, domain/range mismatches
+- Orphan classes, domain/range mismatches
 - Untyped individuals
 - SKOS checks (see above)
 - RDFS reasoning computed natively (seconds even at 200,000 triples), with a
