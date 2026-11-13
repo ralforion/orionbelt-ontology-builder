@@ -160,6 +160,7 @@ from .ui import (  # noqa: F401
     _sparql_limit_ranges,
     _sparql_state_payload,
     _str_list,
+    _to_first_page,
     _uid,
     _uri_local_name,
     _uri_option_index,
