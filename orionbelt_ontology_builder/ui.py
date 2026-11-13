@@ -6557,6 +6557,32 @@ def _filter_texts(item: dict) -> list[str]:
     ]
 
 
+def _glob_matches(pattern: str, text: str) -> bool:
+    """Whether the whole of ``text`` matches ``pattern``'s ``*`` and ``?``.
+
+    The two-pointer walk that, on a mismatch, goes back only to the latest
+    ``*``: at most ``len(pattern) * len(text)`` steps. Translated to a regex,
+    a run of stars backtracked exponentially, and the filter runs while the
+    page renders (Codex review of PR #565).
+    """
+    p = t = 0
+    star, resume = -1, 0
+    while t < len(text):
+        if p < len(pattern) and pattern[p] == "*":
+            star, resume = p, t
+            p += 1
+        elif p < len(pattern) and pattern[p] in ("?", text[t]):
+            p += 1
+            t += 1
+        elif star >= 0:
+            p = star + 1
+            resume += 1
+            t = resume
+        else:
+            return False
+    return all(ch == "*" for ch in pattern[p:])
+
+
 def filter_list_items(items: list, pattern: str) -> list:
     """The ``items`` whose name or label matches a list filter's ``pattern``.
 
@@ -6565,23 +6591,15 @@ def filter_list_items(items: list, pattern: str) -> list:
     match the whole of it, so ``address*`` is "starts with" and ``*type``
     "ends with". An empty pattern keeps every item.
     """
-    pattern = (pattern or "").strip()
-    if not pattern:
+    needle = (pattern or "").strip().casefold()
+    if not needle:
         return items
-    if "*" in pattern or "?" in pattern:
-        regex = re.compile(
-            "".join(
-                ".*" if ch == "*" else "." if ch == "?" else re.escape(ch)
-                for ch in pattern
-            ),
-            re.IGNORECASE | re.DOTALL,
-        )
+    if "*" in needle or "?" in needle:
 
         def matches(text: str) -> bool:
-            return regex.fullmatch(text) is not None
+            return _glob_matches(needle, text.casefold())
 
     else:
-        needle = pattern.casefold()
 
         def matches(text: str) -> bool:
             return needle in text.casefold()
@@ -6614,7 +6632,8 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
     open item that is not in ``items``, or that the Filter box hides, simply
     reads as "nothing open" this render, leaving the value intact so the card
     reappears when the filter clears. One opened from elsewhere (the graph,
-    the sidebar search) clears a filter that would hide it.
+    the sidebar search) clears a filter that would hide it, and so does
+    opening it from there again.
 
     Returns ``(page_items, active_item)``.
     """
@@ -6634,10 +6653,16 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
         newly_active = True
         st.session_state[jump_key] = key_of(active)
 
+    # A navigation (the graph, the sidebar search) asks for its card with a
+    # one-shot scroll request, which the card consumes once it is drawn.
+    # Until then it is still to be shown, even when it was open already and
+    # a filter has hidden it since (Codex review of PR #565).
+    reveal = newly_active or (
+        active is not None
+        and st.session_state.get(_SCROLL_REQUEST) == (kind, key_of(active))
+    )
     filter_key = f"{page_key}__filter"
-    if newly_active and not filter_list_items(
-        [active], st.session_state.get(filter_key, "")
-    ):
+    if reveal and not filter_list_items([active], st.session_state.get(filter_key, "")):
         st.session_state[filter_key] = ""  # before the box reads its key
 
     row = st.container(horizontal=True, vertical_alignment="bottom")
@@ -6669,7 +6694,7 @@ def _resolve_list_view(items, kind, key_of, page_key, noun):
             st.caption(f"Showing {noun} 1–{total} of {total}{of_all}.")
         return items, active
 
-    if newly_active and active is not None:
+    if reveal and active is not None:
         st.session_state[page_key] = items.index(active) // LIST_PAGE_SIZE + 1
     page = _page_input(row, page_key, total, noun)
     _, _, start, end = _page_bounds(total, page, LIST_PAGE_SIZE)

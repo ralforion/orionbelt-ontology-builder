@@ -40,6 +40,12 @@ def _ind_script():
             uri = next(i["uri"] for i in om.get_individuals() if i["name"] == _a)
             st.session_state["active_ind"] = (_uid(uri), "view")
 
+    # A navigation from elsewhere, the way a graph click or search result
+    # opens a card.
+    _nav = st.session_state.pop("_test_nav", None)
+    if _nav:
+        app._nav_open_entity("Individual", _nav)
+
     app.render_individuals()
 
 
@@ -134,3 +140,28 @@ def test_a_card_opened_elsewhere_clears_a_filter_that_hides_it():
     assert [e.label for e in at.expander if "👤" in e.label and e.proto.expanded] == [
         next(e.label for e in at.expander if "Ind075" in e.label)
     ]
+
+
+def _open_cards(at):
+    return [e.label for e in at.expander if "👤" in e.label and e.proto.expanded]
+
+
+def test_opening_a_card_again_clears_a_filter_that_hid_it_since():
+    # Open Ind075, filter it away, then navigate to it again (Codex review
+    # of #565): the second request has to show it as the first did.
+    at = _run_individuals(IND_ACTIVE="Ind075")
+    [card] = _open_cards(at)
+    at.text_input(key="ind_view_page__filter").set_value("ind00*").run()
+    assert not _open_cards(at)
+    om = at.session_state["ontology"]
+    uri = next(i["uri"] for i in om.get_individuals() if i["name"] == "Ind075")
+    from orionbelt_ontology_builder.ui import _uid
+
+    at.session_state["_test_nav"] = _uid(uri)
+    at.run()
+    assert not at.exception, at.exception
+    assert at.text_input(key="ind_view_page__filter").value == ""
+    assert _open_cards(at) == [card]
+    # Shown now, so a filter typed over it hides it again.
+    at.text_input(key="ind_view_page__filter").set_value("ind00*").run()
+    assert not _open_cards(at)

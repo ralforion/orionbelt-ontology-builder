@@ -76,3 +76,11 @@ def test_other_regex_characters_are_literal():
 
 def test_an_empty_filter_keeps_everything():
     assert filter_list_items(_ITEMS, "  ") == _ITEMS
+
+
+def test_a_run_of_stars_takes_no_time():
+    # A regex backtracked exponentially on this one (Codex review of #565).
+    items = [{"name": "AddressUsageType" * 4, "label": ""}]
+    assert filter_list_items(items, "*" * 40 + "Z") == []
+    assert filter_list_items(items, "*" * 40 + "type") == items
+    assert filter_list_items(items, "a*d*d*r*e*s*s*u*s*a*g*e*t*y*p*e") == items
