@@ -6,9 +6,9 @@
 
 # uv provides the resolver; a pinned stage keeps the version reproducible and
 # lets Dependabot bump it like any other base image.
-FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 COPY --from=uv /uv /uvx /bin/
 
