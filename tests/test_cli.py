@@ -115,3 +115,15 @@ def test_run_omits_theme_base_when_unset(monkeypatch):
     cli.run()
 
     assert not any(a.startswith("--theme.base") for a in captured["argv"])
+
+
+def test_api_flags_are_taken_out_and_set_the_environment(monkeypatch):
+    """``--api``/``--api-port`` turn the API on and never reach Streamlit."""
+    from orionbelt_ontology_builder.api.server import ENV_ENABLE, ENV_PORT, api_enabled
+
+    monkeypatch.delenv(ENV_ENABLE, raising=False)
+    monkeypatch.delenv(ENV_PORT, raising=False)
+    rest = cli._take_api_args(["--api", "--api-port=9001", "--server.port", "8502"])
+    assert rest == ["--server.port", "8502"]
+    assert api_enabled()
+    assert os.environ[ENV_PORT] == "9001"

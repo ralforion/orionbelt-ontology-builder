@@ -510,6 +510,61 @@ keeps using per-browser autosave instead — which shares the same dirty/debounc
 scheduling and disables itself (until the graph shrinks) when an ontology exceeds
 the browser storage quota.
 
+### API and MCP server
+
+The app can serve a local HTTP API onto the ontology that is open in it, and
+an MCP server beside it lets an AI agent (Claude Desktop, Claude Code, any MCP
+client) ask the ontology questions and develop it further. Install the `api`
+extra and start the app with `--api`:
+
+```bash
+pip install "orionbelt-ontology-builder[api]"
+orionbelt-ontology-builder --api            # API on http://127.0.0.1:8765
+```
+
+The API works on the live session: what an agent changes appears in the open
+app within a couple of seconds, and every change is one step in the app's
+Undo history, so you can take it back from the sidebar. API calls and the UI
+take turns on one lock, so they never edit the graph at the same time. The
+API serves the ontology of the browser session that ran last, and answers
+"busy" until the app has been opened once. Each start writes the URL and a
+fresh bearer token to `~/.orionbelt_ontology_builder/api.json` (owner-only).
+
+Register the MCP server with your client, for example in Claude Desktop's
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "orionbelt-ontology-builder": {
+      "command": "orionbelt-ontology-builder-mcp"
+    }
+  }
+}
+```
+
+or with Claude Code: `claude mcp add orionbelt-ontology -- orionbelt-ontology-builder-mcp`.
+It reads the discovery file on each call, so it survives app restarts. Use
+`--http --port 8766` for streamable HTTP instead of stdio, and `--api-url` /
+`--api-token` (or `ORIONBELT_API_URL` / `ORIONBELT_API_TOKEN`) when the app runs
+elsewhere, e.g. in Docker.
+
+The MCP server has twelve tools:
+
+| Ask | Change |
+|---|---|
+| `ontology_overview`, `find_entities`, `list_entities`, `describe_entity`, `get_hierarchy`, `find_paths` (how two things are connected), `sparql_query` (read-only), `check_ontology` | `edit_ontology` (an atomic batch of typed operations), `merge_turtle` (a larger piece as Turtle), `infer` (preview or apply reasoning), `undo_redo` |
+
+Changes support `dry_run` (returns the diff, keeps nothing) and
+`expected_revision` (refused if the ontology changed since you read it).
+The REST API behind it is documented at `http://127.0.0.1:8765/docs`.
+
+API settings: `--api-port`, `--api-host` (default `127.0.0.1`; anything else
+exposes the ontology to your network, guarded only by the token), or the
+`ORIONBELT_API`, `ORIONBELT_API_PORT`, `ORIONBELT_API_HOST` and
+`ORIONBELT_API_TOKEN` environment variables. The hosted demo never starts the
+API.
+
 ### Run with Docker
 
 A prebuilt image is published to Docker Hub. No local Python setup required:

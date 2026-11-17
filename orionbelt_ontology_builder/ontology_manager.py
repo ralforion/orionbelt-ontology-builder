@@ -8855,3 +8855,21 @@ class UndoManager:
     def redo_labels(self) -> list[str]:
         """Labels in the redo stack (next redo last)."""
         return [label for label, _ in self._redo_stack]
+
+    def pending_triples(self) -> tuple[list[tuple], list[tuple]]:
+        """The triples added and removed since the last checkpoint.
+
+        For the API, which reports what a batch of edits did (or, on a dry
+        run, would do) before it is either kept as one undo step or rolled
+        back with :meth:`discard_pending`.
+        """
+        added: list[tuple] = []
+        removed: list[tuple] = []
+        for change in self._journal.entries:
+            if isinstance(change, _TripleChange):
+                (added if change.added else removed).append(change.triple)
+        return added, removed
+
+    def discard_pending(self) -> None:
+        """Back out every edit since the last checkpoint, keeping no history."""
+        self._drop_pending()

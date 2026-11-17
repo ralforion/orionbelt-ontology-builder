@@ -8,6 +8,7 @@ import logging
 import streamlit as st
 
 from . import case_picker, local_store
+from .api import bridge as api_bridge
 
 # Re-exported so the top-level compatibility shims and the tests keep
 # addressing these by ``app.<name>``, which is how they were written when
@@ -440,6 +441,14 @@ def render_autosave_sidebar():
 
 def main():
     """Main application entry point."""
+    # With the API on, a run holds the lock the API's calls take, and hands
+    # the session's ontology to the API when it ends (see api.bridge).
+    with api_bridge.run_guard():
+        _run()
+
+
+def _run():
+    """One run of the app: the page, the sidebar and the autosave."""
     _configure_page()
     # Counted before any picker draws, so each can tell a return from a rerun.
     case_picker.new_run()
@@ -452,6 +461,7 @@ def main():
     start_help_capture()
     init_session_state()
     maybe_restore_autosave()
+    api_bridge.absorb_api_writes()
 
     # Sidebar navigation — asset path resolved relative to this module so it
     # works under both `streamlit run` and `pip install` deployments.
@@ -606,6 +616,7 @@ def main():
                 st.rerun()
 
     render_autosave_sidebar()
+    api_bridge.render_sidebar_status()
 
     st.sidebar.divider()
 
