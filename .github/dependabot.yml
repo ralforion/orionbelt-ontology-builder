@@ -47,3 +47,15 @@ updates:
       docker:
         patterns:
           - "*"
+    # The image's Python is not a free-floating base. The CI matrix tests 3.14
+    # because the image ships it (see ci.yml), THIRD_PARTY_NOTICES.md names the
+    # base image, and uv.lock has to have wheels for it: python:3.15-slim (#567)
+    # failed to build because the locked pandas has no 3.15 wheel and the slim
+    # image has no compiler. So a minor or major move changes the Dockerfile, the
+    # ci.yml matrix and the notice together, in one deliberate PR. The uv stage
+    # is still bumped as before.
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
