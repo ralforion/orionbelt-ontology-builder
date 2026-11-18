@@ -552,8 +552,10 @@ Register the MCP server with your client, for example in Claude Desktop's
 or with Claude Code: `claude mcp add orionbelt-ontology -- orionbelt-ontology-builder-mcp`.
 It reads the discovery file on each call, so it survives app restarts. Use
 `--http --port 8766` for streamable HTTP instead of stdio, and `--api-url` /
-`--api-token` (or `ORIONBELT_API_URL` / `ORIONBELT_API_TOKEN`) when the app runs
-elsewhere, e.g. in Docker.
+`--api-token` (or `ORIONBELT_API_URL` / `ORIONBELT_API_TOKEN`) when it cannot
+read the app's discovery file, e.g. when the two run on different machines.
+The API is not in the published Docker image, which runs `streamlit run app.py`
+without the `api` extra.
 
 The MCP server has twelve tools:
 
@@ -610,7 +612,7 @@ A prebuilt image is published to Docker Hub. No local Python setup required:
 docker run --rm -p 8501:8501 ralforion/orionbelt-ontology-builder
 ```
 
-Then open http://localhost:8501. Use `:1.32.1` to pin a specific version instead of `latest`.
+Then open http://localhost:8501. Use `:1.33.0` to pin a specific version instead of `latest`.
 
 To build the image yourself from a checkout:
 

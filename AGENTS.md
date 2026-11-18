@@ -82,6 +82,12 @@ and the CI matrix in `.github/workflows/ci.yml` must agree, and
 - **Version bumps:** the version lives in `pyproject.toml` (and the README badge).
   Before bumping, grep the entire repo for the old version string so nothing is
   missed.
+- **Changelog:** a PR that changes what users get adds its lines under
+  `## [Unreleased]` in `CHANGELOG.md`, in `### Added`, `### Changed`,
+  `### Fixed` or `### Docs`, each with the PR number. A release moves them
+  under `## [x.y.z] - YYYY-MM-DD`, and that entry is the GitHub release's notes.
+  `tests/test_version_consistency.py` fails when the newest entry is not
+  `pyproject.toml`'s version.
 - Code is reviewed with OpenAI Codex — keep changes clean and minimal.
 - Match the surrounding style; add tests under `tests/` for new engine behavior.
 - **A pyoxigraph upgrade needs its licence file regenerated:**

@@ -1,6 +1,7 @@
 include LICENSE
 include THIRD_PARTY_NOTICES.md
 include README.md
+include CHANGELOG.md
 include CLA.md
 include MANIFEST.in
 recursive-include orionbelt_ontology_builder *.py *.png *.ttl *.owl *.rdf *.txt *.md *.html *.js *.css
