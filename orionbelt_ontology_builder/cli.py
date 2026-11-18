@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import env_file
 from .local_store import (
     BRAND_PRIMARY_COLOR,
     ENV_FLAG,
@@ -28,6 +29,9 @@ def run() -> None:
     ``--api`` also starts the local HTTP API (and so lets the MCP server in);
     ``--api-port N`` and ``--api-host H`` set where it listens. These three
     are taken out before the rest goes to Streamlit.
+
+    Settings can also come from a ``.env`` file (see :mod:`.env_file`); the
+    flags win over it.
     """
     from streamlit.web import cli as stcli
 
@@ -35,6 +39,8 @@ def run() -> None:
     # disk-backed autosave / linked-file persistence (the cloud deployment runs
     # ``streamlit run app.py`` directly and never sets this).
     os.environ[ENV_FLAG] = "1"
+    for path in env_file.load():
+        print(f"Settings from {path}", file=sys.stderr)
     args = _take_api_args(sys.argv[1:])
 
     # Pass the brand theme as an explicit Streamlit flag so it applies regardless

@@ -15,7 +15,9 @@ The server finds the API in ``~/.orionbelt_ontology_builder/api.json``, which
 the app rewrites on every start, so a restarted app (and its new token) is
 picked up without restarting the MCP server. ``ORIONBELT_API_URL`` and
 ``ORIONBELT_API_TOKEN`` (or ``--api-url`` / ``--api-token``) override it, for
-an app in Docker or on another host.
+an app in Docker or on another host. ``ORIONBELT_MCP_HTTP``, ``_HOST`` and
+``_PORT`` stand for the flags above, and every one of these variables can also
+be set in a ``.env`` file (see :mod:`.env_file`).
 
 The tool surface is kept small on purpose: eight tools to ask, three to
 change. Every change is one atomic batch and one undo step; ``dry_run``
@@ -38,12 +40,16 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from . import env_file
 from .api.server import DEFAULT_HOST, DEFAULT_PORT, DISCOVERY_NAME
 from .api.service import EDIT_OPS
 from .ontology_manager import OntologyManager
 
 ENV_URL = "ORIONBELT_API_URL"
 ENV_TOKEN = "ORIONBELT_API_TOKEN"
+ENV_MCP_HTTP = "ORIONBELT_MCP_HTTP"
+ENV_MCP_HOST = "ORIONBELT_MCP_HOST"
+ENV_MCP_PORT = "ORIONBELT_MCP_PORT"
 
 #: Set from the command line; otherwise the environment, then the discovery file.
 _override: dict[str, str] = {}
@@ -384,16 +390,27 @@ async def current_ontology() -> str:
 
 
 def run(argv: list[str] | None = None) -> None:
-    """Console entry point: ``orionbelt-ontology-builder-mcp``."""
+    """Console entry point: ``orionbelt-ontology-builder-mcp``.
+
+    Every flag has an ``ORIONBELT_*`` variable, which can also come from a
+    ``.env`` file (see :mod:`.env_file`); a flag wins over both.
+    """
+    # Read before the parser is built: its defaults come from the variables.
+    env_file.load()
     parser = argparse.ArgumentParser(
         prog="orionbelt-ontology-builder-mcp",
         description="MCP server onto a running OrionBelt Ontology Builder.",
     )
     parser.add_argument(
-        "--http", action="store_true", help="serve streamable HTTP, not stdio"
+        "--http",
+        action="store_true",
+        default=env_file.flag(ENV_MCP_HTTP),
+        help=f"serve streamable HTTP, not stdio (default: ${ENV_MCP_HTTP})",
     )
-    parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT + 1)
+    parser.add_argument("--host", default=os.environ.get(ENV_MCP_HOST, DEFAULT_HOST))
+    parser.add_argument(
+        "--port", type=int, default=os.environ.get(ENV_MCP_PORT, DEFAULT_PORT + 1)
+    )
     parser.add_argument("--api-url", help=f"default: ${ENV_URL} or the discovery file")
     parser.add_argument(
         "--api-token", help=f"default: ${ENV_TOKEN} or the discovery file"

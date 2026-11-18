@@ -52,3 +52,6 @@ Thumbs.db
 .coverage.*
 htmlcov/
 coverage.xml
+
+# Local settings (.env.example lists them); may hold the API token
+.env

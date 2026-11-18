@@ -1,7 +1,8 @@
 """Run the HTTP API in a thread of the Streamlit process, once per process.
 
 Off unless asked for: ``ORIONBELT_API=1`` (the ``--api`` launcher flag sets
-it). The hosted Streamlit Cloud app never sets it, so it never opens a port.
+it, and the launcher reads it from a ``.env`` too, see :mod:`..env_file`).
+The hosted Streamlit Cloud app never sets it, so it never opens a port.
 
 Settings, all optional:
 
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .. import local_store
+from .. import env_file, local_store
 
 if TYPE_CHECKING:
     from .service import Workspace
@@ -42,7 +43,7 @@ DISCOVERY_NAME = "api.json"
 
 
 def api_enabled() -> bool:
-    return os.environ.get(ENV_ENABLE, "").strip().lower() in ("1", "true", "yes", "on")
+    return env_file.flag(ENV_ENABLE)
 
 
 def discovery_file() -> Path:
@@ -53,6 +54,10 @@ def discovery_file() -> Path:
 class ApiStatus:
     url: str = ""
     error: str = ""
+    #: The token is the user's own (``ORIONBELT_API_TOKEN``, from the
+    #: environment or a ``.env``), not one made up for this start, so the
+    #: sidebar need not say where to find it.
+    token_given: bool = False
 
     @property
     def running(self) -> bool:
@@ -98,7 +103,8 @@ def ensure_started(workspace: Workspace) -> ApiStatus:
 
         host = os.environ.get(ENV_HOST, DEFAULT_HOST)
         port = int(os.environ.get(ENV_PORT, DEFAULT_PORT))
-        token = os.environ.get(ENV_TOKEN) or secrets.token_urlsafe(32)
+        given = os.environ.get(ENV_TOKEN)
+        token = given or secrets.token_urlsafe(32)
         app = create_app(OntologyService(workspace), token)
         server = uvicorn.Server(
             uvicorn.Config(app, host=host, port=port, log_level="warning")
@@ -130,6 +136,6 @@ def ensure_started(workspace: Workspace) -> ApiStatus:
             return _status
         url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
         _write_discovery(url, token)
-        _status = ApiStatus(url=url)
+        _status = ApiStatus(url=url, token_given=bool(given))
         logger.info("OrionBelt API listening on %s", url)
         return _status

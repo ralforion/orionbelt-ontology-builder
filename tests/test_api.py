@@ -452,3 +452,37 @@ def test_sidebar_lines_shorten_home_but_copy_in_full():
     assert token["shown"] == str(Path("~", ".orionbelt_ontology_builder", "api.json"))
     outside = Path("/srv/orionbelt/api.json")
     assert status_lines("u", outside)[1]["shown"] == str(outside)
+    # A token the user set is not looked up, so there is no line for its file.
+    assert [line["label"] for line in status_lines("u", None)] == ["API:"]
+
+
+class _FakeUvicornServer:
+    """Starts at once and serves nothing, so ensure_started can be run."""
+
+    def __init__(self, config):
+        self.started = False
+
+    def run(self):
+        self.started = True
+
+
+@pytest.mark.parametrize("given", [None, "my-own-token"])
+def test_the_status_knows_whether_the_token_was_given(monkeypatch, tmp_path, given):
+    import uvicorn
+
+    from orionbelt_ontology_builder.api import server
+
+    monkeypatch.setattr(uvicorn, "Server", _FakeUvicornServer)
+    monkeypatch.setattr(server, "_status", None)
+    monkeypatch.setattr(server.local_store, "data_dir", lambda: tmp_path)
+    if given:
+        monkeypatch.setenv(server.ENV_TOKEN, given)
+    else:
+        monkeypatch.delenv(server.ENV_TOKEN, raising=False)
+
+    status = server.ensure_started(LocalWorkspace())
+
+    assert status.running
+    assert status.token_given is bool(given)
+    written = json.loads((tmp_path / server.DISCOVERY_NAME).read_text())["token"]
+    assert written == given if given else written

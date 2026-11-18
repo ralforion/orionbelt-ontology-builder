@@ -26,6 +26,18 @@ def no_leaked_local_persist():
         os.environ[ENV_FLAG] = before
 
 
+@pytest.fixture(autouse=True)
+def no_dotenv(monkeypatch):
+    """Keep the launcher tests from reading a developer's real ``.env`` files.
+
+    Their settings would land in ``os.environ`` for every test after; a test
+    of the loader passes its own files.
+    """
+    from orionbelt_ontology_builder import env_file
+
+    monkeypatch.setattr(env_file, "env_files", list)
+
+
 @pytest.fixture
 def om():
     """Fresh OntologyManager with default namespace."""

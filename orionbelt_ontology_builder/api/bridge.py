@@ -202,22 +202,25 @@ def _watch_api_writes() -> None:
         st.rerun(scope="app")
 
 
-def status_lines(url: str, token_file: Path) -> list[dict[str, str]]:
-    """The sidebar's two lines: a label, the value a copy takes, what is shown.
+def status_lines(url: str, token_file: Path | None) -> list[dict[str, str]]:
+    """The sidebar's lines: a label, the value a copy takes, what is shown.
 
     Only the API has an address. The MCP server is a process of its own,
     on stdio unless started with ``--http``, and finds the API through the
-    token file.
+    token file. With no ``token_file`` (the user set the token, so knows
+    it), the API's line is the only one.
     """
-    return [
-        {"label": "API:", "value": url, "shown": url, "what": "the API address"},
-        {
-            "label": "Token in:",
-            "value": str(token_file),
-            "shown": _home_relative(token_file),
-            "what": "the token file's path",
-        },
-    ]
+    lines = [{"label": "API:", "value": url, "shown": url, "what": "the API address"}]
+    if token_file is not None:
+        lines.append(
+            {
+                "label": "Token in:",
+                "value": str(token_file),
+                "shown": _home_relative(token_file),
+                "what": "the token file's path",
+            }
+        )
+    return lines
 
 
 def _home_relative(path: Path) -> str:
@@ -377,7 +380,12 @@ def render_sidebar_status() -> None:
                 "orionbelt_api_status", html=_LINES_HTML, css=_LINES_CSS, js=_LINES_JS
             )(
                 key="api_status_lines",
-                data={"lines": status_lines(status.url, server.discovery_file())},
+                data={
+                    "lines": status_lines(
+                        status.url,
+                        None if status.token_given else server.discovery_file(),
+                    )
+                },
             )
         _render_agent_changes()
         _watch_api_writes()

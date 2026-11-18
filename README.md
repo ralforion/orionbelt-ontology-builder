@@ -564,8 +564,16 @@ The REST API behind it is documented at `http://127.0.0.1:8765/docs`.
 API settings: `--api-port`, `--api-host` (default `127.0.0.1`; anything else
 exposes the ontology to your network, guarded only by the token), or the
 `ORIONBELT_API`, `ORIONBELT_API_PORT`, `ORIONBELT_API_HOST` and
-`ORIONBELT_API_TOKEN` environment variables. The hosted demo never starts the
-API.
+`ORIONBELT_API_TOKEN` environment variables. The MCP server's flags have
+variables too: `ORIONBELT_MCP_HTTP`, `ORIONBELT_MCP_HOST`, `ORIONBELT_MCP_PORT`.
+The hosted demo never starts the API.
+
+Every one of these settings can also go in a `.env` file, in the directory
+you start from or in `~/.orionbelt_ontology_builder/.env` for every start;
+[`.env.example`](.env.example) lists them all. A variable set in the
+environment wins over the file, and a flag over both. Only `ORIONBELT_*` and
+`STREAMLIT_*` names are read, so `STREAMLIT_SERVER_PORT=8502` sets the app's
+port the same way.
 
 ### Run with Docker
 

@@ -28,6 +28,8 @@ Thumbs.db
 design/
 tests/
 .streamlit/secrets.toml
+# Local launcher settings, which may hold the API token
+.env
 .playwright-mcp/
 .claude/
 
