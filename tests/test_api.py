@@ -9,8 +9,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
-from rdflib import Literal, URIRef
-from rdflib.namespace import OWL, RDFS
+from rdflib import Graph, Literal, URIRef
+from rdflib.namespace import RDFS
 
 from ontology_manager import OntologyManager
 from orionbelt_ontology_builder import mcp_server
@@ -173,32 +173,46 @@ def test_a_change_between_dry_run_and_apply_is_refused(service, workspace):
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_a_term_rdf_cannot_write_rolls_the_batch_back(service, workspace, dry_run):
-    """rdflib takes an IRI with a space, and only fails when writing it."""
+@pytest.mark.parametrize(
+    ("bad_op", "iri"),
+    [
+        (
+            {"op": "set_ontology_metadata", "version_iri": "http://bad.test/a b"},
+            "http://bad.test/a b",
+        ),
+        (
+            {
+                "op": "add_annotation",
+                "subject": "Person",
+                "predicate": "rdfs:comment",
+                "value": "x",
+                "datatype": "http://bad.test/has>angle",
+            },
+            "http://bad.test/has>angle",
+        ),
+    ],
+    ids=["iri", "datatype"],
+)
+def test_a_term_rdf_cannot_write_rolls_the_batch_back(
+    service, workspace, dry_run, bad_op, iri
+):
+    """rdflib takes an IRI with a space or a '>', and only fails writing it."""
     rev = service.overview()["revision"]
+    m = workspace.manager()
+    before = len(m.graph)
     with pytest.raises(ServiceError) as err:
-        service.edit(
-            [
-                {"op": "add_class", "name": "Kept"},
-                {
-                    "op": "set_ontology_metadata",
-                    "version_iri": "http://bad.test/with space",
-                },
-            ],
-            dry_run=dry_run,
-        )
-    assert "http://bad.test/with space" in err.value.message
+        service.edit([{"op": "add_class", "name": "Kept"}, bad_op], dry_run=dry_run)
+    assert repr(iri) in err.value.message
     assert err.value.details["rolled_back"]
     assert err.value.details["failed_index"] is None
     with pytest.raises(NotFound):
         service.describe("Kept")
-    m = workspace.manager()
-    assert list(m.graph.objects(None, OWL.versionIRI)) == []
+    assert len(m.graph) == before
     assert workspace.undo().pending_triples() == ([], [])
     assert workspace.undo().undo_labels == []
     assert workspace.writes == []
     assert service.overview()["revision"] == rev
-    m.export_to_string("turtle")
+    Graph().parse(data=m.export_to_string("turtle"), format="turtle")
 
 
 def test_the_diff_is_net_per_triple_whatever_the_order(service):
@@ -289,6 +303,65 @@ def test_describe_reads_the_resolved_entity_not_its_local_name(external):
     ours = external.describe(BASE + "Person")
     assert "A human being" in [a["value"] for a in ours["annotations"]]
     assert "knows" not in json.dumps(ours["usages"])
+
+
+def _tree_size(nodes: list[dict]) -> int:
+    return sum(1 + _tree_size(n.get("children", [])) for n in nodes)
+
+
+def test_hierarchies_keep_namespaces_apart(external):
+    external.edit([{"op": "add_class", "name": "Employee", "parent": "Person"}])
+    external.merge_rdf(
+        f"@prefix ext: <{EXT}> . @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "ext:Fan a owl:Class ; rdfs:subClassOf ext:Person .\n",
+        dry_run=False,
+    )
+    ours = external.hierarchy("class", root=BASE + "Person")["roots"]
+    theirs = external.hierarchy("class", root=EXT + "Person")["roots"]
+    assert [(n["uri"], [c["uri"] for c in n["children"]]) for n in ours] == [
+        (BASE + "Person", [BASE + "Employee"])
+    ]
+    assert [(n["uri"], [c["uri"] for c in n["children"]]) for n in theirs] == [
+        (EXT + "Person", [EXT + "Fan"])
+    ]
+    with pytest.raises(ServiceError) as err:
+        external.hierarchy("class", root="Person")
+    assert err.value.details["candidates"] == [EXT + "Person", BASE + "Person"]
+    # The whole tree: ext:Person is a root of its own, not merged into ours.
+    whole = {n["uri"]: n for n in external.hierarchy("class", depth=5)["roots"]}
+    assert set(whole) == {BASE + "Agent", EXT + "External", EXT + "Person"}
+    assert [c["uri"] for c in whole[EXT + "Person"]["children"]] == [EXT + "Fan"]
+    person = next(c for c in whole[BASE + "Agent"]["children"] if c["name"] == "Person")
+    assert [c["uri"] for c in person["children"]] == [BASE + "Employee"]
+
+
+def test_the_hierarchy_never_passes_its_node_limit(service, monkeypatch):
+    from orionbelt_ontology_builder.api import service as service_module
+
+    service.edit([{"op": "add_class", "name": f"Z{i}"} for i in range(1010)])
+    # Agent > Organization, Person; then Z0 ... Z1009, all roots.
+    full = service.hierarchy("class")
+    assert _tree_size(full["roots"]) == service_module.MAX_TREE_NODES
+    assert full["truncated"]
+    assert full["more_roots"] == 1011 - (service_module.MAX_TREE_NODES - 2)
+    # Cut inside a tree: its node says how many children it leaves out.
+    monkeypatch.setattr(service_module, "MAX_TREE_NODES", 2)
+    cut = service.hierarchy("class")
+    assert cut["roots"] == [
+        {
+            "name": "Agent",
+            "uri": BASE + "Agent",
+            "children": [{"name": "Organization", "uri": BASE + "Organization"}],
+            "more": 1,
+        }
+    ]
+    assert cut["truncated"] and cut["more_roots"] == 1010
+    # Under the limit nothing is cut.
+    monkeypatch.setattr(service_module, "MAX_TREE_NODES", 2000)
+    every = service.hierarchy("class")
+    assert _tree_size(every["roots"]) == 1013
+    assert not every["truncated"] and "more_roots" not in every
 
 
 def test_merge_turtle(service):

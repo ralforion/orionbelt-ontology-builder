@@ -221,8 +221,11 @@ async def get_hierarchy(
     depth: int = 3,
 ) -> dict[str, Any]:
     """The subclass tree (kind=class) or SKOS broader/narrower tree
-    (kind=concept), from root or from all top nodes, to depth levels. Nodes
-    cut off by depth carry 'more': the number of children not shown."""
+    (kind=concept), from root or from all top nodes, to depth levels. Each
+    node has its name and uri. A node whose children are cut off, by depth
+    or by the limit on nodes per answer, carries 'more': the number not
+    shown; with the limit reached, truncated is true and 'more_roots' counts
+    roots left out. Pass root to see a cut-off part."""
     return await _call(
         "GET",
         "/hierarchy",

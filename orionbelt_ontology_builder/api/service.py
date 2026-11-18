@@ -24,7 +24,7 @@ import threading
 from collections.abc import Callable, Iterator
 from typing import Any, Protocol
 
-from rdflib import Graph, URIRef
+from rdflib import Graph, Literal, URIRef
 
 from ..ontology_manager import (
     IMPORT_MERGE,
@@ -109,7 +109,7 @@ EDIT_OPS: dict[str, str] = {
 _ARG_ALIASES = {"range": "range_", "property": "property_name"}
 
 #: The kinds an update, rename or delete op looks its target up among, by the
-#: word after its verb (``delete_class`` changes a class).
+#: word after its verb (``delete_class`` changes a class); also a hierarchy's.
 _TARGET_KINDS: dict[str, tuple[str, ...]] = {
     "class": ("class",),
     "property": ("object_property", "data_property"),
@@ -208,6 +208,23 @@ def _default_label(operations: list[dict[str, Any]]) -> str:
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(int(value), high))
+
+
+def _local_name(uri: str) -> str:
+    return uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+
+
+def _subtrees(
+    nodes: list[str], build: Callable[[str], dict[str, Any] | None]
+) -> list[dict[str, Any]]:
+    """``build`` each node in turn, up to the first that returns None."""
+    out = []
+    for node in nodes:
+        subtree = build(node)
+        if subtree is None:
+            break
+        out.append(subtree)
+    return out
 
 
 class OntologyService:
@@ -405,45 +422,78 @@ class OntologyService:
         scheme: str | None = None,
         depth: int = 3,
     ) -> dict[str, Any]:
-        """The subclass (or SKOS broader/narrower) tree, to a depth."""
+        """The subclass (or SKOS broader/narrower) tree, to a depth.
+
+        Built on URIs: a tree keyed by local name merged a Person from
+        another namespace with the ontology's own. A root is a node with no
+        parent among the listed ones. At most :data:`MAX_TREE_NODES` nodes:
+        a node whose children are cut off, by the depth or by that limit,
+        counts them in ``more``, and ``more_roots`` counts roots left out.
+        """
         depth = _clamp(depth, 1, 20)
         with self._session() as m:
             if kind == "class":
-                children = m.get_class_hierarchy()
-                parents = {c["name"]: c["parents"] for c in m.get_classes()}
+                every = m.get_classes()
+                listed, up, down = every, "parent_uris", "child_uris"
             elif kind == "concept":
-                children = m.get_concept_hierarchy(scheme)
-                parents = {c["name"]: c["broader"] for c in m.get_concepts(scheme)}
+                every = m.get_concepts()
+                listed = m.get_concepts(scheme) if scheme else every
+                up, down = "broader_uris", "narrower_uris"
             else:
                 raise ServiceError("kind is 'class' or 'concept'.")
+            names = {n["uri"]: n["name"] for n in every}
+            children = {n["uri"]: n.get(down, []) for n in every}
             if root:
-                roots = [self._resolve(m, root)[1]["name"]]
+                roots = [self._target(m, "hierarchy", root, kind)]
             else:
-                roots = [n for n in children if not parents.get(n)]
+                inside = {n["uri"] for n in listed}
+                roots = [
+                    n["uri"]
+                    for n in listed
+                    if not any(p in inside for p in n.get(up, []))
+                ]
             count = 0
             truncated = False
 
-            def tree(node: str, level: int, seen: frozenset[str]) -> dict[str, Any]:
+            def name(uri: str) -> str:
+                return names.get(uri) or _local_name(uri)
+
+            def tree(
+                node: str, level: int, path: frozenset[str]
+            ) -> dict[str, Any] | None:
+                """The subtree at ``node``, or None once the limit is reached."""
                 nonlocal count, truncated
+                if count >= MAX_TREE_NODES:
+                    truncated = True
+                    return None
                 count += 1
-                kids = [k for k in children.get(node, []) if k not in seen]
-                entry: dict[str, Any] = {"name": node}
+                entry: dict[str, Any] = {"name": name(node), "uri": node}
+                path = path | {node}
+                kids = sorted(
+                    (k for k in children.get(node, []) if k not in path),
+                    key=lambda k: (name(k), k),
+                )
                 if not kids:
                     return entry
-                if level >= depth or count >= MAX_TREE_NODES:
+                if level >= depth:
                     entry["more"] = len(kids)
-                    truncated = truncated or count >= MAX_TREE_NODES
                     return entry
-                entry["children"] = [
-                    tree(k, level + 1, seen | {node}) for k in sorted(kids)
-                ]
+                shown = _subtrees(kids, lambda k: tree(k, level + 1, path))
+                entry["children"] = shown
+                if len(shown) < len(kids):
+                    entry["more"] = len(kids) - len(shown)
                 return entry
 
-            return {
+            ordered = sorted(roots, key=lambda r: (name(r), r))
+            shown = _subtrees(ordered, lambda r: tree(r, 1, frozenset()))
+            out: dict[str, Any] = {
                 "kind": kind,
-                "roots": [tree(r, 1, frozenset()) for r in sorted(roots)],
+                "roots": shown,
                 "truncated": truncated,
             }
+            if len(shown) < len(ordered):
+                out["more_roots"] = len(ordered) - len(shown)
+            return out
 
     def paths(
         self,
@@ -482,7 +532,7 @@ class OntologyService:
                 return {"paths": [], "search_limited": True, "message": str(e)}
 
             def short(node: tuple[str, str]) -> str:
-                return node[1].rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+                return _local_name(node[1])
 
             return {
                 "source": ends[0][1],
@@ -630,17 +680,17 @@ class OntologyService:
         added, removed = um.pending_triples()
         # rdflib takes any string as an IRI and only objects when writing it,
         # so an IRI with a space would break every later export and autosave.
+        # A literal's datatype is an IRI too.
         for triple in added:
             for term in triple:
-                reason = (
-                    m.invalid_uri_reason(str(term))
-                    if isinstance(term, URIRef)
-                    else None
-                )
+                iri = term.datatype if isinstance(term, Literal) else term
+                if not isinstance(iri, URIRef):
+                    continue
+                reason = m.invalid_uri_reason(str(iri))
                 if reason:
                     raise ServiceError(
-                        f"{str(term)!r} cannot be stored. {reason}",
-                        term=str(term),
+                        f"{str(iri)!r} cannot be stored. {reason}",
+                        term=str(iri),
                         failed_index=None,
                     )
         return {
@@ -651,8 +701,9 @@ class OntologyService:
         }
 
     def _target(self, m: OntologyManager, op: str, ref: str, noun: str) -> str:
-        """The URI of the entity an update, rename or delete changes.
+        """The URI of the one entity of a kind that ``ref`` names.
 
+        For what an update, rename or delete changes, and a hierarchy's root.
         The engine places a bare name in the base namespace, so an entity from
         another namespace, found here by its local name, would be missed and
         the change made to a new resource in the base namespace. The engine
