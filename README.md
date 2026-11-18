@@ -584,8 +584,8 @@ In the app, the change is one step in the Undo history and is listed under
 "Agent changes" in the sidebar, and the new classes are in the graph:
 
 <p>
-  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-changes.png" alt="The sidebar's Agent changes list: Add sales domain: Customer, Contract, Order (+182 / -0 triples)" width="260">
-  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-graph.png" alt="The graph with Customer, Contract and Order linked to each other and to gUFO's Object, Relator and Event" width="520">
+  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-changes.png" alt="The sidebar's Agent changes list: Add sales domain: Customer, Contract, Order (+182 / -0 triples)" width="260" align="top">
+  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-graph.png" alt="The graph with Customer, Contract and Order linked to each other and to gUFO's Object, Relator and Event" width="520" align="top">
 </p>
 
 API settings: `--api-port`, `--api-host` (default `127.0.0.1`; anything else
