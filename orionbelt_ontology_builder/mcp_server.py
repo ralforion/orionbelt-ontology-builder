@@ -302,7 +302,10 @@ async def infer(
 EDIT_DESCRIPTION = f"""\
 Apply a batch of edits atomically, as one undo step; on any error nothing is
 changed. Each operation is {{"op": <name>, ...arguments}}. Entities are named
-by local name. dry_run=true returns the diff without keeping it. Pass the
+by local name (in the base namespace) or full URI. The entity an update_*,
+rename_* or delete_* changes may also be a prefixed name or the local name
+of an entity in another namespace; a local name two entities share is
+refused, so pass the URI. dry_run=true returns the diff without keeping it. Pass the
 revision you read as expected_revision to refuse the batch if the ontology
 changed meanwhile. New entities go into the ontology's base namespace unless
 you pass namespace.

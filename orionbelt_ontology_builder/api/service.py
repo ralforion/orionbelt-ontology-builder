@@ -108,6 +108,15 @@ EDIT_OPS: dict[str, str] = {
 #: Argument names an agent is likely to use, and the engine's own.
 _ARG_ALIASES = {"range": "range_", "property": "property_name"}
 
+#: The kinds an update, rename or delete op looks its target up among, by the
+#: word after its verb (``delete_class`` changes a class).
+_TARGET_KINDS: dict[str, tuple[str, ...]] = {
+    "class": ("class",),
+    "property": ("object_property", "data_property"),
+    "individual": ("individual",),
+    "concept": ("concept",),
+}
+
 
 class ServiceError(Exception):
     """A call that cannot be answered, with the HTTP status that says why."""
@@ -356,11 +365,17 @@ class OntologyService:
         """Everything the ontology says about one entity, in one answer."""
         with self._session() as m:
             kind, rec = self._resolve(m, ref)
-            name, uri = rec.get("name", ""), rec.get("uri", "")
+            # By URI, not local name: the engine reads a bare name in the base
+            # namespace, so an external Person would get the local one's facts.
+            uri = rec["uri"]
             out: dict[str, Any] = {"kind": kind, **rec}
-            out["annotations"] = m.get_annotations(name)
+            out["annotations"] = m.get_annotations(uri)
             if kind == "class":
-                out["restrictions"] = m.get_restrictions(name)
+                out["restrictions"] = [
+                    r
+                    for r in m.get_restrictions()
+                    if uri in r.get("applied_to_uris", [])
+                ]
                 members = [
                     i["name"] for i in m.get_individuals() if uri in i["class_uris"]
                 ]
@@ -374,7 +389,7 @@ class OntologyService:
                     for p in m.get_object_properties()
                     if p.get("range_uri") == uri
                 ]
-            usages = m.get_resource_usages(name)
+            usages = m.get_resource_usages(uri)
             out["usages"] = {
                 direction: {"total": len(rows), "sample": rows[:50]}
                 for direction, rows in usages.items()
@@ -587,21 +602,14 @@ class OntologyService:
         result["revision_before"] = self._canonical(m.revision_token())
         try:
             yield
+            # Inside the guard: writing the diff can fail too (a term Turtle
+            # cannot write), and the changes must then go as well.
+            if um is not None:
+                result["diff"] = self._diff(m, um)
         except BaseException:
             rollback()
             self._same_as[m.revision_token()] = result["revision_before"]
             raise
-        if um is not None:
-            added, removed = um.pending_triples()
-            # Net: a triple added and removed again inside the batch is no change.
-            plus = set(added) - set(removed)
-            minus = set(removed) - set(added)
-            result["diff"] = {
-                "added": len(plus),
-                "removed": len(minus),
-                "added_sample": [self._n3(m, t) for t in list(plus)[:DIFF_SAMPLE]],
-                "removed_sample": [self._n3(m, t) for t in list(minus)[:DIFF_SAMPLE]],
-            }
         if dry_run:
             rollback()
             self._same_as[m.revision_token()] = result["revision_before"]
@@ -616,6 +624,54 @@ class OntologyService:
             self._ws.note_write(label, detail)
             result["applied"] = True
         result["revision"] = self._canonical(m.revision_token())
+
+    def _diff(self, m: OntologyManager, um: UndoManager) -> dict[str, Any]:
+        """The batch's net change, with a sample of each side as Turtle."""
+        added, removed = um.pending_triples()
+        # rdflib takes any string as an IRI and only objects when writing it,
+        # so an IRI with a space would break every later export and autosave.
+        for triple in added:
+            for term in triple:
+                reason = (
+                    m.invalid_uri_reason(str(term))
+                    if isinstance(term, URIRef)
+                    else None
+                )
+                if reason:
+                    raise ServiceError(
+                        f"{str(term)!r} cannot be stored. {reason}",
+                        term=str(term),
+                        failed_index=None,
+                    )
+        return {
+            "added": len(added),
+            "removed": len(removed),
+            "added_sample": [self._n3(m, t) for t in added[:DIFF_SAMPLE]],
+            "removed_sample": [self._n3(m, t) for t in removed[:DIFF_SAMPLE]],
+        }
+
+    def _target(self, m: OntologyManager, op: str, ref: str, noun: str) -> str:
+        """The URI of the entity an update, rename or delete changes.
+
+        The engine places a bare name in the base namespace, so an entity from
+        another namespace, found here by its local name, would be missed and
+        the change made to a new resource in the base namespace. The engine
+        also takes an unknown name as nothing to do; from an agent that is
+        nearly always a typo, so it is refused, as is a name two entities share.
+        """
+        kinds = _TARGET_KINDS[noun]
+        uris = sorted(
+            {rec["uri"] for kind, rec in self._matches(m, ref) if kind in kinds}
+        )
+        if not uris:
+            raise NotFound(f"{op}: no {noun} named {ref!r}.", ref=ref)
+        if len(uris) > 1:
+            raise ServiceError(
+                f"{op}: {ref!r} names {len(uris)} entities; pass a full URI "
+                "or a prefixed name.",
+                candidates=uris,
+            )
+        return uris[0]
 
     def _call_op(self, m: OntologyManager, op: dict[str, Any]) -> Any:
         if not isinstance(op, dict) or "op" not in op:
@@ -632,18 +688,14 @@ class OntologyService:
         except TypeError as e:
             params = [p for p in inspect.signature(method).parameters if p != "self"]
             raise ServiceError(f"{name}: {e}", parameters=params) from e
-        # The engine treats an unknown name in a delete or update as nothing to
-        # do. From an agent that is nearly always a typo, so say so.
-        target = (
-            args.get("old_name")
-            if name.startswith("rename_")
-            else args.get("name")
-            if name.split("_", 1)[0] in ("delete", "update")
-            and name not in ("delete_annotation", "delete_restriction")
-            else None
-        )
-        if target is not None and not self._matches(m, str(target)):
-            raise NotFound(f"{name}: no entity named {target!r}.", ref=target)
+        verb, _, noun = name.partition("_")
+        if verb in ("update", "rename", "delete") and noun in _TARGET_KINDS:
+            key = "old_name" if verb == "rename" else "name"
+            uri = self._target(m, name, str(args[key]), noun)
+            # Renaming to the same name is the engine's no-op; with the old
+            # name as a URI it would find the new one taken.
+            if not (verb == "rename" and args[key] == args.get("new_name")):
+                args[key] = uri
         value = method(**args)
         if name.startswith("rename_") and value is False:
             raise ServiceError(f"{name}: rename refused (unknown or taken name).")

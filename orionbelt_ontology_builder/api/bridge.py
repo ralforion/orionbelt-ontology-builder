@@ -3,10 +3,11 @@
 Three things, all no-ops unless the API is enabled (:func:`.server.api_enabled`):
 
 * **One lock.** :func:`run_guard` holds a process-wide lock for a whole UI
-  run, :func:`_lock_widget_callbacks` holds it for the widget callbacks
-  Streamlit runs before that, and every API call takes the same lock, so the
-  two never change the graph at once. ``runner.fastReruns`` is already off
-  for the same reason (see :data:`~..local_store.STREAMLIT_OPTIONS`).
+  run, :func:`_lock_script_runs` holds it for everything else Streamlit runs
+  (widget callbacks, a dialog's or fragment's own rerun), and every API call
+  takes the same lock, so the two never change the graph at once.
+  ``runner.fastReruns`` is already off for the same reason (see
+  :data:`~..local_store.STREAMLIT_OPTIONS`).
 * **The live ontology.** At the end of every run the session's
   ``OntologyManager`` and ``UndoManager`` are handed to the API, so a load
   or "new ontology" in the UI is what the next API call sees. With several
@@ -116,7 +117,7 @@ def run_guard() -> Iterator[None]:
     # once; until a run has attached a session, API calls answer "busy".
     server.ensure_started(WORKSPACE)
     with WORKSPACE.lock:
-        _lock_widget_callbacks()
+        _lock_script_runs()
         try:
             yield
         finally:
@@ -125,40 +126,44 @@ def run_guard() -> Iterator[None]:
                 WORKSPACE.attach(ont, st.session_state.get("undo_manager"))
 
 
-#: The wrapper :func:`_lock_widget_callbacks` put in place, so it goes in once.
-_locked_callbacks: Callable[..., None] | None = None
+#: The wrapper :func:`_lock_script_runs` put in place, so it goes in once.
+_locked_exec: Callable[..., Any] | None = None
 
 
-def _lock_widget_callbacks() -> None:
-    """Run widget callbacks under the API's lock too.
+def _lock_script_runs() -> None:
+    """Run everything Streamlit executes for a session under the API's lock.
 
-    Streamlit runs ``on_click`` and ``on_change`` callbacks before the script
-    body, so outside :func:`run_guard`, and most edits in the app are made in
-    one (loading an upper ontology is). Unlocked, an API batch could run while
-    a callback changes the graph: a dry run's rollback would take back part of
-    the user's change, or record a revision that already includes it as the
-    same as the one before the dry run, and the apply's revision check would
-    then pass over it.
+    :func:`run_guard` covers the script body, but Streamlit runs code outside
+    it: widget callbacks before the body (most edits in the app are made in
+    one, loading an upper ontology among them), and a fragment's own rerun,
+    which runs the fragment alone, without ``main()``. A dialog is a fragment,
+    so the delete confirmation's button runs that way. Unlocked, an API batch
+    could run while one of these changes the graph: a dry run's rollback would
+    take back part of the user's change, or record a revision that already
+    includes it as the same as the one before the dry run, and the apply's
+    revision check would then pass over it.
 
-    This wraps the one Streamlit method that dispatches the callbacks, an
-    internal one. ``streamlit`` is pinned to an exact version, and a test runs
-    a callback and checks that it holds the lock. The lock is taken before
-    Streamlit's own session-state lock, in the order a script body takes them.
+    Callbacks, the script body and fragment reruns all run in the one call
+    the script runner makes to ``exec_func_with_error_handling``, an internal
+    function; this wraps the runner's name for it. ``streamlit`` is pinned to
+    an exact version, and tests run a callback and a fragment rerun and check
+    that each holds the lock. The lock is taken before any of Streamlit's own
+    locks a run takes, so it is always the outermost.
     """
-    global _locked_callbacks
-    from streamlit.runtime.state.safe_session_state import SafeSessionState
+    global _locked_exec
+    from streamlit.runtime.scriptrunner import script_runner
 
-    original = SafeSessionState.on_script_will_rerun
-    if original is _locked_callbacks:
+    original = script_runner.exec_func_with_error_handling
+    if original is _locked_exec:
         return
 
     @functools.wraps(original)
-    def locked(self: SafeSessionState, *args: Any, **kwargs: Any) -> None:
+    def locked(*args: Any, **kwargs: Any) -> Any:
         with WORKSPACE.lock:
-            original(self, *args, **kwargs)
+            return original(*args, **kwargs)
 
-    _locked_callbacks = locked
-    SafeSessionState.on_script_will_rerun = locked  # type: ignore[method-assign]
+    _locked_exec = locked
+    script_runner.exec_func_with_error_handling = locked
 
 
 def absorb_api_writes() -> None:

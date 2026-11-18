@@ -9,6 +9,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
+from rdflib import Literal, URIRef
+from rdflib.namespace import OWL, RDFS
 
 from ontology_manager import OntologyManager
 from orionbelt_ontology_builder import mcp_server
@@ -168,6 +170,125 @@ def test_a_change_between_dry_run_and_apply_is_refused(service, workspace):
     workspace.undo().checkpoint("Add class FromTheUser")
     with pytest.raises(Conflict):
         service.merge_rdf(ttl, dry_run=False, expected_revision=preview["revision"])
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_a_term_rdf_cannot_write_rolls_the_batch_back(service, workspace, dry_run):
+    """rdflib takes an IRI with a space, and only fails when writing it."""
+    rev = service.overview()["revision"]
+    with pytest.raises(ServiceError) as err:
+        service.edit(
+            [
+                {"op": "add_class", "name": "Kept"},
+                {
+                    "op": "set_ontology_metadata",
+                    "version_iri": "http://bad.test/with space",
+                },
+            ],
+            dry_run=dry_run,
+        )
+    assert "http://bad.test/with space" in err.value.message
+    assert err.value.details["rolled_back"]
+    assert err.value.details["failed_index"] is None
+    with pytest.raises(NotFound):
+        service.describe("Kept")
+    m = workspace.manager()
+    assert list(m.graph.objects(None, OWL.versionIRI)) == []
+    assert workspace.undo().pending_triples() == ([], [])
+    assert workspace.undo().undo_labels == []
+    assert workspace.writes == []
+    assert service.overview()["revision"] == rev
+    m.export_to_string("turtle")
+
+
+def test_the_diff_is_net_per_triple_whatever_the_order(service):
+    once = service.edit([{"op": "add_class", "name": "X"}], dry_run=True)["diff"]
+    assert once["added"] > 0
+    again = service.edit(
+        [
+            {"op": "add_class", "name": "X"},
+            {"op": "delete_class", "name": "X"},
+            {"op": "add_class", "name": "X"},
+        ],
+        dry_run=True,
+    )["diff"]
+    assert again == once
+    # Taken away and put back is no change, in either order.
+    back = service.edit(
+        [
+            {"op": "update_class", "name": "Person", "new_comment": "Changed"},
+            {"op": "update_class", "name": "Person", "new_comment": "A human being"},
+        ],
+        dry_run=True,
+    )["diff"]
+    assert (back["added"], back["removed"]) == (0, 0)
+
+
+EXT = "http://other.org/ext#"
+
+
+@pytest.fixture
+def external(service):
+    """A second namespace with an ``External`` and a ``Person`` of its own."""
+    service.merge_rdf(
+        f"@prefix ext: <{EXT}> . @prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+        "ext:External a owl:Class .\n"
+        'ext:Person a owl:Class ; rdfs:comment "Someone elsewhere" .\n'
+        "ext:knows a owl:ObjectProperty ; rdfs:domain ext:Person .\n",
+        dry_run=False,
+    )
+    return service
+
+
+def test_edits_change_the_entity_they_resolved(external, workspace):
+    m = workspace.manager()
+    external.edit([{"op": "update_class", "name": "External", "new_label": "Ext"}])
+    assert m.graph.value(URIRef(EXT + "External"), RDFS.label) == Literal("Ext")
+    assert (URIRef(BASE + "External"), None, None) not in m.graph
+    # A rename keeps the namespace of the entity it renames.
+    external.edit(
+        [{"op": "rename_class", "old_name": "External", "new_name": "Outside"}]
+    )
+    assert (URIRef(EXT + "Outside"), None, None) in m.graph
+    # Renaming to the same name is still nothing to do.
+    same = external.edit(
+        [{"op": "rename_class", "old_name": "Agent", "new_name": "Agent"}]
+    )
+    assert same["results"][0]["result"] is True
+
+
+def test_an_edit_target_two_entities_share_is_refused(external, workspace):
+    with pytest.raises(ServiceError) as err:
+        external.edit([{"op": "update_class", "name": "Person", "new_label": "P"}])
+    assert err.value.details["candidates"] == [EXT + "Person", BASE + "Person"]
+    out = external.edit(
+        [{"op": "update_class", "name": EXT + "Person", "new_label": "P"}]
+    )
+    assert out["applied"]
+    m = workspace.manager()
+    assert m.graph.value(URIRef(EXT + "Person"), RDFS.label) == Literal("P")
+    assert m.graph.value(URIRef(BASE + "Person"), RDFS.label) == Literal("Person")
+
+
+def test_an_edit_target_of_another_kind_is_not_found(service):
+    with pytest.raises(NotFound) as err:
+        service.edit([{"op": "delete_class", "name": "alice"}])
+    assert "no class named 'alice'" in err.value.message
+    assert service.describe("alice")["kind"] == "individual"
+
+
+def test_describe_reads_the_resolved_entity_not_its_local_name(external):
+    theirs = external.describe(EXT + "Person")
+    assert [a["value"] for a in theirs["annotations"]] == ["Someone elsewhere"]
+    assert theirs["properties_with_domain"] == ["knows"]
+    assert theirs["individuals"]["total"] == 0
+    seen = json.dumps(theirs["usages"])
+    assert "alice" not in seen and "worksFor" not in seen
+    assert "knows" in seen
+    ours = external.describe(BASE + "Person")
+    assert "A human being" in [a["value"] for a in ours["annotations"]]
+    assert "knows" not in json.dumps(ours["usages"])
 
 
 def test_merge_turtle(service):
@@ -347,7 +468,7 @@ def test_toast_text_names_a_few_and_counts_the_rest():
 @pytest.fixture
 def api_on(monkeypatch, tmp_path):
     """The bridge as the app runs it with the API on, minus the real server."""
-    from streamlit.runtime.state.safe_session_state import SafeSessionState
+    from streamlit.runtime.scriptrunner import script_runner
 
     from orionbelt_ontology_builder.api import bridge, server
 
@@ -357,11 +478,12 @@ def api_on(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_status", server.ApiStatus(url="http://127.0.0.1:0"))
     monkeypatch.setattr(bridge, "WORKSPACE", bridge.StreamlitWorkspace())
     monkeypatch.setattr(server.local_store, "data_dir", lambda: tmp_path)
-    # The bridge wraps a Streamlit method for the callbacks; unwrap it after.
+    # The bridge wraps the function Streamlit runs a session's code in; unwrap
+    # it after.
     monkeypatch.setattr(
-        SafeSessionState,
-        "on_script_will_rerun",
-        SafeSessionState.on_script_will_rerun,
+        script_runner,
+        "exec_func_with_error_handling",
+        script_runner.exec_func_with_error_handling,
     )
     return bridge
 
@@ -437,6 +559,59 @@ def test_widget_callbacks_hold_the_api_lock(api_on):
     at.button[0].click().run()
     assert not at.exception
     assert at.session_state["free_in_callback"] is False
+
+
+def _fragment_script():
+    import threading
+
+    import streamlit as st
+
+    from orionbelt_ontology_builder.api import bridge
+
+    def lock_is_free() -> bool:
+        free = []
+
+        def probe():
+            got = bridge.WORKSPACE.lock.acquire(blocking=False)
+            if got:
+                bridge.WORKSPACE.lock.release()
+            free.append(got)
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        return free[0]
+
+    @st.fragment
+    def confirm():
+        st.session_state.setdefault("free_in_fragment", []).append(lock_is_free())
+        st.button("Confirm")
+
+    with bridge.run_guard():
+        confirm()
+
+
+def test_a_fragment_rerun_holds_the_api_lock(api_on, monkeypatch):
+    """A dialog's button reruns the dialog alone, without main() or run_guard.
+
+    The delete confirmation is a dialog, and a dialog is a fragment.
+    """
+    from streamlit.testing.v1 import AppTest, local_script_runner
+
+    at = AppTest.from_function(_fragment_script, default_timeout=60)
+    at.run()
+    (fragment_id,) = at._fragment_storage._fragments
+    # AppTest has no fragment rerun of its own: ask for the one the browser
+    # sends when a button inside the fragment is clicked.
+    full_run = local_script_runner.RerunData
+    monkeypatch.setattr(
+        local_script_runner,
+        "RerunData",
+        lambda **kw: full_run(**kw, fragment_id_queue=[fragment_id]),
+    )
+    at.run()
+    assert not at.exception
+    assert at.session_state["free_in_fragment"] == [False, False]
 
 
 def test_sidebar_lines_shorten_home_but_copy_in_full():

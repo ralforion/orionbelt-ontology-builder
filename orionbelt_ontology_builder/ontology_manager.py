@@ -8857,17 +8857,26 @@ class UndoManager:
         return [label for label, _ in self._redo_stack]
 
     def pending_triples(self) -> tuple[list[tuple], list[tuple]]:
-        """The triples added and removed since the last checkpoint.
+        """The triples added and removed since the last checkpoint, net.
 
         For the API, which reports what a batch of edits did (or, on a dry
         run, would do) before it is either kept as one undo step or rolled
         back with :meth:`discard_pending`.
+
+        The journal holds only real changes, so a triple's first entry says
+        whether it was there before (it was removed first) and its last entry
+        whether it is there now. Comparing the two keeps order and repetition:
+        a triple added, removed and added again is an addition, where taking
+        the removals from the additions as sets made it no change.
         """
-        added: list[tuple] = []
-        removed: list[tuple] = []
+        first: dict[tuple, bool] = {}
+        last: dict[tuple, bool] = {}
         for change in self._journal.entries:
             if isinstance(change, _TripleChange):
-                (added if change.added else removed).append(change.triple)
+                first.setdefault(change.triple, change.added)
+                last[change.triple] = change.added
+        added = [t for t, now in last.items() if now and first[t]]
+        removed = [t for t, now in last.items() if not now and not first[t]]
         return added, removed
 
     def discard_pending(self) -> None:
