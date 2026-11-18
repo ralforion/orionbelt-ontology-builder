@@ -26,8 +26,11 @@ Thumbs.db
 
 # Local dev / docs not needed at runtime
 design/
+docs/
 tests/
 .streamlit/secrets.toml
+# Local launcher settings, which may hold the API token
+.env
 .playwright-mcp/
 .claude/
 
