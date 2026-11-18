@@ -46,11 +46,15 @@
 
 OrionBelt lets you build, edit, and maintain OWL ontologies and SKOS vocabularies in your browser. No Java, no desktop install - just `pip install` and go.
 
+And you can talk to your ontology: connect Claude or another MCP client to the app on your machine, ask what the ontology says or how two things are connected, or have it model a whole new domain while you watch the changes arrive. [See a session](#a-session-with-an-agent).
+
 It works with **OWL ontologies** (classes as `owl:Class`, properties as `owl:ObjectProperty` / `owl:DatatypeProperty`). Pure RDFS vocabularies like schema.org that use `rdfs:Class` and `rdf:Property` are not currently surfaced in the Classes / Properties panels.
 
 It's not trying to be Protégé. It's meant for people who want something lighter: a workbench that's easy to pick up, hard to break things with, and good enough for real ontology work.
 
 ## What it's good at
+
+**Talking to your ontology.** An AI agent (Claude Desktop, Claude Code or any MCP client) can explain your ontology, find how two things connect, query it, and extend it. Every change can be previewed as a dry run first, shows up in the open app with a note of what changed, and is one step you can undo. It runs locally, against the ontology open in your app: see [API and MCP server](#api-and-mcp-server).
 
 **Not losing your work.** Every change creates an undo checkpoint. Deletes show you what will break before you confirm. Imports show a diff so you can review before applying.
 
@@ -561,6 +565,29 @@ Changes support `dry_run` (returns the diff, keeps nothing) and
 `expected_revision` (refused if the ontology changed since you read it).
 The REST API behind it is documented at `http://127.0.0.1:8765/docs`.
 
+#### A session with an agent
+
+Excerpts from a session in Claude with gUFO open in the app. Asked "Explain my
+ontology in OrionBelt", the agent reads it through the tools:
+
+<img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-explain.png" alt="Claude describes the open ontology: gUFO 1.0.0, its size and revision, and how it is built" width="700">
+
+Asked to add the classes Customer, Contract and Order "with all usual
+properties", it puts them in a namespace of their own, checks the change with
+a dry run, and applies it:
+
+<img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-dry-run.png" alt="Claude plans a sales namespace, runs merge_turtle as a dry run (182 triples, no conflicts) and then applies it" width="700">
+
+<img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-applied.png" alt="Claude reports the three classes added as one undo step, with their gUFO types, superclasses and rules" width="700">
+
+In the app, the change is one step in the Undo history and is listed under
+"Agent changes" in the sidebar, and the new classes are in the graph:
+
+<p>
+  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-changes.png" alt="The sidebar's Agent changes list: Add sales domain: Customer, Contract, Order (+182 / -0 triples)" width="260">
+  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-ontology-builder/main/docs/images/agent-graph.png" alt="The graph with Customer, Contract and Order linked to each other and to gUFO's Object, Relator and Event" width="520">
+</p>
+
 API settings: `--api-port`, `--api-host` (default `127.0.0.1`; anything else
 exposes the ontology to your network, guarded only by the token), or the
 `ORIONBELT_API`, `ORIONBELT_API_PORT`, `ORIONBELT_API_HOST` and
@@ -648,10 +675,13 @@ orionbelt-ontology-builder/
 │   ├── templates.py                    # Built-in templates / upper / reference ontologies
 │   ├── sparql.py                       # Read-only SPARQL execution (deadline + row cap)
 │   ├── sparql_oxigraph.py              # SPARQL on Oxigraph for large ontologies (worker process)
+│   ├── api/                            # Local HTTP API onto the open ontology (`--api`)
+│   ├── mcp_server.py                   # MCP server, a separate process and client of the API
 │   ├── samples/                        # Bundled gist, gUFO, FOAF, PROV-O, GoodRelations, …
 │   ├── lib/                            # The graph component (vendored vis-network)
 │   ├── assets/                         # Logos and screenshots
 │   └── favicon.png
+├── docs/images/                        # README screenshots (not in the package or image)
 ├── pyproject.toml                      # Project metadata
 ├── scripts/                            # Repo tooling (check-action-pins.sh)
 └── tests/                              # pytest suite

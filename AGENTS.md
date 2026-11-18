@@ -29,6 +29,9 @@ orionbelt_ontology_builder/
 ├── sparql_oxigraph.py  # Large ontologies: the query on Oxigraph in a worker killed at the deadline
 ├── rdf_io.py           # Parsing through pyoxigraph where it gives rdflib's result
 ├── reasoning.py        # owlrl closure in a worker process (deadline, progress, cancel)
+├── api/                # Local HTTP API (--api): service, REST, server thread, bridge to the UI run
+├── mcp_server.py       # `orionbelt-ontology-builder-mcp`: a separate process, a client of the API
+├── env_file.py         # Settings from .env for the console launcher and the MCP server
 ├── samples/            # Bundled ontologies (gist, gUFO, FOAF, PROV-O, …)
 ├── lib/                # The graph component (vendored vis-network)
 ├── assets/             # Logos, screenshots
