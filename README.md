@@ -523,8 +523,10 @@ orionbelt-ontology-builder --api            # API on http://127.0.0.1:8765
 ```
 
 The API works on the live session: what an agent changes appears in the open
-app within a couple of seconds, and every change is one step in the app's
-Undo history, so you can take it back from the sidebar. API calls and the UI
+app within a couple of seconds with a toast naming the change (for example
+"add_class Employee (+3 / −0 triples)"). The sidebar's "Agent changes" list
+keeps the last ten, and every change is one step in the app's Undo history,
+so you can take it back from the sidebar. API calls and the UI
 take turns on one lock, so they never edit the graph at the same time. The
 API serves the ontology of the browser session that ran last, and answers
 "busy" until the app has been opened once. Each start writes the URL and a

@@ -13,13 +13,19 @@ Three things, all no-ops unless the API is enabled (:func:`.server.api_enabled`)
 * **A refresh.** An API edit bumps a counter; the next run turns that into
   the UI's own mutation bump (autosave, caches), and a small fragment polls
   the counter so the open page reruns by itself after an agent's edit.
+* **A notice.** That run also shows a toast naming what the agent changed,
+  and the sidebar keeps the last few agent changes, so a change made while
+  nobody was looking is still visible once the toast has gone.
 """
 
 from __future__ import annotations
 
 import contextlib
 import threading
+import time
+from collections import deque
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 import streamlit as st
 
@@ -30,7 +36,27 @@ from .service import Busy
 #: Seconds between the UI's checks for edits made through the API.
 REFRESH_SECONDS = 2.0
 
+#: Agent changes the sidebar list keeps.
+HISTORY_SIZE = 10
+#: Changes named one by one in a toast; beyond that they are counted.
+TOAST_NAMED = 3
+
 _SEEN_KEY = "_api_seen_writes"
+
+
+@dataclass(frozen=True)
+class AgentChange:
+    """One change made through the API, as the UI tells the user about it."""
+
+    seq: int
+    at: float
+    label: str
+    detail: str = ""
+
+    @property
+    def text(self) -> str:
+        what = self.label.removeprefix("API: ")
+        return f"{what} ({self.detail})" if self.detail else what
 
 
 class StreamlitWorkspace:
@@ -39,6 +65,7 @@ class StreamlitWorkspace:
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.writes = 0
+        self.changes: deque[AgentChange] = deque(maxlen=HISTORY_SIZE)
         self._manager: OntologyManager | None = None
         self._undo: UndoManager | None = None
 
@@ -62,8 +89,14 @@ class StreamlitWorkspace:
         finally:
             self.lock.release()
 
-    def note_write(self, label: str) -> None:
+    def note_write(self, label: str, detail: str = "") -> None:
+        # Called by the service while it holds the lock, and read by UI runs,
+        # which hold it too, so the counter and the log never disagree.
         self.writes += 1
+        self.changes.append(AgentChange(self.writes, time.time(), label, detail))
+
+    def changes_since(self, seq: int) -> list[AgentChange]:
+        return [c for c in self.changes if c.seq > seq]
 
 
 WORKSPACE = StreamlitWorkspace()
@@ -96,11 +129,30 @@ def absorb_api_writes() -> None:
     """
     if not server.api_enabled():
         return
-    if st.session_state.get(_SEEN_KEY, 0) != WORKSPACE.writes:
+    if _SEEN_KEY not in st.session_state:
+        # A new session starts from here: changes made before it opened are
+        # history (the sidebar list still shows them), not news to toast.
+        st.session_state[_SEEN_KEY] = WORKSPACE.writes
+        return
+    seen = st.session_state[_SEEN_KEY]
+    if seen != WORKSPACE.writes:
         from ..ui import note_mutation
 
+        fresh = WORKSPACE.changes_since(seen)
         st.session_state[_SEEN_KEY] = WORKSPACE.writes
         note_mutation()
+        if fresh:
+            st.toast(toast_text(fresh), icon="🤖")
+
+
+def toast_text(changes: list[AgentChange]) -> str:
+    """One toast for every change since the last run: a few named, the rest counted."""
+    if len(changes) == 1:
+        return f"Agent changed the ontology: {changes[0].text}. Undo is in the sidebar."
+    named = "; ".join(c.text for c in changes[-TOAST_NAMED:])
+    rest = len(changes) - TOAST_NAMED
+    more = f" and {rest} earlier" if rest > 0 else ""
+    return f"Agent made {len(changes)} changes: {named}{more}. Undo is in the sidebar."
 
 
 @st.fragment(run_every=REFRESH_SECONDS)
@@ -120,6 +172,18 @@ def render_sidebar_status() -> None:
         st.sidebar.caption(
             f"API & MCP: `{status.url}` · token in `{server.discovery_file()}`"
         )
+        _render_agent_changes()
         _watch_api_writes()
     else:
         st.sidebar.caption(f"API not running: {status.error}")
+
+
+def _render_agent_changes() -> None:
+    """The last few agent changes, newest first, under the API line."""
+    changes = list(WORKSPACE.changes)
+    if not changes:
+        return
+    with st.sidebar.expander(f"🤖 Agent changes ({len(changes)})", expanded=False):
+        for c in reversed(changes):
+            st.caption(f"{time.strftime('%H:%M:%S', time.localtime(c.at))} · {c.text}")
+        st.caption("Each one is a step in the Undo history.")

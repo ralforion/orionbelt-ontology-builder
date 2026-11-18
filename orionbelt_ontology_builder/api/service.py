@@ -148,7 +148,10 @@ class Workspace(Protocol):
 
     def locked(self, timeout: float) -> contextlib.AbstractContextManager[None]: ...
 
-    def note_write(self, label: str) -> None: ...
+    def note_write(self, label: str, detail: str = "") -> None:
+        """An API change was kept. ``detail`` is a short summary, e.g. the
+        triple counts, for whoever shows the change to the user."""
+        ...
 
 
 class LocalWorkspace:
@@ -175,8 +178,23 @@ class LocalWorkspace:
         finally:
             self._lock.release()
 
-    def note_write(self, label: str) -> None:
+    def note_write(self, label: str, detail: str = "") -> None:
         self.writes.append(label)
+
+
+def _default_label(operations: list[dict[str, Any]]) -> str:
+    """``API: add_class Employee (+2)``: the first op, what it names, how many more."""
+    first = operations[0] if isinstance(operations[0], dict) else {}
+    subject = next(
+        (
+            first[k]
+            for k in ("name", "old_name", "class_name", "individual", "subject")
+            if isinstance(first.get(k), str)
+        ),
+        "",
+    )
+    more = f" (+{len(operations) - 1})" if len(operations) > 1 else ""
+    return f"API: {first.get('op', 'edit')} {subject}".rstrip() + more
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -587,7 +605,11 @@ class OntologyService:
         else:
             if um is not None:
                 um.checkpoint(label)
-            self._ws.note_write(label)
+            diff = result.get("diff")
+            detail = (
+                f"+{diff['added']} / \u2212{diff['removed']} triples" if diff else ""
+            )
+            self._ws.note_write(label, detail)
             result["applied"] = True
         result["revision"] = self._canonical(m.revision_token())
 
@@ -643,9 +665,7 @@ class OntologyService:
         """
         if not operations:
             raise ServiceError("No operations given.")
-        label = label or f"API: {operations[0].get('op', 'edit')}" + (
-            f" (+{len(operations) - 1})" if len(operations) > 1 else ""
-        )
+        label = label or _default_label(operations)
         result: dict[str, Any] = {"label": label, "results": []}
         with self._session() as m:
             self._check_revision(m, expected_revision)
@@ -758,6 +778,9 @@ class OntologyService:
             um = self._ws.undo()
             if um is None or not (um.can_redo() if redo else um.can_undo()):
                 raise ServiceError(f"Nothing to {'redo' if redo else 'undo'}.")
+            # The engine returns the label it lands on; the user wants to
+            # know which step was taken back (or put back).
+            stepped = (um.redo_labels if redo else um.undo_labels)[-1]
             label = um.redo() if redo else um.undo()
-            self._ws.note_write("Redo" if redo else "Undo")
+            self._ws.note_write(f"API: {'Redo' if redo else 'Undo'}", stepped)
             return {"label": label, "revision": self._canonical(m.revision_token())}

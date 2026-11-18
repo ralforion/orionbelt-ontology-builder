@@ -280,3 +280,92 @@ def test_mcp_without_a_running_app_says_how_to_start_it(monkeypatch, tmp_path):
     monkeypatch.delenv(mcp_server.ENV_TOKEN, raising=False)
     with pytest.raises(ToolError, match="--api"):
         asyncio.run(mcp_server.mcp.call_tool("ontology_overview", {}))
+
+
+# -- telling the user -----------------------------------------------------
+
+
+class _RecordingWorkspace(LocalWorkspace):
+    def __init__(self, manager):
+        super().__init__(manager)
+        self.details: list[tuple[str, str]] = []
+
+    def note_write(self, label, detail=""):
+        super().note_write(label, detail)
+        self.details.append((label, detail))
+
+
+def test_writes_carry_a_named_label_and_triple_counts(workspace):
+    rec = _RecordingWorkspace(workspace.manager())
+    svc = OntologyService(rec)
+    svc.edit(
+        [
+            {"op": "add_class", "name": "Employee", "parent": "Person"},
+            {"op": "add_class", "name": "Intern", "parent": "Employee"},
+        ]
+    )
+    label, detail = rec.details[-1]
+    assert label == "API: add_class Employee (+1)"
+    assert detail.startswith("+") and "triples" in detail
+    svc.edit([{"op": "add_class", "name": "Dry"}], dry_run=True)
+    assert len(rec.details) == 1  # a dry run tells nobody
+    svc.undo()
+    assert rec.details[-1] == ("API: Undo", "API: add_class Employee (+1)")
+
+
+def test_toast_text_names_a_few_and_counts_the_rest():
+    from orionbelt_ontology_builder.api.bridge import AgentChange, toast_text
+
+    one = [AgentChange(1, 0, "API: add_class Employee", "+3 / −0 triples")]
+    assert toast_text(one) == (
+        "Agent changed the ontology: add_class Employee (+3 / −0 triples). "
+        "Undo is in the sidebar."
+    )
+    many = [AgentChange(i, 0, f"API: add_class C{i}") for i in range(1, 6)]
+    text = toast_text(many)
+    assert text.startswith(
+        "Agent made 5 changes: add_class C3; add_class C4; add_class C5"
+    )
+    assert "and 2 earlier" in text
+
+
+def _bridge_script():
+    from orionbelt_ontology_builder.api import bridge
+    from orionbelt_ontology_builder.ui import init_session_state
+
+    with bridge.run_guard():
+        init_session_state()
+        bridge.absorb_api_writes()
+        bridge.render_sidebar_status()
+
+
+def test_ui_toasts_and_lists_an_agent_change(monkeypatch, tmp_path):
+    from streamlit.testing.v1 import AppTest
+
+    from orionbelt_ontology_builder.api import bridge, server
+
+    monkeypatch.setenv(server.ENV_ENABLE, "1")
+    # The real server is not needed: the bridge's workspace is what the API
+    # would call, so drive it directly through a service.
+    monkeypatch.setattr(server, "_status", server.ApiStatus(url="http://127.0.0.1:0"))
+    monkeypatch.setattr(bridge, "WORKSPACE", bridge.StreamlitWorkspace())
+    monkeypatch.setattr(server.local_store, "data_dir", lambda: tmp_path)
+
+    at = AppTest.from_function(_bridge_script, default_timeout=60)
+    at.run()
+    assert not at.exception
+    assert not at.toast  # nothing changed yet
+
+    OntologyService(bridge.WORKSPACE).edit([{"op": "add_class", "name": "FromAgent"}])
+    at.run()
+    assert not at.exception
+    assert "add_class FromAgent" in at.toast[0].value
+    assert any(
+        "FromAgent" in c["name"] for c in at.session_state["ontology"].get_classes()
+    )
+    assert at.session_state["undo_manager"].undo_labels == ["API: add_class FromAgent"]
+    listed = [c.value for c in at.sidebar.expander[0].caption]
+    assert "add_class FromAgent" in listed[0]
+
+    at.run()
+    assert not at.toast  # shown once, not on every run
