@@ -3,9 +3,10 @@
 Three things, all no-ops unless the API is enabled (:func:`.server.api_enabled`):
 
 * **One lock.** :func:`run_guard` holds a process-wide lock for a whole UI
-  run, and every API call takes the same lock, so the two never change the
-  graph at once. ``runner.fastReruns`` is already off for the same reason
-  (see :data:`~..local_store.STREAMLIT_OPTIONS`).
+  run, :func:`_lock_widget_callbacks` holds it for the widget callbacks
+  Streamlit runs before that, and every API call takes the same lock, so the
+  two never change the graph at once. ``runner.fastReruns`` is already off
+  for the same reason (see :data:`~..local_store.STREAMLIT_OPTIONS`).
 * **The live ontology.** At the end of every run the session's
   ``OntologyManager`` and ``UndoManager`` are handed to the API, so a load
   or "new ontology" in the UI is what the next API call sees. With several
@@ -21,11 +22,13 @@ Three things, all no-ops unless the API is enabled (:func:`.server.api_enabled`)
 from __future__ import annotations
 
 import contextlib
+import functools
 import threading
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import streamlit as st
 
@@ -112,12 +115,49 @@ def run_guard() -> Iterator[None]:
     # once; until a run has attached a session, API calls answer "busy".
     server.ensure_started(WORKSPACE)
     with WORKSPACE.lock:
+        _lock_widget_callbacks()
         try:
             yield
         finally:
             ont = st.session_state.get("ontology")
             if ont is not None:
                 WORKSPACE.attach(ont, st.session_state.get("undo_manager"))
+
+
+#: The wrapper :func:`_lock_widget_callbacks` put in place, so it goes in once.
+_locked_callbacks: Callable[..., None] | None = None
+
+
+def _lock_widget_callbacks() -> None:
+    """Run widget callbacks under the API's lock too.
+
+    Streamlit runs ``on_click`` and ``on_change`` callbacks before the script
+    body, so outside :func:`run_guard`, and most edits in the app are made in
+    one (loading an upper ontology is). Unlocked, an API batch could run while
+    a callback changes the graph: a dry run's rollback would take back part of
+    the user's change, or record a revision that already includes it as the
+    same as the one before the dry run, and the apply's revision check would
+    then pass over it.
+
+    This wraps the one Streamlit method that dispatches the callbacks, an
+    internal one. ``streamlit`` is pinned to an exact version, and a test runs
+    a callback and checks that it holds the lock. The lock is taken before
+    Streamlit's own session-state lock, in the order a script body takes them.
+    """
+    global _locked_callbacks
+    from streamlit.runtime.state.safe_session_state import SafeSessionState
+
+    original = SafeSessionState.on_script_will_rerun
+    if original is _locked_callbacks:
+        return
+
+    @functools.wraps(original)
+    def locked(self: SafeSessionState, *args: Any, **kwargs: Any) -> None:
+        with WORKSPACE.lock:
+            original(self, *args, **kwargs)
+
+    _locked_callbacks = locked
+    SafeSessionState.on_script_will_rerun = locked  # type: ignore[method-assign]
 
 
 def absorb_api_writes() -> None:

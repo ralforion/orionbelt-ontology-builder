@@ -276,8 +276,8 @@ class OntologyService:
         return token
 
     def _check_revision(self, m: OntologyManager, expected: str | None) -> None:
-        current = m.revision_token()
-        if expected and self._canonical(expected) != self._canonical(current):
+        current = self._canonical(m.revision_token())
+        if expected and self._canonical(expected) != current:
             raise Conflict(
                 "The ontology changed since that revision; read it again.",
                 expected_revision=expected,
@@ -580,7 +580,11 @@ class OntologyService:
             elif snapshot is not None:
                 m.restore_snapshot(snapshot)
 
-        result["revision_before"] = m.revision_token()
+        # Canonical like every revision the API reports: the raw token after a
+        # dry run differs from the one the dry run reported, so an apply sent
+        # with that ``expected_revision`` would show a ``revision_before`` that
+        # looks as if the ontology had moved in between when it had not.
+        result["revision_before"] = self._canonical(m.revision_token())
         try:
             yield
         except BaseException:

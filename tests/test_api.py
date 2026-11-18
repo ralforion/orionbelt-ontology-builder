@@ -133,8 +133,10 @@ def test_dry_run_keeps_nothing_and_keeps_the_revision(service, workspace):
     with pytest.raises(NotFound):
         service.describe("Robot")
     assert workspace.writes == []
-    # The preview did not "change" the ontology, so the real call still goes.
-    service.edit([{"op": "add_class", "name": "Robot"}], expected_revision=rev)
+    # The preview did not "change" the ontology, so the real call still goes,
+    # and says it started from the revision it was checked against.
+    out = service.edit([{"op": "add_class", "name": "Robot"}], expected_revision=rev)
+    assert out["revision_before"] == rev
 
 
 def test_failed_batch_rolls_everything_back(service):
@@ -151,8 +153,21 @@ def test_failed_batch_rolls_everything_back(service):
 def test_stale_revision_is_refused(service):
     rev = service.overview()["revision"]
     service.edit([{"op": "add_class", "name": "A1"}])
-    with pytest.raises(Conflict):
+    service.edit([{"op": "add_class", "name": "Dry"}], dry_run=True)
+    with pytest.raises(Conflict) as err:
         service.edit([{"op": "add_class", "name": "A2"}], expected_revision=rev)
+    # The revision to start again from, as a read reports it.
+    assert err.value.details["revision"] == service.overview()["revision"]
+
+
+def test_a_change_between_dry_run_and_apply_is_refused(service, workspace):
+    """A user's edit in the app between an agent's preview and its apply."""
+    ttl = f"@prefix : <{BASE}> . @prefix owl: <http://www.w3.org/2002/07/owl#> .\n:Team a owl:Class ."
+    preview = service.merge_rdf(ttl)
+    workspace.manager().add_class("FromTheUser")
+    workspace.undo().checkpoint("Add class FromTheUser")
+    with pytest.raises(Conflict):
+        service.merge_rdf(ttl, dry_run=False, expected_revision=preview["revision"])
 
 
 def test_merge_turtle(service):
@@ -329,6 +344,28 @@ def test_toast_text_names_a_few_and_counts_the_rest():
     assert "and 2 earlier" in text
 
 
+@pytest.fixture
+def api_on(monkeypatch, tmp_path):
+    """The bridge as the app runs it with the API on, minus the real server."""
+    from streamlit.runtime.state.safe_session_state import SafeSessionState
+
+    from orionbelt_ontology_builder.api import bridge, server
+
+    monkeypatch.setenv(server.ENV_ENABLE, "1")
+    # The real server is not needed: the bridge's workspace is what the API
+    # would call, so drive it directly through a service.
+    monkeypatch.setattr(server, "_status", server.ApiStatus(url="http://127.0.0.1:0"))
+    monkeypatch.setattr(bridge, "WORKSPACE", bridge.StreamlitWorkspace())
+    monkeypatch.setattr(server.local_store, "data_dir", lambda: tmp_path)
+    # The bridge wraps a Streamlit method for the callbacks; unwrap it after.
+    monkeypatch.setattr(
+        SafeSessionState,
+        "on_script_will_rerun",
+        SafeSessionState.on_script_will_rerun,
+    )
+    return bridge
+
+
 def _bridge_script():
     from orionbelt_ontology_builder.api import bridge
     from orionbelt_ontology_builder.ui import init_session_state
@@ -339,18 +376,10 @@ def _bridge_script():
         bridge.render_sidebar_status()
 
 
-def test_ui_toasts_and_lists_an_agent_change(monkeypatch, tmp_path):
+def test_ui_toasts_and_lists_an_agent_change(api_on):
     from streamlit.testing.v1 import AppTest
 
-    from orionbelt_ontology_builder.api import bridge, server
-
-    monkeypatch.setenv(server.ENV_ENABLE, "1")
-    # The real server is not needed: the bridge's workspace is what the API
-    # would call, so drive it directly through a service.
-    monkeypatch.setattr(server, "_status", server.ApiStatus(url="http://127.0.0.1:0"))
-    monkeypatch.setattr(bridge, "WORKSPACE", bridge.StreamlitWorkspace())
-    monkeypatch.setattr(server.local_store, "data_dir", lambda: tmp_path)
-
+    bridge = api_on
     at = AppTest.from_function(_bridge_script, default_timeout=60)
     at.run()
     assert not at.exception
@@ -369,3 +398,42 @@ def test_ui_toasts_and_lists_an_agent_change(monkeypatch, tmp_path):
 
     at.run()
     assert not at.toast  # shown once, not on every run
+
+
+def _callback_script():
+    import threading
+
+    import streamlit as st
+
+    from orionbelt_ontology_builder.api import bridge
+
+    def lock_is_free() -> bool:
+        free = []
+
+        def probe():
+            got = bridge.WORKSPACE.lock.acquire(blocking=False)
+            if got:
+                bridge.WORKSPACE.lock.release()
+            free.append(got)
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        return free[0]
+
+    def on_click():
+        st.session_state["free_in_callback"] = lock_is_free()
+
+    with bridge.run_guard():
+        st.button("Edit", on_click=on_click)
+
+
+def test_widget_callbacks_hold_the_api_lock(api_on):
+    """Streamlit runs callbacks before the body, outside run_guard's lock."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_callback_script, default_timeout=60)
+    at.run()
+    at.button[0].click().run()
+    assert not at.exception
+    assert at.session_state["free_in_callback"] is False
