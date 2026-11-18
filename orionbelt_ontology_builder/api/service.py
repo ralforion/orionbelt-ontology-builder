@@ -442,7 +442,17 @@ class OntologyService:
             else:
                 raise ServiceError("kind is 'class' or 'concept'.")
             names = {n["uri"]: n["name"] for n in every}
-            children = {n["uri"]: n.get(down, []) for n in every}
+            # Each link from either end: SKOS states broader and narrower
+            # separately, and a vocabulary may assert only one of them.
+            children: dict[str, set[str]] = {}
+            parents: dict[str, set[str]] = {}
+            for n in every:
+                for child in n.get(down, []):
+                    children.setdefault(n["uri"], set()).add(child)
+                    parents.setdefault(child, set()).add(n["uri"])
+                for parent in n.get(up, []):
+                    children.setdefault(parent, set()).add(n["uri"])
+                    parents.setdefault(n["uri"], set()).add(parent)
             if root:
                 roots = [self._target(m, "hierarchy", root, kind)]
             else:
@@ -450,7 +460,7 @@ class OntologyService:
                 roots = [
                     n["uri"]
                     for n in listed
-                    if not any(p in inside for p in n.get(up, []))
+                    if not parents.get(n["uri"], set()) & inside
                 ]
             count = 0
             truncated = False

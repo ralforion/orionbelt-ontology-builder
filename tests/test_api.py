@@ -309,6 +309,42 @@ def _tree_size(nodes: list[dict]) -> int:
     return sum(1 + _tree_size(n.get("children", [])) for n in nodes)
 
 
+@pytest.mark.parametrize(
+    "links",
+    [
+        ":Child skos:broader :Parent . :Grandchild skos:broader :Child .",
+        ":Parent skos:narrower :Child . :Child skos:narrower :Grandchild .",
+        ":Child skos:broader :Parent . :Child skos:narrower :Grandchild .",
+        (
+            ":Child skos:broader :Parent . :Parent skos:narrower :Child .\n"
+            ":Grandchild skos:broader :Child . :Child skos:narrower :Grandchild ."
+        ),
+    ],
+    ids=["broader-only", "narrower-only", "mixed", "both"],
+)
+def test_a_concept_tree_follows_either_direction(service, links):
+    """SKOS states broader and narrower apart; a vocabulary may have one."""
+    service.merge_rdf(
+        f"@prefix skos: <http://www.w3.org/2004/02/skos/core#> . @prefix : <{BASE}> .\n"
+        ":Parent a skos:Concept . :Child a skos:Concept . :Grandchild a skos:Concept .\n"
+        f"{links}\n",
+        dry_run=False,
+    )
+    assert service.hierarchy("concept")["roots"] == [
+        {
+            "name": "Parent",
+            "uri": BASE + "Parent",
+            "children": [
+                {
+                    "name": "Child",
+                    "uri": BASE + "Child",
+                    "children": [{"name": "Grandchild", "uri": BASE + "Grandchild"}],
+                }
+            ],
+        }
+    ]
+
+
 def test_hierarchies_keep_namespaces_apart(external):
     external.edit([{"op": "add_class", "name": "Employee", "parent": "Person"}])
     external.merge_rdf(
