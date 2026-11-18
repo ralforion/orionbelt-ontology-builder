@@ -36,3 +36,18 @@ def test_readme_pin_hint_matches_pyproject():
         "README Docker pin hint is out of sync with pyproject.toml "
         f"(expected `:{version}`)"
     )
+
+
+def test_changelog_has_the_version_as_its_newest_release():
+    """A release names its version in CHANGELOG.md, under ``[Unreleased]``.
+
+    The GitHub release notes are that entry, so a bump without one would
+    publish a release with nothing to say.
+    """
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = re.findall(r"^## \[(.+?)\]", changelog, re.MULTILINE)
+    assert headings[:1] == ["Unreleased"], "CHANGELOG.md opens with [Unreleased]"
+    assert headings[1:2] == [_pyproject_version()], (
+        "the newest release in CHANGELOG.md is not pyproject.toml's version "
+        f"({headings[1:2]} != {[_pyproject_version()]})"
+    )

@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-ontology-builder"
-version = "1.32.1"
+version = "1.33.0"
 description = "A Streamlit application for building, editing, and managing OWL ontologies"
 readme = "README.md"
 # SPDX. Business Source License 1.1 is BUSL-1.1; BSL-1.0 is the Boost Software
@@ -99,6 +99,7 @@ dev = [
 Homepage = "https://github.com/ralforion/orionbelt-ontology-builder"
 Repository = "https://github.com/ralforion/orionbelt-ontology-builder"
 Issues = "https://github.com/ralforion/orionbelt-ontology-builder/issues"
+Changelog = "https://github.com/ralforion/orionbelt-ontology-builder/blob/main/CHANGELOG.md"
 Demo = "https://orionbelt.streamlit.app"
 
 [tool.ruff.lint]
