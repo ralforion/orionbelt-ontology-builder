@@ -28,6 +28,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -201,6 +202,166 @@ def _watch_api_writes() -> None:
         st.rerun(scope="app")
 
 
+def status_lines(url: str, token_file: Path) -> list[dict[str, str]]:
+    """The sidebar's two lines: a label, the value a copy takes, what is shown.
+
+    Only the API has an address. The MCP server is a process of its own,
+    on stdio unless started with ``--http``, and finds the API through the
+    token file.
+    """
+    return [
+        {"label": "API:", "value": url, "shown": url, "what": "the API address"},
+        {
+            "label": "Token in:",
+            "value": str(token_file),
+            "shown": _home_relative(token_file),
+            "what": "the token file's path",
+        },
+    ]
+
+
+def _home_relative(path: Path) -> str:
+    """``~/...`` for a path under the home directory, to keep the line short."""
+    try:
+        return str(Path("~") / path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
+#: One line per value, cut short with an ellipsis rather than wrapped, the
+#: whole value on hover, and a button that copies it. A component, not a
+#: caption, because copying needs the browser's clipboard. The ``--st-*``
+#: variables are the theme Streamlit hands its components.
+_LINES_HTML = '<div class="ob-lines"></div>'
+
+_LINES_CSS = """
+.ob-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  font-family: var(--st-font, inherit);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: color-mix(in srgb, currentColor 60%, transparent);
+}
+.ob-line {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+.ob-label {
+  flex: none;
+  white-space: nowrap;
+}
+.ob-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-family: var(--st-code-font, monospace);
+  font-size: 0.8em;
+  color: var(--st-code-text-color, inherit);
+  background: var(--st-code-background-color, transparent);
+}
+.ob-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.25rem;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.ob-copy:hover {
+  color: var(--st-text-color, currentColor);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.ob-copy:focus-visible {
+  outline: 2px solid var(--st-primary-color, currentColor);
+  outline-offset: 1px;
+}
+.ob-copy svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+"""
+
+_LINES_JS = """
+const COPY_ICON =
+  '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>' +
+  '<path d="M3.5 10.5H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h6.5a1 1 0 0 1 1 1v.5"/></svg>';
+const DONE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>';
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // No async clipboard outside a secure context, e.g. the app opened by a
+    // LAN address over plain http.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+}
+
+function line({ label, value, shown, what }) {
+  const row = document.createElement("div");
+  row.className = "ob-line";
+  const name = document.createElement("span");
+  name.className = "ob-label";
+  name.textContent = label;
+  const text = document.createElement("code");
+  text.className = "ob-value";
+  text.textContent = shown;
+  text.title = value;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ob-copy";
+  const show = (icon, hint) => {
+    button.innerHTML = icon;
+    button.title = hint;
+    button.setAttribute("aria-label", hint);
+  };
+  show(COPY_ICON, `Copy ${what}`);
+  let timer;
+  button.addEventListener("click", async () => {
+    const ok = await copy(value);
+    show(ok ? DONE_ICON : COPY_ICON, ok ? "Copied" : "Could not copy");
+    clearTimeout(timer);
+    timer = setTimeout(() => show(COPY_ICON, `Copy ${what}`), 1500);
+  });
+  row.append(name, text, button);
+  return row;
+}
+
+export default function ({ data, parentElement }) {
+  parentElement.querySelector(".ob-lines").replaceChildren(...data.lines.map(line));
+}
+"""
+
+
 def render_sidebar_status() -> None:
     """The API's address (or why it is not running), and the refresh poller."""
     if not server.api_enabled():
@@ -209,9 +370,15 @@ def render_sidebar_status() -> None:
     if status is None:
         return
     if status.running:
-        st.sidebar.caption(
-            f"API & MCP: `{status.url}` · token in `{server.discovery_file()}`"
-        )
+        with st.sidebar:
+            # Registered on every call, as the case picker's is: the registry
+            # belongs to the runtime, and a cached handle outlives it.
+            st.components.v2.component(
+                "orionbelt_api_status", html=_LINES_HTML, css=_LINES_CSS, js=_LINES_JS
+            )(
+                key="api_status_lines",
+                data={"lines": status_lines(status.url, server.discovery_file())},
+            )
         _render_agent_changes()
         _watch_api_writes()
     else:

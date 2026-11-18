@@ -437,3 +437,18 @@ def test_widget_callbacks_hold_the_api_lock(api_on):
     at.button[0].click().run()
     assert not at.exception
     assert at.session_state["free_in_callback"] is False
+
+
+def test_sidebar_lines_shorten_home_but_copy_in_full():
+    from pathlib import Path
+
+    from orionbelt_ontology_builder.api.bridge import status_lines
+
+    token_file = Path.home() / ".orionbelt_ontology_builder" / "api.json"
+    api, token = status_lines("http://127.0.0.1:8765", token_file)
+    assert (api["label"], api["value"]) == ("API:", "http://127.0.0.1:8765")
+    assert token["label"] == "Token in:"
+    assert token["value"] == str(token_file)
+    assert token["shown"] == str(Path("~", ".orionbelt_ontology_builder", "api.json"))
+    outside = Path("/srv/orionbelt/api.json")
+    assert status_lines("u", outside)[1]["shown"] == str(outside)
