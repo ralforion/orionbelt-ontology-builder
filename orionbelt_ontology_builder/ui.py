@@ -2317,12 +2317,15 @@ def render_skos_literal_editor(ont, concept, ck):
 def _render_xl_label_rows(ont, concept, ck, xl_rows):
     """The SKOS-XL rows of the literal editor: text edited in place, or deleted.
 
-    Keyed by the label resource and its current text, so the edit fields
-    start from the label as it is now, after a save or an undo, rather than
-    from what was typed into them last.
+    Keyed by the kind, the label resource and its current text, so the edit
+    fields start from the label as it is now, after a save or an undo, rather
+    than from what was typed into them last. The kind is part of it because
+    an import can link one resource under two kinds, and two rows must not
+    share a key.
     """
     for i, (kind, item) in enumerate(xl_rows):
-        rk = f"{ck}_{abs(hash((item['label'], item['value'], item['lang']))) % 10**8}"
+        identity = (kind, item["label"], item["value"], item["lang"])
+        rk = f"{ck}_{abs(hash(identity)) % 10**8}"
         col_kind, col_lang, col_text, col_edit, col_del = st.columns(
             [2, 1, 4.3, 0.7, 0.7]
         )
@@ -2340,7 +2343,14 @@ def _render_xl_label_rows(ont, concept, ck, xl_rows):
             )
             if st.button("Save", key=f"xl_save_{rk}"):
                 try:
-                    ont.set_xl_label_text(item["label"], text, lang or None)
+                    # This row's literal form only: a label that breaks S52
+                    # with several shows each as a row, and the others stay.
+                    ont.set_xl_label_text(
+                        item["label"],
+                        text,
+                        lang or None,
+                        replacing=(item["value"], item["lang"]),
+                    )
                 except ValueError as exc:
                     show_message(str(exc), "error")
                 else:
@@ -2352,7 +2362,7 @@ def _render_xl_label_rows(ont, concept, ck, xl_rows):
                 key=f"del_xl_{ck}_{i}",
                 help=f"Delete this skosxl:{kind}, and what is said about the label",
             ):
-                ont.remove_xl_label(concept["uri"], item["label"])
+                ont.remove_xl_label(concept["uri"], item["label"], kind)
                 save_checkpoint(f"Delete skosxl:{kind}")
                 st.rerun()
 

@@ -4511,6 +4511,11 @@ class OntologyManager:
         for ref in (scheme, broader):
             if ref:
                 self._require_valid_name(ref)
+        if pref_label and pref_label_xl:
+            # Before anything is written, or a refused label leaves the
+            # concept behind, half made and outside the undo history.
+            self._literal_text(pref_label, "prefLabel")
+            self._checked_lang(lang)
         concept_uri = self._uri(name)
         # Before anything is written: a broader given at creation time went
         # straight into the graph, so ``add_concept("A", broader="A")`` minted a
@@ -4975,18 +4980,28 @@ class OntologyManager:
         self.graph.add((uri, prop, node))
         return str(node)
 
-    def remove_xl_label(self, concept: str, label: str) -> bool:
+    def remove_xl_label(
+        self, concept: str, label: str, kind: str | None = None
+    ) -> bool:
         """Unlink a SKOS-XL label from a concept. Returns whether it was linked.
 
         ``label`` is the resource's URI, or ``_:id`` for a blank node, as the
-        ``label`` key of a concept's ``xl_labels`` names it. The resource
-        itself, with everything said about it, is deleted once nothing labels
-        it any more; a label two concepts share stays for the other one.
+        ``label`` key of a concept's ``xl_labels`` names it. ``kind`` unlinks
+        it under that label kind only, for a resource an import links under
+        two (which breaks S58); by default every link from the concept goes.
+        The resource itself, with everything said about it, is deleted once
+        nothing labels it any more; a label two concepts share stays for the
+        other one.
         """
         uri = self._uri(concept)
         node = self._label_node(label)
+        props = (
+            [self._xl_label_property(kind)]
+            if kind
+            else list(self.SKOS_XL_LABEL_KINDS.values())
+        )
         removed = False
-        for prop in self.SKOS_XL_LABEL_KINDS.values():
+        for prop in props:
             if (uri, prop, node) in self.graph:
                 self.graph.remove((uri, prop, node))
                 removed = True
@@ -4997,16 +5012,18 @@ class OntologyManager:
     def _drop_unused_xl_label(self, node: Node) -> None:
         """Delete a label resource nothing labels with any more.
 
-        Not when it is also a class, a concept or another entity: that is a
-        modelling error (SKOS Reference S48) the validator reports, and
-        deleting the label must not delete the entity along with it.
+        Only one that is nothing but a label. A resource also typed as
+        anything else (a collection, a concept, a class) breaks SKOS
+        Reference S48 or serves the vocabulary in another role, and deleting
+        the label must not take that with it, blank node or not. It is only
+        unlinked, and the validator reports it.
         """
         if any(
             (None, prop, node) in self.graph
             for prop in self.SKOS_XL_LABEL_KINDS.values()
         ):
             return
-        if isinstance(node, URIRef) and self._name_in_use(node):
+        if any(t != SKOSXL.Label for t in self.graph.objects(node, RDF.type)):
             return
         self.graph.remove((node, None, None))
         self.graph.remove((None, None, node))
@@ -5028,18 +5045,28 @@ class OntologyManager:
         return texts
 
     def set_xl_label_text(
-        self, label: str, value: str, lang: str | None = None
+        self,
+        label: str,
+        value: str,
+        lang: str | None = None,
+        *,
+        replacing: tuple[str, str] | None = None,
     ) -> None:
         """Change a SKOS-XL label's text, keeping the resource and what it carries.
 
         This is what makes a label a resource worth having: its notes, dates
-        and links stay with it while its spelling changes. The new text is its
-        one ``skosxl:literalForm`` (SKOS Reference S52), so editing a label
-        that had several also repairs it.
+        and links stay with it while its spelling changes.
 
-        Refused when the label is something's prefLabel and that already has a
-        different prefLabel in the new language (S14): an edit should not
-        quietly delete another label to make room.
+        ``replacing`` names the literal form to change, as (text, language
+        tag, ``""`` for none). That is how the editor changes one row of a
+        label that breaks S52 with several forms without discarding the
+        others. Without it, every literal form gives way to the new text,
+        which leaves the label the one form S52 asks for.
+
+        Refused when the label is something's prefLabel and that would then
+        have two prefLabels in one language (S14), counting the label's own
+        remaining forms: an edit should not quietly delete another label to
+        make room.
         """
         node = self._label_node(label)
         linked = any(
@@ -5050,8 +5077,18 @@ class OntologyManager:
             raise ValueError(f"'{label}' is not a SKOS-XL label.")
         text = self._literal_text(value, "label")
         tag = self._checked_lang(lang)
+        forms = list(self.graph.objects(node, SKOSXL.literalForm))
+        if replacing is None:
+            old = forms
+        else:
+            old = [f for f in forms if self._same_text(f, *replacing)]
+            if not old:
+                raise ValueError(
+                    f"'{label}' has no literal form '{replacing[0]}' to change."
+                )
+        kept = [f for f in forms if f not in old and isinstance(f, Literal)]
         for subject in self.graph.subjects(SKOSXL.prefLabel, node):
-            for other in self._pref_label_texts(subject, skip=node):
+            for other in [*self._pref_label_texts(subject, skip=node), *kept]:
                 if (other.language or "") == (tag or "") and str(other) != text:
                     where = f"@{tag}" if tag else " without a language tag"
                     raise ValueError(
@@ -5059,7 +5096,8 @@ class OntologyManager:
                         f"prefLabel '{other}'{where}; SKOS allows one per "
                         "language (SKOS Reference S14)."
                     )
-        self.graph.remove((node, SKOSXL.literalForm, None))
+        for form in old:
+            self.graph.remove((node, SKOSXL.literalForm, form))
         self.graph.add(
             (
                 node,
@@ -6414,8 +6452,9 @@ class OntologyManager:
         wrong one is a lie the validator will then report as clean.
 
         A SKOS-XL label is re-tagged on its literal form, so the label resource
-        and what it carries stay. Counted per (kind, text), as the check reports
-        them: a plain label and a SKOS-XL label with one text are one label.
+        and what it carries stay (see :meth:`_retag_xl_label`). Counted per
+        concept, kind and text, as the check reports them: a plain label and a
+        SKOS-XL label with one text are one label.
         """
         tag = self._checked_lang(lang)
         if not tag:
@@ -6423,55 +6462,96 @@ class OntologyManager:
 
         fixed: set[tuple[str, str, str]] = set()
         for concept in self.get_concepts():
-            effective = self._effective_labels(concept)
-            # Which kinds hold each literal, and each language's prefLabel
-            # texts: a re-tag may land on its own kind's identical text (the
-            # same label spelled both ways) but not on another kind's (S13),
-            # nor beside a different prefLabel in that language (S14).
-            kinds_of: dict[tuple[str, str], set[str]] = {}
+            uri = URIRef(concept["uri"])
             for kind in self.SKOS_LABEL_KINDS:
-                for item in effective[kind]:
-                    kinds_of.setdefault((item["value"], item["lang"]), set()).add(kind)
-            pref_texts: dict[str, set[str]] = {}
-            for item in effective["prefLabel"]:
-                if item["lang"]:
-                    pref_texts.setdefault(item["lang"], set()).add(item["value"])
-
-            for kind in self.SKOS_LABEL_KINDS:
-                untagged = [
-                    ("plain", item)
-                    for item in concept["labels"][kind]
-                    if not item["lang"] and item["value"].strip()
-                ] + [
-                    ("xl", item)
-                    for item in concept["xl_labels"][kind]
-                    if not item["lang"] and item["value"].strip()
-                ]
-                for form, item in untagged:
+                for item in concept["labels"][kind]:
                     value = item["value"]
-                    if kind == "prefLabel" and pref_texts.get(tag, set()) - {value}:
+                    if item["lang"] or not value.strip():
                         continue
-                    if kinds_of.get((value, tag), set()) - {kind}:
+                    if self._retag_breaks_a_rule(uri, kind, value, tag):
                         continue
-                    if form == "xl":
-                        try:
-                            self.set_xl_label_text(item["label"], value, tag)
-                        except ValueError:
-                            # A label another concept shares as its prefLabel,
-                            # where the tag would break S14 for that one.
-                            continue
-                    else:
-                        # Through the helper, which matches the literal actually
-                        # in the graph. Rebuilding one with Literal(value) misses
-                        # a typed label such as "Dog"^^xsd:string, so the old
-                        # literal survived and a tagged duplicate was added.
-                        self.remove_concept_label(concept["uri"], kind, value)
-                        self.set_concept_label(concept["uri"], kind, value, tag)
-                    kinds_of.setdefault((value, tag), set()).add(kind)
-                    if kind == "prefLabel":
-                        pref_texts.setdefault(tag, set()).add(value)
+                    # Through the helper, which matches the literal actually
+                    # in the graph. Rebuilding one with Literal(value) misses
+                    # a typed label such as "Dog"^^xsd:string, so the old
+                    # literal survived and a tagged duplicate was added.
+                    self.remove_concept_label(concept["uri"], kind, value)
+                    self.set_concept_label(concept["uri"], kind, value, tag)
                     fixed.add((concept["uri"], kind, value))
+                for item in concept["xl_labels"][kind]:
+                    value = item["value"]
+                    if item["lang"] or not value.strip():
+                        continue
+                    if self._retag_xl_label(item["label"], value, tag):
+                        fixed.add((concept["uri"], kind, value))
         return len(fixed)
+
+    def _label_texts_of(self, subject: Node) -> dict[str, set[tuple[str, str]]]:
+        """``subject``'s labels by kind as (text, language), plain and SKOS-XL.
+
+        Read from the graph as it stands, not from the concept listing, so a
+        fixer working through the vocabulary sees the changes it has made.
+        """
+        labels: dict[str, set[tuple[str, str]]] = {}
+        for kind, prop in self.SKOS_LABEL_KINDS.items():
+            literals = [
+                *self.graph.objects(subject, prop),
+                *(
+                    form
+                    for node in self.graph.objects(
+                        subject, self.SKOS_XL_LABEL_KINDS[kind]
+                    )
+                    for form in self.graph.objects(node, SKOSXL.literalForm)
+                ),
+            ]
+            labels[kind] = {
+                (str(o), o.language or "") for o in literals if isinstance(o, Literal)
+            }
+        return labels
+
+    def _retag_breaks_a_rule(
+        self, subject: Node, kind: str, value: str, tag: str
+    ) -> bool:
+        """Whether ``value``@``tag`` as ``subject``'s ``kind`` would break S14 or S13.
+
+        S14: ``subject`` already has a different prefLabel in ``tag``. S13:
+        another kind already holds that text in that language. Its own kind
+        holding it is the same label spelled both ways, which is fine.
+        """
+        labels = self._label_texts_of(subject)
+        if kind == "prefLabel" and any(
+            other_tag == tag and text != value
+            for text, other_tag in labels["prefLabel"]
+        ):
+            return True
+        return any((value, tag) in labels[other] for other in labels if other != kind)
+
+    def _retag_xl_label(self, label: str, value: str, tag: str) -> bool:
+        """Tag an untagged SKOS-XL label for the ``missing_lang`` fix.
+
+        Returns whether the label now reads ``value``@``tag``. Left alone when
+        it does not have exactly one literal form (S52): which one is the label
+        is the author's call, and re-tagging would discard the rest. Checked
+        against every concept the resource labels, not only the one being
+        fixed, because a label two concepts share changes for both.
+        """
+        node = self._label_node(label)
+        forms = list(self.graph.objects(node, SKOSXL.literalForm))
+        if len(forms) != 1:
+            return False
+        if self._same_text(forms[0], value, tag):
+            # Already re-tagged, through another concept sharing it.
+            return True
+        if not self._same_text(forms[0], value, None):
+            return False
+        users = [
+            (subject, kind)
+            for kind, prop in self.SKOS_XL_LABEL_KINDS.items()
+            for subject in self.graph.subjects(prop, node)
+        ]
+        if any(self._retag_breaks_a_rule(s, k, value, tag) for s, k in users):
+            return False
+        self.set_xl_label_text(label, value, tag)
+        return True
 
     def _autofix_self_relation(self) -> int:
         fixed = 0

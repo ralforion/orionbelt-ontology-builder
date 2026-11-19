@@ -128,7 +128,8 @@ AGROVOC and EuroVoc publish their labels this way.
   that form first.
 - **Editing them.** Changing a SKOS-XL label's text keeps the resource, so
   what is said about it stays with it. Removing one deletes the resource and
-  its statements, unless another concept shares it.
+  its statements, unless another concept shares it or it is also something
+  other than a label, such as a collection.
 - **One preferred label per language** holds across both forms, because a
   SKOS-XL label entails the plain label with the same text (SKOS Reference
   S55-S57). A new `prefLabel` replaces a different one in its language,

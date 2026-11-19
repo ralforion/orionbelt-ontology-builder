@@ -92,6 +92,16 @@ class TestAdding:
             om.add_xl_label("Dog", kind, value, lang)
         assert len(om.graph) == triples
 
+    def test_a_refused_pref_label_leaves_no_concept_behind(self, om):
+        """Checked before the concept is written, not after (review of #574)."""
+        triples = len(om.graph)
+        with pytest.raises(ValueError):
+            om.add_concept("Cat", scheme="S", pref_label="   ", pref_label_xl=True)
+        with pytest.raises(ValueError):
+            om.add_concept("Cat", pref_label="Cat", lang="no tag", pref_label_xl=True)
+        assert len(om.graph) == triples
+        assert "Cat" not in [c["name"] for c in om.get_concepts()]
+
     def test_add_concept_can_write_its_pref_label_as_skos_xl(self, om):
         om.add_concept(
             "Cat", scheme="S", pref_label="Cat", lang="en", pref_label_xl=True
@@ -174,6 +184,31 @@ class TestEditing:
         om.set_xl_label_text(label, "Dog", "en")
         assert [i["value"] for i in _xl(om)["prefLabel"]] == ["Dog"]
 
+    @pytest.fixture
+    def two_forms(self, om):
+        """A label resource breaking S52 with two literal forms, as imported."""
+        label = URIRef(om.add_xl_label("Dog", "altLabel", "Alias", "en"))
+        om.graph.add((label, SKOSXL.literalForm, Literal("Anderer", lang="de")))
+        return str(label)
+
+    def test_replacing_changes_one_literal_form_and_keeps_the_rest(self, om, two_forms):
+        """The editor edits one row; the other form must not vanish with it."""
+        om.set_xl_label_text(two_forms, "Hound", "en", replacing=("Alias", "en"))
+        assert set(om.graph.objects(URIRef(two_forms), SKOSXL.literalForm)) == {
+            Literal("Hound", lang="en"),
+            Literal("Anderer", lang="de"),
+        }
+
+    def test_replacing_a_form_the_label_does_not_have_is_refused(self, om, two_forms):
+        with pytest.raises(ValueError, match="no literal form"):
+            om.set_xl_label_text(two_forms, "Hound", "en", replacing=("Gone", "en"))
+
+    def test_the_forms_a_label_keeps_count_for_s14(self, om):
+        label = URIRef(om.add_xl_label("Dog", "prefLabel", "Dog", "en"))
+        om.graph.add((label, SKOSXL.literalForm, Literal("Hund", lang="de")))
+        with pytest.raises(ValueError, match="S14"):
+            om.set_xl_label_text(str(label), "Doggy", "en", replacing=("Hund", "de"))
+
     def test_something_that_is_not_a_label_is_refused(self, om):
         with pytest.raises(ValueError, match="not a SKOS-XL label"):
             om.set_xl_label_text(BASE + "Dog", "Dog", "en")
@@ -210,6 +245,30 @@ class TestRemoving:
         om.graph.add((_uri("Oddity"), SKOSXL.literalForm, Literal("Odd", lang="en")))
         om.remove_xl_label("Dog", BASE + "Oddity")
         assert "Oddity" in [c["name"] for c in om.get_classes()]
+
+    def test_a_label_that_is_also_a_collection_is_only_unlinked(self, om):
+        """skos:Collection is no entity kind of this app's, and a blank node
+        has no name to check: neither may lose its own statements (review of
+        #574)."""
+        for node in (_uri("Pack"), BNode()):
+            om.graph.add((node, RDF.type, SKOS.Collection))
+            om.graph.add((node, SKOS.member, _uri("Dog")))
+            om.graph.add((node, SKOSXL.literalForm, Literal("Pack", lang="en")))
+            om.graph.add((_uri("Dog"), SKOSXL.altLabel, node))
+            om.remove_xl_label("Dog", om._node_ref(node))
+            assert (_uri("Dog"), SKOSXL.altLabel, node) not in om.graph
+            assert (node, RDF.type, SKOS.Collection) in om.graph
+            assert (node, SKOS.member, _uri("Dog")) in om.graph
+
+    def test_a_label_linked_under_two_kinds_loses_only_the_one_asked_for(self, om):
+        """An import can link one resource as altLabel and hiddenLabel (S58);
+        deleting the altLabel row must leave the hiddenLabel."""
+        label = om.add_xl_label("Dog", "altLabel", "Hound", "en")
+        om.graph.add((_uri("Dog"), SKOSXL.hiddenLabel, URIRef(label)))
+        assert om.remove_xl_label("Dog", label, "altLabel") is True
+        assert _xl(om)["altLabel"] == []
+        assert _xl(om)["hiddenLabel"][0]["label"] == label
+        assert (URIRef(label), SKOSXL.literalForm, None) in om.graph
 
     def test_a_blank_node_label_is_addressable(self, om):
         """Imported vocabularies may give label resources no URI."""

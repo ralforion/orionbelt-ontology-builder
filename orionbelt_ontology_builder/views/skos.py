@@ -286,18 +286,22 @@ def render_skos_vocabulary():
                 elif lang_error := language_tag_error(c_lang):
                     show_message(lang_error, "error")
                 else:
-                    ont.add_concept(
-                        c_name,
-                        scheme=scheme_lookup.get(c_scheme),
-                        pref_label=c_pref or None,
-                        definition=c_def or None,
-                        broader=_add_broader_lookup.get(c_broader),
-                        lang=c_lang or None,
-                        pref_label_xl=c_pref_xl,
-                    )
-                    save_checkpoint("Add concept")
-                    show_message(f"Concept '{c_name}' added!", "success")
-                    st.rerun()
+                    try:
+                        ont.add_concept(
+                            c_name,
+                            scheme=scheme_lookup.get(c_scheme),
+                            pref_label=c_pref or None,
+                            definition=c_def or None,
+                            broader=_add_broader_lookup.get(c_broader),
+                            lang=c_lang or None,
+                            pref_label_xl=c_pref_xl,
+                        )
+                    except ValueError as exc:
+                        show_message(str(exc), "error")
+                    else:
+                        save_checkpoint("Add concept")
+                        show_message(f"Concept '{c_name}' added!", "success")
+                        st.rerun()
 
         if not concepts:
             st.info("No concepts defined yet.")

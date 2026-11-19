@@ -264,6 +264,43 @@ class TestSkosXlLabels:
         assert xl.autofix_skos("missing_lang", lang="en") == 0
         assert (_uri("lbl"), SKOSXL.literalForm, Literal("Untagged")) in xl.graph
 
+    def test_a_label_with_several_literal_forms_is_left_alone(self, xl):
+        """Which form is the label is the author's call; re-tagging through
+        the editing API would discard the others (review of #574)."""
+        other = Literal("Anderer", lang="de")
+        xl.graph.add((_uri("lbl"), SKOSXL.literalForm, other))
+        assert xl.autofix_skos("missing_lang", lang="en") == 0
+        assert set(xl.graph.objects(_uri("lbl"), SKOSXL.literalForm)) == {
+            Literal("Untagged"),
+            other,
+        }
+
+    @pytest.fixture
+    def shared(self):
+        """A and B share one untagged SKOS-XL altLabel."""
+        om = OntologyManager(base_uri=BASE)
+        om.graph.add((_uri("S"), RDF.type, SKOS.ConceptScheme))
+        label = _uri("shared")
+        om.graph.add((label, RDF.type, SKOSXL.Label))
+        om.graph.add((label, SKOSXL.literalForm, Literal("Alias")))
+        for name in ("A", "B"):
+            _concept(om, name)
+            om.graph.add((_uri(name), SKOSXL.altLabel, label))
+        return om
+
+    def test_a_shared_label_is_retagged_for_every_concept_using_it(self, shared):
+        assert _counts(shared)["missing_lang"] == 2
+        assert shared.autofix_skos("missing_lang", lang="en") == 2
+        assert "missing_lang" not in _counts(shared)
+
+    def test_a_shared_label_is_left_when_another_user_would_clash(self, shared):
+        """B's prefLabel already reads Alias@en, so the tag would break S13
+        for B while fixing A (review of #574)."""
+        shared.graph.set((_uri("B"), SKOS.prefLabel, Literal("Alias", lang="en")))
+        before = _counts(shared)
+        assert shared.autofix_skos("missing_lang", lang="en") == 0
+        assert _counts(shared) == before
+
     def test_a_clash_involving_an_xl_label_is_left_alone(self, xl):
         """Removing the label resource would take its note; removing only the
         plain side leaves the clash, which the SKOS-XL label entails."""

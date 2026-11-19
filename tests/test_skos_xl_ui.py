@@ -17,7 +17,14 @@ def _script():
         om.add_concept_scheme("Things")
         om.add_concept("Dog", scheme="Things")
         om.add_xl_label("Dog", "prefLabel", "Dog", "en")
-        om.add_xl_label("Dog", "altLabel", "Hound", "en")
+        hound = om.add_xl_label("Dog", "altLabel", "Hound", "en")
+        if st.session_state.get("_test_hound_also_hidden"):
+            # As an import can have it: one resource under two kinds (S58).
+            from rdflib import URIRef
+
+            from orionbelt_ontology_builder.ontology_manager import SKOSXL
+
+            om.graph.add((om._uri("Dog"), SKOSXL.hiddenLabel, URIRef(hound)))
         om.add_concept("Cat", scheme="Things", pref_label="Cat", lang="en")
         st.session_state.ontology = om
         st.session_state["_autosave_restored"] = True
@@ -30,9 +37,11 @@ def _script():
     app.render_skos_vocabulary()
 
 
-def _run(tab="Concepts"):
+def _run(tab="Concepts", **seed):
     at = AppTest.from_function(_script)
     at.session_state["skos_active_tab"] = tab
+    for key, value in seed.items():
+        at.session_state[key] = value
     at.run(timeout=60)
     assert not at.exception, at.exception
     return at
@@ -110,6 +119,41 @@ class TestTheConceptEditor:
         dog = next(c for c in om.get_concepts() if c["name"] == "Dog")
         assert dog["xl_labels"]["altLabel"] == []
         assert _xl_rows(at) == ["`skosxl:prefLabel`"]
+
+    def test_a_label_under_two_kinds_opens_and_deletes_one_kind(self):
+        """Two rows of one resource used to share widget keys, and the editor
+        raised StreamlitDuplicateElementKey (review of #574)."""
+        at = _run(_test_hound_also_hidden=True)
+        assert _xl_rows(at) == [
+            "`skosxl:prefLabel`",
+            "`skosxl:altLabel`",
+            "`skosxl:hiddenLabel`",
+        ]
+        at.button(key=f"del_xl_{_ck()}_1").click()
+        at.run(timeout=60)
+        assert not at.exception, at.exception
+        assert _xl_rows(at) == ["`skosxl:prefLabel`", "`skosxl:hiddenLabel`"]
+
+
+class TestAddConcept:
+    def test_the_skos_xl_option_follows_the_vocabulary(self):
+        at = _run()
+        option = next(
+            c for c in at.checkbox if c.label == "Write the preferred label as SKOS-XL"
+        )
+        assert option.value is True
+
+    def test_a_refused_label_is_an_error_in_the_form_and_adds_nothing(self):
+        """A blank SKOS-XL label used to raise after the concept was written."""
+        at = _run()
+        next(t for t in at.text_input if t.label == "Concept Name *").set_value("Bird")
+        next(t for t in at.text_input if t.label == "Preferred Label").set_value("   ")
+        next(b for b in at.button if b.label == "Add Concept").click()
+        at.run(timeout=60)
+        assert not at.exception, at.exception
+        assert any("cannot be empty" in e.value for e in at.error)
+        names = [c["name"] for c in at.session_state["ontology"].get_concepts()]
+        assert "Bird" not in names
 
 
 class TestTheSkosXlSection:
