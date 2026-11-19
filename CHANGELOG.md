@@ -7,6 +7,23 @@ their sections are named as they were then.
 
 ## [Unreleased]
 
+### Added
+
+- **SKOS-XL labels can be written, edited and removed** (#574). A concept's label editor offers `skosxl:prefLabel`, `skosxl:altLabel` and `skosxl:hiddenLabel` beside the plain kinds. Editing a SKOS-XL label's text keeps its resource, so a note or a link on the label stays with it. Removing one deletes the resource and what is said about it, unless another concept shares it or it is also something other than a label. The Add Concept form can write the preferred label as SKOS-XL, and a vocabulary that already labels that way gets that form offered first.
+- **Converting a vocabulary between plain SKOS and SKOS-XL** (#574), in the new SKOS-XL section of the SKOS page: every plain label to SKOS-XL, or every SKOS-XL label to the plain label it entails. The second can keep the label resources, adding plain copies for consumers that read plain SKOS only. Each conversion is one undo step.
+- **Two SKOS-XL integrity checks** (#574): `xl_literal_form`, a label resource without exactly one literal form (SKOS Reference S52), and `xl_label_disjoint`, a label resource that is also a concept, scheme or collection (S48). Both are errors.
+- Search finds a concept by the text of its SKOS-XL preferred and alternative labels (#574).
+
+### Changed
+
+- One preferred label per language holds across both forms (#574): a new `prefLabel` replaces a different one in its language, plain or SKOS-XL. The same text in both forms is one label and stays.
+- The `missing_lang` fix re-tags untagged SKOS-XL labels too, in place (#574).
+- The editorial `skos_xl_labels` notice is gone (#574). It said SKOS-XL labels could not be edited here.
+
+### Fixed
+
+- Deleting a concept deletes its SKOS-XL label resources, unless another concept shares one (#574). They were left behind as labels of nothing.
+
 ## [1.33.0] - 2026-11-18
 
 Talk to your ontology: an AI agent such as Claude can now explain, query and extend the ontology open in your app, while you watch each change arrive.

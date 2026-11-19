@@ -92,7 +92,7 @@ def awkward():
     overlap = _concept(om, "Overlap")
     om.graph.add((overlap, SKOS.altLabel, Literal("Overlap")))
 
-    # A SKOS-XL label, which no fixer may touch.
+    # A SKOS-XL label, which a fixer may re-tag but never delete.
     xl_concept = _concept(om, "Xl", labelled=False)
     label = _uri("xl_label")
     om.graph.add((label, RDF.type, SKOSXL.Label))
@@ -225,9 +225,11 @@ def om_with_dangling_pair():
     return om
 
 
-class TestSkosXlIsNeverTouched:
-    """This app writes plain SKOS. Repairing a SKOS-XL label would mean editing
-    a label resource it cannot author, so those issues are left alone."""
+class TestSkosXlLabels:
+    """A fixer re-tags a SKOS-XL label in place and never deletes one: removing
+    a label resource takes whatever is said about it with it."""
+
+    NOTE = Literal("Coined in 1990", lang="en")
 
     @pytest.fixture
     def xl(self):
@@ -237,16 +239,74 @@ class TestSkosXlIsNeverTouched:
         label = _uri("lbl")
         om.graph.add((label, RDF.type, SKOSXL.Label))
         om.graph.add((label, SKOSXL.literalForm, Literal("Untagged")))
+        om.graph.add((label, SKOS.note, self.NOTE))
         om.graph.add((concept, SKOSXL.prefLabel, label))
         return om
 
-    def test_an_untagged_xl_label_is_left_alone(self, xl):
+    def test_an_untagged_xl_label_is_retagged_in_place(self, xl):
+        assert xl.autofix_skos("missing_lang", lang="en") == 1
+        assert (_uri("lbl"), SKOSXL.literalForm, Literal("Untagged", lang="en")) in (
+            xl.graph
+        )
+        assert (_uri("lbl"), SKOSXL.literalForm, Literal("Untagged")) not in xl.graph
+        assert (_uri("lbl"), SKOS.note, self.NOTE) in xl.graph
+        assert "missing_lang" not in _counts(xl)
+
+    def test_one_label_spelled_both_ways_counts_once(self, xl):
+        """The check reports it once, so the fix must not claim two."""
+        xl.graph.add((_uri("A"), SKOS.prefLabel, Literal("Untagged")))
+        assert _counts(xl)["missing_lang"] == 1
+        assert xl.autofix_skos("missing_lang", lang="en") == 1
+        assert "missing_lang" not in _counts(xl)
+
+    def test_a_retag_that_would_break_s14_is_skipped(self, xl):
+        xl.graph.add((_uri("A"), SKOS.prefLabel, Literal("Other", lang="en")))
         assert xl.autofix_skos("missing_lang", lang="en") == 0
         assert (_uri("lbl"), SKOSXL.literalForm, Literal("Untagged")) in xl.graph
 
+    def test_a_label_with_several_literal_forms_is_left_alone(self, xl):
+        """Which form is the label is the author's call; re-tagging through
+        the editing API would discard the others (review of #574)."""
+        other = Literal("Anderer", lang="de")
+        xl.graph.add((_uri("lbl"), SKOSXL.literalForm, other))
+        assert xl.autofix_skos("missing_lang", lang="en") == 0
+        assert set(xl.graph.objects(_uri("lbl"), SKOSXL.literalForm)) == {
+            Literal("Untagged"),
+            other,
+        }
+
+    @pytest.fixture
+    def shared(self):
+        """A and B share one untagged SKOS-XL altLabel."""
+        om = OntologyManager(base_uri=BASE)
+        om.graph.add((_uri("S"), RDF.type, SKOS.ConceptScheme))
+        label = _uri("shared")
+        om.graph.add((label, RDF.type, SKOSXL.Label))
+        om.graph.add((label, SKOSXL.literalForm, Literal("Alias")))
+        for name in ("A", "B"):
+            _concept(om, name)
+            om.graph.add((_uri(name), SKOSXL.altLabel, label))
+        return om
+
+    def test_a_shared_label_is_retagged_for_every_concept_using_it(self, shared):
+        assert _counts(shared)["missing_lang"] == 2
+        assert shared.autofix_skos("missing_lang", lang="en") == 2
+        assert "missing_lang" not in _counts(shared)
+
+    def test_a_shared_label_is_left_when_another_user_would_clash(self, shared):
+        """B's prefLabel already reads Alias@en, so the tag would break S13
+        for B while fixing A (review of #574)."""
+        shared.graph.set((_uri("B"), SKOS.prefLabel, Literal("Alias", lang="en")))
+        before = _counts(shared)
+        assert shared.autofix_skos("missing_lang", lang="en") == 0
+        assert _counts(shared) == before
+
     def test_a_clash_involving_an_xl_label_is_left_alone(self, xl):
-        """Which spelling the author meant to keep is not ours to guess."""
-        xl.graph.add((_uri("A"), SKOS.altLabel, Literal("Untagged", lang="en")))
+        """Removing the label resource would take its note; removing only the
+        plain side leaves the clash, which the SKOS-XL label entails."""
+        xl.graph.set((_uri("lbl"), SKOSXL.literalForm, Literal("Dog", lang="en")))
+        xl.graph.add((_uri("A"), SKOS.altLabel, Literal("Dog", lang="en")))
+        assert _counts(xl).get("label_overlap")
         before = len(xl.graph)
         assert xl.autofix_skos("label_overlap") == 0
         assert len(xl.graph) == before

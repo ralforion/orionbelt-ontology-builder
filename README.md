@@ -14,7 +14,7 @@
   ✔ Visual graph editor<br>
   ✔ OWL RL reasoning &amp; consistency checks<br>
   ✔ OWL + SKOS in one workbench<br>
-  ✔ SKOS mappings, poly-hierarchy, 22 checks<br>
+  ✔ SKOS &amp; SKOS-XL labels, mappings, poly-hierarchy, 23 checks<br>
   ✔ Read-only SPARQL console<br>
   ✔ RDF/OWL import &amp; export<br>
   ✔ Pure Python: <a href="https://orionbelt.streamlit.app/">hosted app</a>, browser or desktop
@@ -104,11 +104,46 @@ A dedicated page for building controlled vocabularies:
 - Concept schemes with concept counts
 - Concepts with labels and notes in any number of languages: `prefLabel`,
   `altLabel`, `hiddenLabel`, `definition`, `scopeNote` and the rest
+- SKOS-XL labels written, edited and removed beside the plain ones, and a
+  whole vocabulary converted between the two forms (see below)
 - `notation`, top concepts, and poly-hierarchy (a concept may have several parents)
 - Full SKOS relation support (broader, narrower, related, all match types),
   with mapping properties able to point at an external IRI such as Wikidata
 - An edge that would make a concept its own ancestor is refused as you save it
 - Hierarchy tree view, filterable by scheme
+
+#### SKOS-XL labels
+
+SKOS-XL makes a label a resource of its own: a `skosxl:Label` with exactly one
+`skosxl:literalForm`, linked from the concept by `skosxl:prefLabel`,
+`altLabel` or `hiddenLabel`. Because the label has an identity, statements
+can be made about it, such as a note, a date or a link to another label.
+AGROVOC and EuroVoc publish their labels this way.
+
+- **Writing them.** The label kinds in a concept's editor include
+  `skosxl:prefLabel`, `skosxl:altLabel` and `skosxl:hiddenLabel`, and the Add
+  Concept form can write the preferred label as one. A new label resource is
+  named after its concept and language, `Dog_xl_en`, in the concept's
+  namespace. When a vocabulary already labels in SKOS-XL, the editor offers
+  that form first.
+- **Editing them.** Changing a SKOS-XL label's text keeps the resource, so
+  what is said about it stays with it. Removing one deletes the resource and
+  its statements, unless another concept shares it or it is also something
+  other than a label, such as a collection.
+- **One preferred label per language** holds across both forms, because a
+  SKOS-XL label entails the plain label with the same text (SKOS Reference
+  S55-S57). A new `prefLabel` replaces a different one in its language,
+  whichever form either is in; the same text in both forms is one label and
+  stays.
+- **Converting.** The SKOS-XL section of the SKOS page turns every plain
+  label into a SKOS-XL label, or every SKOS-XL label into the plain label it
+  entails. The second can keep the label resources, adding plain copies for
+  consumers that read plain SKOS only (SKOS Reference B.3.4.1).
+
+From Python: `add_xl_label()`, `remove_xl_label()`, `set_xl_label_text()`,
+`convert_labels_to_xl()` and `convert_xl_labels_to_plain(keep_xl=True)`.
+Each concept from `get_concepts()` lists its SKOS-XL labels under
+`xl_labels`, each with the `label` resource it is addressed by.
 
 #### Concept scheme metadata
 
@@ -142,7 +177,7 @@ DC is used for a vocabulary version in practice.
 
 #### What SKOS validation checks
 
-22 checks in three tiers. The page groups results by check and lets you
+23 checks in three tiers. The page groups results by check and lets you
 switch either advisory tier off, which is what makes it usable on a large
 imported vocabulary. `validate_skos()` returns the same list to Python callers,
 each issue carrying a stable `type`, a `severity`, the `subject` concept and its
@@ -159,6 +194,8 @@ each issue carrying a stable `type`, a `severity`, the `subject` concept and its
 | `dangling_relation` | A broader, narrower or related link points at something that is not a Concept here. Mapping properties are exempt: reaching outside the vocabulary is what they are for. | Practice |
 | `relation_clash` | Two concepts are skos:related and also connected up or down the hierarchy. | SKOS Reference S27 |
 | `broader_cycle` | A chain of skos:broader links returns to its start. | qSKOS |
+| `xl_literal_form` | A SKOS-XL label resource has no skosxl:literalForm, or more than one. | SKOS Reference S52 |
+| `xl_label_disjoint` | A SKOS-XL label resource is also a skos:Concept, skos:ConceptScheme or skos:Collection. | SKOS Reference S48 |
 
 **Conventions.** Thesaurus practice rather than broken data. Switch off with `check_conventions=False`.
 
@@ -182,7 +219,6 @@ each issue carrying a stable `type`, a `severity`, the `subject` concept and its
 | `scheme_untitled` | A ConceptScheme has neither a dcterms:title nor an rdfs:label, leaving a consumer only its URI. | Practice |
 | `undocumented` | The concept has neither a definition nor a scopeNote. | Practice |
 | `valueless_association` | Two concepts are skos:related and already share a parent, which relates them anyway. | qSKOS |
-| `skos_xl_labels` | The vocabulary uses SKOS-XL labels, which this editor shows but does not edit. | SKOS-XL |
 | `disconnected_components` | A cluster of concepts has no link to the main body of the vocabulary. | qSKOS |
 
 #### Fixing what it finds
@@ -205,8 +241,8 @@ and dropping a redundant edge both discard something the author may have
 meant, so the choice belongs to them, one class at a time. The rest of the
 checks describe things only an author can settle, such as what a concept
 means or which scheme it belongs to, and guessing would be worse than
-reporting. SKOS-XL labels are never modified, since this editor writes plain
-SKOS and repairing one would mean editing a label resource it cannot author.
+reporting. A fix re-tags a SKOS-XL label in place but never deletes one,
+since that would take whatever is said about the label with it.
 
 From Python: `autofix_skos("missing_lang", lang="en")` returns how many
 issues it resolved.

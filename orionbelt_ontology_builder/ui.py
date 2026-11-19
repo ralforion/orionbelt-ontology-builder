@@ -2209,28 +2209,37 @@ def render_skos_literal_editor(ont, concept, ck):
     one add row rather than two stacked sections halves the height of the
     editor, which is what makes the panel usable without scrolling.
 
+    SKOS-XL labels are rows of the same table, kinds ``skosxl:prefLabel`` and
+    so on. Each is a resource rather than a literal, so its row also edits the
+    text in place, keeping the resource and what is said about it, and its
+    delete removes the resource.
+
     This renders *outside* the concept form on purpose. A form submits as a
     unit, so per-row add and delete buttons inside one cannot take effect until
     the whole form is saved, which reads as a dead button. It also renders for
     the single open concept only, per the active-entity state model, so the
     cost does not scale with the size of the vocabulary.
     """
-    kinds = [*ont.SKOS_LABEL_KINDS, *ont.SKOS_NOTE_KINDS]
-
-    def _api(kind):
-        """(add, remove) for a kind, whichever half of the API owns it."""
-        if kind in ont.SKOS_LABEL_KINDS:
-            return ont.set_concept_label, ont.remove_concept_label
-        return ont.set_concept_note, ont.remove_concept_note
+    xl_kinds = {f"skosxl:{kind}": kind for kind in ont.SKOS_XL_LABEL_KINDS}
+    kinds = [*ont.SKOS_LABEL_KINDS, *xl_kinds, *ont.SKOS_NOTE_KINDS]
 
     rows = [
         (kind, item)
-        for kind in kinds
+        for kind in [*ont.SKOS_LABEL_KINDS, *ont.SKOS_NOTE_KINDS]
         for item in (
             concept["labels"] if kind in ont.SKOS_LABEL_KINDS else concept["notes"]
         )[kind]
     ]
+    xl_rows = [
+        (kind, item)
+        for kind in ont.SKOS_XL_LABEL_KINDS
+        for item in concept["xl_labels"][kind]
+    ]
+    # Plain labels, then SKOS-XL ones, then notes, as the add row lists them.
+    n_labels = sum(len(concept["labels"][k]) for k in ont.SKOS_LABEL_KINDS)
     for i, (kind, item) in enumerate(rows):
+        if i == n_labels:
+            _render_xl_label_rows(ont, concept, ck, xl_rows)
         col_kind, col_lang, col_text, col_del = st.columns([2, 1, 5, 0.7])
         with col_kind:
             st.write(f"`{kind}`")
@@ -2240,40 +2249,29 @@ def render_skos_literal_editor(ont, concept, ck):
             st.write(item["value"])
         with col_del:
             if st.button("🗑️", key=f"del_lit_{ck}_{i}", help=f"Delete this {kind}"):
-                _api(kind)[1](concept["uri"], kind, item["value"], item["lang"])
+                remove = (
+                    ont.remove_concept_label
+                    if kind in ont.SKOS_LABEL_KINDS
+                    else ont.remove_concept_note
+                )
+                remove(concept["uri"], kind, item["value"], item["lang"])
                 save_checkpoint(f"Delete {kind}")
                 st.rerun()
-    if not rows and not any(
-        concept["xl_labels"][kind] for kind in ont.SKOS_XL_LABEL_KINDS
-    ):
+    if len(rows) == n_labels:
+        _render_xl_label_rows(ont, concept, ck, xl_rows)
+    if not rows and not xl_rows:
         st.caption("No labels or notes yet.")
-
-    # SKOS-XL labels are shown but not editable: this app writes plain SKOS, and
-    # a delete button next to one would silently do nothing. Rendering them at
-    # all is what keeps an imported AGROVOC or EuroVoc from looking unlabelled.
-    xl_rows = [
-        (kind, item)
-        for kind in ont.SKOS_XL_LABEL_KINDS
-        for item in concept["xl_labels"][kind]
-    ]
-    if xl_rows:
-        for kind, item in xl_rows:
-            col_kind, col_lang, col_text, _ = st.columns([2, 1, 5, 0.7])
-            with col_kind:
-                st.write(f"`skosxl:{kind}`")
-            with col_lang:
-                st.write(item["lang"] or "—")
-            with col_text:
-                st.write(item["value"])
-        st.caption(
-            "SKOS-XL labels are read-only here. To edit one, add a plain SKOS "
-            "label of the same kind below."
-        )
 
     col_kind, col_lang, col_text, col_add = st.columns([2, 1, 5, 0.7])
     with col_kind:
+        # A vocabulary that labels in SKOS-XL is offered that form first, so a
+        # new label matches the ones already there.
         new_kind = st.selectbox(
-            "Kind", list(kinds), key=f"add_lit_kind_{ck}", label_visibility="collapsed"
+            "Kind",
+            list(kinds),
+            index=kinds.index("skosxl:prefLabel") if ont.prefers_skos_xl() else 0,
+            key=f"add_lit_kind_{ck}",
+            label_visibility="collapsed",
         )
     with col_lang:
         # Collapsed like the other two: a visible label here pushes the picker
@@ -2293,7 +2291,18 @@ def render_skos_literal_editor(ont, concept, ck):
     with col_add:
         if st.button("➕", key=f"add_lit_btn_{ck}", help="Add this label or note"):
             try:
-                _api(new_kind)[0](concept["uri"], new_kind, new_text, new_lang or None)
+                if new_kind in xl_kinds:
+                    ont.add_xl_label(
+                        concept["uri"], xl_kinds[new_kind], new_text, new_lang or None
+                    )
+                elif new_kind in ont.SKOS_LABEL_KINDS:
+                    ont.set_concept_label(
+                        concept["uri"], new_kind, new_text, new_lang or None
+                    )
+                else:
+                    ont.set_concept_note(
+                        concept["uri"], new_kind, new_text, new_lang or None
+                    )
             except ValueError as exc:
                 show_message(str(exc), "error")
             else:
@@ -2302,6 +2311,59 @@ def render_skos_literal_editor(ont, concept, ck):
                 # several values in one language is the common case, and a
                 # value left in the box invites adding it twice.
                 _clear_input(f"add_lit_text_{ck}")
+                st.rerun()
+
+
+def _render_xl_label_rows(ont, concept, ck, xl_rows):
+    """The SKOS-XL rows of the literal editor: text edited in place, or deleted.
+
+    Keyed by the kind, the label resource and its current text, so the edit
+    fields start from the label as it is now, after a save or an undo, rather
+    than from what was typed into them last. The kind is part of it because
+    an import can link one resource under two kinds, and two rows must not
+    share a key.
+    """
+    for i, (kind, item) in enumerate(xl_rows):
+        identity = (kind, item["label"], item["value"], item["lang"])
+        rk = f"{ck}_{abs(hash(identity)) % 10**8}"
+        col_kind, col_lang, col_text, col_edit, col_del = st.columns(
+            [2, 1, 4.3, 0.7, 0.7]
+        )
+        with col_kind:
+            st.write(f"`skosxl:{kind}`")
+        with col_lang:
+            st.write(item["lang"] or "—")
+        with col_text:
+            st.write(item["value"])
+        with col_edit, st.popover("✏️", help="Edit this label's text"):
+            st.caption(f"`{item['label']}` keeps its URI and everything said about it.")
+            text = st.text_input("Text", value=item["value"], key=f"xl_text_{rk}")
+            lang = language_selectbox(
+                "Language", key=f"xl_lang_{rk}", value=item["lang"]
+            )
+            if st.button("Save", key=f"xl_save_{rk}"):
+                try:
+                    # This row's literal form only: a label that breaks S52
+                    # with several shows each as a row, and the others stay.
+                    ont.set_xl_label_text(
+                        item["label"],
+                        text,
+                        lang or None,
+                        replacing=(item["value"], item["lang"]),
+                    )
+                except ValueError as exc:
+                    show_message(str(exc), "error")
+                else:
+                    save_checkpoint(f"Edit skosxl:{kind}")
+                    st.rerun()
+        with col_del:
+            if st.button(
+                "🗑️",
+                key=f"del_xl_{ck}_{i}",
+                help=f"Delete this skosxl:{kind}, and what is said about the label",
+            ):
+                ont.remove_xl_label(concept["uri"], item["label"], kind)
+                save_checkpoint(f"Delete skosxl:{kind}")
                 st.rerun()
 
 
