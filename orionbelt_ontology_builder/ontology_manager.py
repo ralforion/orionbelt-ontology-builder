@@ -4931,7 +4931,9 @@ class OntologyManager:
                 if isinstance(f, Literal) and (f.language or "") == (tag or "")
             ]
             if in_tag and not any(self._same_text(f, text, tag) for f in in_tag):
-                self.remove_xl_label(uri, self._node_ref(node))
+                # As a prefLabel only: an import may link the same resource
+                # under another kind too, and that link is not being replaced.
+                self.remove_xl_label(uri, self._node_ref(node), "prefLabel")
 
     def add_xl_label(
         self, concept: str, kind: str, value: str, lang: str | None = None
@@ -5206,7 +5208,10 @@ class OntologyManager:
                     new = (uri, prop, plain) not in self.graph
                     self.graph.add((uri, prop, plain))
                     if not keep_xl:
-                        self.remove_xl_label(uri, self._node_ref(node))
+                        # Under this kind only, so a resource an import links
+                        # under two keeps its other link until that kind's
+                        # turn comes and it is converted too.
+                        self.remove_xl_label(uri, self._node_ref(node), kind)
                         converted += 1
                     elif new:
                         converted += 1

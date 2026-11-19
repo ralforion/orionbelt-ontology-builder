@@ -270,6 +270,15 @@ class TestRemoving:
         assert _xl(om)["hiddenLabel"][0]["label"] == label
         assert (URIRef(label), SKOSXL.literalForm, None) in om.graph
 
+    def test_replacing_a_pref_label_keeps_its_other_kind(self, om):
+        """A new prefLabel unlinks the old one as a prefLabel only; the same
+        resource linked as an altLabel stays one (review of #574)."""
+        old = om.add_xl_label("Dog", "prefLabel", "Hound", "en")
+        om.graph.add((_uri("Dog"), SKOSXL.altLabel, URIRef(old)))
+        om.add_xl_label("Dog", "prefLabel", "Dog", "en")
+        assert [i["value"] for i in _xl(om)["prefLabel"]] == ["Dog"]
+        assert _xl(om)["altLabel"] == [{"value": "Hound", "lang": "en", "label": old}]
+
     def test_a_blank_node_label_is_addressable(self, om):
         """Imported vocabularies may give label resources no URI."""
         node = BNode()
@@ -339,6 +348,16 @@ class TestConverting:
         assert sum(len(v) for v in _xl(plain).values()) == 4
         assert sum(len(v) for v in _plain(plain).values()) == 4
         assert plain.convert_xl_labels_to_plain(keep_xl=True) == 0
+
+    def test_a_label_under_two_kinds_becomes_both_plain_labels(self, om):
+        """Each link converts under its own kind; unlinking every kind at the
+        first one lost the second (review of #574)."""
+        label = om.add_xl_label("Dog", "altLabel", "Hound", "en")
+        om.graph.add((_uri("Dog"), SKOSXL.hiddenLabel, URIRef(label)))
+        assert om.convert_xl_labels_to_plain() == 2
+        assert [i["value"] for i in _plain(om)["altLabel"]] == ["Hound"]
+        assert [i["value"] for i in _plain(om)["hiddenLabel"]] == ["Hound"]
+        assert (URIRef(label), None, None) not in om.graph
 
     def test_a_label_without_one_literal_form_is_left_for_the_author(self, om):
         node = BNode()
