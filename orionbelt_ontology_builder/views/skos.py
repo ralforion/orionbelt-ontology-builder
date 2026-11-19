@@ -59,7 +59,13 @@ def render_skos_vocabulary():
 
     _skos_tab = st.segmented_control(
         "Section",
-        ["Concepts", "Concept Schemes", "Concept Hierarchy", "SKOS Validation"],
+        [
+            "Concepts",
+            "Concept Schemes",
+            "Concept Hierarchy",
+            "SKOS-XL",
+            "SKOS Validation",
+        ],
         default="Concepts",
         key="skos_active_tab",
         label_visibility="collapsed",
@@ -245,6 +251,14 @@ def render_skos_vocabulary():
         ):
             c_name = st.text_input("Concept Name *")
             c_pref = st.text_input("Preferred Label")
+            # Ticked by default where the vocabulary labels in SKOS-XL, so a
+            # new concept is labelled like the ones already there.
+            c_pref_xl = st.checkbox(
+                "Write the preferred label as SKOS-XL",
+                value=ont.prefers_skos_xl(),
+                help="A skosxl:Label resource with the text as its "
+                "skosxl:literalForm, rather than a plain skos:prefLabel.",
+            )
             c_def = st.text_area("Definition")
             c_scheme = clearable_selectbox(
                 "Scheme",
@@ -279,6 +293,7 @@ def render_skos_vocabulary():
                         definition=c_def or None,
                         broader=_add_broader_lookup.get(c_broader),
                         lang=c_lang or None,
+                        pref_label_xl=c_pref_xl,
                     )
                     save_checkpoint("Add concept")
                     show_message(f"Concept '{c_name}' added!", "success")
@@ -371,6 +386,12 @@ def render_skos_vocabulary():
                                 st.write(
                                     f"**{_kind}:** "
                                     f"{_fmt_tagged(concept['labels'][_kind])}"
+                                )
+                        for _kind in ont.SKOS_XL_LABEL_KINDS:
+                            if concept["xl_labels"][_kind]:
+                                st.write(
+                                    f"**skosxl:{_kind}:** "
+                                    f"{_fmt_tagged(concept['xl_labels'][_kind])}"
                                 )
                         if concept["notation"]:
                             st.write(f"**notation:** {concept['notation']}")
@@ -733,6 +754,9 @@ def render_skos_vocabulary():
             if hierarchy and all(broader.get(name) for name in hierarchy):
                 st.warning("All concepts have broader concepts — possible cycle.")
 
+    if _skos_tab == "SKOS-XL":
+        _render_skos_xl_section(ont)
+
     if _skos_tab == "SKOS Validation":
         st.subheader("SKOS Validation")
         st.caption(
@@ -827,8 +851,8 @@ def render_skos_vocabulary():
                                     show_message(str(exc), "error")
                                 else:
                                     # A fixer can legitimately do nothing: every
-                                    # issue in the group may involve a SKOS-XL
-                                    # label, or be a re-tag that would break S14.
+                                    # issue in the group may need a SKOS-XL label
+                                    # deleted, or be a re-tag that would break S14.
                                     # Checkpointing an empty change and calling
                                     # it success puts a no-op in the undo stack
                                     # and leaves the group standing underneath a
@@ -837,8 +861,8 @@ def render_skos_vocabulary():
                                         show_message(
                                             f"Nothing to fix automatically in "
                                             f"{_kind}. These need an editorial "
-                                            "decision: a SKOS-XL label this "
-                                            "editor cannot rewrite, or a repair "
+                                            "decision: a SKOS-XL label a fix "
+                                            "would have to delete, or a repair "
                                             "that would break another rule.",
                                             "info",
                                         )
@@ -858,3 +882,93 @@ def render_skos_vocabulary():
                                         st.rerun()
                         for _issue in _group:
                             st.markdown(f"- {_issue['message']}")
+
+
+def _render_skos_xl_section(ont):
+    """What SKOS-XL is, how much of the vocabulary uses it, and converting.
+
+    The conversions act on the whole vocabulary at once: a vocabulary labels
+    in one form by convention, and a half-converted one is what this is for
+    getting out of. Each is one undo step.
+    """
+    st.subheader("SKOS-XL Labels")
+    st.caption(
+        "SKOS-XL makes a label a resource of its own: a skosxl:Label with one "
+        "skosxl:literalForm, so a label can carry a note, a date or a link to "
+        "another label. It entails the plain label with the same text (SKOS "
+        "Reference S55-S57), so validation treats the two forms alike. Write "
+        "and edit SKOS-XL labels in a concept's editor, under the "
+        "skosxl:prefLabel, skosxl:altLabel and skosxl:hiddenLabel kinds."
+    )
+    counts = ont.label_form_counts()
+    _c1, _c2 = st.columns(2)
+    _c1.metric(
+        "Plain labels",
+        counts["plain"],
+        help=f"On {counts['plain_concepts']} concepts.",
+    )
+    _c2.metric(
+        "SKOS-XL labels",
+        counts["xl"],
+        help=f"On {counts['xl_concepts']} concepts.",
+    )
+
+    st.markdown("**Plain to SKOS-XL**")
+    st.caption(
+        "Each skos:prefLabel, altLabel and hiddenLabel becomes a skosxl:Label "
+        "with that text, linked by the matching skosxl property, and the "
+        "plain literal is removed."
+    )
+    if st.button(
+        "Convert plain labels to SKOS-XL",
+        key="skosxl_to_xl",
+        disabled=not counts["plain"],
+    ):
+        _n = ont.convert_labels_to_xl()
+        save_checkpoint("Convert labels to SKOS-XL")
+        set_flash_message(
+            f"Converted {_n} label{'s' if _n != 1 else ''} to SKOS-XL.", "success"
+        )
+        st.rerun()
+
+    st.markdown("**SKOS-XL to plain**")
+    _keep = st.checkbox(
+        "Keep the SKOS-XL labels",
+        value=True,
+        key="skosxl_keep_xl",
+        help="Adds the plain label each SKOS-XL label entails (SKOS Reference "
+        "B.3.4.1), for consumers that read plain SKOS only. Unticked, the "
+        "label resources are deleted along with everything said about them.",
+    )
+    st.caption(
+        "Plain copies are added beside the SKOS-XL labels."
+        if _keep
+        else "Each SKOS-XL label becomes a plain label, and its label resource "
+        "is deleted with everything said about it."
+    )
+    if st.button(
+        "Add plain copies" if _keep else "Replace SKOS-XL labels with plain labels",
+        key="skosxl_to_plain",
+        disabled=not counts["xl"],
+    ):
+        _n = ont.convert_xl_labels_to_plain(keep_xl=_keep)
+        if not _n:
+            show_message(
+                "Every SKOS-XL label already has its plain copy."
+                if _keep
+                else "No SKOS-XL label could be converted: each has no literal "
+                "form or several, which the xl_literal_form check reports.",
+                "info",
+            )
+        else:
+            save_checkpoint(
+                "Add plain copies of SKOS-XL labels"
+                if _keep
+                else "Convert SKOS-XL labels to plain"
+            )
+            set_flash_message(
+                f"{'Copied' if _keep else 'Converted'} {_n} SKOS-XL "
+                f"label{'s' if _n != 1 else ''} to plain SKOS.",
+                "success",
+            )
+            st.rerun()

@@ -12,6 +12,7 @@ mix the engine's own operations with raw triple changes, undo and redo,
 prefix changes, and a bulk change past the journal's log limit.
 """
 
+import contextlib
 import random
 import re
 from pathlib import Path
@@ -302,6 +303,42 @@ class _Editor:
                 (node, SKOSXL.literalForm, Literal("XL label", lang="en"))
             )
 
+    def xl_authoring(self):
+        """The engine's SKOS-XL operations, which change label resources the
+        concept entry reads through its links."""
+        concept = self._pick(SKOS.Concept)
+        if concept is None:
+            return
+        choice = self.rng.randrange(6)
+        kind = self.rng.choice(list(OntologyManager.SKOS_XL_LABEL_KINDS))
+        labels = [
+            item["label"]
+            for kinds in self.om._concept_entry(concept)["xl_labels"].values()
+            for item in kinds
+        ]
+        if choice == 0 or not labels:
+            self.om.add_xl_label(
+                str(concept), kind, f"XL {self.made}", self.rng.choice(["en", "de"])
+            )
+            self.made += 1
+        elif choice == 1:
+            # Refused when the label is a prefLabel and the concept already
+            # has an untagged one, which is the engine working.
+            with contextlib.suppress(ValueError):
+                self.om.set_xl_label_text(
+                    self.rng.choice(labels), f"Edited {self.made}"
+                )
+            self.made += 1
+        elif choice == 2:
+            self.om.remove_xl_label(str(concept), self.rng.choice(labels))
+        elif choice == 3:
+            self.om.convert_labels_to_xl()
+        elif choice == 4:
+            self.om.convert_xl_labels_to_plain(keep_xl=self.rng.random() < 0.5)
+        else:
+            self.om.set_concept_label(str(concept), "prefLabel", f"P {self.made}", "en")
+            self.made += 1
+
     def blank_node_soup(self):
         node = BNode()
         self.om.graph.add((node, RDF.type, OWL.Class))
@@ -333,6 +370,7 @@ class _Editor:
         scheme_side_top,
         drop_in_scheme,
         xl_label,
+        xl_authoring,
     )
 
     def step(self) -> str:
