@@ -91,7 +91,7 @@ dev = [
     "orionbelt-ontology-builder[api]",
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff==0.17.5",
+    "ruff==0.17.6",
     "mypy==2.4.1",
 ]
 
